@@ -4,23 +4,23 @@
 
 * 01 - Introduction
   * What is nova?
-* 02 - Quick start
+* [02 - Quick start](02_quick_start.md)
   * Use rebar3 and nova_rebar3
   * nova_admin
-* 03 - Routing
+* [03 - Routing](03_routing.md)
   * How to create routes
   * Using prefix
   * Secure routing
-* 04 - Controllers
+* [04 - Controllers](04_controllers.md)
   * HTML
   * REST
   * Websockets
-* 05 - Views
-* 06 - Building releases
-* XX - Future work and todos
+* [05 - Views](05_views.md)
+* [06 - Building releases](06_building-releases.md)
+* [XX - Future work and todos](xx_future-work-and-todos.md)
 
 
 ### What is nova?
 
-Nova is a small VC (View/Controller) framework that builds upon (Cowboy)[https://github.com/ninenines/cowboy]. It's inspired by (Chicago Boss)[https://github.com/ChicagoBoss/ChicagoBoss] but tries
+Nova is a small VC (View/Controller) framework that builds upon (Cowboy)[https://github.com/ninenines/cowboy]. It's inspired by (Chicago Boss)[https://github.com/ChicagoBoss/ChicagoBoss] and also (Phoenix)[https://github.com/phoenixframework/phoenix) but tries
 to utilize the OTP way a bit more.
