@@ -1,0 +1,22 @@
+{application, nova,
+ [{description, "Novaa is a web application framework"},
+  {vsn, "0.0.1"},
+  {registered, []},
+  {mod, { nova_app, []}},
+  {included_applications, [
+    ranch,
+    cowboy,
+    compiler,
+    erlydtl,
+    jsone]},
+  {applications,
+   [kernel,
+    stdlib,
+    logger,
+    sasl
+   ]},
+  {env,[]},
+  {modules, []},
+  {licenses, ["Apache 2.0"]},
+  {links, [{"GitHub", "https://github.com/novaframework/nova"}]}
+ ]}.
