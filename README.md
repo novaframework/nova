@@ -1,6 +1,6 @@
 ![nova logo](https://raw.githubusercontent.com/novaframework/nova/master/priv/static/nova.png)
 
-> ### Fast. Reliable.
+> ### Trusted. Different.
 > A web framework.
 
 ## Getting started
@@ -22,7 +22,7 @@ We will add a homepage soon.
 
 ## Documentation
 
-We will soon add documentation on hexdocs.
+Hex docs: https://hexdocs.pm/nova/
 
 ## Contributing
 
