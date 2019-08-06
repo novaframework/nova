@@ -4,4 +4,4 @@
         ]).
 
 index(#{method := <<"GET">>} = _Req) ->
-    {ok, [{message, "Hello World!"}]}.
+    {ok, [{message, "Nova is running!"}]}.
