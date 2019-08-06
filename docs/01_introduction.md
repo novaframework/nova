@@ -4,7 +4,7 @@
 
 * 01 - Introduction
   * What is nova?
-* [02 - Quick start](02_quick_start.md)
+* [02 - Quick start](02_quick-start.md)
   * Use rebar3 and nova_rebar3
   * nova_admin
 * [03 - Routing](03_routing.md)
