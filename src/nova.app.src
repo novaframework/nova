@@ -1,5 +1,5 @@
 {application, nova,
- [{description, "Novaa is a web application framework"},
+ [{description, "Nova is a web application framework"},
   {vsn, "0.0.1"},
   {registered, []},
   {mod, { nova_app, []}},
