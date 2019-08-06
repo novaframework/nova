@@ -1,0 +1,21 @@
+{description, "Basic nova project"}.
+{variables, [
+    {name, "project", "Name of the project"}
+]}.
+
+{dir, "{{name}}"}.
+{dir, "{{name}}/priv"}.
+{dir, "{{name}}/config"}.
+{dir, "{{name}}/src/controllers"}.
+{dir, "{{name}}/src/views"}.
+
+{template, "nova/sys.config", "{{name}}/config/sys.config"}.
+{template, "nova/start.sh", "{{name}}/start.sh"}.
+{template, "nova/routes.erl", "{{name}}/priv/{{name}}.routes.erl"}.
+{template, "nova/app.src", "{{name}}/src/{{name}}.app.src"}.
+{template, "nova/app.erl", "{{name}}/src/{{name}}_app.erl"}.
+{template, "nova/sup.erl", "{{name}}/src/{{name}}_sup.erl"}.
+{template, "nova/controller.erl", "{{name}}/src/controllers/{{name}}_main_controller.erl"}.
+{template, "nova/rebar.config", "{{name}}/rebar.config"}.
+
+{file, "nova/controller.dtl", "{{name}}/src/views/{{name}}_main_controller.dtl"}.
