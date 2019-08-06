@@ -1,6 +1,6 @@
 ![nova logo](https://raw.githubusercontent.com/novaframework/nova/master/priv/static/nova.png)
 
-> ### Trusted. Different.
+> ### New. Shiny.
 > A web framework.
 
 ## Getting started
@@ -23,6 +23,8 @@ We will add a homepage soon.
 ## Documentation
 
 Hex docs: https://hexdocs.pm/nova/
+
+More how things is working can be read in docs [Introduction](docs/01_intoduction.md).
 
 ## Contributing
 

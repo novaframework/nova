@@ -1,9 +1,19 @@
 # 02 - Quick start
 
-## Use rebar3 and nova_rebar3
+## Use rebar3 and nova
 
-The easiest way to get started with nova is to make use of the rebar3 plugin which can be found here: https://github.com/burbas/nova_rebar3
-Once installed you can call
+Start by add the rebar3 template for Nova.
+
+```bash
+cd installer
+./installer.sh
+```
+
+After this is done use rebar3 to generate a new project with Nova.
+
+```bash
+rebar3 new nova my_first_nova
+```
 
 ```
 $ rebar3 new nova my_first_app
@@ -28,7 +38,7 @@ Eshell V9.3  (abort with ^G)
 1>
 ```
 
-Now you can type `application:ensure_all_started(my_first_app).` to start your app. If you now open http://localhost:8080/ you should see a "Hello World"-message.
+Now you can type `application:ensure_all_started(my_first_app).` to start your app. If you now open http://localhost:8080/ you should see a "Nova is running"-message.
 
 ## Dev mode
 
