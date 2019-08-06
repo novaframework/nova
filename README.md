@@ -24,7 +24,7 @@ We will add a homepage soon.
 
 Hex docs: https://hexdocs.pm/nova/
 
-More how things is working can be read in docs [Introduction](docs/01_intoduction.md).
+More how things is working can be read in docs [Introduction](docs/01_introduction.md).
 
 ## Contributing
 
