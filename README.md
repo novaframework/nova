@@ -30,4 +30,20 @@ Contribution is welcome to Nova. Check our [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.
 
 ### Generating a Nova project
 
-Go to https://github.com/novaframework/nova_rebar3 and use the rebar3 template.
+Start a new project with:
+
+```bash
+rebar3 new nova my_first_nova
+```
+
+That will generate a Nova project for you.
+
+```bash
+rebar3 shell
+```
+
+This will fetch all dependencies and compile. After compilation it will start a shell that also say what port it is running on and some debug lines.
+
+When the shell is started, open a browser and go to localhost:8080 and it will point to the my_first_nova server running Nova.
+
+
