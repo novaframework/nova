@@ -22,5 +22,5 @@
 
 ### What is nova?
 
-Nova is a small VC (View/Controller) framework that builds upon (Cowboy)[https://github.com/ninenines/cowboy]. It's inspired by (Chicago Boss)[https://github.com/ChicagoBoss/ChicagoBoss] and also (Phoenix)[https://github.com/phoenixframework/phoenix) but tries
+Nova is a small VC (View/Controller) framework that builds upon [Cowboy](https://github.com/ninenines/cowboy). It's inspired by [Chicago Boss](https://github.com/ChicagoBoss/ChicagoBoss) and also [Phoenix](https://github.com/phoenixframework/phoenix) but tries
 to utilize the OTP way a bit more.
