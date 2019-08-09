@@ -69,8 +69,7 @@ handle(Mod, Fun, Req = #{method := Method}, State) ->
             {ok, Req1, State};
         {ok, Variables} ->
             %% Derive the view from module
-            ViewName = atom_to_list(Mod) ++ "_dtl",
-            ViewNameAtom = list_to_atom(ViewName),
+            ViewNameAtom = get_view_name(Mod),
             handle_view(ViewNameAtom, Variables, #{}, Req, State);
         {ok, Variables, Options} ->
             View =
@@ -118,3 +117,12 @@ render_dtl(View, Variables, Options) ->
         _ ->
             View:render(Variables, Options)
     end.
+
+
+get_view_name(Mod) when is_atom(Mod) ->
+    StrName = get_view_name(erlang:atom_to_list(Mod)),
+    erlang:list_to_atom(StrName);
+get_view_name([$_, $c, $o, $n, $t, $r, $o, $l, $l, $e, $r]) ->
+    "_dtl";
+get_view_name([H|T]) ->
+    [H|get_view_name(T)].
