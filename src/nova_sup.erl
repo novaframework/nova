@@ -79,16 +79,15 @@ init([]) ->
                         logger:info("Starting Nova as normal..."),
                         [child(nova_compiler, nova_compiler)|Children]
                 end,
-    Children3 =
-        case application:get_env(dev_mode) of
-            {ok, true} ->
-                logger:info("Nova reloader starting..."),
-                [child(nova_reloader, nova_reloader)|Children2];
-            _ ->
-                Children2
-        end,
+    case application:get_env(dev_mode) of
+        {ok, true} ->
+            logger:info("Starting nova in developer mode..."),
+            application:ensure_all_started(sync);
+        _ ->
+            ok
+    end,
 
-    {ok, {SupFlags, Children3}}.
+    {ok, {SupFlags, Children2}}.
 
 %%%===================================================================
 %%% Internal functions
