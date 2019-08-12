@@ -46,8 +46,17 @@ dispatch(Req, State) ->
 
 
 
-handle(Mod, Fun, Req = #{method := Method}, State) ->
-    case Mod:Fun(Req) of
+handle(Mod, Fun, Req, State) ->
+    try Mod:Fun(Req) of
+        RetObj ->
+            handle1(RetObj, {Mod, Fun}, Req, State)
+    catch
+        Type:Exception ->
+            logger:error("Controller failed with ~p:~p", [Type, Exception])
+    end.
+
+handle1(RetObj, {Mod, Fun}, Req = #{method := Method}, State) ->
+    case RetObj of
 	{json, JSON} ->
             EncodedJSON = jsone:encode(JSON, [undefined_as_null]),
 	    StatusCode = case Method of
@@ -89,6 +98,18 @@ handle(Mod, Fun, Req = #{method := Method}, State) ->
             {ok, Req1, State};
         {cowboy_req, CowboyReq} ->
             {ok, CowboyReq, State};
+        {extern_handler, Module, Function, Payload} ->
+            try Module:Function(Payload, Req) of
+                {external_handler, _, _, _} ->
+                    logger:error("Infinite loop detected"),
+                    Req1 = cowboy_req:reply(500, #{}, Req),
+                    {ok, Req1, State};
+                RetObject ->
+                    handle1(RetObject, {Mod, Fun}, Req, State)
+            catch
+                _:_ ->
+                    logger:info("External handler failed")
+            end;
         Other ->
             logger:info("Unsupported return value from controller ~p:~p/1. Returned: ~p", [Mod, Fun, Other]),
             Req1 = cowboy_req:reply(500, #{}, Req),
