@@ -1,6 +1,6 @@
 ![nova logo](https://raw.githubusercontent.com/novaframework/nova/master/priv/static/nova.png)
 
-> ### New. Shiny.
+> ### Simple. Fault-tolerant. Distributed.
 > A web framework.
 
 ## Getting started
