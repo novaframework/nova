@@ -38,7 +38,7 @@ Eshell V9.3  (abort with ^G)
 1>
 ```
 
-Now you can type `application:ensure_all_started(my_first_app).` to start your app. If you now open http://localhost:8080/ you should see a "Nova is running"-message.
+Now you can type `application:ensure_all_started(my_first_app).` to start your app. If you now open http://localhost:8081/ you should see a "Nova is running"-message.
 
 ## Dev mode
 
