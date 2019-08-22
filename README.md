@@ -9,12 +9,12 @@ Start by add the rebar3 template for Nova.
 
 *Via curl*
 ```bash
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/novaframework/nova/installer/installer/install.sh)"
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/novaframework/nova/master/tools/install.sh)"
 ```
 
 *Via wget*
 ```bash
-sh -c "$(wget -O- https://raw.githubusercontent.com/novaframework/nova/installer/installer/install.sh)"
+sh -c "$(wget -O- https://raw.githubusercontent.com/novaframework/nova/master/tools/install.sh)"
 ```
 
 After this is done use rebar3 to generate a new project with Nova.
