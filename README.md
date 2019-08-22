@@ -3,6 +3,9 @@
 > ### Simple. Fault-tolerant. Distributed.
 > A web framework.
 
+[http://www.novaframework.org](http://www.novaframework.org)
+
+
 ## Getting started
 
 Start by add the rebar3 template for Nova.
@@ -22,8 +25,6 @@ After this is done use rebar3 to generate a new project with Nova.
 ```bash
 rebar3 new nova my_first_nova
 ```
-
-We will add a homepage soon.
 
 ## Documentation
 
