@@ -16,6 +16,8 @@
 %% Supervisor callbacks
 -export([init/1]).
 
+-include_lib("nova/include/nova.hrl").
+
 -define(SERVER, ?MODULE).
 
 %%%===================================================================
@@ -56,7 +58,7 @@ init([]) ->
         {ok, true} ->
             {ok, Cert} = application:get_env(ssl_certfile),
             {ok, CACert} = application:get_env(ssl_cacertfile),
-            logger:info("Starting Nova with SSL support. Cert: ~s, CACert: ~s", [Cert, CACert]),
+            ?INFO("Starting Nova with SSL support. Cert: ~s, CACert: ~s", [Cert, CACert]),
             start_cowboy_secure(CACert, Cert);
         _ ->
             start_cowboy()
@@ -73,15 +75,15 @@ init([]) ->
 
     Children2 = case application:get_env(rest_only) of
                     {ok, true} ->
-                        logger:info("Starting Nova with rest_only option. Views will not be compiled"),
+                        ?INFO("Starting Nova with rest_only option. Views will not be compiled"),
                         Children;
                     _ ->
-                        logger:info("Starting Nova as normal..."),
+                        ?INFO("Starting Nova as normal..."),
                         [child(nova_compiler, nova_compiler)|Children]
                 end,
     case application:get_env(dev_mode) of
         {ok, true} ->
-            logger:info("Starting nova in developer mode..."),
+            ?INFO("Starting nova in developer mode..."),
             application:ensure_all_started(sync);
         _ ->
             ok
@@ -109,7 +111,7 @@ start_cowboy() ->
             {ok, WebPort} ->
                 WebPort
         end,
-    logger:info("Nova is running on port ~p", [Port]),
+    ?INFO("Nova is running on port ~p", [Port]),
     {ok, _} = cowboy:start_clear(
                 nova_listener,
                 [{port, Port}],
@@ -120,7 +122,7 @@ start_cowboy_secure(CACert, Cert) ->
                undefined -> 8443;
                {ok, SSLPort} -> SSLPort
            end,
-    logger:info("Nova is running SSL on port ~p", [Port]),
+    ?INFO("Nova is running SSL on port ~p", [Port]),
     {ok, _} = cowboy:start_tls(nova_listener, [
                                        {port, Port},
                                        {certfile, Cert},

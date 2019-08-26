@@ -12,6 +12,8 @@
          terminate/3
         ]).
 
+-include_lib("nova/include/nova.hrl").
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Public functions        %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -51,8 +53,8 @@ handle(Mod, Fun, Req, State) ->
         RetObj ->
             handle1(RetObj, {Mod, Fun}, Req, State)
     catch
-        Type:Exception ->
-            logger:error("Controller failed with ~p:~p", [Type, Exception])
+        ?WITH_STACKTRACE(Type, Reason, Stacktrace)
+          ?ERROR("Controller failed with ~p:~p.~nStacktrace:~n~p", [Type, Reason, Stacktrace])
     end.
 
 handle1(RetObj, {Mod, Fun}, Req = #{method := Method}, State) ->
@@ -101,17 +103,17 @@ handle1(RetObj, {Mod, Fun}, Req = #{method := Method}, State) ->
         {extern_handler, Module, Function, Payload} ->
             try Module:Function(Payload, Req) of
                 {external_handler, _, _, _} ->
-                    logger:error("Infinite loop detected"),
+                    ?ERROR("Infinite loop detected"),
                     Req1 = cowboy_req:reply(500, #{}, Req),
                     {ok, Req1, State};
                 RetObject ->
                     handle1(RetObject, {Mod, Fun}, Req, State)
             catch
                 _:_ ->
-                    logger:info("External handler failed")
+                    ?WARNING("External handler (~p:~p) failed", [Module, Function])
             end;
         Other ->
-            logger:info("Unsupported return value from controller ~p:~p/1. Returned: ~p", [Mod, Fun, Other]),
+            ?WARNING("Unsupported return value from controller ~p:~p/1. Returned: ~p", [Mod, Fun, Other]),
             Req1 = cowboy_req:reply(500, #{}, Req),
             {ok, Req1, State}
     end.
@@ -134,7 +136,7 @@ render_dtl(View, Variables, Options) ->
     case code:is_loaded(View) of
         false ->
             %% Cast a warning since the module could not be found
-            logger:warning("Could not render ~p cause it's not loaded.", [View]);
+            ?WARNING("Could not render ~p cause it's not loaded.", [View]);
         _ ->
             View:render(Variables, Options)
     end.

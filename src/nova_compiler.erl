@@ -30,6 +30,8 @@
          code_change/3
         ]).
 
+-include_lib("nova/include/nova.hrl").
+
 -define(SERVER, ?MODULE).
 
 -record(state, {
@@ -107,7 +109,7 @@ handle_call(get_views, _From, State = #state{compiled_modules = CM}) ->
 handle_call({recompile, Viewname}, _From, State = #state{compiled_modules = CM}) ->
     case maps:get(Viewname, CM, undefined) of
         undefined ->
-            logger:warning("Tried to recompile a module (~p) that does not exists?", [Viewname]),
+            ?WARNING("Tried to recompile a module (~p) that does not exists?", [Viewname]),
             {reply, {error, view_not_found}, State};
         File ->
             do_compile([File]),
@@ -183,7 +185,7 @@ code_change(_OldVsn, State, _Extra) ->
 compile_files(#{name := App}) ->
     case code:lib_dir(App, src) of
         {error, _} ->
-            logger:warning("Could not find the src directory of app ~p", [App]),
+            ?WARNING("Could not find the src directory of app ~p", [App]),
             error;
         Filepath ->
             {ok, FilesAndDirs} = file:list_dir(Filepath),
@@ -212,34 +214,56 @@ do_compile(File) ->
             case filename:extension(File) of
                 ".dtl" ->
                     ModName = list_to_atom(filename:basename(File, ".dtl") ++ "_dtl"),
-                    case erlydtl:compile_file(File, ModName, [{out_dir, BeamDir}]) of
+                    {module, _} = code:ensure_loaded(erlydtl),
+                    try erlydtl:compile_file(File, ModName, [{out_dir, BeamDir}, return]) of
                         {ok, Module} ->
-                            logger:info("Compiled dtl view: ~p", [Module]);
+                            ?INFO("Compiled dtl view: ~p", [Module]);
                         {ok, Module, Binary} when is_binary(Binary) ->
-                            logger:info("Compiled dtl view: ~p", [Module]);
+                            ?INFO("Compiled dtl view: ~p", [Module]);
                         {ok, Module, Warnings} ->
-                            logger:warning("Compiled dtl view: ~p with warnings: ~p", [Module, Warnings]);
+                            ?WARNING("Compiled dtl view: ~p with warnings: ~p", [Module, Warnings]);
                         {ok, Module, _Binary, Warnings} ->
-                            logger:warning("Compiled dtl view: ~p with warnings: ~p", [Module, Warnings])
+                            ?WARNING("Compiled dtl view: ~p with warnings: ~p", [Module, Warnings]);
+                        {error, Error, Warnings} ->
+                            format_msg(error, Error)
+                    catch
+                        ?WITH_STACKTRACE(Type, Reason, Stacktrace)
+                        ?ERROR("Could not compile file ~s. Reason ~p~nStacktrace:~n~p", [File, Reason, Stacktrace])
                     end,
                     {ModName, File};
                 ".erl" ->
-                    case compile:file(File, [{out_dir, BeamDir}]) of
+                    try compile:file(File, [{out_dir, BeamDir}]) of
                         {error, Errors, Warnings} ->
-                            logger:warning("Got error when compiling ~p. Errors: ~p, Warnings: ~p", [File, Errors, Warnings]),
+                            ?WARNING("Got error when compiling ~p. Errors: ~p, Warnings: ~p", [File, Errors, Warnings]),
                             [];
                         error ->
-                            logger:warning("Could not compile file ~p", [File]),
+                            ?WARNING("Could not compile file ~p", [File]),
                             [];
                         {ok, ModuleName, Warnings} ->
-                            logger:info("Compiled erlang module from file: ~p with warnings: ~p", [File, Warnings]),
+                            ?WARNING("Compiled erlang module from file: ~p with warnings: ~p", [File, Warnings]),
                             {ModuleName, File};
                         {ok, ModuleName} ->
-                            logger:info("Compiled erlang module from file: ~p to dir: ~p", [File, BeamDir]),
+                            ?INFO("Compiled erlang module from file: ~p to dir: ~p", [File, BeamDir]),
                             {ModuleName, File}
+                    catch
+                        ?WITH_STACKTRACE(Type, Reason, Stacktrace)
+                          ?ERROR("Could not compile file ~s. Reason ~p", [File, Reason])
                     end;
-                _ ->
+                Unsupported ->
                     %% Not supported file
+                    ?WARNING("Nova does not support files ending with ~s. If this was intentionally just disregard this warning.", [Unsupported]),
                     []
             end
     end.
+
+
+
+format_msg(Level, [{File, [{Row, Module, [Msg, Param]}]}]) ->
+    case Level of
+        error ->
+            ?ERROR("In file \"~s\", ~p:~p \"~s\", ~p", [File, Module, Row, Msg, Param]);
+        _ ->
+            ?WARNING("In file \"~s\", ~p:~p \"~s\", ~p", [File, Module, Row, Msg, Param])
+    end;
+format_msg(_, _) ->
+    ok.

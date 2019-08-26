@@ -33,6 +33,8 @@
          code_change/3
         ]).
 
+-include_lib("nova/include/nova.hrl").
+
 -define(SERVER, ?MODULE).
 
 -record(state, {
@@ -151,16 +153,16 @@ handle_cast({process_routes, App, Routefile}, State) ->
 handle_cast({remove_route, Host, Route}, State = #state{dispatch_table = DT}) ->
     case proplists:get_value(Host, DT) of
         undefined ->
-            logger:warning("Could not remove route: ~p for host: ~p. Host not found!", [Route, Host]),
+            ?WARNING("Could not remove route: ~p for host: ~p. Host not found!", [Route, Host]),
             {noreply, State};
         {Host, Routes} ->
             NewRoutes = proplists:delete(Route, Routes),
             case NewRoutes of
                 Routes ->
-                    logger:warning("Could not remove route: ~p for host: ~p. Route not found!", [Route, Host]),
+                    ?WARNING("Could not remove route: ~p for host: ~p. Route not found!", [Route, Host]),
                     {noreply, State};
                 _ ->
-                    logger:info("Removed route: ~p from host: ~p", [Route, Host]),
+                    ?INFO("Removed route: ~p from host: ~p", [Route, Host]),
                     DT2 = proplists:delete(Host, DT),
                     NewDT = [{Host, NewRoutes}|DT2],
                     {noreply, State#state{dispatch_table = NewDT}}
@@ -169,7 +171,7 @@ handle_cast({remove_route, Host, Route}, State = #state{dispatch_table = DT}) ->
 
 handle_cast(apply_routes, State = #state{dispatch_table = DT,
                                          listener = Listener}) ->
-    logger:info("Applying routes. ~p", [DT]),
+    ?INFO("Applying routes. ~p", [DT]),
     Dispatch = cowboy_router:compile(DT),
     cowboy:set_env(Listener, dispatch, Dispatch),
     {noreply, State};
@@ -250,7 +252,7 @@ code_change(_OldVsn, State, _Extra) ->
 load_app_route(#{name := AppName, routes_file := RouteFile}) ->
     case code:lib_dir(AppName) of
         {error, bad_name} ->
-            logger:warning("Could not find the application ~p. Check your config and rerun the application", [AppName]),
+            ?WARNING("Could not find the application ~p. Check your config and rerun the application", [AppName]),
             ok;
         Filepath ->
             RouteFilePath = filename:join([Filepath, RouteFile]),
