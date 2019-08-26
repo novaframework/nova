@@ -1,6 +1,6 @@
 {application, nova,
  [{description, "Nova is a web application framework"},
-  {vsn, "0.0.1"},
+  {vsn, "0.1.0"},
   {registered, []},
   {mod, { nova_app, []}},
   {included_applications, [
@@ -12,7 +12,6 @@
   {applications,
    [kernel,
     stdlib,
-    logger,
     sasl
    ]},
   {env,[]},
