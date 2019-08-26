@@ -60,7 +60,7 @@ setup_templates() {
     fi
 
     echo "${BLUE}Copying Nova templates into rebar3 directory: ${TEMPLATE_DIR}${RESET}"
-    cp $tmp_dir/nova.template $TEMPLATE_DIR && cp -r $tmp_dir/nova $TEMPLATE_DIR
+    cp $tmp_dir/nova.template $tmp_dir/nova_rest.template $TEMPLATE_DIR && cp -r $tmp_dir/nova $TEMPLATE_DIR
 
     if [ $? -ne 0 ]; then
 	error "Could not copy template files into directory"
