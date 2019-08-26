@@ -3,13 +3,21 @@
 > ### Simple. Fault-tolerant. Distributed.
 > A web framework.
 
+[http://www.novaframework.org](http://www.novaframework.org)
+
+
 ## Getting started
 
 Start by add the rebar3 template for Nova.
 
+*Via curl*
 ```bash
-cd installer
-./installer.sh
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/novaframework/nova/master/tools/install.sh)"
+```
+
+*Via wget*
+```bash
+sh -c "$(wget -O- https://raw.githubusercontent.com/novaframework/nova/master/tools/install.sh)"
 ```
 
 After this is done use rebar3 to generate a new project with Nova.
@@ -17,8 +25,6 @@ After this is done use rebar3 to generate a new project with Nova.
 ```bash
 rebar3 new nova my_first_nova
 ```
-
-We will add a homepage soon.
 
 ## Documentation
 
@@ -47,5 +53,3 @@ rebar3 shell
 This will fetch all dependencies and compile. After compilation it will start a shell that also say what port it is running on and some debug lines.
 
 When the shell is started, open a browser and go to localhost:8080 and it will point to the my_first_nova server running Nova.
-
-
