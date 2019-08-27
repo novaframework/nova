@@ -1,0 +1,28 @@
+{application, {{name}},
+ [{description, "{{name}} managed by Nova"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, { {{name}}_app, []}},
+  {included_applications, [
+                           nova
+                          ]},
+  {applications,
+   [kernel,
+    stdlib
+   ]},
+  {env,[
+        {web_port, 8080},
+        {rest_only, true},
+        {nova_applications, [
+                               #{
+                                 name => {{name}},
+                                 routes_file => "priv/{{name}}.routes.erl"
+                                }
+                              ]}
+
+       ]},
+  {modules, []},
+  {maintainers, []},
+  {licenses, ["Apache 2.0"]},
+  {links, []}
+ ]}.

@@ -4,7 +4,7 @@
 
 REPO=${REPO:-novaframework/nova}
 REMOTE=${REMOTE:-https://github.com/${REPO}.git}
-BRANCH=${BRANCH:-templates}
+BRANCH=${BRANCH:-master}
 TEMPLATE_DIR=${TEMPLATE_DIR:-~/.config/rebar3/templates}
 
 command_exists() {
@@ -60,7 +60,8 @@ setup_templates() {
     fi
 
     echo "${BLUE}Copying Nova templates into rebar3 directory: ${TEMPLATE_DIR}${RESET}"
-    cp $tmp_dir/nova.template $tmp_dir/nova_rest.template $TEMPLATE_DIR && cp -r $tmp_dir/nova $TEMPLATE_DIR
+    base_dir = $tmp_dir/tools/templates
+    cp $base_dir/nova.template $base_dir/nova_rest.template $TEMPLATE_DIR && cp -r $base_dir/nova $TEMPLATE_DIR
 
     if [ $? -ne 0 ]; then
 	error "Could not copy template files into directory"
