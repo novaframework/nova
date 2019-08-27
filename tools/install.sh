@@ -60,7 +60,7 @@ setup_templates() {
     fi
 
     echo "${BLUE}Copying Nova templates into rebar3 directory: ${TEMPLATE_DIR}${RESET}"
-    base_dir = $tmp_dir/tools/templates
+    base_dir=$tmp_dir/tools/templates
     cp $base_dir/nova.template $base_dir/nova_rest.template $TEMPLATE_DIR && cp -r $base_dir/nova $TEMPLATE_DIR
 
     if [ $? -ne 0 ]; then
