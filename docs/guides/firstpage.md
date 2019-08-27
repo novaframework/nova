@@ -43,4 +43,22 @@ index(#{method := <<"GET">>} = _Req) ->
     {ok, [{message, "Nova is running!"}]}.
 ```
 
+## Start Nova
 
+In the root directory run:
+
+```bash
+rebar3 shell
+```
+
+This will start a shell and compile all code. When Nova is started it will also compile all dtl files.
+
+When the shell is up my_page is started at localhost:8080
+
+It will be a page with the text "Nova is running!". Now we know that Nova works and we can start working with this.
+
+Open a editor and open ./src/controller/my_page_main_controller.erl
+
+Change the text "Nova is running!" to "This is my page!".
+
+Reload the page and now the text have changed to "This is my page!".
