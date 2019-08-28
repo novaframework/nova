@@ -43,6 +43,23 @@ index(#{method := <<"GET">>} = _Req) ->
     {ok, [{message, "Nova is running!"}]}.
 ```
 
+When we generated this project we also got a route file for my_page. It is in priv/my_page.routes.erl and when generated looks like this:
+
+```erlang
+#{prefix => "",
+  type => html,
+  security => false,
+  routes => [
+            {"/", my_page_main_controller, index}
+           ],
+ statics => [
+             {"/assets/[...]", "assets"}
+            ]
+}.
+```
+
+What this file say is that we use html, we don't have any security and when we point our web browser to "/" it will use my_page_main_controller module with the function index. As described above in my_page_main_controller.erl
+
 ## Start Nova
 
 In the root directory run:
@@ -57,8 +74,28 @@ When the shell is up my_page is started at localhost:8080
 
 It will be a page with the text "Nova is running!". Now we know that Nova works and we can start working with this.
 
+## Change text in controllern
+
+Set the project in dev mode:
+
+Open a editor and open src/my_page.app.src and add {dev_mode, true} in env.
+
+It should look like this:
+```erlang
+	{dev_mode, true},
+        {web_port, 8080},
+        {nova_applications, [
+                               #{
+                                 name => my_page,
+                                 routes_file => "priv/my_page.routes.erl"
+                                }
+                              ]}
+
+       ]},
+```
+
 Open a editor and open ./src/controller/my_page_main_controller.erl
 
 Change the text "Nova is running!" to "This is my page!".
 
-Reload the page and now the text have changed to "This is my page!".
+Reload the page and now the text have changed to "This is my page!". Now when we run in dev mode we use synch to auto-reload files. So when we update the browser now the text will be changed to "This is my page!".
