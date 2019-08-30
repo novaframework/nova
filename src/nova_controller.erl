@@ -22,6 +22,10 @@
 
 -include_lib("nova/include/nova.hrl").
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Public functions        %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -225,3 +229,12 @@ find_subprotocol_match([SupportedProtocol|Tl], ReqProtocols, Req) ->
         _ ->
             find_subprotocol_match(Tl, ReqProtocols, Req)
     end.
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Eunit functions         %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%
+-ifdef(TEST).
+
+-endif.

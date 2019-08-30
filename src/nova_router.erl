@@ -36,6 +36,11 @@
 
 -include_lib("nova/include/nova.hrl").
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
+
 -define(SERVER, ?MODULE).
 
 -record(state, {
@@ -316,13 +321,43 @@ add_statics(App, Host, Prefix, [{Route, Path} | T]) ->
 
 
 get_methods(#{methods := M}) when is_list(M) ->
-    lists:map(fun(get)  -> <<"GET">>;
-                 (post) -> <<"POST">>;
-                 (put) -> <<"PUT">>;
-                 (delete) -> <<"DELETE">>;
-                 (_) -> undefined
-              end, M);
+    Res = lists:map(fun(get)  -> <<"GET">>;
+                       (post) -> <<"POST">>;
+                       (put) -> <<"PUT">>;
+                       (delete) -> <<"DELETE">>;
+                       (_) -> throw(unknown_method)
+                    end, M),
+    case length(Res) of
+        4 -> '_';
+        _ -> Res
+    end;
 get_methods(#{methods := M}) ->
     get_methods(#{methods => [M]});
 get_methods(_) ->
     '_'.
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Eunit functions         %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%
+-ifdef(TEST).
+process_empty_route_test_() ->
+    ?_assert(ok =:= process_routes(test, [])).
+
+methods_test_() ->
+    [
+     ?_assertMatch([<<"GET">>], get_methods(#{methods => [get]})),
+     ?_assertMatch([<<"POST">>], get_methods(#{methods => [post]})),
+     ?_assertMatch([<<"PUT">>], get_methods(#{methods => [put]})),
+     ?_assertMatch([<<"DELETE">>], get_methods(#{methods => [delete]})),
+     ?_assertMatch([<<"GET">>, <<"PUT">>], get_methods(#{methods => [get, put]}))
+    ].
+
+methods_wildcard_test_() ->
+    [?_assertException(throw, unknown_method, get_methods(#{methods => [something_else]})),
+     ?_assertMatch('_', get_methods(undefined)),
+     ?_assertMatch('_', get_methods(#{methods => [get,put,delete,post]}))
+    ].
+
+
+-endif.
