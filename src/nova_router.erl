@@ -1,4 +1,4 @@
-%%%-------------------------------------------------------------------
+%%-------------------------------------------------------------------
 %%% @author Niclas Axelsson <niclas@burbas.se>
 %%% @copyright (C) 2018, Niclas Axelsson
 %%% @doc
@@ -15,12 +15,13 @@
          start_link/0,
          get_main_app/0,
          process_routefile/2,
+         add_route/4,
          add_route/5,
          add_route/6,
-         add_route/7,
          apply_routes/0,
          remove_route/2,
-         get_routes/0
+         get_routes/0,
+         get_route_info/1
         ]).
 
 %% gen_server callbacks
@@ -136,7 +137,9 @@ handle_call({get_route_info, Route}, _From, State = #state{dispatch_table = DT})
         false ->
             %% Not found
             {reply, {error, not_found}, State};
-        {
+        Route ->
+            {reply, {ok, Route}, State}
+    end;
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -206,13 +209,13 @@ handle_cast({add_route, App, CallbackInfo, Host, Route, Secure, Options}, State 
                 HttpState = InitialState#{protocol => http,
                                           mod => Module,
                                           func => Func,
-                                          methods = get_methods(Options)},
-                {Route, nova_controller, InitialState};
+                                          methods => get_methods(Options)},
+                {Route, nova_controller, HttpState};
             ws ->
                 SubProtocols = maps:get(subprotocols, Options, []),
                 WSState = InitialState#{protocol => ws,
                                         mod => CallbackInfo,
-                                        subprotocols = SubProtocols},
+                                        subprotocols => SubProtocols},
                 {Route, nova_controller, WSState}
         end,
 
@@ -312,8 +315,14 @@ add_statics(App, Host, Prefix, [{Route, Path} | T]) ->
     add_statics(App, Host, Prefix, T).
 
 
-get_method(#{method := get}) -> <<"GET">>;
-get_method(#{method := post}) -> <<"POST">>;
-get_method(#{method := put}) -> <<"PUT">>;
-get_method(#{method := delete}) -> <<"DELETE">>;
-get_method(_) -> undefined.
+get_methods(#{methods := M}) when is_list(M) ->
+    lists:map(fun(get)  -> <<"GET">>;
+                 (post) -> <<"POST">>;
+                 (put) -> <<"PUT">>;
+                 (delete) -> <<"DELETE">>;
+                 (_) -> undefined
+              end, M);
+get_methods(#{methods := M}) ->
+    get_methods(#{methods => [M]});
+get_methods(_) ->
+    '_'.

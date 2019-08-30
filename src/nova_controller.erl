@@ -58,10 +58,18 @@ dispatch(Req, State = #{protocol := ws}) ->
                     {ok, Req1, State}
             end
     end;
-dispatch(Req = #{method := ReqMethod}, State = #{protocol := http, mod := Mod,
-                                                 func := Func, method := Method}) when Method == '_' orelse
-                                                                                       Method == ReqMethod ->
+dispatch(Req, State = #{protocol := http, mod := Mod,
+                        func := Func, methods := '_'}) ->
     handle(Mod, Func, Req, State);
+dispatch(Req = #{method := ReqMethod}, State = #{protocol := http, mod := Mod,
+                                                 func := Func, methods := Methods}) ->
+    case lists:any(fun(X) -> X == ReqMethod end, Methods) of
+        true ->
+            handle(Mod, Func, Req, State);
+        false ->
+            Req1 = cowboy_req:reply(404, Req),
+            {ok, Req1, State}
+    end;
 dispatch(Req, State) ->
     %% Display a nicer page
     Req1 = cowboy_req:reply(404, Req),
@@ -173,7 +181,7 @@ get_view_name([H|T]) ->
     [H|get_view_name(T)].
 
 
-find_subprotocol_match([], _, _) -> not_found.
+find_subprotocol_match([], _, _) -> not_found;
 find_subprotocol_match([SupportedProtocol|Tl], ReqProtocols, Req) ->
     case lists:keymember(SupportedProtocol, 1, ReqProtocols) of
         true ->
