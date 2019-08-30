@@ -40,8 +40,7 @@
 -record(state, {
                 main_app :: atom(),
                 listener = nova_listener :: atom(),
-                dispatch_table = [] :: list(),
-                ext_dispatch_table = [] :: list()
+                dispatch_table = [] :: list()
                }).
 
 %%%===================================================================
@@ -196,21 +195,6 @@ handle_cast({add_static, App, Path, Host, Route}, State = #state{dispatch_table 
                 [{Host, [RouteInfo|Routes]}|proplists:delete(Host, DT)]
         end,
     {noreply, State#state{dispatch_table = NewDT}};
-handle_cast({add_route, App, {Mod, Func}, Host, HttpCode, _, _}, State = #state{ext_dispatch_table = CT}) when is_integer(HttpCode) ->
-    InitialState = #{app => App,
-                     mod => Mod,
-                     func => Func,
-                     secure => undefined},
-    RouteInfo = {HttpCode, nova_controller, InitialState},
-
-    NewCT =
-        case proplists:get_value(Host, CT) of
-            undefined ->
-                [{Host, [RouteInfo]}|CT];
-            Routes ->
-                [{Host, [RouteInfo|Routes]}|proplists:delete(Host, CT)]
-        end,
-    {noreply, State#state{catch_table = NewDT};
 handle_cast({add_route, App, CallbackInfo, Host, Route, Secure, Options}, State = #state{dispatch_table = DT}) ->
     InitialState = #{app => App,
                      secure => Secure
