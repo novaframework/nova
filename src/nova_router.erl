@@ -73,7 +73,7 @@ add_route(App, CallbackInfo, Route, Security) ->
     add_route(App, CallbackInfo, '_', Route, Security).
 
 add_route(App, CallbackInfo, Host, Route, Security) ->
-    add_route(App, CallbackInfo, Host, Route, Security, '_').
+    add_route(App, CallbackInfo, Host, Route, Security, #{}).
 
 add_route(App, CallbackInfo, Host, Route, Security, Options) ->
     gen_server:cast(?SERVER, {add_route, App, CallbackInfo, Host, Route, Security, Options}).
