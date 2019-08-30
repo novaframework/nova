@@ -1,4 +1,4 @@
-%%%-------------------------------------------------------------------
+%%-------------------------------------------------------------------
 %%% @author Niclas Axelsson <niclas@burbas.se>
 %%% @copyright (C) 2018, Niclas Axelsson
 %%% @doc
@@ -15,12 +15,13 @@
          start_link/0,
          get_main_app/0,
          process_routefile/2,
+         add_route/4,
          add_route/5,
          add_route/6,
-         add_route/7,
          apply_routes/0,
          remove_route/2,
-         get_routes/0
+         get_routes/0,
+         get_route_info/1
         ]).
 
 %% gen_server callbacks
@@ -63,14 +64,14 @@ get_main_app() ->
 process_routefile(App, Routefile) ->
     gen_server:cast(?SERVER, {process_routes, App, Routefile}).
 
-add_route(App, Module, Func, Route, Security) ->
-    add_route(App, Module, Func, '_', Route, Security).
+add_route(App, CallbackInfo, Route, Security) ->
+    add_route(App, CallbackInfo, '_', Route, Security).
 
-add_route(App, Module, Func, Host, Route, Security) ->
-    add_route(App, Module, Func, Host, Route, Security, '_').
+add_route(App, CallbackInfo, Host, Route, Security) ->
+    add_route(App, CallbackInfo, Host, Route, Security, '_').
 
-add_route(App, Module, Func, Host, Route, Security, Method) ->
-    gen_server:cast(?SERVER, {add_route, App, Module, Func, Host, Route, Security, Method}).
+add_route(App, CallbackInfo, Host, Route, Security, Options) ->
+    gen_server:cast(?SERVER, {add_route, App, CallbackInfo, Host, Route, Security, Options}).
 
 add_static(App, Path, Host, Route) ->
     gen_server:cast(?SERVER, {add_static, App, Path, Host, Route}).
@@ -83,6 +84,9 @@ remove_route(Host, Route) ->
 
 get_routes() ->
     gen_server:call(?SERVER, get_routes).
+
+get_route_info(Route) ->
+    gen_server:call(?SERVER, {get_route_info, Route}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -128,6 +132,14 @@ handle_call(get_main_app, _From, State = #state{main_app = Application}) ->
     {reply, {ok, Application}, State};
 handle_call(get_routes, _From, State = #state{dispatch_table = DT}) ->
     {reply, {ok, DT}, State};
+handle_call({get_route_info, Route}, _From, State = #state{dispatch_table = DT}) ->
+    case lists:keyfind(Route, 1, DT) of
+        false ->
+            %% Not found
+            {reply, {error, not_found}, State};
+        Route ->
+            {reply, {ok, Route}, State}
+    end;
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -186,14 +198,26 @@ handle_cast({add_static, App, Path, Host, Route}, State = #state{dispatch_table 
                 [{Host, [RouteInfo|Routes]}|proplists:delete(Host, DT)]
         end,
     {noreply, State#state{dispatch_table = NewDT}};
-
-handle_cast({add_route, App, Module, Func, Host, Route, Secure, Method}, State = #state{dispatch_table = DT}) ->
+handle_cast({add_route, App, CallbackInfo, Host, Route, Secure, Options}, State = #state{dispatch_table = DT}) ->
     InitialState = #{app => App,
-		     mod => Module,
-		     func => Func,
-		     secure => Secure,
-		     method => get_method(Method)},
-    RouteInfo = {Route, nova_controller, InitialState},
+                     secure => Secure
+                    },
+    RouteInfo =
+        case maps:get(protocol, Options, http) of
+            http ->
+                {Module, Func} = CallbackInfo,
+                HttpState = InitialState#{protocol => http,
+                                          mod => Module,
+                                          func => Func,
+                                          methods => get_methods(Options)},
+                {Route, nova_controller, HttpState};
+            ws ->
+                SubProtocols = maps:get(subprotocols, Options, []),
+                WSState = InitialState#{protocol => ws,
+                                        mod => CallbackInfo,
+                                        subprotocols => SubProtocols},
+                {Route, nova_controller, WSState}
+        end,
 
     NewDT =
         case proplists:get_value(Host, DT) of
@@ -274,13 +298,14 @@ process_routes(App, [RoutesLine|T]) ->
     add_statics(App, Host, Prefix, Statics),
     process_routes(App, T).
 
+
 add_routes(_, _, _, _, []) ->
     ok;
-add_routes(App, Host, Prefix, Secure, [{Route, Module, Func} | T]) ->
-    add_route(App, Module, Func, Host, Prefix ++ Route, Secure),
+add_routes(App, Host, Prefix, Secure, [{Route, CallbackInfo} | T]) ->
+    add_route(App, CallbackInfo, Host, Prefix ++ Route, Secure),
     add_routes(App, Host, Prefix, Secure, T);
-add_routes(App, Host, Prefix, Secure, [{Route, Method, Module, Func} | T]) ->
-    add_route(App, Module, Func, Host, Prefix ++ Route, Secure, Method),
+add_routes(App, Host, Prefix, Secure, [{Route, CallbackInfo, Options} | T]) ->
+    add_route(App, CallbackInfo, Host, Prefix ++ Route, Secure, Options),
     add_routes(App, Host, Prefix, Secure, T).
 
 add_statics(_, _, _, []) ->
@@ -290,8 +315,14 @@ add_statics(App, Host, Prefix, [{Route, Path} | T]) ->
     add_statics(App, Host, Prefix, T).
 
 
-get_method(get) -> <<"GET">>;
-get_method(post) -> <<"POST">>;
-get_method(put) -> <<"PUT">>;
-get_method(delete) -> <<"DELETE">>;
-get_method(Others) -> Others.
+get_methods(#{methods := M}) when is_list(M) ->
+    lists:map(fun(get)  -> <<"GET">>;
+                 (post) -> <<"POST">>;
+                 (put) -> <<"PUT">>;
+                 (delete) -> <<"DELETE">>;
+                 (_) -> undefined
+              end, M);
+get_methods(#{methods := M}) ->
+    get_methods(#{methods => [M]});
+get_methods(_) ->
+    '_'.
