@@ -37,11 +37,33 @@ terminate(_Reason, _Req, _State) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 
-dispatch(Req = #{method := ReqMethod},
-         State = #{mod := Mod, func := Func, method := Method}) when Method == '_' orelse
-                                                                     Method == ReqMethod ->
+dispatch(Req, State = #{protocol := ws}) ->
+    ReqProtocols = cowboy_req:parse_header(<<"sec-websocket-protocol">>, Req),
+
+    case maps:get(subprotocols, State, []) of
+        [] when ReqProtocols == undefined ->
+            %% We have not specified any procols. Client have not requested specific protocol so we accept.
+            {cowboy_websocket, Req, State};
+        _Subprotocols when ReqProtocols == undefined->
+            %% The client have not requested any specific protocol but we requre one. Return 400.
+            Req1 = cowboy_req:reply(400, Req),
+            {ok, Req1, State};
+        Subprotocols ->
+            %% Find out if we support the subprotocol
+            case find_subprotocol_match(Subprotocols, ReqProtocols, Req) of
+                {ok, Req1} ->
+                    {cowboy_websocket, Req1, State};
+                _ ->
+                    Req1 = cowboy_req:reply(400, Req),
+                    {ok, Req1, State}
+            end
+    end;
+dispatch(Req = #{method := ReqMethod}, State = #{protocol := http, mod := Mod,
+                                                 func := Func, method := Method}) when Method == '_' orelse
+                                                                                       Method == ReqMethod ->
     handle(Mod, Func, Req, State);
 dispatch(Req, State) ->
+    %% Display a nicer page
     Req1 = cowboy_req:reply(404, Req),
     {ok, Req1, State}.
 
@@ -149,3 +171,15 @@ get_view_name([$_, $c, $o, $n, $t, $r, $o, $l, $l, $e, $r]) ->
     "_dtl";
 get_view_name([H|T]) ->
     [H|get_view_name(T)].
+
+
+find_subprotocol_match([], _, _) -> not_found.
+find_subprotocol_match([SupportedProtocol|Tl], ReqProtocols, Req) ->
+    case lists:keymember(SupportedProtocol, 1, ReqProtocols) of
+        true ->
+            Req1 = cowboy_req:set_resp_header(<<"sec-websocket-protocol">>,
+                                              SupportedProtocol, Req),
+            {ok, Req1};
+        _ ->
+            find_subprotocol_match(Tl, ReqProtocols, Req)
+    end.
