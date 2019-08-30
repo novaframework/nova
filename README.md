@@ -5,6 +5,7 @@
 
 [http://www.novaframework.org](http://www.novaframework.org)
 
+[![Build Status](https://travis-ci.org/novaframework/nova.svg?branch=master)](https://travis-ci.org/novaframework/nova)
 
 ## Getting started
 
