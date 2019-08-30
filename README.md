@@ -1,7 +1,8 @@
 ![nova logo](https://raw.githubusercontent.com/novaframework/nova/master/priv/static/nova.png)
 
 > ### Simple. Fault-tolerant. Distributed.
-> A web framework.
+> - Create a basic webpage in minutes
+> - Using Erlang OTP to achieve both fault-tolerance and distribution
 
 [http://www.novaframework.org](http://www.novaframework.org)
 
@@ -9,7 +10,7 @@
 
 ## Getting started
 
-Start by adding the `rebar3` template for Nova.
+Start by adding the `rebar3` template for Nova. This can be done by running the installation script;
 
 *Via curl*
 ```bash
