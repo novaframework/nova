@@ -12,6 +12,14 @@
          terminate/3
         ]).
 
+
+%% Websocket specific callbacks
+-export([
+         websocket_init/1,
+         websocket_handle/2,
+         websocket_info/2
+        ]).
+
 -include_lib("nova/include/nova.hrl").
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -32,10 +40,36 @@ terminate(_Reason, _Req, _State) ->
     ok.
 
 
+websocket_init(State = #{mod := Mod}) ->
+    handle_ws(Mod, websocket_init, [], State).
+
+websocket_handle(Frame, State = #{mod := Mod}) ->
+    handle_ws(Mod, websocket_handle, [Frame], State).
+
+websocket_info(Msg, State = #{mod := Mod}) ->
+    handle_ws(Mod, websocket_info, [Msg], State).
+
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Private functions       %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+handle_ws(Mod, Func, Args, State = #{substate := Substate}) ->
+    try
+        case erlang:apply(Mod, Func, Args ++ [Substate]) of
+            {reply, Frame, NewSubstate} ->
+                {reply, Frame, State#{substate => NewSubstate}};
+            {reply, Frame, NewSubstate, hibernate} ->
+                {reply, Frame, State#{substate => NewSubstate}, hibernate};
+            {ok, NewSubstate, hibernate} ->
+                {ok, State#{substate => NewSubstate}, hibernate};
+            {stop, NewSubstate} ->
+                {stop, State#{substate => NewSubstate}}
+        end
+    catch
+        ?WITH_STACKTRACE(Type, Reason, Stacktrace)
+          ?ERROR("Websocket failed with ~p:~p.~nStacktrace:~n~p", [Type, Reason, Stacktrace]),
+          Substate
+    end.
 
 dispatch(Req, State = #{protocol := ws}) ->
     ReqProtocols = cowboy_req:parse_header(<<"sec-websocket-protocol">>, Req),
