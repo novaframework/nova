@@ -42,7 +42,5 @@ Now you can type `application:ensure_all_started(my_first_app).` to start your a
 
 ## Dev mode
 
-When developing you probably don't want to quit erlang, recompile and then re-run the whole thing again. If you specify `{devmode, true}` in your configuration the `nova_reloader` module will start.
-This module checks for file changes and recompiles/reloades the files if needed. You can also add additional directories with `nova_reloader:add_directory/1`.
-
-*Note!* We semi-support reloading dtl-templates at this stage, but we'll fix this asap.
+When developing you probably don't want to quit erlang, recompile and then re-run the whole thing again. If you specify `{dev_mode, true}` in your configuration the reloader will start.
+This module checks for file changes and recompiles/reloades the files if needed.
