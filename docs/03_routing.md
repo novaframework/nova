@@ -35,6 +35,9 @@ The routing object consist of four or three fields.
 
 The websocket controller needs to implement three functions: `websocket_init/1`, `websocket_handle/2`, `websocket_info/2`. More information about these callbacks can be found in the [Cowboy documentation](https://ninenines.eu/docs/en/cowboy/2.6/guide/ws_handlers/).
 
+*Important*
+One needs to define `protocol => ws` in the options-map in order to enable websocket communications.
+
 
 ## How to create routes
 
