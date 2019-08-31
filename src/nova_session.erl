@@ -119,7 +119,11 @@ handle_call({new_session, Req}, _From, State) ->
     {reply, {#{}, Req1}, State};
 handle_call({put, Key, Value, Req}, _From, State) ->
     #{session_id := SessionId} = cowboy_req:match_cookies([{session_id, [], undefined}], Req),
-    [#session_data{data = Data}] = ets:lookup(?SERVER, SessionId),
+    Data =
+        case ets:lookup(?SERVER, SessionId) of
+            [] -> #{};
+            [#session_data{data = Data0}] -> Data0
+        end,
     ets:insert(?SERVER, #session_data{id = SessionId, data = Data#{Key => Value}}),
     {reply, ok, State};
 handle_call(_Request, _From, State) ->
