@@ -178,6 +178,13 @@ handle1(RetObj, {Mod, Fun}, Req = #{method := Method}, State) ->
         {status, Status, Headers} when is_integer(Status) ->
             Req1 = cowboy_req:reply(Status, Headers, Req),
             {ok, Req1, State};
+        {redirect, Route} ->
+            Req1 = cowboy_req:reply(
+                     302,
+                     #{<<"Location">> => list_to_binary(Route)},
+                     Req
+                    ),
+            {ok, Req1, State};
         {cowboy_req, CowboyReq} ->
             {ok, CowboyReq, State};
         {extern_handler, Module, Function, Payload} ->
