@@ -35,8 +35,17 @@ init(Req, State = #{secure := {Mod, Func}}) ->
     case Mod:Func(Req) of
         true ->
             dispatch(Req, State);
-        _ ->
+        false ->
             Req1 = cowboy_req:reply(401, Req),
+            {ok, Req1, State};
+        {redirect, Route} ->
+            Req1 = cowboy_req:reply(
+                     302,
+                     #{<<"Location">> => list_to_binary(Route)},
+                     Req
+                    ),
+            {ok, Req1, State};
+        {cowboy_req, Req1} ->
             {ok, Req1, State}
     end.
 
