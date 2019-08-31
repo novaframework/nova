@@ -73,6 +73,8 @@ handle_ws(Mod, Func, Args, State = #{substate := Substate}) ->
                 {reply, Frame, State#{substate => NewSubstate}};
             {reply, Frame, NewSubstate, hibernate} ->
                 {reply, Frame, State#{substate => NewSubstate}, hibernate};
+            {ok, NewSubstate} ->
+                {ok, State#{substate => NewSubstate}};
             {ok, NewSubstate, hibernate} ->
                 {ok, State#{substate => NewSubstate}, hibernate};
             {stop, NewSubstate} ->
