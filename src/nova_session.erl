@@ -60,8 +60,12 @@ get_session(Req) ->
             %% Create new session
             new_session(Req);
         #{session_id := SessionId} ->
-            [#session_data{data = Data}] = ets:lookup(?SERVER, SessionId),
-            {Data, Req}
+            case ets:lookup(?SERVER, SessionId) of
+                [#session_data{data = Data}] ->
+                    {Data, Req};
+                [] ->
+                    new_session(Req)
+            end
     end.
 
 new_session(Req) ->
