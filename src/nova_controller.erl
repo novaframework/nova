@@ -187,7 +187,7 @@ handle1(RetObj, {Mod, Fun}, Req = #{method := Method}, State) ->
             {ok, Req1, State};
         {cowboy_req, CowboyReq} ->
             {ok, CowboyReq, State};
-        {extern_handler, Module, Function, Payload} ->
+        {external_handler, Module, Function, Payload} ->
             try Module:Function(Payload, Req) of
                 {external_handler, _, _, _} ->
                     ?ERROR("Infinite loop detected"),
@@ -196,8 +196,8 @@ handle1(RetObj, {Mod, Fun}, Req = #{method := Method}, State) ->
                 RetObject ->
                     handle1(RetObject, {Mod, Fun}, Req, State)
             catch
-                _:_ ->
-                    ?WARNING("External handler (~p:~p) failed", [Module, Function])
+                ?WITH_STACKTRACE(Type, Reason, Stacktrace)
+                    ?WARNING("External handler (~p:~p) failed. ~p:~p. Stacktrace: ~p", [Module, Function, Type, Reason, Stacktrace])
             end;
         Other ->
             ?WARNING("Unsupported return value from controller ~p:~p/1. Returned: ~p", [Mod, Fun, Other]),

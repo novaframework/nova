@@ -10,7 +10,7 @@ A simple route file could look something like this:
 #{prefix => "/admin",
   security => false,
   routes => [
-    {"/", my_controller, main, #{methods => [get]}}
+    {"/", {my_controller, main}, #{methods => [get]}}
   ]
 }
 ```
@@ -24,7 +24,7 @@ The routing object consist of four or three fields.
 **HTTP Routing**
 
 ```
-{Route :: list(), Controller :: atom(), Function :: atom(), Options :: map()}
+{Route :: list(), {Controller :: atom(), Function :: atom()}, Options :: map()}
 ```
 
 **Websocket routing**
@@ -63,7 +63,7 @@ You can secure routes by providing a module and function to the `security` direc
   type => html,
   security => {security_controller, do_security},
   routes => [
-    {"/", my_controller, main, #{methods => [get]}}
+    {"/", {my_controller, main}, #{methods => [get]}}
   ]
 }
 ```
