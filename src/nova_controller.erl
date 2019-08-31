@@ -135,7 +135,7 @@ handle(Mod, Fun, Req, State) ->
             handle1(RetObj, {Mod, Fun}, Req, State)
     catch
         ?WITH_STACKTRACE(Type, Reason, Stacktrace)
-          ?ERROR("Controller failed with ~p:~p.~nStacktrace:~n~p", [Type, Reason, Stacktrace])
+          ?ERROR("Controller (~p:~p/1) failed with ~p:~p.~nStacktrace:~n~p", [Mod, Fun, Type, Reason, Stacktrace])
     end.
 
 handle1(RetObj, {Mod, Fun}, Req = #{method := Method}, State) ->
@@ -191,8 +191,8 @@ handle1(RetObj, {Mod, Fun}, Req = #{method := Method}, State) ->
             {ok, Req1, State};
         {cowboy_req, CowboyReq} ->
             {ok, CowboyReq, State};
-        {external_handler, Module, Function, Payload} ->
-            try Module:Function(Payload, Req) of
+        {external_handler, Module, Payload} ->
+            try Module:handle(Payload, Req) of
                 {external_handler, _, _, _} ->
                     ?ERROR("Infinite loop detected"),
                     Req1 = cowboy_req:reply(500, #{}, Req),
