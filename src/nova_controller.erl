@@ -82,7 +82,9 @@ handle_ws(Mod, Func, Args, State = #{substate := Substate}) ->
         ?WITH_STACKTRACE(Type, Reason, Stacktrace)
           ?ERROR("Websocket failed with ~p:~p.~nStacktrace:~n~p", [Type, Reason, Stacktrace]),
           Substate
-    end.
+     end;
+handle_ws(Mod, Func, Args, State) ->
+    handle_ws(Mod, Func, Args, State#{substate => #{}}).
 
 dispatch(Req, State = #{protocol := ws}) ->
     ReqProtocols = cowboy_req:parse_header(<<"sec-websocket-protocol">>, Req),
