@@ -156,8 +156,11 @@ handle1(RetObj, {Mod, Fun}, Req = #{method := Method}, State) ->
                     undefined ->
                         ViewName = atom_to_list(Mod) ++ "_dtl",
                         list_to_atom(ViewName);
+                    CustomView when is_atom(CustomView) ->
+                        ViewName = atom_to_list(CustomView) ++ "_dtl",
+                        list_to_atom(ViewName);
                     CustomView ->
-                        CustomView
+                        list_to_atom(CustomView ++ "_dtl")
                 end,
             handle_view(View, Variables, Options, Req, State);
         {status, Status} when is_integer(Status) ->
