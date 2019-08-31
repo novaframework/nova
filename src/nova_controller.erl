@@ -201,7 +201,7 @@ handle1(RetObj, {Mod, Fun}, Req = #{method := Method}, State) ->
                     handle1(RetObject, {Mod, Fun}, Req, State)
             catch
                 ?WITH_STACKTRACE(Type, Reason, Stacktrace)
-                    ?WARNING("External handler (~p:~p) failed. ~p:~p. Stacktrace: ~p", [Module, Function, Type, Reason, Stacktrace])
+                    ?WARNING("External handler (~p:~p) failed. ~p:~p. Stacktrace: ~p", [Module, handle, Type, Reason, Stacktrace])
             end;
         Other ->
             ?WARNING("Unsupported return value from controller ~p:~p/1. Returned: ~p", [Mod, Fun, Other]),
