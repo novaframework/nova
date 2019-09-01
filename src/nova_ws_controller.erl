@@ -92,7 +92,9 @@ handle_ws(Mod, Func, Args, State = #{substate := Substate}) ->
             {ok, NewSubstate, hibernate} ->
                 {ok, State#{substate => NewSubstate}, hibernate};
             {stop, NewSubstate} ->
-                {stop, State#{substate => NewSubstate}}
+                {stop, State#{substate => NewSubstate}};
+            ok ->
+                {ok, State}
         end
     catch
         ?WITH_STACKTRACE(Type, Reason, Stacktrace)
