@@ -162,8 +162,6 @@ handle_cast({process_routes, App, Routefile}, State) ->
     apply_routes(),
     {noreply, State};
 
-
-
 handle_cast({remove_route, Host, Route}, State = #state{dispatch_table = DT}) ->
     case proplists:get_value(Host, DT) of
         undefined ->
