@@ -1,0 +1,20 @@
+{"1.1.0",
+[{<<"cowboy">>,{pkg,<<"cowboy">>,<<"2.6.1">>},0},
+ {<<"cowlib">>,{pkg,<<"cowlib">>,<<"2.7.3">>},1},
+ {<<"erlydtl">>,{pkg,<<"erlydtl">>,<<"0.12.1">>},0},
+ {<<"jsone">>,{pkg,<<"jsone">>,<<"1.5.0">>},0},
+ {<<"quickrand">>,{pkg,<<"quickrand">>,<<"1.7.5">>},1},
+ {<<"ranch">>,{pkg,<<"ranch">>,<<"1.7.1">>},1},
+ {<<"sync">>,{pkg,<<"sync">>,<<"0.1.3">>},0},
+ {<<"uuid">>,{pkg,<<"uuid_erl">>,<<"1.7.5">>},0}]}.
+[
+{pkg_hash,[
+ {<<"cowboy">>, <<"F2E06F757C337B3B311F9437E6E072B678FCD71545A7B2865BDAA154D078593F">>},
+ {<<"cowlib">>, <<"A7FFCD0917E6D50B4D5FB28E9E2085A0CEB3C97DEA310505F7460FF5ED764CE9">>},
+ {<<"erlydtl">>, <<"3FDE3190D30340B10CFCFDB4135A828761D468DB4E4B34817C6B91D295F3142D">>},
+ {<<"jsone">>, <<"410F5208BCAE541BF941B3F2756E5BB5A4C8694D7FFD6B34B909AE88262629C0">>},
+ {<<"quickrand">>, <<"E3086A153EB13A057FC19192D05E2D4C6BB2BDBB55746A699BEAE9847AC17CA8">>},
+ {<<"ranch">>, <<"6B1FAB51B49196860B733A49C07604465A47BDB78AA10C1C16A3D199F7F8C881">>},
+ {<<"sync">>, <<"C5785FE1311542B76355F403B8E0B35E30DBBEE1F5E89968748CEA4D0A20D289">>},
+ {<<"uuid">>, <<"3862FF9A21C42566DFD0376B97512FA202922897129E09A05E2AFA0D9CAFD97A">>}]}
+].
