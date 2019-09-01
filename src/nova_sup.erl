@@ -1,11 +1,8 @@
-%%%-------------------------------------------------------------------
 %%% @author Niclas Axelsson <niclas@burbas.se>
-%%% @copyright (C) 2018, Niclas Axelsson
 %%% @doc
-%%%
+%%% Nova supervisor
 %%% @end
-%%% Created : 26 Jun 2018 by Niclas Axelsson <niclas@burbas.se>
-%%%-------------------------------------------------------------------
+
 -module(nova_sup).
 
 -behaviour(supervisor).

@@ -2,7 +2,6 @@
 %%% @doc
 %%% Callback controller for handling websockets
 %%% @end
-%%% Created :  1 Sep 2019 by Niclas Axelsson <niclas@burbas.se>
 
 -module(nova_ws_controller).
 
