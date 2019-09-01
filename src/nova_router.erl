@@ -304,11 +304,11 @@ add_routes(_, _, _, _, []) ->
 add_routes(App, Host, Prefix, Secure, [{Route, CallbackInfo} | T]) ->
     add_route(App, CallbackInfo, Host, Prefix ++ Route, Secure),
     add_routes(App, Host, Prefix, Secure, T);
-add_routes(App, Host, Prefix, Secure, [{Route, CallbackInfo, Options} | T]) ->
+add_routes(App, Host, Prefix, Secure, [{Route, CallbackInfo, Options} | T]) when is_map(Options) ->
     add_route(App, CallbackInfo, Host, Prefix ++ Route, Secure, Options),
     add_routes(App, Host, Prefix, Secure, T);
 add_routes(App, Host, Prefix, Secure, [{Route, Module, Function} | T]) ->
-    add_route(App, {Module, Function}, Host, Prefix ++ Route, Secure);
+    add_route(App, {Module, Function}, Host, Prefix ++ Route, Secure),
     add_routes(App, Host, Prefix, Secure, T);
 add_routes(App, Host, Prefix, Secure, [{Route, Module, Function, Options} | T]) ->
     add_route(App, {Module, Function}, Host, Prefix ++ Route, Secure, Options),
