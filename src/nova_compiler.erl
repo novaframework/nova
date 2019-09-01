@@ -1,11 +1,8 @@
-%%%-------------------------------------------------------------------
 %%% @author Niclas Axelsson <niclas@burbas.se>
-%%% @copyright (C) 2018, Niclas Axelsson
 %%% @doc
-%%%
+%%% Nova compiler handles the initial compilation of controllers and
+%%% views.
 %%% @end
-%%% Created : 28 Jun 2018 by Niclas Axelsson <niclas@burbas.se>
-%%%-------------------------------------------------------------------
 -module(nova_compiler).
 
 -behaviour(gen_server).
