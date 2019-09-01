@@ -1,23 +1,15 @@
 %%% @author Niclas Axelsson <niclas@burbas.se>
-%%% @copyright (C) 2018, Niclas Axelsson
 %%% @doc
-%%%
+%%% Callback controller for handling http requests
 %%% @end
 %%% Created : 25 Jun 2018 by Niclas Axelsson <niclas@burbas.se>
 
--module(nova_controller).
+-module(nova_http_controller).
 
 -export([
+         check_security/2,
          init/2,
          terminate/3
-        ]).
-
-
-%% Websocket specific callbacks
--export([
-         websocket_init/1,
-         websocket_handle/2,
-         websocket_info/2
         ]).
 
 -include_lib("nova/include/nova.hrl").
@@ -27,12 +19,49 @@
 -endif.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Type/Spec declarations  %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%
+-type deprecated_call_result(State) :: {ok, State}
+                                     | {ok, State, hibernate}
+                                     | {reply, cow_ws:frame() | [cow_ws:frame()], State}
+                                     | {reply, cow_ws:frame() | [cow_ws:frame()], State, hibernate}
+                                     | {stop, State}.
+
+
+
+-spec check_security(Req :: cowboy_req:req(), State :: map()) -> boolean() |
+                                                                 {redirect, Route :: binary()} |
+                                                                 {cowboy_req, Req1 :: cowboy_req:req()}.
+-spec init(Req :: cowboy_req:req(), State :: map()) -> boolean() |
+                                                       deprecated_call_result(State) when State :: map().
+-spec terminate(Reason :: any(), Req :: cowboy_req:req(), State :: map()) -> ok.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Public functions        %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-init(Req, State = #{secure := false}) -> dispatch(Req, State);
-init(Req, State = #{secure := {Mod, Func}}) ->
-    case Mod:Func(Req) of
+%%--------------------------------------------------------------------
+%% @doc
+%% If a security module/func is defined in the route of the request that
+%% module/func will be called. If the result of that is false it will
+%% return a 401 to the requester. Otherwise it will continue to handle
+%% the request.
+%% @end
+%%--------------------------------------------------------------------
+check_security(Req, State = #{secure := false}) -> true;
+check_security(Req, State = #{secure := {Mod, Func}}) -> Mod:Func(Req).
+
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Callback function from cowboy. Checks if the user is allowed to see
+%% this page (See check_security/2 function). If true then the handling
+%% of the request will continue. If not it will either redirect the user,
+%% return a 401 http staus or return a cowboy request object.
+%% @end
+%%--------------------------------------------------------------------
+init(Req, State) ->
+    case check_security(Req, State) of
         true ->
             dispatch(Req, State);
         false ->
@@ -49,71 +78,16 @@ init(Req, State = #{secure := {Mod, Func}}) ->
             {ok, Req1, State}
     end.
 
+%% TODO! Fix a proper terminate function
 terminate(_Reason, _Req, _State) ->
     ok.
-
-
-websocket_init(State = #{mod := Mod}) ->
-    handle_ws(Mod, websocket_init, [], State).
-
-websocket_handle(Frame, State = #{mod := Mod}) ->
-    handle_ws(Mod, websocket_handle, [Frame], State).
-
-websocket_info(Msg, State = #{mod := Mod}) ->
-    handle_ws(Mod, websocket_info, [Msg], State).
-
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Private functions       %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
-handle_ws(Mod, Func, Args, State = #{substate := Substate}) ->
-    try
-        case erlang:apply(Mod, Func, Args ++ [Substate]) of
-            {reply, Frame, NewSubstate} ->
-                {reply, Frame, State#{substate => NewSubstate}};
-            {reply, Frame, NewSubstate, hibernate} ->
-                {reply, Frame, State#{substate => NewSubstate}, hibernate};
-            {ok, NewSubstate} ->
-                {ok, State#{substate => NewSubstate}};
-            {ok, NewSubstate, hibernate} ->
-                {ok, State#{substate => NewSubstate}, hibernate};
-            {stop, NewSubstate} ->
-                {stop, State#{substate => NewSubstate}}
-        end
-    catch
-        ?WITH_STACKTRACE(Type, Reason, Stacktrace)
-          ?ERROR("Websocket failed with ~p:~p.~nStacktrace:~n~p", [Type, Reason, Stacktrace]),
-          Substate
-     end;
-handle_ws(Mod, Func, Args, State) ->
-    handle_ws(Mod, Func, Args, State#{substate => #{}}).
-
-dispatch(Req, State = #{protocol := ws}) ->
-    ReqProtocols = cowboy_req:parse_header(<<"sec-websocket-protocol">>, Req),
-
-    case maps:get(subprotocols, State, []) of
-        [] when ReqProtocols == undefined ->
-            %% We have not specified any procols. Client have not requested specific protocol so we accept.
-            {cowboy_websocket, Req, State};
-        _Subprotocols when ReqProtocols == undefined->
-            %% The client have not requested any specific protocol but we requre one. Return 400.
-            Req1 = cowboy_req:reply(400, Req),
-            {ok, Req1, State};
-        Subprotocols ->
-            %% Find out if we support the subprotocol
-            case find_subprotocol_match(Subprotocols, ReqProtocols, Req) of
-                {ok, Req1} ->
-                    {cowboy_websocket, Req1, State};
-                _ ->
-                    Req1 = cowboy_req:reply(400, Req),
-                    {ok, Req1, State}
-            end
-    end;
-dispatch(Req, State = #{protocol := http, mod := Mod,
-                        func := Func, methods := '_'}) ->
+dispatch(Req, State = #{mod := Mod, func := Func, methods := '_'}) ->
     handle(Mod, Func, Req, State);
-dispatch(Req = #{method := ReqMethod}, State = #{protocol := http, mod := Mod,
-                                                 func := Func, methods := Methods}) ->
+dispatch(Req = #{method := ReqMethod}, State = #{mod := Mod, func := Func, methods := Methods}) ->
     case lists:any(fun(X) -> X == ReqMethod end, Methods) of
         true ->
             handle(Mod, Func, Req, State);
@@ -126,19 +100,16 @@ dispatch(Req, State) ->
     Req1 = cowboy_req:reply(404, Req),
     {ok, Req1, State}.
 
-
-
-
 handle(Mod, Fun, Req, State) ->
     try Mod:Fun(Req) of
         RetObj ->
-            handle1(RetObj, {Mod, Fun}, Req, State)
+            handle1(RetObj, Mod, Fun, Req, State)
     catch
         ?WITH_STACKTRACE(Type, Reason, Stacktrace)
           ?ERROR("Controller (~p:~p/1) failed with ~p:~p.~nStacktrace:~n~p", [Mod, Fun, Type, Reason, Stacktrace])
     end.
 
-handle1(RetObj, {Mod, Fun}, Req = #{method := Method}, State) ->
+handle1(RetObj, Mod, Fun, Req = #{method := Method}, State) ->
     case RetObj of
 	{json, JSON} ->
             EncodedJSON = jsone:encode(JSON, [undefined_as_null]),
@@ -198,7 +169,7 @@ handle1(RetObj, {Mod, Fun}, Req = #{method := Method}, State) ->
                     Req1 = cowboy_req:reply(500, #{}, Req),
                     {ok, Req1, State};
                 RetObject ->
-                    handle1(RetObject, {Mod, Fun}, Req, State)
+                    handle1(RetObject, Mod, Fun, Req, State)
             catch
                 ?WITH_STACKTRACE(Type, Reason, Stacktrace)
                     ?WARNING("External handler (~p:~p) failed. ~p:~p. Stacktrace: ~p", [Module, handle, Type, Reason, Stacktrace])
@@ -240,19 +211,6 @@ get_view_name([$_, $c, $o, $n, $t, $r, $o, $l, $l, $e, $r]) ->
     "_dtl";
 get_view_name([H|T]) ->
     [H|get_view_name(T)].
-
-
-find_subprotocol_match([], _, _) -> not_found;
-find_subprotocol_match([SupportedProtocol|Tl], ReqProtocols, Req) ->
-    case lists:keymember(SupportedProtocol, 1, ReqProtocols) of
-        true ->
-            Req1 = cowboy_req:set_resp_header(<<"sec-websocket-protocol">>,
-                                              SupportedProtocol, Req),
-            {ok, Req1};
-        _ ->
-            find_subprotocol_match(Tl, ReqProtocols, Req)
-    end.
-
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
