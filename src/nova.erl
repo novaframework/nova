@@ -42,6 +42,6 @@ application_loaded(Application) ->
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec spec load_routefile(Application :: atom(), RoutePath :: string()) -> ok.
+-spec load_routefile(Application :: atom(), RoutePath :: string()) -> ok.
 load_routefile(Application, RoutePath) ->
     nova_router:process_routefile(Application, RoutePath).
