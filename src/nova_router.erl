@@ -208,17 +208,15 @@ handle_cast({add_route, App, CallbackInfo, Host, Route, Secure, Options}, State 
         case maps:get(protocol, Options, http) of
             http ->
                 {Module, Func} = CallbackInfo,
-                HttpState = InitialState#{protocol => http,
-                                          mod => Module,
+                HttpState = InitialState#{mod => Module,
                                           func => Func,
                                           methods => get_methods(Options)},
-                {Route, nova_controller, HttpState};
+                {Route, nova_http_controller, HttpState};
             ws ->
                 SubProtocols = maps:get(subprotocols, Options, []),
-                WSState = InitialState#{protocol => ws,
-                                        mod => CallbackInfo,
+                WSState = InitialState#{mod => CallbackInfo,
                                         subprotocols => SubProtocols},
-                {Route, nova_controller, WSState}
+                {Route, nova_ws_controller, WSState}
         end,
 
     NewDT =
