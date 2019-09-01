@@ -2,7 +2,6 @@
 %%% @doc
 %%% Callback controller for handling http requests
 %%% @end
-%%% Created : 25 Jun 2018 by Niclas Axelsson <niclas@burbas.se>
 
 -module(nova_http_controller).
 
