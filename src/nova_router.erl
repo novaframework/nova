@@ -1,11 +1,8 @@
-%%-------------------------------------------------------------------
 %%% @author Niclas Axelsson <niclas@burbas.se>
-%%% @copyright (C) 2018, Niclas Axelsson
 %%% @doc
-%%%
+%%% Nova router is responsible for handling all incoming request and
+%%% routes them to the correct controller.
 %%% @end
-%%% Created : 24 Jun 2018 by Niclas Axelsson <niclas@burbas.se>
-%%%-------------------------------------------------------------------
 -module(nova_router).
 
 -behaviour(gen_server).

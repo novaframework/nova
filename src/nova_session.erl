@@ -1,11 +1,7 @@
-%%%-------------------------------------------------------------------
 %%% @author Niclas Axelsson <niclas@burbas.se>
-%%% @copyright (C) 2018, Niclas Axelsson
 %%% @doc
-%%%
+%%% Session handler for Nova.
 %%% @end
-%%% Created : 29 Jun 2018 by Niclas Axelsson <niclas@burbas.se>
-%%%-------------------------------------------------------------------
 -module(nova_session).
 
 -behaviour(gen_server).
