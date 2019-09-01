@@ -222,10 +222,11 @@ do_compile(File) ->
                         {ok, Module, _Binary, Warnings} ->
                             ?WARNING("Compiled dtl view: ~p with warnings: ~p", [Module, Warnings]);
                         {error, Error, Warnings} ->
+                            format_msg(warning, Warnings),
                             format_msg(error, Error)
                     catch
                         ?WITH_STACKTRACE(Type, Reason, Stacktrace)
-                        ?ERROR("Could not compile file ~s. Reason ~p~nStacktrace:~n~p", [File, Reason, Stacktrace])
+                        ?ERROR("Could not compile file ~s - ~p:~p~nStacktrace:~n~p", [File, Type, Reason, Stacktrace])
                     end,
                     {ModName, File};
                 ".erl" ->
@@ -244,7 +245,7 @@ do_compile(File) ->
                             {ModuleName, File}
                     catch
                         ?WITH_STACKTRACE(Type, Reason, Stacktrace)
-                          ?ERROR("Could not compile file ~s. Reason ~p", [File, Reason])
+                          ?ERROR("Could not compile file ~s - ~p:~p~nStacktrace: ~p", [File, Type, Reason, Stacktrace])
                     end;
                 Unsupported ->
                     %% Not supported file
