@@ -5,6 +5,7 @@
 * 01 - Introduction
   * Erlang
   * What is nova?
+  * [Guides](./guides)
 * [02 - Quick start](02_quick-start.md)
   * Use rebar3 and nova_rebar3
   * nova_admin
