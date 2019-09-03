@@ -47,7 +47,6 @@ When we generated this project we also got a route file for my_page. It is in pr
 
 ```erlang
 #{prefix => "",
-  type => html,
   security => false,
   routes => [
             {"/", my_page_main_controller, index}
@@ -78,21 +77,6 @@ It will be a page with the text "Nova is running!". Now we know that Nova works 
 
 Set the project in dev mode:
 
-Open a editor and open src/my_page.app.src and add {dev_mode, true} in env.
-
-It should look like this:
-```erlang
-	{dev_mode, true},
-        {web_port, 8080},
-        {nova_applications, [
-                               #{
-                                 name => my_page,
-                                 routes_file => "priv/my_page.routes.erl"
-                                }
-                              ]}
-
-       ]},
-```
 
 Open a editor and open ./src/controller/my_page_main_controller.erl
 
