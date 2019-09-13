@@ -47,8 +47,8 @@
 %% the request.
 %% @end
 %%--------------------------------------------------------------------
-check_security(Req, State = #{secure := false}) -> true;
-check_security(Req, State = #{secure := {Mod, Func}}) -> Mod:Func(Req).
+check_security(_, #{secure := false}) -> true;
+check_security(Req, #{secure := {Mod, Func}}) -> Mod:Func(Req).
 
 
 %%--------------------------------------------------------------------
