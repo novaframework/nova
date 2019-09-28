@@ -6,10 +6,10 @@
 -module(nova_http_controller).
 
 -export([
-         check_security/2,
-         init/2,
-         terminate/3
+         execute/2
         ]).
+
+-behaviour(cowboy_middleware).
 
 -include_lib("nova/include/nova.hrl").
 
@@ -18,38 +18,8 @@
 -endif.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Type/Spec declarations  %
-%%%%%%%%%%%%%%%%%%%%%%%%%%%
--type deprecated_call_result(State) :: {ok, State}
-                                     | {ok, State, hibernate}
-                                     | {reply, cow_ws:frame() | [cow_ws:frame()], State}
-                                     | {reply, cow_ws:frame() | [cow_ws:frame()], State, hibernate}
-                                     | {stop, State}.
-
-
-
--spec check_security(Req :: cowboy_req:req(), State :: map()) -> boolean() |
-                                                                 {redirect, Route :: binary()} |
-                                                                 {cowboy_req, Req1 :: cowboy_req:req()}.
--spec init(Req :: cowboy_req:req(), State :: map()) -> boolean() |
-                                                       deprecated_call_result(State) when State :: map().
--spec terminate(Reason :: any(), Req :: cowboy_req:req(), State :: map()) -> ok.
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Public functions        %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%--------------------------------------------------------------------
-%% @doc
-%% If a security module/func is defined in the route of the request that
-%% module/func will be called. If the result of that is false it will
-%% return a 401 to the requester. Otherwise it will continue to handle
-%% the request.
-%% @end
-%%--------------------------------------------------------------------
-check_security(_, #{secure := false}) -> true;
-check_security(Req, #{secure := {Mod, Func}}) -> Mod:Func(Req).
-
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -59,27 +29,9 @@ check_security(Req, #{secure := {Mod, Func}}) -> Mod:Func(Req).
 %% return a 401 http staus or return a cowboy request object.
 %% @end
 %%--------------------------------------------------------------------
-init(Req, State) ->
-    case check_security(Req, State) of
-        true ->
-            dispatch(Req, State);
-        false ->
-            Req1 = cowboy_req:reply(401, Req),
-            {ok, Req1, State};
-        {redirect, Route} ->
-            Req1 = cowboy_req:reply(
-                     302,
-                     #{<<"Location">> => list_to_binary(Route)},
-                     Req
-                    ),
-            {ok, Req1, State};
-        {cowboy_req, Req1} ->
-            {ok, Req1, State}
-    end.
-
-%% TODO! Fix a proper terminate function
-terminate(_Reason, _Req, _State) ->
-    ok.
+execute(Req, Env = #{handler_opts := HandlerOpts}) ->
+    HandlerOpts1 = dispatch(Req, HandlerOpts),
+    {ok, Req, Env#{handler_opts => HandlerOpts1}}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Private functions       %
@@ -99,8 +51,8 @@ dispatch(Req, State) ->
     Req1 = cowboy_req:reply(404, Req),
     {ok, Req1, State}.
 
-handle(Mod, Fun, Req, State) ->
-    try Mod:Fun(Req) of
+handle(Mod, Fun, Req, State = #{auth_data := SecObject}) ->
+    try erlang:apply(Mod, Fun, [Req, SecObject]) of
         RetObj ->
             handle1(RetObj, Mod, Fun, Req, State)
     catch
@@ -161,22 +113,18 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, State) ->
             {ok, Req1, State};
         {cowboy_req, CowboyReq} ->
             {ok, CowboyReq, State};
-        {external_handler, Module, Payload} ->
-            try Module:handle(Payload, Req) of
-                {external_handler, _, _, _} ->
-                    ?ERROR("Infinite loop detected"),
-                    Req1 = cowboy_req:reply(500, #{}, Req),
-                    {ok, Req1, State};
-                RetObject ->
-                    handle1(RetObject, Mod, Fun, Req, State)
-            catch
-                ?WITH_STACKTRACE(Type, Reason, Stacktrace)
-                    ?WARNING("External handler (~p:~p) failed. ~p:~p. Stacktrace: ~p", [Module, handle, Type, Reason, Stacktrace])
-            end;
         Other ->
-            ?WARNING("Unsupported return value from controller ~p:~p/1. Returned: ~p", [Mod, Fun, Other]),
-            Req1 = cowboy_req:reply(500, #{}, Req),
-            {ok, Req1, State}
+            Signature = erlang:element(1, Other),
+            case proplists:get_value(Signature, Handlers) of
+                #{module => Handler} ->
+                    try Handler:handle(Other) of
+                        Result ->
+                            %% Recurse. Maybe we need something else?
+                            handle1(Result, Mod, Fun, Req)
+                    catch
+                        ?WITH_STACKTRACE(Type, Reason, Stacktrace)
+                        erlang:raise(Type, Reason, Stacktrace)
+            end
     end.
 
 handle_view(View, Variables, Options, Req, State) ->
