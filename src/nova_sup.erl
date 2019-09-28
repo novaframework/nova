@@ -112,7 +112,7 @@ start_cowboy() ->
     {ok, _} = cowboy:start_clear(
                 nova_listener,
                 [{port, Port}],
-                #{}).
+                #{middlewares => [cowboy_router, nova_security_handler, nova_http_controller}).
 
 start_cowboy_secure(CACert, Cert) ->
     Port = case application:get_env(ssl_port) of
@@ -121,7 +121,8 @@ start_cowboy_secure(CACert, Cert) ->
            end,
     ?INFO("Nova is running SSL on port ~p", [Port]),
     {ok, _} = cowboy:start_tls(nova_listener, [
-                                       {port, Port},
-                                       {certfile, Cert},
-                                       {cacertfile, CACert}
-                                      ], #{}).
+                                               {port, Port},
+                                               {certfile, Cert},
+                                               {cacertfile, CACert}
+                                              ],
+                               #{middlewares => [cowboy_router, nova_security_handler, nova_http_controller}).
