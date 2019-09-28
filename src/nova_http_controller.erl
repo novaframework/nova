@@ -115,15 +115,19 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, State) ->
             {ok, CowboyReq, State};
         Other ->
             Signature = erlang:element(1, Other),
+            Handlers = maps:get(handlers, State, []),
             case proplists:get_value(Signature, Handlers) of
-                #{module => Handler} ->
+                #{module := Handler} ->
                     try Handler:handle(Other) of
                         Result ->
                             %% Recurse. Maybe we need something else?
-                            handle1(Result, Mod, Fun, Req)
+                            handle1(Result, Mod, Fun, Req, State)
                     catch
                         ?WITH_STACKTRACE(Type, Reason, Stacktrace)
                         erlang:raise(Type, Reason, Stacktrace)
+                    end;
+                _ ->
+                    erlang:throw({unknown_return_type, Other})
             end
     end.
 
