@@ -43,7 +43,7 @@ dispatch(Req = #{method := ReqMethod}, State = #{mod := Mod, func := Func, metho
         true ->
             handle(Mod, Func, Req, State);
         false ->
-            Req1 = cowboy_req:reply(404, Req),
+            Req1 = nova_router:status_page(401, Req),
             {ok, Req1, State}
     end;
 dispatch(Req, State) ->
