@@ -48,7 +48,8 @@ execute(Req, _Env) ->
 % Private functions       %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-handle(Mod, Fun, Req, Env = #{handler_opts := #{auth_data := SecObject}}) ->
+handle(Mod, Fun, Req, Env = #{handler_opts := State}) ->
+    SecObject = maps:get(auth_data, State, []),
     try erlang:apply(Mod, Fun, [Req, SecObject]) of
         RetObj ->
             handle1(RetObj, Mod, Fun, Req, Env)
