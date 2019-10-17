@@ -3,7 +3,7 @@
 %%% Callback controller for handling http requests
 %%% @end
 
--module(nova_http_controller).
+-module(nova_http_handler).
 
 -export([
          execute/2
@@ -29,38 +29,35 @@
 %% return a 401 http staus or return a cowboy request object.
 %% @end
 %%--------------------------------------------------------------------
-execute(Req, Env = #{handler_opts := HandlerOpts}) ->
-    HandlerOpts1 = dispatch(Req, HandlerOpts),
-    {ok, Req, Env#{handler_opts => HandlerOpts1}}.
+execute(Req, Env = #{handler_opts := #{mod := Mod, func := Func, methods := '_'}}) ->
+    handle(Mod, Func, Req, Env);
+execute(Req = #{method := ReqMethod}, Env = #{handler_opts := #{mod := Mod, func := Func, methods := Methods}}) ->
+    case lists:any(fun(X) -> X == ReqMethod end, Methods) of
+        true ->
+            handle(Mod, Func, Req, Env);
+        false ->
+            Req1 = nova_router:status_page(401, Req),
+            {stop, Req1}
+    end;
+execute(Req, _Env) ->
+    %% Display a nicer page
+    Req1 = cowboy_req:reply(404, Req),
+    {stop, Req1}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Private functions       %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
-dispatch(Req, State = #{mod := Mod, func := Func, methods := '_'}) ->
-    handle(Mod, Func, Req, State);
-dispatch(Req = #{method := ReqMethod}, State = #{mod := Mod, func := Func, methods := Methods}) ->
-    case lists:any(fun(X) -> X == ReqMethod end, Methods) of
-        true ->
-            handle(Mod, Func, Req, State);
-        false ->
-            Req1 = nova_router:status_page(401, Req),
-            {ok, Req1, State}
-    end;
-dispatch(Req, State) ->
-    %% Display a nicer page
-    Req1 = cowboy_req:reply(404, Req),
-    {ok, Req1, State}.
 
-handle(Mod, Fun, Req, State = #{auth_data := SecObject}) ->
+handle(Mod, Fun, Req, Env = #{handler_opts := #{auth_data := SecObject}}) ->
     try erlang:apply(Mod, Fun, [Req, SecObject]) of
         RetObj ->
-            handle1(RetObj, Mod, Fun, Req, State)
+            handle1(RetObj, Mod, Fun, Req, Env)
     catch
         ?WITH_STACKTRACE(Type, Reason, Stacktrace)
           ?ERROR("Controller (~p:~p/1) failed with ~p:~p.~nStacktrace:~n~p", [Mod, Fun, Type, Reason, Stacktrace])
     end.
 
-handle1(RetObj, Mod, Fun, Req = #{method := Method}, State) ->
+handle1(RetObj, Mod, Fun, Req = #{method := Method}, Env = #{handler_opts := State}) ->
     case RetObj of
 	{json, JSON} ->
             EncodedJSON = jsone:encode(JSON, [undefined_as_null]),
@@ -71,7 +68,7 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, State) ->
             Req1 = cowboy_req:reply(StatusCode, #{
                                                   <<"content-type">> => <<"application/json">>
                                                  }, EncodedJSON, Req),
-            {ok, Req1, State};
+            {ok, Req1, Env};
         {json, StatusCode, Headers, JSON} ->
             EncodedJSON = jsone:encode(JSON, [undefined_as_null]),
             Req1 = cowboy_req:reply(StatusCode,
@@ -80,11 +77,11 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, State) ->
                                               Headers),
 				    EncodedJSON,
 				    Req),
-            {ok, Req1, State};
+            {ok, Req1, Env};
         {ok, Variables} ->
             %% Derive the view from module
             ViewNameAtom = get_view_name(Mod),
-            handle_view(ViewNameAtom, Variables, #{}, Req, State);
+            handle_view(ViewNameAtom, Variables, #{}, Req, Env);
         {ok, Variables, Options} ->
             View =
                 case maps:get(view, Options, undefined) of
@@ -97,22 +94,26 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, State) ->
                     CustomView ->
                         list_to_atom(CustomView ++ "_dtl")
                 end,
-            handle_view(View, Variables, Options, Req, State);
+            handle_view(View, Variables, Options, Req, Env);
         {status, Status} when is_integer(Status) ->
             Req1 = cowboy_req:reply(Status, #{}, Req),
-            {ok, Req1, State};
+            {ok, Req1, Env};
         {status, Status, Headers} when is_integer(Status) ->
             Req1 = cowboy_req:reply(Status, Headers, Req),
-            {ok, Req1, State};
+            {ok, Req1, Env};
         {redirect, Route} ->
             Req1 = cowboy_req:reply(
                      302,
                      #{<<"Location">> => list_to_binary(Route)},
                      Req
                     ),
-            {ok, Req1, State};
+            {stop, Req1};
         {cowboy_req, CowboyReq} ->
-            {ok, CowboyReq, State};
+            {ok, CowboyReq, Env#{handler_opts := CowboyReq}};
+        {websocket, WebsocketState} ->
+            cowboy_websocket:upgrade(Req, Env#{handler_opts := WebsocketState}, nova_ws_controller);
+        {websocket, WebsocketState, Options} ->
+            cowboy_websocket:upgrade(Req, Env#{handler_opts := WebsocketState}, nova_ws_controller, Options);
         Other ->
             Signature = erlang:element(1, Other),
             Handlers = maps:get(handlers, State, []),
@@ -121,7 +122,7 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, State) ->
                     try Handler:handle(Other) of
                         Result ->
                             %% Recurse. Maybe we need something else?
-                            handle1(Result, Mod, Fun, Req, State)
+                            handle1(Result, Mod, Fun, Req, Env)
                     catch
                         ?WITH_STACKTRACE(Type, Reason, Stacktrace)
                         erlang:raise(Type, Reason, Stacktrace)
@@ -131,7 +132,7 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, State) ->
             end
     end.
 
-handle_view(View, Variables, Options, Req, State) ->
+handle_view(View, Variables, Options, Req, Env) ->
     {ok, HTML} = render_dtl(View, Variables, []),
     Headers =
         case maps:get(headers, Options, undefined) of
@@ -142,7 +143,7 @@ handle_view(View, Variables, Options, Req, State) ->
         end,
     StatusCode = maps:get(status_code, Options, 200),
     Req1 = cowboy_req:reply(StatusCode, Headers, HTML, Req),
-    {ok, Req1, State}.
+    {ok, Req1, Env}.
 
 
 render_dtl(View, Variables, Options) ->

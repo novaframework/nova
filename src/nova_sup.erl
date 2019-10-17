@@ -76,7 +76,7 @@ init([]) ->
                         Children;
                     _ ->
                         ?INFO("Starting Nova as normal..."),
-                        [child(nova_compiler, nova_compiler)|Children]
+                        Children
                 end,
     case application:get_env(dev_mode) of
         {ok, true} ->
@@ -112,7 +112,7 @@ start_cowboy() ->
     {ok, _} = cowboy:start_clear(
                 nova_listener,
                 [{port, Port}],
-                #{middlewares => [cowboy_router, nova_security_handler, nova_http_controller]}).
+                #{middlewares => [cowboy_router, nova_security_handler, nova_http_handler]}).
 
 start_cowboy_secure(CACert, Cert) ->
     Port = case application:get_env(ssl_port) of
@@ -125,4 +125,4 @@ start_cowboy_secure(CACert, Cert) ->
                                                {certfile, Cert},
                                                {cacertfile, CACert}
                                               ],
-                               #{middlewares => [cowboy_router, nova_security_handler, nova_http_controller]}).
+                               #{middlewares => [cowboy_router, nova_security_handler, nova_http_handler]}).
