@@ -39,7 +39,10 @@ execute(Req = #{method := ReqMethod}, Env = #{handler_opts := #{mod := Mod, func
             Req1 = nova_router:status_page(401, Req),
             {stop, Req1}
     end;
-execute(Req, _Env) ->
+execute(Req, Env = #{handler := nova_ws_controller}) ->
+    %% This is a websocket request
+    nova_ws_controller:init(Req, Env);
+execute(Req, Env) ->
     %% Display a nicer page
     Req1 = cowboy_req:reply(404, Req),
     {stop, Req1}.
@@ -120,9 +123,9 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, Env = #{handler_opts := Sta
         {cowboy_req, CowboyReq} ->
             {ok, CowboyReq, Env#{handler_opts := CowboyReq}};
         {websocket, WebsocketState} ->
-            cowboy_websocket:upgrade(Req, Env#{handler_opts := WebsocketState}, nova_ws_controller);
+            cowboy_websocket:upgrade(Req, Env, nova_ws_controller, WebsocketState);
         {websocket, WebsocketState, Options} ->
-            cowboy_websocket:upgrade(Req, Env#{handler_opts := WebsocketState}, nova_ws_controller, Options);
+            cowboy_websocket:upgrade(Req, Env, nova_ws_controller, WebsocketState, Options);
         Other ->
             Signature = erlang:element(1, Other),
             Handlers = maps:get(handlers, State, []),

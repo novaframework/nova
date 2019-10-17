@@ -47,14 +47,14 @@
 % Public functions        %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-init(Req, State = #{mod := Mod}) ->
+init(Req, Env = #{handler_opts := State = #{mod := Mod}}) ->
     case Mod:init(Req) of
         {ok, Substate} ->
-            {cowboy_websocket, Req, State#{substate => Substate}};
+            cowboy_websocket:upgrade(Req, Env, nova_ws_controller, Substate);
         Error ->
             ?ERROR("Websocket handler ~p returned unkown result ~p", [Mod, Error]),
             Req1 = cowboy_req:reply(500, Req),
-            {ok, Req1, State}
+            {stop, Req1}
     end.
 
 
