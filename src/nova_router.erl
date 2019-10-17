@@ -10,6 +10,7 @@
 %% API
 -export([
          start_link/0,
+         status_page/2,
          get_main_app/0,
          process_routefile/2,
          add_route/4,
@@ -59,6 +60,9 @@
 %%--------------------------------------------------------------------
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+
+status_page(Error, Req) ->
+    cowboy_req:reply(Error, #{}, Req).
 
 get_main_app() ->
     gen_server:call(?SERVER, get_main_app).
