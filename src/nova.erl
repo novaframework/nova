@@ -7,8 +7,7 @@
 
 -export([
          get_main_app/0,
-         application_loaded/1,
-         load_routefile/2
+         application_loaded/1
         ]).
 
 
@@ -21,7 +20,7 @@
 %%--------------------------------------------------------------------
 -spec get_main_app() -> {ok, Application :: atom()}.
 get_main_app() ->
-    nova_router:get_main_app().
+    application:get_application(nova_sup).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -35,13 +34,3 @@ application_loaded(Application) ->
     {ok, MainApp} = application:get_application(nova_sup),
     lists:any(fun({CompApp, _, _}) -> CompApp == Application end,
               application:get_env(MainApp, nova_applications)).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Loads a route-file for a certain application
-%%
-%% @end
-%%--------------------------------------------------------------------
--spec load_routefile(Application :: atom(), RoutePath :: string()) -> ok.
-load_routefile(Application, RoutePath) ->
-    nova_router:process_routefile(Application, RoutePath).
