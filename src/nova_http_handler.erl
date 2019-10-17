@@ -49,13 +49,21 @@ execute(Req, _Env) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 handle(Mod, Fun, Req, Env = #{handler_opts := State}) ->
-    SecObject = maps:get(auth_data, State, []),
-    try erlang:apply(Mod, Fun, [Req, SecObject]) of
+    Args =
+        case maps:get(auth_data, State, undefined) of
+            undefined ->
+                [Req];
+            SecObject ->
+                [Req, SecObject]
+        end,
+    try erlang:apply(Mod, Fun, Args) of
         RetObj ->
             handle1(RetObj, Mod, Fun, Req, Env)
     catch
         ?WITH_STACKTRACE(Type, Reason, Stacktrace)
-          ?ERROR("Controller (~p:~p/1) failed with ~p:~p.~nStacktrace:~n~p", [Mod, Fun, Type, Reason, Stacktrace])
+          ?ERROR("Controller (~p:~p/1) failed with ~p:~p.~nStacktrace:~n~p", [Mod, Fun, Type, Reason, Stacktrace]),
+          Req1 = nova_router:status_page(404, Req),
+          {ok, Req1, Env}
     end.
 
 handle1(RetObj, Mod, Fun, Req = #{method := Method}, Env = #{handler_opts := State}) ->
