@@ -24,7 +24,7 @@ execute(Req, Env = #{handler_opts := HandlerOpts = #{secure := {Mod, Func}}}) ->
                      302,
                      #{<<"Location">> => list_to_binary(Route)},
                      Req),
-            {ok, Req1, Env};
+            {stop, Req1};
         {cowboy_req, Req1} ->
             {ok, Req1, Env}
     catch
