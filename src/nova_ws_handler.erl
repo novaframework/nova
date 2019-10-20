@@ -3,15 +3,18 @@
 %%% Callback controller for handling websockets
 %%% @end
 
--module(nova_ws_controller).
+-module(nova_ws_handler).
 
 -export([
+         execute/2,
          init/2,
          terminate/3,
          websocket_init/1,
          websocket_handle/2,
          websocket_info/2
         ]).
+
+-behaviour(cowboy_middleware).
 
 -include_lib("nova/include/nova.hrl").
 
@@ -20,43 +23,24 @@
 -endif.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Type/Spec declarations  %
-%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
--type deprecated_call_result(State) :: {ok, State}
-                                     | {ok, State, hibernate}
-                                     | {reply, cow_ws:frame() | [cow_ws:frame()], State}
-                                     | {reply, cow_ws:frame() | [cow_ws:frame()], State, hibernate}
-                                     | {stop, State}.
-
--spec init(Req :: cowboy_req:req(), State :: map()) -> {ok, Req :: cowboy_req:req(), State :: map()} |
-                                                       {cowboy_websocket, Req :: cowboy_req:req(), State :: map()}.
--spec websocket_init(State :: map()) -> deprecated_call_result(State) when State :: map().
-
--spec websocket_handle(ping | pong | {text | binary | ping | pong, binary()}, State)
-                      -> deprecated_call_result(State) when State :: map().
-
--spec websocket_info(Msg :: any(), State) -> deprecated_call_result(State) when State :: map().
-
--spec terminate(Reason :: any(), PatialReq :: cowboy_req:req(), State :: map()) -> ok.
-
--spec handle_ws(Mod :: atom(), Func :: atom(), Args :: list(), State) ->
-                       deprecated_call_result(State) when State :: map().
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Public functions        %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
+execute(Req, Env = #{handler := Handler, handler_opts := HandlerOpts = #{protocol := websocket}}) ->
+    Substate = maps:get(substate, HandlerOpts, #{}),
+    cowboy_websocket:upgrade(Req, Env, nova_ws_handler, Substate);
+execute(Req, Env) ->
+    {ok, Req, Env}.
 
-init(Req, Env = #{handler_opts := State = #{mod := Mod}}) ->
+
+init(Req, State = #{mod := Mod}) ->
     case Mod:init(Req) of
         {ok, Substate} ->
-            cowboy_websocket:upgrade(Req, Env, nova_ws_controller, Substate);
+            {cowboy_websocket, Req, State#{substate => Substate}};
         Error ->
             ?ERROR("Websocket handler ~p returned unkown result ~p", [Mod, Error]),
             Req1 = cowboy_req:reply(500, Req),
-            {stop, Req1}
+            {ok, Req1, State}
     end.
-
 
 websocket_init(State = #{mod := Mod}) ->
     handle_ws(Mod, websocket_init, [], State).
