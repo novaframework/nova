@@ -10,7 +10,7 @@
 %% API
 -export([
          start_link/0,
-         status_page/2,
+         get_status_page/2,
          get_main_app/0,
          process_routefile/2,
          add_route/4,
@@ -61,7 +61,7 @@
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
-status_page(Error, Req) ->
+get_status_page(Error, Req) ->
     cowboy_req:reply(Error, #{}, Req).
 
 get_main_app() ->
@@ -212,12 +212,14 @@ handle_cast({add_route, App, CallbackInfo, Host, Route, Secure, Options}, State 
                 {Module, Func} = CallbackInfo,
                 HttpState = InitialState#{mod => Module,
                                           func => Func,
-                                          methods => get_methods(Options)},
+                                          methods => get_methods(Options),
+                                          protocol => http},
                 {Route, nova_http_controller, HttpState};
             ws ->
                 SubProtocols = maps:get(subprotocols, Options, []),
                 WSState = InitialState#{mod => CallbackInfo,
-                                        subprotocols => SubProtocols},
+                                        subprotocols => SubProtocols,
+                                        protocol => websocket},
                 {Route, nova_ws_controller, WSState}
         end,
 

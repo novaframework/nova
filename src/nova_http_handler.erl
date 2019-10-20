@@ -39,13 +39,9 @@ execute(Req = #{method := ReqMethod}, Env = #{handler_opts := #{mod := Mod, func
             Req1 = nova_router:status_page(401, Req),
             {stop, Req1}
     end;
-execute(Req, Env = #{handler := nova_ws_controller}) ->
-    %% This is a websocket request
-    nova_ws_controller:init(Req, Env);
 execute(Req, Env) ->
-    %% Display a nicer page
-    Req1 = cowboy_req:reply(404, Req),
-    {stop, Req1}.
+    %% Just continue to next handler
+    {ok, Req, Env}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Private functions       %
@@ -66,7 +62,7 @@ handle(Mod, Fun, Req, Env = #{handler_opts := State}) ->
         ?WITH_STACKTRACE(Type, Reason, Stacktrace)
           ?ERROR("Controller (~p:~p/1) failed with ~p:~p.~nStacktrace:~n~p", [Mod, Fun, Type, Reason, Stacktrace]),
           Req1 = nova_router:status_page(404, Req),
-          {ok, Req1, Env}
+          {stop, Req1}
     end.
 
 handle1(RetObj, Mod, Fun, Req = #{method := Method}, Env = #{handler_opts := State}) ->
@@ -80,7 +76,7 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, Env = #{handler_opts := Sta
             Req1 = cowboy_req:reply(StatusCode, #{
                                                   <<"content-type">> => <<"application/json">>
                                                  }, EncodedJSON, Req),
-            {ok, Req1, Env};
+            {stop, Req1};
         {json, StatusCode, Headers, JSON} ->
             EncodedJSON = jsone:encode(JSON, [undefined_as_null]),
             Req1 = cowboy_req:reply(StatusCode,
@@ -89,7 +85,7 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, Env = #{handler_opts := Sta
                                               Headers),
 				    EncodedJSON,
 				    Req),
-            {ok, Req1, Env};
+            {stop, Req1};
         {ok, Variables} ->
             %% Derive the view from module
             ViewNameAtom = get_view_name(Mod),
@@ -108,11 +104,12 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, Env = #{handler_opts := Sta
                 end,
             handle_view(View, Variables, Options, Req, Env);
         {status, Status} when is_integer(Status) ->
-            Req1 = cowboy_req:reply(Status, #{}, Req),
-            {ok, Req1, Env};
-        {status, Status, Headers} when is_integer(Status) ->
-            Req1 = cowboy_req:reply(Status, Headers, Req),
-            {ok, Req1, Env};
+            Req1 = nova_router:get_status_page(Status, Req),
+            {stop, Req1};
+        {status, Status, _Headers} when is_integer(Status) ->
+            %% TODO! Include headers
+            Req1 = nova_router:get_status_page(Status, Req),
+            {ok, Req1};
         {redirect, Route} ->
             Req1 = cowboy_req:reply(
                      302,
@@ -121,26 +118,23 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, Env = #{handler_opts := Sta
                     ),
             {stop, Req1};
         {cowboy_req, CowboyReq} ->
-            {ok, CowboyReq, Env#{handler_opts := CowboyReq}};
-        {websocket, WebsocketState} ->
-            cowboy_websocket:upgrade(Req, Env, nova_ws_controller, WebsocketState);
-        {websocket, WebsocketState, Options} ->
-            cowboy_websocket:upgrade(Req, Env, nova_ws_controller, WebsocketState, Options);
+            {stop, CowboyReq};
         Other ->
             Signature = erlang:element(1, Other),
-            Handlers = maps:get(handlers, State, []),
-            case proplists:get_value(Signature, Handlers) of
+            case nova_router:get_handler(Signature) of
                 #{module := Handler} ->
                     try Handler:handle(Other) of
-                        Result ->
+                        {continue, Result} ->
                             %% Recurse. Maybe we need something else?
-                            handle1(Result, Mod, Fun, Req, Env)
+                            handle1(Result, Mod, Fun, Req, Env);
+                        Result ->
+                            Result
                     catch
                         ?WITH_STACKTRACE(Type, Reason, Stacktrace)
                         erlang:raise(Type, Reason, Stacktrace)
                     end;
                 _ ->
-                    erlang:throw({unknown_return_type, Other})
+                    erlang:throw({unknown_handler_type, Signature})
             end
     end.
 
