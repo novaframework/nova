@@ -25,7 +25,7 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Public functions        %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
-execute(Req, Env = #{handler := Handler, handler_opts := HandlerOpts = #{protocol := websocket}}) ->
+execute(Req, Env = #{handler_opts := HandlerOpts = #{protocol := websocket}}) ->
     Substate = maps:get(substate, HandlerOpts, #{}),
     cowboy_websocket:upgrade(Req, Env, nova_ws_handler, Substate);
 execute(Req, Env) ->
