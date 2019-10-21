@@ -65,7 +65,7 @@ handle(Mod, Fun, Req, Env = #{handler_opts := State}) ->
           {stop, Req1}
     end.
 
-handle1(RetObj, Mod, Fun, Req = #{method := Method}, Env = #{handler_opts := State}) ->
+handle1(RetObj, Mod, Fun, Req = #{method := Method}, Env) ->
     case RetObj of
 	{json, JSON} ->
             EncodedJSON = jsone:encode(JSON, [undefined_as_null]),
