@@ -213,14 +213,17 @@ handle_cast({add_route, App, CallbackInfo, Host, Route, Secure, Options}, State 
                 HttpState = InitialState#{mod => Module,
                                           func => Func,
                                           methods => get_methods(Options),
-                                          protocol => http},
+                                          nova_handler => nova_http_handler},
                 {Route, nova_http_controller, HttpState};
             ws ->
                 SubProtocols = maps:get(subprotocols, Options, []),
                 WSState = InitialState#{mod => CallbackInfo,
                                         subprotocols => SubProtocols,
-                                        protocol => websocket},
-                {Route, nova_ws_controller, WSState}
+                                        nova_handler => nova_ws_handler},
+                {Route, nova_ws_controller, WSState};
+            Other ->
+                logger:info("No protocol matches ~p", [Other]),
+                erlang:throw({unknown_protocol, Other})
         end,
 
     NewDT =
