@@ -10,7 +10,7 @@
 %% Set a value
 -callback set_value(SessionId, Key, Value) ->
     ok |
-    {error, Reason :: atom()},
+    {error, Reason :: atom()}
     when SessionId :: binary(),
          Key :: binary(),
          Value :: binary().
