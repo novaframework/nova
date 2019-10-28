@@ -24,6 +24,6 @@
 %% Deletes a specific key of a session
 -callback delete_value(SessionId, Key) ->
     ok |
-    {error, Reason}
+    {error, Reason :: atom()}
         when SessionId :: binary(),
              Key :: binary().
