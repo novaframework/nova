@@ -6,15 +6,12 @@
 -module(nova_ws_handler).
 
 -export([
-         execute/2,
          init/2,
          terminate/3,
          websocket_init/1,
          websocket_handle/2,
          websocket_info/2
         ]).
-
--behaviour(cowboy_middleware).
 
 -include_lib("nova/include/nova.hrl").
 
@@ -25,13 +22,6 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Public functions        %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
-execute(Req, Env = #{handler_opts := HandlerOpts = #{protocol := websocket}}) ->
-    Substate = maps:get(substate, HandlerOpts, #{}),
-    cowboy_websocket:upgrade(Req, Env, nova_ws_handler, Substate);
-execute(Req, Env) ->
-    {ok, Req, Env}.
-
-
 init(Req, State = #{mod := Mod}) ->
     case Mod:init(Req) of
         {ok, Substate} ->

@@ -6,10 +6,8 @@
 -module(nova_http_handler).
 
 -export([
-         execute/2
+         init/2
         ]).
-
--behaviour(cowboy_middleware).
 
 -include_lib("nova/include/nova.hrl").
 
@@ -23,31 +21,29 @@
 
 %%--------------------------------------------------------------------
 %% @doc
-%% Callback function from cowboy. Checks if the user is allowed to see
-%% this page (See check_security/2 function). If true then the handling
-%% of the request will continue. If not it will either redirect the user,
-%% return a 401 http staus or return a cowboy request object.
+%% Callback function from nova_handler. This is the initial call where
+%% all the logic is handed.
 %% @end
 %%--------------------------------------------------------------------
-execute(Req, Env = #{handler_opts := #{mod := Mod, func := Func, methods := '_'}}) ->
-    handle(Mod, Func, Req, Env);
-execute(Req = #{method := ReqMethod}, Env = #{handler_opts := #{mod := Mod, func := Func, methods := Methods}}) ->
+init(Req, State = #{mod := Mod, func := Func, methods := '_'}) ->
+    handle(Mod, Func, Req, State);
+init(Req = #{method := ReqMethod}, State = #{mod := Mod, func := Func, methods := Methods}) ->
     case lists:any(fun(X) -> X == ReqMethod end, Methods) of
         true ->
-            handle(Mod, Func, Req, Env);
+            handle(Mod, Func, Req, State);
         false ->
-            Req1 = nova_router:status_page(401, Req),
-            {stop, Req1}
+            Req1 = nova_router:status_page(405, Req),
+            {ok, Req1, State}
     end;
-execute(Req, Env) ->
-    %% Just continue to next handler
-    {ok, Req, Env}.
+init(Req, State) ->
+    Req1 = nova_router:status_page(404, Req),
+    {ok, Req1, State}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Private functions       %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-handle(Mod, Fun, Req, Env = #{handler_opts := State}) ->
+handle(Mod, Fun, Req, State) ->
     Args =
         case maps:get(auth_data, State, undefined) of
             undefined ->
@@ -57,15 +53,15 @@ handle(Mod, Fun, Req, Env = #{handler_opts := State}) ->
         end,
     try erlang:apply(Mod, Fun, Args) of
         RetObj ->
-            handle1(RetObj, Mod, Fun, Req, Env)
+            handle1(RetObj, Mod, Fun, Req, State)
     catch
         ?WITH_STACKTRACE(Type, Reason, Stacktrace)
           ?ERROR("Controller (~p:~p/1) failed with ~p:~p.~nStacktrace:~n~p", [Mod, Fun, Type, Reason, Stacktrace]),
           Req1 = nova_router:status_page(404, Req),
-          {stop, Req1}
+          {ok, Req1, State}
     end.
 
-handle1(RetObj, Mod, Fun, Req = #{method := Method}, Env) ->
+handle1(RetObj, Mod, Fun, Req = #{method := Method}, State) ->
     case RetObj of
 	{json, JSON} ->
             EncodedJSON = jsone:encode(JSON, [undefined_as_null]),
@@ -76,7 +72,7 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, Env) ->
             Req1 = cowboy_req:reply(StatusCode, #{
                                                   <<"content-type">> => <<"application/json">>
                                                  }, EncodedJSON, Req),
-            {stop, Req1};
+            {ok, Req1, State};
         {json, StatusCode, Headers, JSON} ->
             EncodedJSON = jsone:encode(JSON, [undefined_as_null]),
             Req1 = cowboy_req:reply(StatusCode,
@@ -85,11 +81,11 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, Env) ->
                                               Headers),
 				    EncodedJSON,
 				    Req),
-            {stop, Req1};
+            {ok, Req1, State};
         {ok, Variables} ->
             %% Derive the view from module
             ViewNameAtom = get_view_name(Mod),
-            handle_view(ViewNameAtom, Variables, #{}, Req, Env);
+            handle_view(ViewNameAtom, Variables, #{}, Req, State);
         {ok, Variables, Options} ->
             View =
                 case maps:get(view, Options, undefined) of
@@ -102,23 +98,23 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, Env) ->
                     CustomView ->
                         list_to_atom(CustomView ++ "_dtl")
                 end,
-            handle_view(View, Variables, Options, Req, Env);
+            handle_view(View, Variables, Options, Req, State);
         {status, Status} when is_integer(Status) ->
             Req1 = nova_router:get_status_page(Status, Req),
-            {stop, Req1};
+            {ok, Req1, State};
         {status, Status, _Headers} when is_integer(Status) ->
             %% TODO! Include headers
             Req1 = nova_router:get_status_page(Status, Req),
-            {ok, Req1};
+            {ok, Req1, State};
         {redirect, Route} ->
             Req1 = cowboy_req:reply(
                      302,
                      #{<<"Location">> => list_to_binary(Route)},
                      Req
                     ),
-            {stop, Req1};
+            {ok, Req1, State};
         {cowboy_req, CowboyReq} ->
-            {stop, CowboyReq};
+            {ok, CowboyReq, State};
         Other ->
             Signature = erlang:element(1, Other),
             case nova_router:get_handler(Signature) of
@@ -126,7 +122,7 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, Env) ->
                     try Handler:handle(Other) of
                         {continue, Result} ->
                             %% Recurse. Maybe we need something else?
-                            handle1(Result, Mod, Fun, Req, Env);
+                            handle1(Result, Mod, Fun, Req, State);
                         Result ->
                             Result
                     catch
@@ -138,7 +134,7 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, Env) ->
             end
     end.
 
-handle_view(View, Variables, Options, Req, Env) ->
+handle_view(View, Variables, Options, Req, State) ->
     {ok, HTML} = render_dtl(View, Variables, []),
     Headers =
         case maps:get(headers, Options, undefined) of
@@ -149,7 +145,7 @@ handle_view(View, Variables, Options, Req, Env) ->
         end,
     StatusCode = maps:get(status_code, Options, 200),
     Req1 = cowboy_req:reply(StatusCode, Headers, HTML, Req),
-    {ok, Req1, Env}.
+    {ok, Req1, State}.
 
 
 render_dtl(View, Variables, Options) ->
