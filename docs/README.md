@@ -19,6 +19,7 @@
   * Websockets
 * [05 - Views](05_views.md)
 * [06 - Building releases](06_building-releases.md)
+  * [Include other nova applications](06_building-releases.md#include-other-nova-applications)
 * [07 - Books and links](07_books-and-links.md)
 * [XX - Future work and todos](xx_future-work-and-todos.md)
 
