@@ -1,8 +1,11 @@
+%%%-------------------------------------------------------------------
 %%% @author Niclas Axelsson <niclas@burbas.se>
+%%% @copyright (C) 2019, Niclas Axelsson
 %%% @doc
-%%% Nova router is responsible for handling all incoming request and
-%%% routes them to the correct controller.
+%%%
 %%% @end
+%%% Created : 17 Nov 2019 by Niclas Axelsson <niclas@burbas.se>
+%%%-------------------------------------------------------------------
 -module(nova_router).
 
 -behaviour(gen_server).
@@ -10,16 +13,9 @@
 %% API
 -export([
          start_link/0,
-         get_status_page/2,
-         get_main_app/0,
-         process_routefile/2,
-         add_route/4,
-         add_route/5,
-         add_route/6,
-         apply_routes/0,
-         remove_route/2,
-         get_routes/0,
-         get_route_info/1
+         process_routefile/1,
+         status_page/2,
+         apply_routes/0
         ]).
 
 %% gen_server callbacks
@@ -29,22 +25,18 @@
          handle_cast/2,
          handle_info/2,
          terminate/2,
-         code_change/3
+         code_change/3,
+         format_status/2
         ]).
 
 -include_lib("nova/include/nova.hrl").
 
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
--endif.
-
-
 -define(SERVER, ?MODULE).
+-define(STATIC_ROUTE_TABLE, static_route_table).
 
 -record(state, {
-                main_app :: atom(),
-                listener = nova_listener :: atom(),
-                dispatch_table = [] :: list()
+                route_table :: [{binary(), list()}],
+                static_route_table :: [{integer(), atom(), atom()}]
                }).
 
 %%%===================================================================
@@ -54,45 +46,47 @@
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
-%%
-%% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
+-spec start_link() -> {ok, Pid :: pid()} |
+                      {error, Error :: {already_started, pid()}} |
+                      {error, Error :: term()} |
+                      ignore.
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
-get_status_page(Error, Req) ->
-    cowboy_req:reply(Error, #{}, Req).
+status_page(Status, Req) when is_integer(Status) ->
+    gen_server:call(?SERVER, {render_status_page, Status, Req}).
 
-get_main_app() ->
-    gen_server:call(?SERVER, get_main_app).
+process_routefile(#{name := Application, routes_file := RouteFile}) ->
+    case code:lib_dir(Application) of
+        {error, bad_name} ->
+            ?LOG(warn, "Could not find the application ~p. Check your config and rerun the application", [Application]),
+            ok;
+        Filepath ->
+            ?LOG(debug, "Processing routefile: ~p", [Filepath]),
+            RouteFilePath = filename:join([Filepath, RouteFile]),
+            {ok, [AppMap|_]} = file:consult(RouteFilePath),
+            %% Extract information
+            Prefix = maps:get(prefix, AppMap, ""),
+            Host = maps:get(host, AppMap, '_'),
+            Routes = maps:get(routes, AppMap, []),
+            Secure = maps:get(security, AppMap, false),
+            %% Built intermediate object
+            RouteInfo = #{application => Application,
+                             prefix => Prefix,
+                             host => Host,
+                             security => Secure},
+            %% Send the routing information to the gen_server
+            [ gen_server:cast(?SERVER, {add_route, RouteInfo, Route}) || Route <- Routes ]
+    end;
+process_routefile(AppInfo = #{name := Application}) ->
+    Routename = lists:concat(["priv/", Application, ".routes.erl"]),
+    process_routefile(AppInfo#{routes_file => Routename}).
 
-process_routefile(App, Routefile) ->
-    gen_server:cast(?SERVER, {process_routes, App, Routefile}).
-
-add_route(App, CallbackInfo, Route, Security) ->
-    add_route(App, CallbackInfo, '_', Route, Security).
-
-add_route(App, CallbackInfo, Host, Route, Security) ->
-    add_route(App, CallbackInfo, Host, Route, Security, #{}).
-
-add_route(App, CallbackInfo, Host, Route, Security, Options) ->
-    gen_server:cast(?SERVER, {add_route, App, CallbackInfo, Host, Route, Security, Options}).
-
-add_static(App, Path, Host, Route) ->
-    gen_server:cast(?SERVER, {add_static, App, Path, Host, Route}).
 
 apply_routes() ->
     gen_server:cast(?SERVER, apply_routes).
-
-remove_route(Host, Route) ->
-    gen_server:cast(?SERVER, {remove_route, Host, Route}).
-
-get_routes() ->
-    gen_server:call(?SERVER, get_routes).
-
-get_route_info(Route) ->
-    gen_server:call(?SERVER, {get_route_info, Route}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -102,153 +96,131 @@ get_route_info(Route) ->
 %% @private
 %% @doc
 %% Initializes the server
-%%
-%% @spec init(Args) -> {ok, State} |
-%%                     {ok, State, Timeout} |
-%%                     ignore |
-%%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
+-spec init(Args :: term()) -> {ok, State :: term()} |
+                              {ok, State :: term(), Timeout :: timeout()} |
+                              {ok, State :: term(), hibernate} |
+                              {stop, Reason :: term()} |
+                              ignore.
 init([]) ->
-    Apps =
-        case application:get_env(nova_applications) of
-            undefined -> [];
-            {ok, AppsList} -> AppsList
-        end,
-    lists:foreach(fun load_app_route/1, Apps),
-    {ok, MainApp} = application:get_application(),
     process_flag(trap_exit, true),
-    {ok, #state{main_app = MainApp}}.
+    {ok, MainApplication} = application:get_application(),
+    Apps = application:get_env(nova_applications, MainApplication, []),
+    ?LOG(debug, "Bootstrapping router for application ~p, included_apps: ~p", [MainApplication, Apps]),
+    [ process_routefile(#{name => NovaApp}) || NovaApp <- [MainApplication|Apps] ],
+    apply_routes(),
+    {ok, #state{
+            route_table = [],
+            static_route_table = #{}
+           }}.
 
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
 %% Handling call messages
-%%
-%% @spec handle_call(Request, From, State) ->
-%%                                   {reply, Reply, State} |
-%%                                   {reply, Reply, State, Timeout} |
-%%                                   {noreply, State} |
-%%                                   {noreply, State, Timeout} |
-%%                                   {stop, Reason, Reply, State} |
-%%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call(get_main_app, _From, State = #state{main_app = Application}) ->
-    {reply, {ok, Application}, State};
-handle_call(get_routes, _From, State = #state{dispatch_table = DT}) ->
-    {reply, {ok, DT}, State};
-handle_call({get_route_info, Route}, _From, State = #state{dispatch_table = DT}) ->
-    case lists:keyfind(Route, 1, DT) of
-        false ->
-            %% Not found
-            {reply, {error, not_found}, State};
-        Route ->
-            {reply, {ok, Route}, State}
+-spec handle_call(Request :: term(), From :: {pid(), term()}, State :: term()) ->
+                         {reply, Reply :: term(), NewState :: term()} |
+                         {reply, Reply :: term(), NewState :: term(), Timeout :: timeout()} |
+                         {reply, Reply :: term(), NewState :: term(), hibernate} |
+                         {noreply, NewState :: term()} |
+                         {noreply, NewState :: term(), Timeout :: timeout()} |
+                         {noreply, NewState :: term(), hibernate} |
+                         {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
+                         {stop, Reason :: term(), NewState :: term()}.
+handle_call({render_status_page, Status, Req}, _From,
+            State = #state{static_route_table = StaticRouteTable}) ->
+    case maps:get(Status, StaticRouteTable, undefined) of
+        {Mod, Func} ->
+            {ok, Req1, _} = nova_http_handler:handle(Mod, Func, Req, #{}),
+            {reply, {ok, Req1}, State};
+        _ ->
+            {reply, {error, not_found}, State}
     end;
-handle_call(_Request, _From, State) ->
-    Reply = ok,
-    {reply, Reply, State}.
+handle_call(Request, _From, State) ->
+    ?WARNING("Unknown request: ~p when state: ~p", [Request, State]),
+    {reply, error, State}.
 
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
 %% Handling cast messages
-%%
-%% @spec handle_cast(Msg, State) -> {noreply, State} |
-%%                                  {noreply, State, Timeout} |
-%%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast({process_routes, App, Routefile}, State) ->
-    {ok, HostRoutes} = file:consult(Routefile),
-    process_routes(App, HostRoutes),
-    apply_routes(),
-    {noreply, State};
-
-handle_cast({remove_route, Host, Route}, State = #state{dispatch_table = DT}) ->
-    case proplists:get_value(Host, DT) of
-        undefined ->
-            ?WARNING("Could not remove route: ~p for host: ~p. Host not found!", [Route, Host]),
-            {noreply, State};
-        {Host, Routes} ->
-            NewRoutes = proplists:delete(Route, Routes),
-            case NewRoutes of
-                Routes ->
-                    ?WARNING("Could not remove route: ~p for host: ~p. Route not found!", [Route, Host]),
-                    {noreply, State};
-                _ ->
-                    ?INFO("Removed route: ~p from host: ~p", [Route, Host]),
-                    DT2 = proplists:delete(Host, DT),
-                    NewDT = [{Host, NewRoutes}|DT2],
-                    {noreply, State#state{dispatch_table = NewDT}}
-            end
-    end;
-
-handle_cast(apply_routes, State = #state{dispatch_table = DT,
-                                         listener = Listener}) ->
-    ?INFO("Applying routes. ~p", [DT]),
-    Dispatch = cowboy_router:compile(DT),
-    cowboy:set_env(Listener, dispatch, Dispatch),
-    {noreply, State};
-
-handle_cast({add_static, App, Path, Host, Route}, State = #state{dispatch_table = DT}) ->
-    RouteInfo = {Route, cowboy_static, {priv_dir, App, Path}},
-    NewDT =
-        case proplists:get_value(Host, DT) of
-            undefined ->
-                [{Host, [RouteInfo]}|DT];
-            Routes ->
-                [{Host, [RouteInfo|Routes]}|proplists:delete(Host, DT)]
-        end,
-    {noreply, State#state{dispatch_table = NewDT}};
-handle_cast({add_route, App, CallbackInfo, Host, Route, Secure, Options}, State = #state{dispatch_table = DT}) ->
-    InitialState = #{app => App,
-                     secure => Secure
-                    },
-    RouteInfo =
-        case maps:get(protocol, Options, http) of
-            http ->
-                {Module, Func} = CallbackInfo,
-                HttpState = InitialState#{mod => Module,
-                                          func => Func,
-                                          methods => get_methods(Options),
-                                          nova_handler => nova_http_handler},
-                {Route, nova_http_handler, HttpState};
-            ws ->
-                SubProtocols = maps:get(subprotocols, Options, []),
-                WSState = InitialState#{mod => CallbackInfo,
-                                        subprotocols => SubProtocols,
-                                        nova_handler => nova_ws_handler},
-                {Route, nova_ws_handler, WSState};
+-spec handle_cast(Request :: term(), State :: term()) ->
+                         {noreply, NewState :: term()} |
+                         {noreply, NewState :: term(), Timeout :: timeout()} |
+                         {noreply, NewState :: term(), hibernate} |
+                         {stop, Reason :: term(), NewState :: term()}.
+handle_cast({add_route, _, {StatusCode, Module, Function}},
+            State = #state{static_route_table = StaticRouteTable}) when is_integer(StatusCode) ->
+    %% Do something with the status code
+    StaticRouteTable2 = maps:put(StatusCode, {Module, Function}, StaticRouteTable),
+    {reply, ok, State#state{static_route_table = StaticRouteTable2}};
+handle_cast({add_route, #{application := Application, prefix := Prefix,
+                          host := Host, security := Security}, RouteDetails},
+            State = #state{route_table = RouteTable}) ->
+    InitialState = #{app => Application,
+                     secure => Security},
+    CowboyRoute =
+        case RouteDetails of
+            {Route, {Module, Function}} ->
+                {Prefix++Route,
+                 nova_http_handler,
+                 InitialState#{mod => Module,
+                               func => Function,
+                               methods => '_',
+                               nova_handler => nova_http_handler}};
+            {Route, {Module, Function}, Options = #{protocol := http}} ->
+                {Prefix++Route,
+                 nova_http_handler,
+                 InitialState#{mod => Module,
+                               func => Function,
+                               methods => get_methods(Options),
+                               nova_handler => nova_http_handler}};
+            {Route, CallbackInfo, Options = #{protocol := ws}} ->
+                {Prefix++Route,
+                 nova_ws_handler,
+                 InitialState#{mod => CallbackInfo,
+                               subprotocols => maps:get(subprotocols, Options, []),
+                               nova_handler => nova_ws_handler}};
+            {Route, Module, Function} ->
+                %% This is to keep legacy-format. Should be deprecated
+                ?LOG(warn, "Route of format {Route, Module, Function} is deprecated and will be removed in future versions of Nova", []),
+                {Prefix++Route,
+                 nova_http_handler,
+                 InitialState#{mod => Module,
+                               func => Function,
+                               methods => '_',
+                               nova_handler => nova_http_handler}};
             Other ->
-                logger:info("No protocol matches ~p", [Other]),
-                erlang:throw({unknown_protocol, Other})
+                ?LOG(warn, "Could not parse route ~p", [Other]),
+                erlang:throw({route_error, Other})
         end,
-
-    NewDT =
-        case proplists:get_value(Host, DT) of
-            undefined ->
-                [{Host, [RouteInfo]}|DT];
-            Routes ->
-                [{Host, [RouteInfo|Routes]}|proplists:delete(Host, DT)]
-        end,
-
-    {noreply, State#state{dispatch_table = NewDT}};
-
-handle_cast(_Msg, State) ->
+    ?LOG(debug, "Applying route: ~p", [RouteDetails]),
+    NewRouteTable = prop_upsert(Host, CowboyRoute, RouteTable),
+    {noreply, State#state{route_table = NewRouteTable}};
+handle_cast(apply_routes, State = #state{route_table = RouteTable}) ->
+    Dispatch = cowboy_router:compile(RouteTable),
+    cowboy:set_env(nova_listener, dispatch, Dispatch),
+    {noreply, State};
+handle_cast(Request, State) ->
+    ?LOG(warn, "Got unknown cast in router: ~p", [Request]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
 %% Handling all non call/cast messages
-%%
-%% @spec handle_info(Info, State) -> {noreply, State} |
-%%                                   {noreply, State, Timeout} |
-%%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+-spec handle_info(Info :: timeout() | term(), State :: term()) ->
+                         {noreply, NewState :: term()} |
+                         {noreply, NewState :: term(), Timeout :: timeout()} |
+                         {noreply, NewState :: term(), hibernate} |
+                         {stop, Reason :: normal | term(), NewState :: term()}.
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -259,10 +231,10 @@ handle_info(_Info, State) ->
 %% terminate. It should be the opposite of Module:init/1 and do any
 %% necessary cleaning up. When it returns, the gen_server terminates
 %% with Reason. The return value is ignored.
-%%
-%% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
+-spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
+                State :: term()) -> any().
 terminate(_Reason, _State) ->
     ok.
 
@@ -270,64 +242,31 @@ terminate(_Reason, _State) ->
 %% @private
 %% @doc
 %% Convert process state when code is changed
-%%
-%% @spec code_change(OldVsn, State, Extra) -> {ok, NewState}
 %% @end
 %%--------------------------------------------------------------------
+-spec code_change(OldVsn :: term() | {down, term()},
+                  State :: term(),
+                  Extra :: term()) -> {ok, NewState :: term()} |
+                                      {error, Reason :: term()}.
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% This function is called for changing the form and appearance
+%% of gen_server status when it is returned from sys:get_status/1,2
+%% or when it appears in termination error logs.
+%% @end
+%%--------------------------------------------------------------------
+-spec format_status(Opt :: normal | terminate,
+                    Status :: list()) -> Status :: term().
+format_status(_Opt, Status) ->
+    Status.
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-load_app_route(#{name := AppName, routes_file := RouteFile}) ->
-    case code:lib_dir(AppName) of
-        {error, bad_name} ->
-            ?WARNING("Could not find the application ~p. Check your config and rerun the application", [AppName]),
-            ok;
-        Filepath ->
-            RouteFilePath = filename:join([Filepath, RouteFile]),
-            process_routefile(AppName, RouteFilePath)
-    end;
-load_app_route(RouteInfo = #{name := AppName}) ->
-    Routename = "priv/" ++ erlang:atom_to_list(AppName) ++ ".routes.erl",
-    load_app_route(RouteInfo#{routes_file => Routename}).
-
-process_routes(_, []) ->
-    ok;
-process_routes(App, [RoutesLine|T]) ->
-    Prefix = maps:get(prefix, RoutesLine, ""),
-    Host = maps:get(host, RoutesLine, '_'),
-    Routes = maps:get(routes, RoutesLine, []),
-    Statics = maps:get(statics, RoutesLine, []),
-    Secure = maps:get(security, RoutesLine, false),
-    add_routes(App, Host, Prefix, Secure, Routes),
-    add_statics(App, Host, Prefix, Statics),
-    process_routes(App, T).
-
-
-add_routes(_, _, _, _, []) ->
-    ok;
-add_routes(App, Host, Prefix, Secure, [{Route, CallbackInfo} | T]) ->
-    add_route(App, CallbackInfo, Host, Prefix ++ Route, Secure),
-    add_routes(App, Host, Prefix, Secure, T);
-add_routes(App, Host, Prefix, Secure, [{Route, CallbackInfo, Options} | T]) when is_map(Options) ->
-    add_route(App, CallbackInfo, Host, Prefix ++ Route, Secure, Options),
-    add_routes(App, Host, Prefix, Secure, T);
-add_routes(App, Host, Prefix, Secure, [{Route, Module, Function} | T]) ->
-    add_route(App, {Module, Function}, Host, Prefix ++ Route, Secure),
-    add_routes(App, Host, Prefix, Secure, T);
-add_routes(App, Host, Prefix, Secure, [{Route, Module, Function, Options} | T]) ->
-    add_route(App, {Module, Function}, Host, Prefix ++ Route, Secure, Options),
-    add_routes(App, Host, Prefix, Secure, T).
-
-add_statics(_, _, _, []) ->
-    ok;
-add_statics(App, Host, Prefix, [{Route, Path} | T]) ->
-    add_static(App, Path, Host, Prefix ++ Route),
-    add_statics(App, Host, Prefix, T).
-
-
 get_methods(#{methods := M}) when is_list(M) ->
     Res = lists:map(fun(get)  -> <<"GET">>;
                        (post) -> <<"POST">>;
@@ -345,27 +284,10 @@ get_methods(_) ->
     '_'.
 
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Eunit functions         %
-%%%%%%%%%%%%%%%%%%%%%%%%%%%
--ifdef(TEST).
-process_empty_route_test_() ->
-    ?_assert(ok =:= process_routes(test, [])).
-
-methods_test_() ->
-    [
-     ?_assertMatch([<<"GET">>], get_methods(#{methods => [get]})),
-     ?_assertMatch([<<"POST">>], get_methods(#{methods => [post]})),
-     ?_assertMatch([<<"PUT">>], get_methods(#{methods => [put]})),
-     ?_assertMatch([<<"DELETE">>], get_methods(#{methods => [delete]})),
-     ?_assertMatch([<<"GET">>, <<"PUT">>], get_methods(#{methods => [get, put]}))
-    ].
-
-methods_wildcard_test_() ->
-    [?_assertException(throw, unknown_method, get_methods(#{methods => [something_else]})),
-     ?_assertMatch('_', get_methods(undefined)),
-     ?_assertMatch('_', get_methods(#{methods => [get,put,delete,post]}))
-    ].
-
-
--endif.
+prop_upsert(Key, NewEntry, Proplist) ->
+    case proplists:lookup(Key, Proplist) of
+        none ->
+            [{Key, [NewEntry]}|Proplist];
+        {Key, OldList} ->
+            [{Key, [NewEntry|OldList]}|proplists:delete(Key, Proplist)]
+    end.
