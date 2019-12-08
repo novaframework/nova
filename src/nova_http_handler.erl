@@ -6,7 +6,8 @@
 -module(nova_http_handler).
 
 -export([
-         init/2
+         init/2,
+         handle/4
         ]).
 
 -include_lib("nova/include/nova.hrl").
@@ -44,6 +45,7 @@ init(Req, State) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 handle(Mod, Fun, Req, State) ->
+    ?LOG(debug, "Handling request for ~p:~p", [Mod, Fun]),
     Args =
         case maps:get(auth_data, State, undefined) of
             undefined ->
@@ -96,7 +98,7 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, State) ->
                         ViewName = atom_to_list(CustomView) ++ "_dtl",
                         list_to_atom(ViewName);
                     CustomView ->
-                        list_to_atom(CustomView ++ "_dtl")
+                         list_to_atom(CustomView ++ "_dtl")
                 end,
             handle_view(View, Variables, Options, Req, State);
         {status, Status} when is_integer(Status) ->
