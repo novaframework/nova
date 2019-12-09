@@ -1,4 +1,14 @@
 -module(nova_session).
+-export([
+         get/2,
+         set/3,
+         delete/1,
+         delete/2
+        ]).
+
+%%%===================================================================
+%%% Callbacks
+%%%===================================================================
 
 %% Get a value from a given session_id
 -callback get_value(SessionId, Key) ->
@@ -27,3 +37,81 @@
     {error, Reason :: atom()}
         when SessionId :: binary(),
              Key :: binary().
+
+%%%===================================================================
+%%% Public functions
+%%%===================================================================
+get(Req, Key) ->
+    case get_session_id(Req) of
+        {ok, SessionId} ->
+            Mod = get_session_module(),
+            Mod:get_value(SessionId, Key);
+        _ ->
+            {error, not_found}
+    end.
+
+set(Req, Key, Value) ->
+    case get_session_id(Req) of
+        {ok, SessionId} ->
+            Mod = get_session_module(),
+            Mod:set_value(SessionId, Key, Value);
+        _ ->
+            SessionId = generate_session_id(),
+            Mod = get_session_module(),
+            ok = Mod:set_value(SessionId, Key, Value),
+            Req1 = cowboy_req:set_resp_cookie(<<"session_id">>, SessionId, Req),
+            {ok, Req1}
+    end.
+
+delete(Req) ->
+    case get_session_id(Req) of
+        {ok, SessionId} ->
+            Mod = get_session_module(),
+            Mod:delete_value(SessionId),
+            Req1 = cowboy_req:set_resp_cookie(<<"session_id">>, SessionId, Req,
+                                              #{max_age => 0}),
+            {ok, Req1};
+        _ ->
+            %% Session not found
+            {ok, Req}
+    end.
+
+delete(Req, Key) ->
+    case get_session_id(Req) of
+        {ok, SessionId} ->
+            Mod = get_session_module(),
+            Mod:delete_value(SessionId, Key),
+            {ok, Req};
+        _ ->
+            %% Session not found
+            {ok, Req}
+    end.
+
+
+%%%===================================================================
+%%% Private functions
+%%%===================================================================
+get_session_module() ->
+    case application:get_env(session_manager) of
+        {ok, Module} ->
+            Module;
+        _ ->
+            %% Default to nova_session_ets
+            nova_session_ets
+    end.
+
+get_session_id(Req) ->
+    #{session_id := SessionId} = cowboy_req:match_cookies([{session_id, [], undefined}], Req),
+    case SessionId of
+        undefined ->
+            {error, not_found};
+        _ ->
+            {ok, SessionId}
+    end.
+
+
+generate_session_id() ->
+    SessionId =
+        << <<X:8/unsigned-integer>> ||
+            X <- [ rand:uniform(255) || _ <- lists:seq(0,31) ] >>,
+    {ok, base64:encode(SessionId)}.
