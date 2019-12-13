@@ -65,9 +65,18 @@ init([]) ->
                  intensity => 1,
                  period => 5},
 
+    SessionManager =
+        case application:get_env(session_manager) of
+            {ok, Manager} ->
+                Manager;
+            _ ->
+                %% Default to the nova_session_ets manager
+                nova_session_ets
+        end,
+
     Children = [
                 child(nova_router, nova_router),
-                child(nova_session, nova_session)
+                child(SessionManager, SessionManager)
                ],
 
     Children2 = case application:get_env(rest_only) of
