@@ -64,7 +64,7 @@ process_routefile(#{name := Application, routes_file := RouteFile}) ->
             ?LOG(warn, "Could not find the application ~p. Check your config and rerun the application", [Application]),
             ok;
         Filepath ->
-            ?LOG(debug, "Processing routefile: ~p", [Filepath]),
+            ?DEBUG("Processing routefile: ~p", [Filepath]),
             RouteFilePath = filename:join([Filepath, RouteFile]),
             {ok, [AppMap|_]} = file:consult(RouteFilePath),
             %% Extract information
@@ -107,7 +107,7 @@ init([]) ->
     process_flag(trap_exit, true),
     {ok, MainApplication} = application:get_application(),
     Apps = application:get_env(nova_applications, MainApplication, []),
-    ?LOG(debug, "Bootstrapping router for application ~p, included_apps: ~p", [MainApplication, Apps]),
+    ?DEBUG("Bootstrapping router for application ~p, included_apps: ~p", [MainApplication, Apps]),
     [ process_routefile(#{name => NovaApp}) || NovaApp <- [MainApplication|Apps] ],
     apply_routes(),
     {ok, #state{
@@ -188,7 +188,7 @@ handle_cast({add_route, #{application := Application, prefix := Prefix,
                                nova_handler => nova_ws_handler}};
             {Route, Module, Function} ->
                 %% This is to keep legacy-format. Should be deprecated
-                ?LOG(warn, "Route of format {Route, Module, Function} is deprecated and will be removed in future versions of Nova", []),
+                ?WARNING("Route of format {Route, Module, Function} is deprecated and will be removed in future versions of Nova", []),
                 {Prefix++Route,
                  nova_http_handler,
                  InitialState#{mod => Module,
@@ -196,10 +196,10 @@ handle_cast({add_route, #{application := Application, prefix := Prefix,
                                methods => '_',
                                nova_handler => nova_http_handler}};
             Other ->
-                ?LOG(warn, "Could not parse route ~p", [Other]),
+                ?WARNING("Could not parse route ~p", [Other]),
                 erlang:throw({route_error, Other})
         end,
-    ?LOG(debug, "Applying route: ~p", [RouteDetails]),
+    ?DEBUG("Applying route: ~p", [RouteDetails]),
     NewRouteTable = prop_upsert(Host, CowboyRoute, RouteTable),
     {noreply, State#state{route_table = NewRouteTable}};
 handle_cast(apply_routes, State = #state{route_table = RouteTable}) ->
