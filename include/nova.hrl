@@ -25,6 +25,8 @@
 -define(TERM_BOLD, "\033[1m").
 -define(TERM_RESET, "\033[m").
 
+-define(DEBUG(M), ?LOG(debug, M)).
+-define(DEBUG(M, Meta), ?LOG(debug, M, Meta)).
 -define(INFO(M), ?LOG(info, ?TERM_GREEN ++ M ++ ?TERM_RESET)).
 -define(INFO(M,Meta), ?LOG(info, ?TERM_GREEN ++ M ++ ?TERM_RESET, Meta)).
 -define(WARNING(M), ?LOG(warning, ?TERM_YELLOW ++ M ++ ?TERM_RESET)).
