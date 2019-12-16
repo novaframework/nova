@@ -154,7 +154,7 @@ render_dtl(View, Variables, Options) ->
     case code:is_loaded(View) of
         false ->
             %% Cast a warning since the module could not be found
-            ?WARNING("Could not render ~p cause it's not loaded.", [View]);
+            ?ERROR("Could not render ~p cause it's not loaded.", [View]);
         _ ->
             View:render(Variables, Options)
     end.
