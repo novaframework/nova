@@ -92,7 +92,8 @@ init([]) ->
             ?INFO("Starting nova in developer mode..."),
             application:ensure_all_started(sync);
         _ ->
-            ok
+            %% Run the nova compiler
+            nova_compiler:compile_all()
     end,
 
     {ok, {SupFlags, Children2}}.
