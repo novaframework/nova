@@ -34,27 +34,17 @@ compile_files(#{name := App}) ->
             error;
         Filepath ->
             {ok, FilesAndDirs} = file:list_dir(Filepath),
-            Result = [ do_compile(filename:join([Filepath, FileOrDir])) || FileOrDir <- FilesAndDirs ],
+            Result = [ do_compile(App, filename:join([Filepath, FileOrDir])) || FileOrDir <- FilesAndDirs ],
             {ok, maps:from_list(lists:flatten(Result))}
     end.
 
-do_compile(File) ->
-    BeamDir =
-        case application:get_application() of
-            {ok, App} ->
-                EbinDir = code:lib_dir(App, ebin),
-                filelib:ensure_dir(EbinDir),
-                EbinDir;
-            _ ->
-                %% We're running inside an unknown application - just put it in somewhere (This is ugly)
-                [Dir|_] = code:get_path(),
-                Dir
-        end,
+do_compile(App, File) ->
+    BeamDir = code:lib_dir(App, ebin),
 
     case filelib:is_dir(File) of
         true ->
             {ok, SubFiles} = file:list_dir(File),
-            [ do_compile(filename:join(File, SubFile)) || SubFile <- SubFiles ];
+            [ do_compile(App, filename:join(File, SubFile)) || SubFile <- SubFiles ];
         _ ->
             case filename:extension(File) of
                 ".dtl" ->
