@@ -102,11 +102,11 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, State) ->
                 end,
             handle_view(View, Variables, Options, Req, State);
         {status, Status} when is_integer(Status) ->
-            Req1 = nova_router:get_status_page(Status, Req),
+            Req1 = nova_router:status_page(Status, Req),
             {ok, Req1, State};
         {status, Status, _Headers} when is_integer(Status) ->
             %% TODO! Include headers
-            Req1 = nova_router:get_status_page(Status, Req),
+            Req1 = nova_router:status_page(Status, Req),
             {ok, Req1, State};
         {redirect, Route} ->
             Req1 = cowboy_req:reply(
