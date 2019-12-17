@@ -157,16 +157,8 @@ handle_call(Request, _From, State) ->
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), NewState :: term()}.
 handle_cast({add_static, #{application := Application, prefix := Prefix,
-                           host := Host, security := Security}, RouteDetails},
+                           host := Host, security := _Security}, {Route, DirOrFile}},
             State = #state{route_table = RouteTable}) ->
-    {Route, DirOrFile, Options} =
-        case RouteDetails of
-            {_, _, _} ->
-                RouteDetails;
-            {Route0, DirOrFile0} ->
-                {Route0, DirOrFile0, #{}}
-        end,
-
     case code:lib_dir(Application, priv) of
         {error, _} ->
             ?ERROR("Could not apply route ~p. Could not find priv dir of application ~p", [RouteDetails, Application]),
@@ -175,12 +167,23 @@ handle_cast({add_static, #{application := Application, prefix := Prefix,
             CowboyRoute =
                 case filelib:is_dir(filename:join([PrivDir, DirOrFile])) of
                     true ->
-                        {Route, cowboy_static, {priv_dir, Application, DirOrFile}};
+                        {Prefix++Route, cowboy_static, {priv_dir, Application, DirOrFile}};
                     _ ->
-                        {Route, cowboy_static, {priv_file, Application, DirOrFile}}
+                        case filelib:is_file(filename:join([PrivDir, DirOrFile])) of
+                            true ->
+                                {Prefix++Route, cowboy_static, {priv_file, Application, DirOrFile}};
+                            _ ->
+                                ?WARNING("Could not find the static file ~p which is reffered from the route ~p. Ignoring route", [DirOrFile, RouteDetails]),
+                                false
+                        end
                 end,
-            NewRouteTable = prop_upsert(Host, CowboyRoute, RouteTable),
-            {noreply, State#state{route_table = NewRouteTable}}
+            case CowboyRoute of
+                false ->
+                    {noreply, State};
+                _ ->
+                    NewRouteTable = prop_upsert(Host, CowboyRoute, RouteTable),
+                    {noreply, State#state{route_table = NewRouteTable}}
+            end
     end;
 handle_cast({add_route, _, {StatusCode, Module, Function}},
             State = #state{static_route_table = StaticRouteTable}) when is_integer(StatusCode) ->
