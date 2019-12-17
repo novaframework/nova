@@ -71,6 +71,7 @@ process_routefile(#{name := Application, routes_file := RouteFile}) ->
             Prefix = maps:get(prefix, AppMap, ""),
             Host = maps:get(host, AppMap, '_'),
             Routes = maps:get(routes, AppMap, []),
+            Statics = maps:get(statics, AppMap, []),
             Secure = maps:get(security, AppMap, false),
             %% Built intermediate object
             RouteInfo = #{application => Application,
@@ -78,6 +79,7 @@ process_routefile(#{name := Application, routes_file := RouteFile}) ->
                              host => Host,
                              security => Secure},
             %% Send the routing information to the gen_server
+            [ gen_server:cast(?SERVER, {add_static, RouteInfo, Static}) || Static <- Statics ],
             [ gen_server:cast(?SERVER, {add_route, RouteInfo, Route}) || Route <- Routes ]
     end;
 process_routefile(AppInfo = #{name := Application}) ->
@@ -154,6 +156,32 @@ handle_call(Request, _From, State) ->
                          {noreply, NewState :: term(), Timeout :: timeout()} |
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), NewState :: term()}.
+handle_cast({add_static, #{application := Application, prefix := Prefix,
+                           host := Host, security := Security}, RouteDetails},
+            State = #state{route_table = RouteTable}) ->
+    {Route, DirOrFile, Options} =
+        case RouteDetails of
+            {_, _, _} ->
+                RouteDetails;
+            {Route0, DirOrFile0} ->
+                {Route0, DirOrFile0, #{}}
+        end,
+
+    case code:lib_dir(Application, priv) of
+        {error, _} ->
+            ?ERROR("Could not apply route ~p. Could not find priv dir of application ~p", [RouteDetails, Application]),
+            {noreply, State};
+        PrivDir ->
+            CowboyRoute =
+                case filelib:is_dir(filename:join([PrivDir, DirOrFile])) of
+                    true ->
+                        {Route, cowboy_static, {priv_dir, Application, DirOrFile}};
+                    _ ->
+                        {Route, cowboy_static, {priv_file, Application, DirOrFile}}
+                end,
+            NewRouteTable = prop_upsert(Host, CowboyRoute, RouteTable),
+            {noreply, State#state{route_table = NewRouteTable}}
+    end;
 handle_cast({add_route, _, {StatusCode, Module, Function}},
             State = #state{static_route_table = StaticRouteTable}) when is_integer(StatusCode) ->
     %% Do something with the status code
