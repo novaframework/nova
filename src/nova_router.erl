@@ -157,7 +157,7 @@ handle_call(Request, _From, State) ->
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), NewState :: term()}.
 handle_cast({add_static, #{application := Application, prefix := Prefix,
-                           host := Host, security := _Security}, {Route, DirOrFile}},
+                           host := Host, security := _Security}, RouteDetails = {Route, DirOrFile}},
             State = #state{route_table = RouteTable}) ->
     case code:lib_dir(Application, priv) of
         {error, _} ->
