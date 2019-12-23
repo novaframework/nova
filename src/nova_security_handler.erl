@@ -13,6 +13,9 @@
 %% the request.
 %% @end
 %%--------------------------------------------------------------------
+-spec execute(Req, Env) -> {ok, Req, Env} | {stop, Req}
+                               when Req :: cowboy_req:req(),
+                                    Env :: cowboy_middleware:env().
 execute(Req, Env = #{handler_opts := HandlerOpts = #{secure := {Mod, Func}}}) ->
     try Mod:Func(Req) of
         {ok, AuthData} ->

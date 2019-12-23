@@ -45,15 +45,19 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 
+-spec get_value(SessionId :: binary(), Key :: binary()) -> {ok, Value :: binary()} | {error, not_found}.
 get_value(SessionId, Key) ->
     gen_server:call(?SERVER, {get_value, SessionId, Key}).
 
+-spec set_value(SessionId :: binary(), Key :: binary(), Value :: binary()) -> ok | {error, Reason :: term()}.
 set_value(SessionId, Key, Value) ->
     gen_server:call(?SERVER, {set_value, SessionId, Key, Value}).
 
+-spec delete_value(SessionId :: binary()) -> ok | {error, Reason :: term()}.
 delete_value(SessionId) ->
     gen_server:call(?SERVER, {delete_value, SessionId}).
 
+-spec delete_value(SessionId :: binary(), Key :: binary()) -> ok | {error, Reason :: term()}.
 delete_value(SessionId, Key) ->
     gen_server:call(?SERVER, {delete_value, SessionId, Key}).
 
