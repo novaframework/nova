@@ -122,7 +122,9 @@ start_cowboy() ->
     {ok, _} = cowboy:start_clear(
                 nova_listener,
                 [{port, Port}],
-                #{middlewares => [cowboy_router, nova_security_handler, cowboy_handler]}).
+                #{middlewares => [cowboy_router, nova_security_handler, cowboy_handler],
+                  stream_handlers => [nova_stream_h, cowboy_compress_h, cowboy_stream_h],
+                  compress => true}).
 
 start_cowboy_secure(CACert, Cert) ->
     Port = case application:get_env(ssl_port) of
