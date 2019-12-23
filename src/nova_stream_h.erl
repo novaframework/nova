@@ -29,13 +29,13 @@ data(StreamID, IsFin, Data, State = #state{next = Next}) ->
 
 -spec info(cowboy_stream:streamid(), any(), State)
 	-> {cowboy_stream:commands(), State} when State::#state{}.
-info(StreamID, {response, Code, Headers, _Body} = Info, State = #state{next = Next, req = Req})
+info(StreamID, {response, Code, _Headers, _Body} = Info, State = #state{next = Next, req = Req})
   when is_integer(Code) ->
     case nova_router:status_page(Code, Req) of
         {ok, StatusCode, StatusHeaders, StatusBody, _} ->
             {[{error_response, StatusCode, StatusHeaders, StatusBody},
               stop], State};
-        Ret ->
+        _Ret ->
             {Commands, Next0} = cowboy_stream:info(StreamID, Info, Next),
             {Commands, State#state{next = Next0}}
     end;
