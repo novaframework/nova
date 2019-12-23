@@ -19,6 +19,12 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Public functions        %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
+-type method() :: '_' | <<"GET">> | <<"POST">> | <<"DELETE">> | <<"PUT">>.
+-type nova_http_state() :: #{mod := atom(),
+                             func := atom(),
+                             methods := [method()]}.
+-export_type([nova_http_state/0]).
+
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -26,26 +32,39 @@
 %% all the logic is handed.
 %% @end
 %%--------------------------------------------------------------------
+-spec init(Req :: cowboy_req:req(), State :: nova_http_state()) ->
+                  {ok, Req1 :: cowboy_req:req(), State0 :: nova_http_state()}.
 init(Req, State = #{mod := Mod, func := Func, methods := '_'}) ->
-    handle(Mod, Func, Req, State);
+    {ok, StatusCode, Headers, Body, State0} = handle(Mod, Func, Req, State),
+    Req1 = cowboy_req:reply(StatusCode, Headers, Body, Req),
+    {ok, Req1, State0};
 init(Req = #{method := ReqMethod}, State = #{mod := Mod, func := Func, methods := Methods}) ->
     case lists:any(fun(X) -> X == ReqMethod end, Methods) of
         true ->
-            handle(Mod, Func, Req, State);
+            {ok, StatusCode, Headers, Body, State0} = handle(Mod, Func, Req, State),
+            Req1 = cowboy_req:reply(StatusCode, Headers, Body, Req),
+            {ok, Req1, State0};
         false ->
-            Req1 = nova_router:status_page(405, Req),
+            {ok, StatusCode, Headers, Body, _} = nova_router:status_page(405, Req),
+            Req1 = cowboy_req:reply(StatusCode, Headers, Body, Req),
             {ok, Req1, State}
     end;
 init(Req, State) ->
-    Req1 = nova_router:status_page(404, Req),
+    {ok, StatusCode, Headers, Body, _} = nova_router:status_page(404, Req),
+    Req1 = cowboy_req:reply(StatusCode, Headers, Body, Req),
     {ok, Req1, State}.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Private functions       %
-%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+%%--------------------------------------------------------------------
+%% @doc
+%% This function is exposed mostly cause we need to call it from nova_router.
+%% It returns the raw handle request instead of the aggregated result returned in init/2.
+%% @end
+%%--------------------------------------------------------------------
+-spec handle(Mod :: atom(), Fun :: atom(), Req :: cowboy_req:req(), State :: nova_http_state()) ->
+                    {ok, StatusCode :: integer(), Headers :: cowboy:http_headers(), Body :: binary(), State0 :: nova_http_state()}.
 handle(Mod, Fun, Req, State) ->
-    ?LOG(debug, "Handling request for ~p:~p", [Mod, Fun]),
+    ?DEBUG("Handling request for ~p:~p", [Mod, Fun]),
     Args =
         case maps:get(auth_data, State, undefined) of
             undefined ->
@@ -59,35 +78,30 @@ handle(Mod, Fun, Req, State) ->
     catch
         ?WITH_STACKTRACE(Type, Reason, Stacktrace)
           ?ERROR("Controller (~p:~p/1) failed with ~p:~p.~nStacktrace:~n~p", [Mod, Fun, Type, Reason, Stacktrace]),
-          Req1 = nova_router:status_page(404, Req),
-          {ok, Req1, State}
+          nova_router:status_page(404, Req)
     end.
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Private functions       %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%
 handle1(RetObj, Mod, Fun, Req = #{method := Method}, State) ->
     case RetObj of
 	{json, JSON} ->
-            EncodedJSON = jsone:encode(JSON, [undefined_as_null]),
+            EncodedJSON = json:encode(JSON, [binary, {maps, true}]),
 	    StatusCode = case Method of
 			     <<"POST">> -> 201;
 			     _ -> 200
 			 end,
-            Req1 = cowboy_req:reply(StatusCode, #{
-                                                  <<"content-type">> => <<"application/json">>
-                                                 }, EncodedJSON, Req),
-            {ok, Req1, State};
+            Headers = #{<<"content-type">> => <<"application/json">>},
+            {ok, StatusCode, Headers, EncodedJSON, State};
         {json, StatusCode, Headers, JSON} ->
-            EncodedJSON = jsone:encode(JSON, [undefined_as_null]),
-            Req1 = cowboy_req:reply(StatusCode,
-				    maps:merge(#{<<"content-type">> =>
-						    <<"application/json">>},
-                                              Headers),
-				    EncodedJSON,
-				    Req),
-            {ok, Req1, State};
+            EncodedJSON = json:encode(JSON, [binary, {maps, true}]),
+            Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, Headers),
+            {ok, StatusCode, Headers0, EncodedJSON, State};
         {ok, Variables} ->
             %% Derive the view from module
             ViewNameAtom = get_view_name(Mod),
-            handle_view(ViewNameAtom, Variables, #{}, Req, State);
+            handle_view(ViewNameAtom, Variables, #{}, State);
         {ok, Variables, Options} ->
             View =
                 case maps:get(view, Options, undefined) of
@@ -100,21 +114,16 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, State) ->
                     CustomView ->
                          list_to_atom(CustomView ++ "_dtl")
                 end,
-            handle_view(View, Variables, Options, Req, State);
+            handle_view(View, Variables, Options, State);
         {status, Status} when is_integer(Status) ->
-            Req1 = nova_router:status_page(Status, Req),
-            {ok, Req1, State};
-        {status, Status, _Headers} when is_integer(Status) ->
-            %% TODO! Include headers
-            Req1 = nova_router:status_page(Status, Req),
-            {ok, Req1, State};
+            nova_router:status_page(Status, Req);
+        {status, Status, ExtraHeaders} when is_integer(Status) ->
+            {ok, _StatusCode, StatusHeaders, StatusBody, _} = nova_router:status_page(Status, Req),
+            Headers0 = maps:merge(ExtraHeaders, StatusHeaders),
+            {ok, Status, Headers0, StatusBody, State};
         {redirect, Route} ->
-            Req1 = cowboy_req:reply(
-                     302,
-                     #{<<"Location">> => list_to_binary(Route)},
-                     Req
-                    ),
-            {ok, Req1, State};
+            Headers = #{<<"Location">> => list_to_binary(Route)},
+            {ok, 302, Headers, <<>>, State};
         {cowboy_req, CowboyReq} ->
             {ok, CowboyReq, State};
         Other ->
@@ -136,7 +145,7 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, State) ->
             end
     end.
 
-handle_view(View, Variables, Options, Req, State) ->
+handle_view(View, Variables, Options, State) ->
     {ok, HTML} = render_dtl(View, Variables, []),
     Headers =
         case maps:get(headers, Options, undefined) of
@@ -146,9 +155,7 @@ handle_view(View, Variables, Options, Req, State) ->
                 UserHeaders
         end,
     StatusCode = maps:get(status_code, Options, 200),
-    Req1 = cowboy_req:reply(StatusCode, Headers, HTML, Req),
-    {ok, Req1, State}.
-
+    {ok, StatusCode, Headers, HTML, State}.
 
 render_dtl(View, Variables, Options) ->
     case code:is_loaded(View) of
