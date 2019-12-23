@@ -41,6 +41,7 @@
 %%%===================================================================
 %%% Public functions
 %%%===================================================================
+-spec get(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Value :: binary()} | {error, Reason :: atom()}.
 get(Req, Key) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
@@ -50,6 +51,7 @@ get(Req, Key) ->
             {error, not_found}
     end.
 
+-spec set(Req :: cowboy_req:req(), Key :: binary(), Value :: binary()) -> ok | {error, Reason :: atom()}.
 set(Req, Key, Value) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
@@ -62,7 +64,7 @@ set(Req, Key, Value) ->
             Req1 = cowboy_req:set_resp_cookie(<<"session_id">>, SessionId, Req),
             {ok, Req1}
     end.
-
+-spec delete(Req :: cowboy_req:req()) -> ok | {error, Reason :: atom()}.
 delete(Req) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
@@ -76,6 +78,7 @@ delete(Req) ->
             {ok, Req}
     end.
 
+-spec delete(Req :: cowboy_req:req(), Key :: binary()) -> ok | {error, Reason :: atom()}.
 delete(Req, Key) ->
     case get_session_id(Req) of
         {ok, SessionId} ->

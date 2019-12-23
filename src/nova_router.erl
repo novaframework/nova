@@ -55,9 +55,26 @@
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Checks if there is a route for a special "status page" in the route
+%% table. This is done outside of cowboy since they does not support having
+%% custom pages for status pages (Eg 404)
+%% @end
+%%--------------------------------------------------------------------
+-spec status_page(Status :: integer(), Req :: cowboy_req:req()) ->
+                         {ok, StatusCode :: integer(), Headers :: cowboy:http_headers(), Body :: binary(), State0 :: nova_http_handler:nova_http_state()}.
 status_page(Status, Req) when is_integer(Status) ->
-    gen_server:call(?SERVER, {render_status_page, Status, Req}).
+    gen_server:call(?SERVER, {fetch_status_page, Status, Req}).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Process the routefile for the specified application and injects the
+%% resulting route-table into cowboy.
+%% TODO! We need this to work in a recursive manner.
+%% @end
+%%--------------------------------------------------------------------
+-spec process_routefile(#{name := atom(), routes_file => list()}) -> [ok].
 process_routefile(#{name := Application, routes_file := RouteFile}) ->
     case code:lib_dir(Application) of
         {error, bad_name} ->
@@ -86,7 +103,13 @@ process_routefile(AppInfo = #{name := Application}) ->
     Routename = lists:concat(["priv/", Application, ".routes.erl"]),
     process_routefile(AppInfo#{routes_file => Routename}).
 
-
+%%--------------------------------------------------------------------
+%% @doc
+%% Takes all the routes in nova_router and applies them in cowboy_router.
+%% The changes should be instant.
+%% @end
+%%--------------------------------------------------------------------
+-spec apply_routes() -> ok.
 apply_routes() ->
     gen_server:cast(?SERVER, apply_routes).
 
@@ -132,12 +155,12 @@ init([]) ->
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
                          {stop, Reason :: term(), NewState :: term()}.
-handle_call({render_status_page, Status, Req}, _From,
+handle_call({fetch_status_page, Status, Req}, _From,
             State = #state{static_route_table = StaticRouteTable}) ->
     case maps:get(Status, StaticRouteTable, undefined) of
         {Mod, Func} ->
-            {ok, Req1, _} = nova_http_handler:handle(Mod, Func, Req, #{}),
-            {reply, {ok, Req1}, State};
+            Reply = nova_http_handler:handle(Mod, Func, Req, #{}),
+            {reply, Reply, State};
         _ ->
             {reply, {error, not_found}, State}
     end;
@@ -185,11 +208,12 @@ handle_cast({add_static, #{application := Application, prefix := Prefix,
                     {noreply, State#state{route_table = NewRouteTable}}
             end
     end;
-handle_cast({add_route, _, {StatusCode, Module, Function}},
+handle_cast({add_route, _, {StatusCode, {Module, Function}}},
             State = #state{static_route_table = StaticRouteTable}) when is_integer(StatusCode) ->
     %% Do something with the status code
     StaticRouteTable2 = maps:put(StatusCode, {Module, Function}, StaticRouteTable),
-    {reply, ok, State#state{static_route_table = StaticRouteTable2}};
+    ?DEBUG("Applying status-route for code ~p, MF: ~p", [StatusCode, {Module, Function}]),
+    {noreply, State#state{static_route_table = StaticRouteTable2}};
 handle_cast({add_route, #{application := Application, prefix := Prefix,
                           host := Host, security := Security}, RouteDetails},
             State = #state{route_table = RouteTable}) ->
