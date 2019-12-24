@@ -35,7 +35,7 @@ info(StreamID, {response, Code, _Headers, _Body} = Info, State = #state{next = N
         {ok, StatusCode, StatusHeaders, StatusBody, _} ->
             {[{error_response, StatusCode, StatusHeaders, StatusBody},
               stop], State};
-        _Ret ->
+        _ ->
             {Commands, Next0} = cowboy_stream:info(StreamID, Info, Next),
             {Commands, State#state{next = Next0}}
     end;
@@ -51,10 +51,10 @@ terminate(StreamID, Reason, #state{next = Next}) ->
                   cowboy_stream:partial_req(), Resp, cowboy:opts())
                  -> Resp
                         when Resp::cowboy_stream:resp_command().
-early_error(StreamID, Reason, PartialReq, {_, Status, Headers, _} = Resp, Opts) ->
+early_error(StreamID, Reason, PartialReq, {_, Status, _Headers, _} = Resp, Opts) ->
     case nova_router:status_page(Status, PartialReq) of
-        {ok, Req0} ->
-            cowboy_stream:early_error(StreamID, Reason, PartialReq, {response, Status, Headers, Req0}, Opts);
+        {ok, StatusCode, StatusHeaders, StatusBody, _} ->
+            {response, StatusCode, StatusHeaders, StatusBody};
         _ ->
             cowboy_stream:early_error(StreamID, Reason, PartialReq, Resp, Opts)
     end.

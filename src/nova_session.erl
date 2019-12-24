@@ -58,13 +58,13 @@ set(Req, Key, Value) ->
             Mod = get_session_module(),
             Mod:set_value(SessionId, Key, Value);
         _ ->
-            SessionId = generate_session_id(),
+            {ok, SessionId} = generate_session_id(),
             Mod = get_session_module(),
             ok = Mod:set_value(SessionId, Key, Value),
             Req1 = cowboy_req:set_resp_cookie(<<"session_id">>, SessionId, Req),
             {ok, Req1}
     end.
--spec delete(Req :: cowboy_req:req()) -> ok | {error, Reason :: atom()}.
+-spec delete(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} | {error, Reason :: atom()}.
 delete(Req) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
@@ -78,7 +78,7 @@ delete(Req) ->
             {ok, Req}
     end.
 
--spec delete(Req :: cowboy_req:req(), Key :: binary()) -> ok | {error, Reason :: atom()}.
+-spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} | {error, Reason :: atom()}.
 delete(Req, Key) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
