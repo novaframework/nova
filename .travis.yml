@@ -4,4 +4,5 @@ otp_release:
   - 21.0
 script:
   - rebar3 dialyzer
+  - rebar3 xref
   - rebar3 compile
