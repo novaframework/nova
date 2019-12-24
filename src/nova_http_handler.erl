@@ -22,7 +22,8 @@
 -type method() :: '_' | binary(). %% Can not have binary literals in specs
 -type nova_http_state() :: #{mod := atom(),
                              func := atom(),
-                             methods := [method()]}.
+                             methods := [method()] | method(),
+                             _ => _}.
 -export_type([nova_http_state/0]).
 
 
@@ -127,22 +128,8 @@ handle1(RetObj, Mod, Fun, Req = #{method := Method}, State) ->
         {cowboy_req, CowboyReq} ->
             {ok, CowboyReq, State};
         Other ->
-            Signature = erlang:element(1, Other),
-            case nova_router:get_handler(Signature) of
-                #{module := Handler} ->
-                    try Handler:handle(Other) of
-                        {continue, Result} ->
-                            %% Recurse. Maybe we need something else?
-                            handle1(Result, Mod, Fun, Req, State);
-                        Result ->
-                            Result
-                    catch
-                        ?WITH_STACKTRACE(Type, Reason, Stacktrace)
-                        erlang:raise(Type, Reason, Stacktrace)
-                    end;
-                _ ->
-                    erlang:throw({unknown_handler_type, Signature})
-            end
+            ?ERROR("Unknown return object ~p returned from module: ~p function: ~p", [Other, Mod, Fun]),
+            erlang:throw({unknown_handler_type, Other})
     end.
 
 handle_view(View, Variables, Options, State) ->

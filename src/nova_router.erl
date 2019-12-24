@@ -35,8 +35,8 @@
 -define(STATIC_ROUTE_TABLE, static_route_table).
 
 -record(state, {
-                route_table :: [{binary(), list()}],
-                static_route_table :: [{integer(), atom(), atom()}]
+                route_table :: [{binary(), list()}] | [],
+                static_route_table :: #{StatusCode :: integer() => {Mod :: atom(), Func :: atom()}}
                }).
 
 %%%===================================================================
@@ -63,7 +63,7 @@ start_link() ->
 %% @end
 %%--------------------------------------------------------------------
 -spec status_page(Status :: integer(), Req :: cowboy_req:req()) ->
-                         {ok, StatusCode :: integer(), Headers :: cowboy:http_headers(), Body :: binary(), State0 :: nova_http_handler:nova_http_state()}.
+                         {ok, StatusCode :: integer(), Headers :: cowboy:http_headers(), Body :: binary(), State0 :: nova_http_handler:nova_http_state()} | {error, not_found}.
 status_page(Status, Req) when is_integer(Status) ->
     gen_server:call(?SERVER, {fetch_status_page, Status, Req}).
 
@@ -78,7 +78,7 @@ status_page(Status, Req) when is_integer(Status) ->
 process_routefile(#{name := Application, routes_file := RouteFile}) ->
     case code:lib_dir(Application) of
         {error, bad_name} ->
-            ?LOG(warn, "Could not find the application ~p. Check your config and rerun the application", [Application]),
+            ?WARNING("Could not find the application ~p. Check your config and rerun the application", [Application]),
             ok;
         Filepath ->
             ?DEBUG("Processing routefile: ~p", [Filepath]),
@@ -146,7 +146,8 @@ init([]) ->
 %% Handling call messages
 %% @end
 %%--------------------------------------------------------------------
--spec handle_call(Request :: term(), From :: {pid(), term()}, State :: term()) ->
+-spec handle_call(Request :: term() | {fetch_status_page, Status :: integer(), Req :: cowboy_req:req()},
+                  From :: {pid(), term()}, State :: term()) ->
                          {reply, Reply :: term(), NewState :: term()} |
                          {reply, Reply :: term(), NewState :: term(), Timeout :: timeout()} |
                          {reply, Reply :: term(), NewState :: term(), hibernate} |
@@ -159,7 +160,9 @@ handle_call({fetch_status_page, Status, Req}, _From,
             State = #state{static_route_table = StaticRouteTable}) ->
     case maps:get(Status, StaticRouteTable, undefined) of
         {Mod, Func} ->
-            Reply = nova_http_handler:handle(Mod, Func, Req, #{}),
+            Reply = nova_http_handler:handle(Mod, Func, Req, #{mod => dummy,
+                                                               func => dummy,
+                                                               methods => '_'}),
             {reply, Reply, State};
         _ ->
             {reply, {error, not_found}, State}
@@ -262,7 +265,7 @@ handle_cast(apply_routes, State = #state{route_table = RouteTable}) ->
     cowboy:set_env(nova_listener, dispatch, Dispatch),
     {noreply, State};
 handle_cast(Request, State) ->
-    ?LOG(warn, "Got unknown cast in router: ~p", [Request]),
+    ?WARNING("Got unknown cast in router: ~p", [Request]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------

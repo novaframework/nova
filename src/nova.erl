@@ -33,4 +33,4 @@ application_loaded(Application) ->
     %% First we need to check which application that is the main one
     {ok, MainApp} = application:get_application(nova_sup),
     lists:any(fun({CompApp, _, _}) -> CompApp == Application end,
-              application:get_env(MainApp, nova_applications)).
+              application:get_env(MainApp, nova_applications, [])).
