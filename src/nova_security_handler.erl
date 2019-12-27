@@ -1,6 +1,8 @@
 -module(nova_security_handler).
 -behaviour(cowboy_middleware).
 
+-include_lib("nova/include/nova.hrl").
+
 -export([
          execute/2
         ]).
@@ -31,7 +33,8 @@ execute(Req, Env = #{handler_opts := HandlerOpts = #{secure := {Mod, Func}}}) ->
         {cowboy_req, Req1} ->
             {ok, Req1, Env}
     catch
-        _:_ ->
+        Class:Reason ->
+            ?ERROR("Security module ~p:~p failed with ~p/~p", [Mod, Func, Class, Reason]),
             {stop, cowboy_req:reply(500, Req)}
     end;
 execute(Req, Env) ->
