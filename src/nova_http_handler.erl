@@ -19,7 +19,7 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Public functions        %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
--type method() :: '_' | binary(). %% Can not have binary literals in specs
+-type method() :: '_' | binary().
 -type nova_http_state() :: #{mod := atom(),
                              func := atom(),
                              methods := [method()] | method(),

@@ -15,6 +15,7 @@
          start_link/0,
          process_routefile/1,
          status_page/2,
+         get_all_routes/0,
          apply_routes/0
         ]).
 
@@ -67,6 +68,17 @@ start_link() ->
 status_page(Status, Req) when is_integer(Status) ->
     gen_server:call(?SERVER, {fetch_status_page, Status, Req}).
 
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Returns all the routes for this node. The RouteTable contains all
+%% routes injected into cowboy while the StaticRouteTable contains
+%% route information about status pages (eg 404).
+%% @end
+%%--------------------------------------------------------------------
+-spec get_all_routes() -> {ok, {RouteTable :: list(), StaticRouteTable :: map()}}.
+get_all_routes() ->
+    gen_server:call(?SERVER, get_all_routes).
 %%--------------------------------------------------------------------
 %% @doc
 %% Process the routefile for the specified application and injects the
@@ -74,7 +86,7 @@ status_page(Status, Req) when is_integer(Status) ->
 %% TODO! We need this to work in a recursive manner.
 %% @end
 %%--------------------------------------------------------------------
--spec process_routefile(#{name := atom(), routes_file => list()}) -> [ok].
+-spec process_routefile(#{name := atom(), routes_file => list()}) -> ok.
 process_routefile(#{name := Application, routes_file := RouteFile}) ->
     case code:lib_dir(Application) of
         {error, bad_name} ->
@@ -83,21 +95,23 @@ process_routefile(#{name := Application, routes_file := RouteFile}) ->
         Filepath ->
             ?DEBUG("Processing routefile: ~p", [Filepath]),
             RouteFilePath = filename:join([Filepath, RouteFile]),
-            {ok, [AppMap|_]} = file:consult(RouteFilePath),
-            %% Extract information
-            Prefix = maps:get(prefix, AppMap, ""),
-            Host = maps:get(host, AppMap, '_'),
-            Routes = maps:get(routes, AppMap, []),
-            Statics = maps:get(statics, AppMap, []),
-            Secure = maps:get(security, AppMap, false),
-            %% Built intermediate object
-            RouteInfo = #{application => Application,
-                             prefix => Prefix,
-                             host => Host,
-                             security => Secure},
-            %% Send the routing information to the gen_server
-            [ gen_server:cast(?SERVER, {add_static, RouteInfo, Static}) || Static <- Statics ],
-            [ gen_server:cast(?SERVER, {add_route, RouteInfo, Route}) || Route <- Routes ]
+            {ok, AppRoutes} = file:consult(RouteFilePath),
+            lists:foreach(fun(AppMap) ->
+                                  %% Extract information
+                                  Prefix = maps:get(prefix, AppMap, ""),
+                                  Host = maps:get(host, AppMap, '_'),
+                                  Routes = maps:get(routes, AppMap, []),
+                                  Statics = maps:get(statics, AppMap, []),
+                                  Secure = maps:get(security, AppMap, false),
+                                  %% Built intermediate object
+                                  RouteInfo = #{application => Application,
+                                                prefix => Prefix,
+                                                host => Host,
+                                                security => Secure},
+                                  %% Send the routing information to the gen_server
+                                  [ gen_server:cast(?SERVER, {add_static, RouteInfo, Static}) || Static <- Statics ],
+                                  [ gen_server:cast(?SERVER, {add_route, RouteInfo, Route}) || Route <- Routes ]
+                          end, AppRoutes)
     end;
 process_routefile(AppInfo = #{name := Application}) ->
     Routename = lists:concat(["priv/", Application, ".routes.erl"]),
@@ -167,6 +181,9 @@ handle_call({fetch_status_page, Status, Req}, _From,
         _ ->
             {reply, {error, not_found}, State}
     end;
+handle_call(get_all_routes, _From, State = #state{route_table = RoutesTable,
+                                                  static_route_table = StaticRouteTable}) ->
+    {reply, {ok, {RoutesTable, StaticRouteTable}}, State};
 handle_call(Request, _From, State) ->
     ?WARNING("Unknown request: ~p when state: ~p", [Request, State]),
     {reply, error, State}.
