@@ -86,7 +86,7 @@ get_all_routes() ->
 %% TODO! We need this to work in a recursive manner.
 %% @end
 %%--------------------------------------------------------------------
--spec process_routefile(#{name := atom(), routes_file => list()}) -> [ok].
+-spec process_routefile(#{name := atom(), routes_file => list()}) -> ok.
 process_routefile(#{name := Application, routes_file := RouteFile}) ->
     case code:lib_dir(Application) of
         {error, bad_name} ->
