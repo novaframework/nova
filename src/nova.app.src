@@ -4,11 +4,12 @@
   {registered, []},
   {mod, { nova_app, []}},
   {included_applications, [
-    ranch,
-    cowboy,
-    compiler,
-    erlydtl,
-    jsone]},
+                           ranch,
+                           cowboy,
+                           compiler,
+                           erlydtl,
+                           jhn_stdlib
+                          ]},
   {applications,
    [kernel,
     stdlib,
