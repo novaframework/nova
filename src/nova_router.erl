@@ -15,6 +15,7 @@
          start_link/0,
          process_routefile/1,
          status_page/2,
+         add_route/2,
          get_all_routes/0,
          apply_routes/0
         ]).
@@ -39,6 +40,21 @@
                 route_table :: [{binary(), list()}] | [],
                 static_route_table :: #{StatusCode :: integer() => {Mod :: atom(), Func :: atom()}}
                }).
+
+-type route_info() :: #{application := atom(),
+                        prefix := atom(),
+                        host := atom() | string(),
+                        security := false | {atom(), atom()},
+                        _ => _}.
+-export_type([route_info/0]).
+
+-type route() :: {Route :: string(), {Module :: atom(), Function :: atom()}} |
+                 {Route :: string(), {Module :: atom(), Function :: atom()}, Options :: map()} |
+                 {Route :: string(), Module :: atom(), Function :: atom()} |
+                 {Route :: string(), CallbackInfo :: atom(), Options :: map()} |
+                 {StatusCode :: integer(), {Module :: atom(), Function :: atom()}} |
+                 {Route :: string(), Filename :: string()}.
+-export_type([route/0]).
 
 %%%===================================================================
 %%% API
@@ -67,6 +83,18 @@ start_link() ->
                          {ok, StatusCode :: integer(), Headers :: cowboy:http_headers(), Body :: binary(), State0 :: nova_http_handler:nova_http_state()} | {error, not_found}.
 status_page(Status, Req) when is_integer(Status) ->
     gen_server:call(?SERVER, {fetch_status_page, Status, Req}).
+
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Add a route to nova.
+%% @end
+%%--------------------------------------------------------------------
+-spec add_route(RouteInfo :: route_info(), Route :: route()) -> ok.
+add_route(RouteInfo, StaticRoute) when is_list(StaticRoute) ->
+    gen_server:cast(?SERVER, {add_static, RouteInfo, StaticRoute});
+add_route(RouteInfo, Route) ->
+    gen_server:cast(?SERVER, {add_route, RouteInfo, Route}).
 
 
 %%--------------------------------------------------------------------
@@ -108,9 +136,8 @@ process_routefile(#{name := Application, routes_file := RouteFile}) ->
                                                 prefix => Prefix,
                                                 host => Host,
                                                 security => Secure},
-                                  %% Send the routing information to the gen_server
-                                  [ gen_server:cast(?SERVER, {add_static, RouteInfo, Static}) || Static <- Statics ],
-                                  [ gen_server:cast(?SERVER, {add_route, RouteInfo, Route}) || Route <- Routes ]
+                                  %% Add routes
+                                  [ add_route(RouteInfo, Route) || Route <- Routes ++ Statics ]
                           end, AppRoutes)
     end;
 process_routefile(AppInfo = #{name := Application}) ->
