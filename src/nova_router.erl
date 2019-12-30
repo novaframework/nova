@@ -91,8 +91,8 @@ status_page(Status, Req) when is_integer(Status) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec add_route(RouteInfo :: route_info(), Route :: route()) -> ok.
-add_route(RouteInfo, StaticRoute) when is_list(StaticRoute) ->
-    gen_server:cast(?SERVER, {add_static, RouteInfo, StaticRoute});
+add_route(RouteInfo, Route = {_, FileOrDir}) when is_list(FileOrDir) ->
+    gen_server:cast(?SERVER, {add_static, RouteInfo, Route});
 add_route(RouteInfo, Route) ->
     gen_server:cast(?SERVER, {add_route, RouteInfo, Route}).
 
@@ -275,19 +275,19 @@ handle_cast({add_route, #{application := Application, prefix := Prefix,
                                func => Function,
                                methods => '_',
                                nova_handler => nova_http_handler}};
-            {Route, {Module, Function}, Options = #{protocol := http}} ->
-                {Prefix++Route,
-                 nova_http_handler,
-                 InitialState#{mod => Module,
-                               func => Function,
-                               methods => get_methods(Options),
-                               nova_handler => nova_http_handler}};
             {Route, CallbackInfo, Options = #{protocol := ws}} ->
                 {Prefix++Route,
                  nova_ws_handler,
                  InitialState#{mod => CallbackInfo,
                                subprotocols => maps:get(subprotocols, Options, []),
                                nova_handler => nova_ws_handler}};
+            {Route, {Module, Function}, Options} ->
+                {Prefix++Route,
+                 nova_http_handler,
+                 InitialState#{mod => Module,
+                               func => Function,
+                               methods => get_methods(Options),
+                               nova_handler => nova_http_handler}};
             {Route, Module, Function} ->
                 %% This is to keep legacy-format. Should be deprecated
                 ?WARNING("Route of format {Route, Module, Function} is deprecated and will be removed in future versions of Nova", []),
