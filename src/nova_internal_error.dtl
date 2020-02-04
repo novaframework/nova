@@ -1,0 +1,21 @@
+<html>
+  <head>
+    <title>500 Internal Server Error</title>
+  </head>
+  <body>
+    <h1>Internal Server Error</h1>
+    {% if dev_mode %}
+    <b>Module:</b> {{module}}<br />
+    <b>Function:</b> {{function}}<br />
+    <b>Error:</b> {{type}}:{{reason}}<br />
+    <b>Stacktrace:</b>
+    <pre>
+      {{stacktrace}}
+    </pre>
+    {% else %}
+    <p>The server encountered an internal error or misconfiguration and was unable to complete your request.</p>
+    {% endif %}
+    <hr />
+    <i>Cowboy Server running Nova Framework</i>
+  </body>
+</html>
