@@ -17,6 +17,7 @@
          status_page/2,
          add_route/2,
          get_all_routes/0,
+         get_main_app/0,
          apply_routes/0
         ]).
 
@@ -37,6 +38,7 @@
 -define(STATIC_ROUTE_TABLE, static_route_table).
 
 -record(state, {
+                main_app :: atom(),
                 route_table :: [{binary(), list()}] | [],
                 static_route_table :: #{StatusCode :: integer() => {Mod :: atom(), Func :: atom()}}
                }).
@@ -107,6 +109,17 @@ add_route(RouteInfo, Route) ->
 -spec get_all_routes() -> {ok, {RouteTable :: list(), StaticRouteTable :: map()}}.
 get_all_routes() ->
     gen_server:call(?SERVER, get_all_routes).
+
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Returns the name of the application that intiated the start.
+%% @end
+%%--------------------------------------------------------------------
+-spec get_main_app() -> atom().
+get_main_app() ->
+    gen_server:call(?SERVER, get_main_app).
+
 %%--------------------------------------------------------------------
 %% @doc
 %% Process the routefile for the specified application and injects the
@@ -177,6 +190,7 @@ init([]) ->
     [ process_routefile(#{name => NovaApp}) || NovaApp <- [MainApplication|Apps] ],
     apply_routes(),
     {ok, #state{
+            main_app = MainApplication,
             route_table = [],
             static_route_table = #{}
            }}.
@@ -197,6 +211,8 @@ init([]) ->
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
                          {stop, Reason :: term(), NewState :: term()}.
+handle_call(get_main_app, _From, State = #state{main_app = MainApp}) ->
+    {reply, MainApp, State};
 handle_call({fetch_status_page, Status, Req}, _From,
             State = #state{static_route_table = StaticRouteTable}) ->
     case maps:get(Status, StaticRouteTable, undefined) of
@@ -290,7 +306,7 @@ handle_cast({add_route, #{application := Application, prefix := Prefix,
                                nova_handler => nova_http_handler}};
             {Route, Module, Function} ->
                 %% This is to keep legacy-format. Should be deprecated
-                ?WARNING("Route of format {Route, Module, Function} is deprecated and will be removed in future versions of Nova", []),
+                ?DEPRECATION("Route of format {Route, Module, Function} is deprecated and will be removed in future versions of Nova"),
                 {Prefix++Route,
                  nova_http_handler,
                  InitialState#{mod => Module,
