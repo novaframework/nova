@@ -290,7 +290,7 @@ handle_cast({add_route, #{application := Application, prefix := Prefix,
                                nova_handler => nova_http_handler}};
             {Route, Module, Function} ->
                 %% This is to keep legacy-format. Should be deprecated
-                ?WARNING("Route of format {Route, Module, Function} is deprecated and will be removed in future versions of Nova", []),
+                ?DEPRECATION("Route of format {Route, Module, Function} is deprecated and will be removed in future versions of Nova"),
                 {Prefix++Route,
                  nova_http_handler,
                  InitialState#{mod => Module,
