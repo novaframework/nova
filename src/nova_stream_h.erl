@@ -18,13 +18,18 @@
 -spec init(cowboy_stream:streamid(), cowboy_req:req(), cowboy:opts())
           -> {cowboy_stream:commands(), #state{}}.
 init(StreamID, Req, Opts) ->
-    Cookies = cowboy_req:parse_cookies(Req),
     Req0 =
-        case lists:keyfind(<<"session_id">>, 1, Cookies) of
-            {_, _} -> Req;
-            _ ->
-                {ok, SessionId} = nova_session:generate_session_id(),
-                cowboy_req:set_resp_cookie(<<"session_id">>, SessionId, Req)
+        case nova:get_env(use_sessions, true) of
+            true ->
+                Cookies = cowboy_req:parse_cookies(Req),
+                case lists:keyfind(<<"session_id">>, 1, Cookies) of
+                    {_, _} -> Req;
+                    _ ->
+                        {ok, SessionId} = nova_session:generate_session_id(),
+                        cowboy_req:set_resp_cookie(<<"session_id">>, SessionId, Req)
+                end;
+            false ->
+                Req
         end,
     {Commands, Next} = cowboy_stream:init(StreamID, Req0, Opts),
     {Commands, #state{req = Req0, next = Next}}.

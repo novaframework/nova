@@ -6,6 +6,7 @@
          delete/2,
          generate_session_id/0
         ]).
+-include_lib("nova/include/nova.hrl").
 
 %%%===================================================================
 %%% Callbacks
@@ -101,14 +102,19 @@ get_session_module() ->
     end.
 
 get_session_id(Req) ->
-    #{session_id := SessionId} = cowboy_req:match_cookies([{session_id, [], undefined}], Req),
-    case SessionId of
-        undefined ->
-            {error, not_found};
+    case nova:get_env(use_sessions, true) of
+        true ->
+            #{session_id := SessionId} = cowboy_req:match_cookies([{session_id, [], undefined}], Req),
+            case SessionId of
+                undefined ->
+                    {error, not_found};
+                _ ->
+                    {ok, SessionId}
+            end;
         _ ->
-            {ok, SessionId}
+            ?ERROR("Session called, but 'use_session' option set to false"),
+            throw({nova_session, unsupported_session_used})
     end.
-
 
 generate_session_id() ->
     SessionId =
