@@ -3,7 +3,8 @@
          get/2,
          set/3,
          delete/1,
-         delete/2
+         delete/2,
+         generate_session_id/0
         ]).
 
 %%%===================================================================
@@ -58,11 +59,7 @@ set(Req, Key, Value) ->
             Mod = get_session_module(),
             Mod:set_value(SessionId, Key, Value);
         _ ->
-            {ok, SessionId} = generate_session_id(),
-            Mod = get_session_module(),
-            ok = Mod:set_value(SessionId, Key, Value),
-            Req1 = cowboy_req:set_resp_cookie(<<"session_id">>, SessionId, Req),
-            {ok, Req1}
+            {error, session_id_not_set}
     end.
 -spec delete(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} | {error, Reason :: atom()}.
 delete(Req) ->
