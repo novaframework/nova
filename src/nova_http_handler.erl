@@ -101,7 +101,7 @@ handle(Mod, Fun, Req, State) ->
 handle1(RetObj, Mod, Fun, Req = #{method := Method}, State) ->
     case RetObj of
 	{json, JSON} ->
-            EncodedJSON = json:encode(JSON, [binary, {maps, true}]),
+            EncodedJSON = json:encode(JSON, [binary, maps]),
 	    StatusCode = case Method of
 			     <<"POST">> -> 201;
 			     _ -> 200
