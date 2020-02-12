@@ -149,6 +149,10 @@ process_routefile(#{name := Application, routes_file := RouteFile}) ->
                                                 prefix => Prefix,
                                                 host => Host,
                                                 security => Secure},
+                                  %% Check for handlers
+                                  Handlers = maps:get(handlers, AppMap, []),
+                                  [ nova_handlers:register_handler(Handle, Callback) || {Handle, Callback} <- Handlers ],
+
                                   %% Add routes
                                   [ add_route(RouteInfo, Route) || Route <- Routes ++ Statics ]
                           end, AppRoutes)
