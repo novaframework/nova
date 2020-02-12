@@ -76,6 +76,7 @@ init([]) ->
 
     Children = [
                 child(nova_router, nova_router),
+                child(nova_handlers, nova_handlers),
                 child(SessionManager, SessionManager)
                ],
 
