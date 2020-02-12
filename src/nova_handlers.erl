@@ -105,11 +105,11 @@ get_handler(Handle) ->
 init([]) ->
     process_flag(trap_exit, true),
     {ok, #state{
-            handlers = [{json, {nova_basic_handler, handle_json}},
-                        {ok, {nova_basic_handler, handle_ok}},
-                        {status, {nova_basic_handler, handle_status}},
-                        {redirect, {nova_basic_handler, handle_redirect}},
-                        {cowboy_req, {nova_basic_handler, handle_cowboy_req}}
+            handlers = [{json, fun nova_basic_handler:handle_json/4},
+                        {ok, fun nova_basic_handler:handle_ok/4},
+                        {status, fun nova_basic_handler:handle_status/4},
+                        {redirect, fun nova_basic_handler:handle_redirect/4},
+                        {cowboy_req, fun nova_basic_handler:handle_cowboy_req/4}
                        ]
            }}.
 
@@ -129,9 +129,14 @@ init([]) ->
                          {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
                          {stop, Reason :: term(), NewState :: term()}.
 handle_call({register_handler, Handle, Callback}, _From, State = #state{handlers = Handlers}) ->
+    Callback0 =
+        case Callback of
+            Callback when is_function(Callback) -> Callback;
+            {Module, Function} -> fun Module:Function/4
+        end,
     case proplists:get_value(Handle, Handlers) of
         undefined ->
-            {reply, ok, State#state{handlers = [{Handle, Callback}|Handlers]}};
+            {reply, ok, State#state{handlers = [{Handle, Callback0}|Handlers]}};
         _ ->
             ?ERROR("Could not register handler ~p since there's already another one registered on that name", [Handle]),
             {reply, {error, already_exists}, State}
