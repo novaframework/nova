@@ -136,6 +136,7 @@ handle_call({register_handler, Handle, Callback}, _From, State = #state{handlers
         end,
     case proplists:get_value(Handle, Handlers) of
         undefined ->
+            ?INFO("Registered handler ~p", [Handle]),
             {reply, ok, State#state{handlers = [{Handle, Callback0}|Handlers]}};
         _ ->
             ?ERROR("Could not register handler ~p since there's already another one registered on that name", [Handle]),
@@ -147,6 +148,7 @@ handle_call({unregister_handler, Handle}, _From, State = #state{handlers = Handl
             ?WARNING("Error when unregistering handler: Could not find handler ~p", [Handle]),
             {reply, {error, not_found}, State};
         Handlers0 ->
+            ?INFO("Removed handler ~p", [Handle]),
             {reply, ok, Handlers0}
     end;
 handle_call({get_handler, Handle}, _From, State = #state{handlers = Handlers}) ->
