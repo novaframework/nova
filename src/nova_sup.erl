@@ -80,14 +80,6 @@ init([]) ->
                 child(SessionManager, SessionManager)
                ],
 
-    Children2 = case application:get_env(rest_only) of
-                    {ok, true} ->
-                        ?INFO("Starting Nova with rest_only option. Views will not be compiled"),
-                        Children;
-                    _ ->
-                        ?INFO("Starting Nova as normal..."),
-                        Children
-                end,
     case application:get_env(dev_mode) of
         {ok, true} ->
             ?INFO("Starting nova in developer mode..."),
@@ -97,7 +89,7 @@ init([]) ->
             ok
     end,
 
-    {ok, {SupFlags, Children2}}.
+    {ok, {SupFlags, Children}}.
 
 %%%===================================================================
 %%% Internal functions
