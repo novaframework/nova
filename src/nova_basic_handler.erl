@@ -9,20 +9,30 @@
 
 -include_lib("nova/include/nova.hrl").
 
-handle_json({json, JSON}, _, #{method := Method}, State) ->
+-type mod_fun() :: {Module :: atom(), Function :: atom()}.
+-type erlydtl_vars() :: map() | [{Key :: atom() | binary() | string(), Value :: any()}].
+
+-spec handle_json({json, JSON :: map()}, ModFun :: mod_fun(), Req :: cowboy_req:req(),
+                  State :: nova_http_handler:nova_http_state()) ->
+                         nova_handler:handler_return() | none().
+handle_json({json, JSON}, _ModFun, #{method := Method}, State) ->
     EncodedJSON = json:encode(JSON, [binary, maps]),
-    StatusCode = case Method of
-                     <<"POST">> -> 201;
-                     _ -> 200
-                 end,
+    StatusCode =
+        case Method of
+            <<"POST">> -> 201;
+            _ -> 200
+        end,
     Headers = #{<<"content-type">> => <<"application/json">>},
     {ok, StatusCode, Headers, EncodedJSON, State};
 handle_json({json, StatusCode, Headers, JSON}, _, _Req, State) ->
-    EncodedJSON = json:encode(JSON, [binary, {maps, true}]),
+    EncodedJSON = json:encode(JSON, [binary, maps]),
     Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, Headers),
     {ok, StatusCode, Headers0, EncodedJSON, State}.
 
 
+-spec handle_ok({ok, Variables :: erlydtl_vars()} | {ok, Variables :: erlydtl_vars(), Options :: map()},
+                ModFun :: mod_fun(), Req :: cowboy_req:req(), State :: nova_http_handler:nova_http_state()) ->
+                       nova_handler:handler_return() | no_return().
 handle_ok({ok, Variables}, {Mod, _Func}, _Req, State) ->
     %% Derive the view from module
     ViewNameAtom = get_view_name(Mod),

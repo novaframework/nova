@@ -39,12 +39,10 @@ init(Req, State = #{mod := Mod, func := Func, methods := '_'}) ->
     {ok, StatusCode, Headers, Body, State0} = handle(Mod, Func, Req, State),
     Req1 = cowboy_req:reply(StatusCode, Headers, Body, Req),
     {ok, Req1, State0};
-init(Req = #{method := ReqMethod}, State = #{mod := Mod, func := Func, methods := Methods}) ->
+init(Req = #{method := ReqMethod}, State = #{methods := Methods}) ->
     case lists:any(fun(X) -> X == ReqMethod end, Methods) of
         true ->
-            {ok, StatusCode, Headers, Body, State0} = handle(Mod, Func, Req, State),
-            Req1 = cowboy_req:reply(StatusCode, Headers, Body, Req),
-            {ok, Req1, State0};
+            init(Req, State#{methods := '_'});
         false ->
             {ok, StatusCode, Headers, Body, _} = nova_router:status_page(405, Req),
             Req1 = cowboy_req:reply(StatusCode, Headers, Body, Req),
@@ -55,7 +53,6 @@ init(Req, State) ->
     Req1 = cowboy_req:reply(StatusCode, Headers, Body, Req),
     {ok, Req1, State}.
 
-
 %%--------------------------------------------------------------------
 %% @doc
 %% This function is exposed mostly cause we need to call it from nova_router.
@@ -63,7 +60,8 @@ init(Req, State) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec handle(Mod :: atom(), Fun :: atom(), Req :: cowboy_req:req(), State :: nova_http_state()) ->
-                    {ok, StatusCode :: integer(), Headers :: cowboy:http_headers(), Body :: binary(), State0 :: nova_http_state()}.
+                    {ok, StatusCode :: integer(), Headers :: cowboy:http_headers(), Body :: binary(),
+                     State0 :: nova_http_state()}.
 handle(Mod, Fun, Req, State) ->
     ?DEBUG("Handling request for ~p:~p", [Mod, Fun]),
     Args =

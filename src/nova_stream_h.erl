@@ -15,8 +15,11 @@
                 next :: any(),
                 req
                }).
+
+-type state() :: #state{}.
+
 -spec init(cowboy_stream:streamid(), cowboy_req:req(), cowboy:opts())
-          -> {cowboy_stream:commands(), #state{}}.
+          -> {cowboy_stream:commands(), state()}.
 init(StreamID, Req, Opts) ->
     Req0 =
         case nova:get_env(use_sessions, true) of
@@ -35,13 +38,13 @@ init(StreamID, Req, Opts) ->
     {Commands, #state{req = Req0, next = Next}}.
 
 -spec data(cowboy_stream:streamid(), cowboy_stream:fin(), cowboy_req:resp_body(), State)
-          -> {cowboy_stream:commands(), State} when State::#state{}.
+          -> {cowboy_stream:commands(), State} when State::state().
 data(StreamID, IsFin, Data, State = #state{next = Next}) ->
     {Commands, Next0} = cowboy_stream:data(StreamID, IsFin, Data, Next),
     {Commands, State#state{next = Next0}}.
 
 -spec info(cowboy_stream:streamid(), any(), State)
-	-> {cowboy_stream:commands(), State} when State::#state{}.
+          -> {cowboy_stream:commands(), State} when State::state().
 info(StreamID, {response, Code, _Headers, _Body} = Info, State = #state{next = Next, req = Req})
   when is_integer(Code) ->
     case nova_router:status_page(Code, Req) of
@@ -56,7 +59,7 @@ info(StreamID, Info, State = #state{next = Next}) ->
     {Commands, Next0} = cowboy_stream:info(StreamID, Info, Next),
     {Commands, State#state{next = Next0}}.
 
--spec terminate(cowboy_stream:streamid(), cowboy_stream:reason(), #state{}) -> any().
+-spec terminate(cowboy_stream:streamid(), cowboy_stream:reason(), state()) -> any().
 terminate(StreamID, Reason, #state{next = Next}) ->
     cowboy_stream:terminate(StreamID, Reason, Next).
 
