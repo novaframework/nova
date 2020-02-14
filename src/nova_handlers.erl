@@ -65,7 +65,7 @@ start_link() ->
 -spec register_handler(Handle :: atom(), Callback :: nova_handler_callback()) ->
                               ok | {error, Reason :: atom()}.
 register_handler(Handle, Callback) ->
-    gen_server:call(?SERVER, {register_handler, Handle, Callback}).
+    gen_server:cast(?SERVER, {register_handler, Handle, Callback}).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -104,14 +104,12 @@ get_handler(Handle) ->
                               ignore.
 init([]) ->
     process_flag(trap_exit, true),
-    {ok, #state{
-            handlers = [{json, fun nova_basic_handler:handle_json/4},
-                        {ok, fun nova_basic_handler:handle_ok/4},
-                        {status, fun nova_basic_handler:handle_status/4},
-                        {redirect, fun nova_basic_handler:handle_redirect/4},
-                        {cowboy_req, fun nova_basic_handler:handle_cowboy_req/4}
-                       ]
-           }}.
+    register_handler(json, fun nova_basic_handler:handle_json/4),
+    register_handler(ok, fun nova_basic_handler:handle_ok/4),
+    register_handler(status, fun nova_basic_handler:handle_status/4),
+    register_handler(redirect, fun nova_basic_handler:handle_redirect/4),
+    register_handler(cowboy_req, fun nova_basic_handler:handle_cowboy_req/4),
+    {ok, #state{handlers = []}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -128,27 +126,13 @@ init([]) ->
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
                          {stop, Reason :: term(), NewState :: term()}.
-handle_call({register_handler, Handle, Callback}, _From, State = #state{handlers = Handlers}) ->
-    Callback0 =
-        case Callback of
-            Callback when is_function(Callback) -> Callback;
-            {Module, Function} -> fun Module:Function/4
-        end,
-    case proplists:get_value(Handle, Handlers) of
-        undefined ->
-            ?INFO("Registered handler ~p", [Handle]),
-            {reply, ok, State#state{handlers = [{Handle, Callback0}|Handlers]}};
-        _ ->
-            ?ERROR("Could not register handler ~p since there's already another one registered on that name", [Handle]),
-            {reply, {error, already_exists}, State}
-    end;
 handle_call({unregister_handler, Handle}, _From, State = #state{handlers = Handlers}) ->
     case proplists:delete(Handle, Handlers) of
         Handlers ->
             ?WARNING("Error when unregistering handler: Could not find handler ~p", [Handle]),
             {reply, {error, not_found}, State};
         Handlers0 ->
-            ?INFO("Removed handler ~p", [Handle]),
+            ?DEBUG("Removed handler ~p", [Handle]),
             {reply, ok, Handlers0}
     end;
 handle_call({get_handler, Handle}, _From, State = #state{handlers = Handlers}) ->
@@ -174,6 +158,20 @@ handle_call(_Request, _From, State) ->
                          {noreply, NewState :: term(), Timeout :: timeout()} |
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), NewState :: term()}.
+handle_cast({register_handler, Handle, Callback}, State = #state{handlers = Handlers}) ->
+    Callback0 =
+        case Callback of
+            Callback when is_function(Callback) -> Callback;
+            {Module, Function} -> fun Module:Function/4
+        end,
+    case proplists:get_value(Handle, Handlers) of
+        undefined ->
+            ?DEBUG("Registered handler ~p", [Handle]),
+            {reply, ok, State#state{handlers = [{Handle, Callback0}|Handlers]}};
+        _ ->
+            ?ERROR("Could not register handler ~p since there's already another one registered on that name", [Handle]),
+            {reply, {error, already_exists}, State}
+    end;
 handle_cast(_Request, State) ->
     {noreply, State}.
 
