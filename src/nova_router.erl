@@ -82,7 +82,8 @@ start_link() ->
 %% @end
 %%--------------------------------------------------------------------
 -spec status_page(Status :: integer(), Req :: cowboy_req:req()) ->
-                         {ok, StatusCode :: integer(), Headers :: cowboy:http_headers(), Body :: binary(), State0 :: nova_http_handler:nova_http_state()} | {error, not_found}.
+                         {ok, StatusCode :: integer(), Headers :: cowboy:http_headers(), Body :: binary(),
+                          State0 :: nova_http_handler:nova_http_state()} | {error, not_found}.
 status_page(Status, Req) when is_integer(Status) ->
     gen_server:call(?SERVER, {fetch_status_page, Status, Req}).
 
@@ -151,7 +152,8 @@ process_routefile(#{name := Application, routes_file := RouteFile}) ->
                                                 security => Secure},
                                   %% Check for handlers
                                   Handlers = maps:get(handlers, AppMap, []),
-                                  [ nova_handlers:register_handler(Handle, Callback) || {Handle, Callback} <- Handlers ],
+                                  [ nova_handlers:register_handler(Handle, Callback) ||
+                                      {Handle, Callback} <- Handlers ],
 
                                   %% Add routes
                                   [ add_route(RouteInfo, Route) || Route <- Routes ++ Statics ]
@@ -255,17 +257,16 @@ handle_cast({add_static, #{application := Application, prefix := Prefix,
             {noreply, State};
         PrivDir ->
             CowboyRoute =
-                case filelib:is_dir(filename:join([PrivDir, DirOrFile])) of
-                    true ->
-                        {Prefix++Route, cowboy_static, {priv_dir, Application, DirOrFile}};
+                case {filelib:is_dir(filename:join([PrivDir, DirOrFile])),
+                      filelib:is_file(filename:join([PrivDir, DirOrFile]))} of
+                    {true, _} ->
+                        {Prefix ++ Route, cowboy_static, {priv_dir, Application, DirOrFile}};
+                    {false, true} ->
+                        {Prefix ++ Route, cowboy_static, {priv_file, Application, DirOrFile}};
                     _ ->
-                        case filelib:is_file(filename:join([PrivDir, DirOrFile])) of
-                            true ->
-                                {Prefix++Route, cowboy_static, {priv_file, Application, DirOrFile}};
-                            _ ->
-                                ?WARNING("Could not find the static file ~p which is reffered from the route ~p. Ignoring route", [DirOrFile, RouteDetails]),
-                                false
-                        end
+                        ?WARNING("Could not find the static file ~p which is reffered from the route ~p. " ++
+                                     "Ignoring route", [DirOrFile, RouteDetails]),
+                        false
                 end,
             case CowboyRoute of
                 false ->
