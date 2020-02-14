@@ -289,34 +289,29 @@ handle_cast({add_route, #{application := Application, prefix := Prefix,
     CowboyRoute =
         case RouteDetails of
             {Route, {Module, Function}} ->
-                {Prefix++Route,
+                {Prefix ++ Route,
                  nova_http_handler,
                  InitialState#{mod => Module,
                                func => Function,
                                methods => '_',
                                nova_handler => nova_http_handler}};
             {Route, CallbackInfo, Options = #{protocol := ws}} ->
-                {Prefix++Route,
+                {Prefix ++ Route,
                  nova_ws_handler,
                  InitialState#{mod => CallbackInfo,
                                subprotocols => maps:get(subprotocols, Options, []),
                                nova_handler => nova_ws_handler}};
             {Route, {Module, Function}, Options} ->
-                {Prefix++Route,
+                {Prefix ++ Route,
                  nova_http_handler,
                  InitialState#{mod => Module,
                                func => Function,
                                methods => get_methods(Options),
                                nova_handler => nova_http_handler}};
-            {Route, Module, Function} ->
-                %% This is to keep legacy-format. Should be deprecated
-                ?DEPRECATION("Route of format {Route, Module, Function} is deprecated and will be removed in future versions of Nova"),
-                {Prefix++Route,
-                 nova_http_handler,
-                 InitialState#{mod => Module,
-                               func => Function,
-                               methods => '_',
-                               nova_handler => nova_http_handler}};
+            {_Route, _Module, _Function} ->
+                %% This is to keep legacy-format. Deprecated
+                ?DEPRECATED("Route of format {Route, Module, Function} is deprecated!"),
+                erlang:throw({deprecated_route_format,  RouteDetails});
             Other ->
                 ?WARNING("Could not parse route ~p", [Other]),
                 erlang:throw({route_error, Other})
