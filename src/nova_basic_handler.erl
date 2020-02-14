@@ -26,7 +26,7 @@
 %%--------------------------------------------------------------------
 -spec handle_json({json, JSON :: map()} | {json, StatusCode :: integer(), Headers :: map(), JSON :: map()},
                   ModFun :: mod_fun(), Req :: cowboy_req:req(), State :: nova_http_handler:nova_http_state()) ->
-                         nova_handler:handler_return() | no_return().
+                         nova_handlers:handler_return() | no_return().
 handle_json({json, StatusCode, Headers, JSON}, _ModFun, Req, State) ->
     try json:encode(JSON, [binary, maps]) of
         EncodedJSON ->
@@ -54,7 +54,7 @@ handle_json({json, JSON}, ModFun, Req = #{method := Method}, State) ->
 %%--------------------------------------------------------------------
 -spec handle_ok({ok, Variables :: erlydtl_vars()} | {ok, Variables :: erlydtl_vars(), Options :: map()},
                 ModFun :: mod_fun(), Req :: cowboy_req:req(), State :: nova_http_handler:nova_http_state()) ->
-                       nova_handler:handler_return() | no_return().
+                       nova_handlers:handler_return() | no_return().
 handle_ok({ok, Variables}, {Mod, _Func}, _Req, State) ->
     %% Derive the view from module
     ViewNameAtom = get_view_name(Mod),
@@ -75,7 +75,7 @@ handle_ok({ok, Variables, Options}, {Mod, _Func}, _Req, State) ->
 
 -spec handle_status({status, StatusCode :: integer()} | {status, StatusCode :: integer(), ExtraHeaders :: map()},
                     ModFun :: mod_fun(), Req :: cowboy_req:req(), State :: nova_http_handler:nova_http_state()) ->
-                           nova_handler:handler_return().
+                           nova_handlers:handler_return().
 handle_status({status, Status, ExtraHeaders}, _ModFun, Req, State) ->
     {ok, _StatusCode, StatusHeaders, StatusBody, _} = nova_router:status_page(Status, Req),
     Headers0 = maps:merge(ExtraHeaders, StatusHeaders),
@@ -86,7 +86,7 @@ handle_status({status, Status}, ModFun, Req, State) ->
 
 -spec handle_redirect({redirect, Route :: list()}, ModFun :: mod_fun(), Req :: cowboy_req:req(),
                       State :: nova_http_handler:nova_http_state()) ->
-                             nova_handler:handler_return().
+                             nova_handlers:handler_return().
 handle_redirect({redirect, Route}, _ModFun, _Req, State) ->
     Headers = #{<<"Location">> => list_to_binary(Route)},
     {ok, 302, Headers, <<>>, State}.
