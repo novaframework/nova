@@ -119,5 +119,5 @@ get_session_id(Req) ->
 generate_session_id() ->
     SessionId =
         << <<X:8/unsigned-integer>> ||
-            X <- [ rand:uniform(255) || _ <- lists:seq(0,31) ] >>,
+            X <- [ rand:uniform(255) || _ <- lists:seq(0, 31) ] >>,
     {ok, base64:encode(SessionId)}.

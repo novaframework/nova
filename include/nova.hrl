@@ -34,3 +34,4 @@
 -define(ERROR(M), ?LOG(error, ?TERM_RED ++ M ++ ?TERM_RESET)).
 -define(ERROR(M,Meta), ?LOG(error, ?TERM_RED ++ M ++ ?TERM_RESET, Meta)).
 -define(DEPRECATION(M), ?LOG(warning, ?TERM_YELLOW ++ "DEPRECATION WARNING! " ++ M ++ ?TERM_RESET)).
+-define(DEPRECATED(M), ?LOG(error, ?TERM_RED ++ "DEPRECATION ERROR!!! " ++ M ++ ?TERM_RESET)).
