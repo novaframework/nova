@@ -172,11 +172,11 @@ handle_cast({register_handler, Handle, Callback}, State = #state{handlers = Hand
         end,
     case proplists:get_value(Handle, Handlers) of
         undefined ->
-            ?DEBUG("Registered handler ~p", [Handle]),
-            {reply, ok, State#state{handlers = [{Handle, Callback0}|Handlers]}};
+            ?DEBUG("Registered handler '~p'", [Handle]),
+            {noreply, State#state{handlers = [{Handle, Callback0}|Handlers]}};
         _ ->
             ?ERROR("Could not register handler ~p since there's already another one registered on that name", [Handle]),
-            {reply, {error, already_exists}, State}
+            {noreply, State}
     end;
 handle_cast(_Request, State) ->
     {noreply, State}.
