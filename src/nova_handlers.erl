@@ -36,6 +36,12 @@
 -type nova_handler_callback() :: {Module :: atom(), Function :: atom()} |
                                  fun((...) -> any()).
 
+-type handler_return() :: {ok, StatusCode :: integer(), Headers :: map(), Body :: binary(),
+                           State :: nova_http_handler:nova_http_state()} |
+                          {error, Reason :: any()}.
+-export_type([handler_return/0]).
+
+
 -record(state, {
                 handlers :: [{Handle :: atom(), Callback :: nova_handler_callback()}]
                }).
