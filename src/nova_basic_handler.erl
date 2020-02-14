@@ -73,8 +73,8 @@ handle_ok({ok, Variables, Options}, {Mod, _Func}, _Req, State) ->
         end,
     handle_view(View, Variables, Options, State).
 
--spec handle_status({status, StatusCode :: integer()} | {status, StatusCode :: integer(), ExtraHeaders :: map()}, ModFun :: mod_fun(),
-                    Req :: cowboy_req:req(), State :: nova_http_handler:nova_http_state()) ->
+-spec handle_status({status, StatusCode :: integer()} | {status, StatusCode :: integer(), ExtraHeaders :: map()},
+                    ModFun :: mod_fun(), Req :: cowboy_req:req(), State :: nova_http_handler:nova_http_state()) ->
                            nova_handler:handler_return().
 handle_status({status, Status, ExtraHeaders}, _ModFun, Req, State) ->
     {ok, _StatusCode, StatusHeaders, StatusBody, _} = nova_router:status_page(Status, Req),
