@@ -82,7 +82,8 @@ start_link() ->
 %% @end
 %%--------------------------------------------------------------------
 -spec status_page(Status :: integer(), Req :: cowboy_req:req()) ->
-                         {ok, StatusCode :: integer(), Headers :: cowboy:http_headers(), Body :: binary(), State0 :: nova_http_handler:nova_http_state()} | {error, not_found}.
+                         {ok, StatusCode :: integer(), Headers :: cowboy:http_headers(), Body :: binary(),
+                          State0 :: nova_http_handler:nova_http_state()} | {error, not_found}.
 status_page(Status, Req) when is_integer(Status) ->
     gen_server:call(?SERVER, {fetch_status_page, Status, Req}).
 
@@ -149,6 +150,11 @@ process_routefile(#{name := Application, routes_file := RouteFile}) ->
                                                 prefix => Prefix,
                                                 host => Host,
                                                 security => Secure},
+                                  %% Check for handlers
+                                  Handlers = maps:get(handlers, AppMap, []),
+                                  [ nova_handlers:register_handler(Handle, Callback) ||
+                                      {Handle, Callback} <- Handlers ],
+
                                   %% Add routes
                                   [ add_route(RouteInfo, Route) || Route <- Routes ++ Statics ]
                           end, AppRoutes)
@@ -251,17 +257,16 @@ handle_cast({add_static, #{application := Application, prefix := Prefix,
             {noreply, State};
         PrivDir ->
             CowboyRoute =
-                case filelib:is_dir(filename:join([PrivDir, DirOrFile])) of
-                    true ->
-                        {Prefix++Route, cowboy_static, {priv_dir, Application, DirOrFile}};
+                case {filelib:is_dir(filename:join([PrivDir, DirOrFile])),
+                      filelib:is_file(filename:join([PrivDir, DirOrFile]))} of
+                    {true, _} ->
+                        {Prefix ++ Route, cowboy_static, {priv_dir, Application, DirOrFile}};
+                    {false, true} ->
+                        {Prefix ++ Route, cowboy_static, {priv_file, Application, DirOrFile}};
                     _ ->
-                        case filelib:is_file(filename:join([PrivDir, DirOrFile])) of
-                            true ->
-                                {Prefix++Route, cowboy_static, {priv_file, Application, DirOrFile}};
-                            _ ->
-                                ?WARNING("Could not find the static file ~p which is reffered from the route ~p. Ignoring route", [DirOrFile, RouteDetails]),
-                                false
-                        end
+                        ?WARNING("Could not find the static file ~p which is reffered from the route ~p. " ++
+                                     "Ignoring route", [DirOrFile, RouteDetails]),
+                        false
                 end,
             case CowboyRoute of
                 false ->
@@ -285,34 +290,29 @@ handle_cast({add_route, #{application := Application, prefix := Prefix,
     CowboyRoute =
         case RouteDetails of
             {Route, {Module, Function}} ->
-                {Prefix++Route,
+                {Prefix ++ Route,
                  nova_http_handler,
                  InitialState#{mod => Module,
                                func => Function,
                                methods => '_',
                                nova_handler => nova_http_handler}};
             {Route, CallbackInfo, Options = #{protocol := ws}} ->
-                {Prefix++Route,
+                {Prefix ++ Route,
                  nova_ws_handler,
                  InitialState#{mod => CallbackInfo,
                                subprotocols => maps:get(subprotocols, Options, []),
                                nova_handler => nova_ws_handler}};
             {Route, {Module, Function}, Options} ->
-                {Prefix++Route,
+                {Prefix ++ Route,
                  nova_http_handler,
                  InitialState#{mod => Module,
                                func => Function,
                                methods => get_methods(Options),
                                nova_handler => nova_http_handler}};
-            {Route, Module, Function} ->
-                %% This is to keep legacy-format. Should be deprecated
-                ?DEPRECATION("Route of format {Route, Module, Function} is deprecated and will be removed in future versions of Nova"),
-                {Prefix++Route,
-                 nova_http_handler,
-                 InitialState#{mod => Module,
-                               func => Function,
-                               methods => '_',
-                               nova_handler => nova_http_handler}};
+            {_Route, _Module, _Function} ->
+                %% This is to keep legacy-format. Deprecated
+                ?DEPRECATED("Route of format {Route, Module, Function} is deprecated!"),
+                erlang:throw({deprecated_route_format,  RouteDetails});
             Other ->
                 ?WARNING("Could not parse route ~p", [Other]),
                 erlang:throw({route_error, Other})
