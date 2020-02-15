@@ -1,21 +1,26 @@
 name: Erlang CI
 
-on: [push]
+on: [push, pull_request]
 
 jobs:
 
   build:
 
     runs-on: ubuntu-latest
-
-    container:
-      image: erlang:22.0.7
-
+    name: OTP ${{matrix.otp}}
+    strategy:
+      matrix:
+        otp: [22.1, 20.3.8.22]
     steps:
     - uses: actions/checkout@v2
+    - uses: gleam-lang/setup-erlang@v1.0.0
+      with:
+        otp-version: ${{matrix.otp}}
     - name: Compile
       run: rebar3 compile
     - name: Run dialyzer
       run: rebar3 dialyzer
     - name: Run xref
       run: rebar3 xref
+    - name: Run elvis
+      run: rebar3 as lint lint
