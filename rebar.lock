@@ -1,6 +1,10 @@
 {"1.1.0",
 [{<<"cowboy">>,{pkg,<<"cowboy">>,<<"2.6.1">>},0},
  {<<"cowlib">>,{pkg,<<"cowlib">>,<<"2.7.3">>},1},
+ {<<"edoc_modern">>,
+  {git,"https://github.com/novaframework/edoc-modern.git",
+       {ref,"b0480e369b2bed4b5b53b6e454cd83da7107252e"}},
+  0},
  {<<"erlydtl">>,
   {git,"https://github.com/erlydtl/erlydtl.git",
        {ref,"e16631d3870ae21d04b614a2d14af8cbc856ecb9"}},
@@ -9,7 +13,7 @@
   {git,"https://github.com/JanHenryNystrom/jhn_stdlib.git",
        {ref,"4c174c58646e6a37f8f424b7f4b6487333287661"}},
   0},
- {<<"jsone">>,{pkg,<<"jsone">>,<<"1.5.0">>},0},
+ {<<"jsx">>,{pkg,<<"jsx">>,<<"2.8.0">>},1},
  {<<"quickrand">>,{pkg,<<"quickrand">>,<<"1.7.5">>},1},
  {<<"ranch">>,{pkg,<<"ranch">>,<<"1.7.1">>},1},
  {<<"sync">>,
@@ -21,7 +25,7 @@
 {pkg_hash,[
  {<<"cowboy">>, <<"F2E06F757C337B3B311F9437E6E072B678FCD71545A7B2865BDAA154D078593F">>},
  {<<"cowlib">>, <<"A7FFCD0917E6D50B4D5FB28E9E2085A0CEB3C97DEA310505F7460FF5ED764CE9">>},
- {<<"jsone">>, <<"410F5208BCAE541BF941B3F2756E5BB5A4C8694D7FFD6B34B909AE88262629C0">>},
+ {<<"jsx">>, <<"749BEC6D205C694AE1786D62CEA6CC45A390437E24835FD16D12D74F07097727">>},
  {<<"quickrand">>, <<"E3086A153EB13A057FC19192D05E2D4C6BB2BDBB55746A699BEAE9847AC17CA8">>},
  {<<"ranch">>, <<"6B1FAB51B49196860B733A49C07604465A47BDB78AA10C1C16A3D199F7F8C881">>},
  {<<"uuid">>, <<"3862FF9A21C42566DFD0376B97512FA202922897129E09A05E2AFA0D9CAFD97A">>}]}

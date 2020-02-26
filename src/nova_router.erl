@@ -1,8 +1,42 @@
 %%%-------------------------------------------------------------------
 %%% @author Niclas Axelsson <niclas@burbas.se>
-%%% @copyright (C) 2019, Niclas Axelsson
 %%% @doc
+%%% <i>Nova router</i> is in charge of all routing in Nova. When a nova application
+%%% is started its routing-file is read and processed by the router. You should
+%%% not use this module directly if you're not certain of what you are doing.
 %%%
+%%% A basic routing file could look something like this;
+%%% <code title="priv/my_demo_app.routes.erl">
+%%% #{prefix => "",
+%%%   security => false,
+%%%   routes => [
+%%%              {"/", {hello_world_controller, index}},
+%%%              {"/blog", {my_blog_controller, index}},
+%%%              {404, {error_controller, not_found}}
+%%%             ],
+%%%   statics => [
+%%%               {"/assets/[...]", "assets"}
+%%%              ]
+%%%  }.
+%%% </code>
+%%% Lets go through it in sections.
+%%%
+%%% <icode>prefix</icode> - This tells us if the routes should have a common prefix (Eg "/v1" or similar)
+%%%
+%%% <icode>security</icode> - If this is a tuple of type <icode>{Module, Function}</icode> Nova will try and call that function
+%%% each time a page from the <i>routes</i>-section is visited. That function could return either true or false, telling
+%%% nova if the user should be allowed to visit the page or not.
+%%%
+%%% <icode>routes</icode> - Describes the routes inside this block. (An application can have several of these maps defined)
+%%%
+%%% <icode>statics</icode> - Routes for all the static assets
+%%%
+%%% <h3>Routing more in detail</h3>
+%%% There's three different ways of describing a route, depending on what kind of protocol (http, websocket) or what options you have.
+%%%
+%%% <icode>{Route, {Module, Function}}</icode> - This is a regular route used for HTTP.
+%%% @end
+%%% @todo Extend the introduction to how routing works.
 %%% @end
 %%% Created : 17 Nov 2019 by Niclas Axelsson <niclas@burbas.se>
 %%%-------------------------------------------------------------------
@@ -125,7 +159,9 @@ get_main_app() ->
 %% @doc
 %% Process the routefile for the specified application and injects the
 %% resulting route-table into cowboy.
-%% TODO! We need this to work in a recursive manner.
+%% @end
+%% @todo
+%% We need this to work in a recursive manner.
 %% @end
 %%--------------------------------------------------------------------
 -spec process_routefile(#{name := atom(), routes_file => list()}) -> ok.
