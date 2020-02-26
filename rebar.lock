@@ -3,7 +3,7 @@
  {<<"cowlib">>,{pkg,<<"cowlib">>,<<"2.7.3">>},1},
  {<<"edoc_modern">>,
   {git,"https://github.com/novaframework/edoc-modern.git",
-       {ref,"b0480e369b2bed4b5b53b6e454cd83da7107252e"}},
+       {ref,"75f04db2fa053a574c44bfe73cc73f34b4d8b30b"}},
   0},
  {<<"erlydtl">>,
   {git,"https://github.com/erlydtl/erlydtl.git",
