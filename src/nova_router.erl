@@ -23,16 +23,18 @@
 %%%
 %%% <icode>prefix</icode> - This tells us if the routes should have a common prefix (Eg "/v1" or similar)
 %%%
-%%% <icode>security</icode> - If this is a tuple of type <icode>{Module, Function}</icode> Nova will try and call that function
-%%% each time a page from the <i>routes</i>-section is visited. That function could return either true or false, telling
-%%% nova if the user should be allowed to visit the page or not.
+%%% <icode>security</icode> - If this is a tuple of type <icode>{Module, Function}</icode> Nova will try and call
+%%% that function each time a page from the <i>routes</i>-section is visited. That function could return either
+%%% true or false, telling nova if the user should be allowed to visit the page or not.
 %%%
-%%% <icode>routes</icode> - Describes the routes inside this block. (An application can have several of these maps defined)
+%%% <icode>routes</icode> - Describes the routes inside this block. (An application can have several of these maps
+%%% defined)
 %%%
 %%% <icode>statics</icode> - Routes for all the static assets
 %%%
 %%% <h3>Routing more in detail</h3>
-%%% There's three different ways of describing a route, depending on what kind of protocol (http, websocket) or what options you have.
+%%% There's three different ways of describing a route, depending on what kind of protocol (http, websocket) or what
+%%% options you have.
 %%%
 %%% <icode>{Route, {Module, Function}}</icode> - This is a regular route used for HTTP.
 %%% @end
