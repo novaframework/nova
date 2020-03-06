@@ -82,11 +82,9 @@ init([]) ->
 
     case application:get_env(dev_mode) of
         {ok, true} ->
-            ?INFO("Starting nova in developer mode..."),
-            application:ensure_all_started(sync);
+            ?INFO("Starting nova in developer mode...");
         _ ->
-            ?INFO("Starting nova in production mode..."),
-            ok
+            ?INFO("Starting nova in production mode...")
     end,
 
     {ok, {SupFlags, Children}}.

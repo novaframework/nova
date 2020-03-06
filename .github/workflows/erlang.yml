@@ -20,6 +20,7 @@ jobs:
     - name: Compile
       run: rebar3 compile
     - name: Run dialyzer
+      if: matrix.otp != '20.3.8.22'
       run: rebar3 dialyzer
     - name: Run xref
       run: rebar3 xref

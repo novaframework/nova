@@ -54,7 +54,8 @@
          add_route/2,
          get_all_routes/0,
          get_main_app/0,
-         apply_routes/0
+         apply_routes/0,
+         get_app/1
         ]).
 
 %% gen_server callbacks
@@ -73,12 +74,6 @@
 -define(SERVER, ?MODULE).
 -define(STATIC_ROUTE_TABLE, static_route_table).
 
--record(state, {
-                main_app :: atom(),
-                route_table :: [{binary(), list()}] | [],
-                static_route_table :: #{StatusCode :: integer() => {Mod :: atom(), Func :: atom()}}
-               }).
-
 -type route_info() :: #{application := atom(),
                         prefix := atom(),
                         host := atom() | string(),
@@ -93,6 +88,21 @@
                  {StatusCode :: integer(), {Module :: atom(), Function :: atom()}} |
                  {Route :: string(), Filename :: string()}.
 -export_type([route/0]).
+
+-type app_info() :: #{name := atom(),
+                      prefix := string(),
+                      host := atom() | string(),
+                      security := false | {atom(), atom()},
+                      routes := [route()]}.
+-export_type([app_info/0]).
+
+
+-record(state, {
+                main_app :: atom(),
+                apps :: app_info() | #{},
+                route_table :: [{binary(), list()}] | [],
+                static_route_table :: #{StatusCode :: integer() => {Mod :: atom(), Func :: atom()}}
+               }).
 
 %%%===================================================================
 %%% API
@@ -147,6 +157,16 @@ add_route(RouteInfo, Route) ->
 get_all_routes() ->
     gen_server:call(?SERVER, get_all_routes).
 
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Returns all the information about a certain app and all of it's
+%% routes.
+%% @end
+%%--------------------------------------------------------------------
+-spec get_app(App :: atom()) -> {ok, app_info()} | {error, Reason :: atom()}.
+get_app(App) ->
+    gen_server:call(?SERVER, {get_app, App}).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -236,6 +256,7 @@ init([]) ->
     {ok, #state{
             main_app = MainApplication,
             route_table = [],
+            apps = #{},
             static_route_table = #{}
            }}.
 
@@ -257,6 +278,16 @@ init([]) ->
                          {stop, Reason :: term(), NewState :: term()}.
 handle_call(get_main_app, _From, State = #state{main_app = MainApp}) ->
     {reply, MainApp, State};
+handle_call({get_app, App}, _From, State = #state{apps = AppsInfo}) ->
+    Reply =
+        case maps:get(App, AppsInfo, undefined) of
+            undefined ->
+                {error, not_found};
+            AppInfo ->
+                {ok, AppInfo}
+        end,
+    {reply, Reply, State};
+
 handle_call({fetch_status_page, Status, Req}, _From,
             State = #state{static_route_table = StaticRouteTable}) ->
     case maps:get(Status, StaticRouteTable, undefined) of
@@ -288,7 +319,7 @@ handle_call(Request, _From, State) ->
                          {stop, Reason :: term(), NewState :: term()}.
 handle_cast({add_static, #{application := Application, prefix := Prefix,
                            host := Host, security := _Security}, RouteDetails = {Route, DirOrFile}},
-            State = #state{route_table = RouteTable}) ->
+            State = #state{route_table = RouteTable, apps = AppsInfo}) ->
     case code:lib_dir(Application, priv) of
         {error, _} ->
             ?ERROR("Could not apply route ~p. Could not find priv dir of application ~p", [RouteDetails, Application]),
@@ -310,19 +341,22 @@ handle_cast({add_static, #{application := Application, prefix := Prefix,
                 false ->
                     {noreply, State};
                 _ ->
+                    AppsInfo0 = add_route_to_app(Application, Prefix, Host, false, RouteDetails, AppsInfo),
                     NewRouteTable = prop_upsert(Host, CowboyRoute, RouteTable),
-                    {noreply, State#state{route_table = NewRouteTable}}
+                    {noreply, State#state{route_table = NewRouteTable, apps = AppsInfo0}}
             end
     end;
-handle_cast({add_route, _, {StatusCode, {Module, Function}}},
-            State = #state{static_route_table = StaticRouteTable}) when is_integer(StatusCode) ->
+handle_cast({add_route, #{application := Application, prefix := Prefix,
+                          host := Host}, RouteDetails = {StatusCode, {Module, Function}}},
+            State = #state{static_route_table = StaticRouteTable, apps = AppsInfo}) when is_integer(StatusCode) ->
     %% Do something with the status code
-    StaticRouteTable2 = maps:put(StatusCode, {Module, Function}, StaticRouteTable),
+    StaticRouteTable0 = maps:put(StatusCode, {Module, Function}, StaticRouteTable),
+    AppsInfo0 = add_route_to_app(Application, Prefix, Host, false, RouteDetails, AppsInfo),
     ?DEBUG("Applying status-route for code ~p, MF: ~p", [StatusCode, {Module, Function}]),
-    {noreply, State#state{static_route_table = StaticRouteTable2}};
+    {noreply, State#state{static_route_table = StaticRouteTable0, apps = AppsInfo0}};
 handle_cast({add_route, #{application := Application, prefix := Prefix,
                           host := Host, security := Security}, RouteDetails},
-            State = #state{route_table = RouteTable}) ->
+            State = #state{route_table = RouteTable, apps = AppsInfo}) ->
     InitialState = #{app => Application,
                      secure => Security},
     CowboyRoute =
@@ -355,9 +389,10 @@ handle_cast({add_route, #{application := Application, prefix := Prefix,
                 ?WARNING("Could not parse route ~p", [Other]),
                 erlang:throw({route_error, Other})
         end,
-    ?DEBUG("Applying route: ~p", [RouteDetails]),
+    ?DEBUG("Adding route: ~p", [RouteDetails]),
+    AppsInfo0 = add_route_to_app(Application, Prefix, Host, Security, RouteDetails, AppsInfo),
     NewRouteTable = prop_upsert(Host, CowboyRoute, RouteTable),
-    {noreply, State#state{route_table = NewRouteTable}};
+    {noreply, State#state{route_table = NewRouteTable, apps = AppsInfo0}};
 handle_cast(apply_routes, State = #state{route_table = RouteTable}) ->
     Dispatch = cowboy_router:compile(RouteTable),
     cowboy:set_env(nova_listener, dispatch, Dispatch),
@@ -446,4 +481,17 @@ prop_upsert(Key, NewEntry, Proplist) ->
             [{Key, [NewEntry]}|Proplist];
         {Key, OldList} ->
             [{Key, [NewEntry|OldList]}|proplists:delete(Key, Proplist)]
+    end.
+
+
+add_route_to_app(App, Prefix, Host, Security, Route, AppMap) when is_map(AppMap) ->
+    case maps:get(App, AppMap, undefined) of
+        undefined ->
+            #{App => #{name => App,
+                       prefix => Prefix,
+                       host => Host,
+                       security => Security,
+                       routes => [Route]}};
+        Result ->
+            AppMap#{App => Result#{routes => [Route|maps:get(routes, Result)]}}
     end.
