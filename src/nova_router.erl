@@ -90,7 +90,7 @@
 -export_type([route/0]).
 
 -type app_info() :: #{name := atom(),
-                      prefix := atom(),
+                      prefix := string(),
                       host := atom() | string(),
                       security := false | {atom(), atom()},
                       routes := [route()]}.
@@ -99,7 +99,7 @@
 
 -record(state, {
                 main_app :: atom(),
-                apps :: [app_info()],
+                apps :: app_info() | #{},
                 route_table :: [{binary(), list()}] | [],
                 static_route_table :: #{StatusCode :: integer() => {Mod :: atom(), Func :: atom()}}
                }).
@@ -484,7 +484,7 @@ prop_upsert(Key, NewEntry, Proplist) ->
     end.
 
 
-add_route_to_app(App, Prefix, Host, Security, Route, AppMap) ->
+add_route_to_app(App, Prefix, Host, Security, Route, AppMap) when is_map(AppMap) ->
     case maps:get(App, AppMap, undefined) of
         undefined ->
             #{App => #{name => App,
