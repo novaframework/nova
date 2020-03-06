@@ -7,16 +7,9 @@
 -include_lib("nova/include/nova.hrl").
 
 -ifndef(OTP_RELEASE).
-log(Level, Msg, Metadata) ->
-    case Level of
-        error -> io:format(?TERM_RED);
-        warning -> io:format(?TERM_YELLOW);
-        info -> io:format(?TERM_GREEN);
-        _ -> ok
-    end,
-    io:format("[~p] ", [Level]),
-    io:format(Msg, Metadata),
-    io:format("~s~n", [?TERM_RESET]).
+log(error, Format, Data) -> error_logger:error_msg(Format, Data);
+log(warning, Format, Data) -> error_logger:warning_msg(Format, Data);
+log(_, Format, Data) -> error_logger:info_msg(Format, Data).
 
 log(Level, Msg) ->
     log(Level, Msg, []).
