@@ -119,8 +119,14 @@ handle_view(View, Variables, Options, State) ->
 render_dtl(View, Variables, Options) ->
     case code:is_loaded(View) of
         false ->
-            %% Cast a warning since the module could not be found
-            ?ERROR("Could not render ~p cause it's not loaded.", [View]);
+            case code:load_file(View) of
+                {error, Reason} ->
+                    %% Cast a warning since the module could not be found
+                    ?ERROR("Could not render ~p. Reason given: ~p", [View, Reason]),
+                    throw({error, template_not_found});
+                _ ->
+                    View:render(Variables, Options)
+            end;
         _ ->
             View:render(Variables, Options)
     end.
