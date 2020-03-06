@@ -1,22 +1,8 @@
 -ifndef(OTP_RELEASE).
--define(LOG(Level, Msg), io:format("[~p] ~s~n", [Level, Msg])).
--define(LOG(Level, Msg, Metadata),
-        case Level of
-            error -> io:format(?TERM_RED);
-            warning -> io:format(?TERM_YELLOW);
-            info -> io:format(?TERM_GREEN);
-            _ -> ok
-        end,
-        io:format("[~p] ", [Level]),
-        io:format(Msg, Metadata),
-        io:format("~s~n", [?TERM_RESET])).
 -define(WITH_STACKTRACE(T, R, S), T:R -> S = erlang:get_stacktrace(), ).
 -else.
--define(LOG(Level, Msg), logger:log(Level, Msg)).
--define(LOG(Level, Msg, Metadata), logger:log(Level, Msg, Metadata)).
 -define(WITH_STACKTRACE(T, R, S), T:R:S ->).
 -endif.
-
 
 -define(TERM_RED, "\033[31m").
 -define(TERM_GREEN, "\033[32m").
@@ -25,13 +11,14 @@
 -define(TERM_BOLD, "\033[1m").
 -define(TERM_RESET, "\033[m").
 
--define(DEBUG(M), ?LOG(debug, M)).
--define(DEBUG(M, Meta), ?LOG(debug, M, Meta)).
--define(INFO(M), ?LOG(info, ?TERM_GREEN ++ M ++ ?TERM_RESET)).
--define(INFO(M,Meta), ?LOG(info, ?TERM_GREEN ++ M ++ ?TERM_RESET, Meta)).
--define(WARNING(M), ?LOG(warning, ?TERM_YELLOW ++ M ++ ?TERM_RESET)).
--define(WARNING(M,Meta), ?LOG(warning, ?TERM_YELLOW ++ M ++ ?TERM_RESET, Meta)).
--define(ERROR(M), ?LOG(error, ?TERM_RED ++ M ++ ?TERM_RESET)).
--define(ERROR(M,Meta), ?LOG(error, ?TERM_RED ++ M ++ ?TERM_RESET, Meta)).
--define(DEPRECATION(M), ?LOG(warning, ?TERM_YELLOW ++ "DEPRECATION WARNING! " ++ M ++ ?TERM_RESET)).
--define(DEPRECATED(M), ?LOG(error, ?TERM_RED ++ "DEPRECATION ERROR!!! " ++ M ++ ?TERM_RESET)).
+
+-define(DEBUG(M), nova_log:log(debug, M)).
+-define(DEBUG(M, Meta), nova_log:log(debug, M, Meta)).
+-define(INFO(M), nova_log:log(info, ?TERM_GREEN ++ M ++ ?TERM_RESET)).
+-define(INFO(M,Meta), nova_log:log(info, ?TERM_GREEN ++ M ++ ?TERM_RESET, Meta)).
+-define(WARNING(M), nova_log:log(warning, ?TERM_YELLOW ++ M ++ ?TERM_RESET)).
+-define(WARNING(M,Meta), nova_log:log(warning, ?TERM_YELLOW ++ M ++ ?TERM_RESET, Meta)).
+-define(ERROR(M), nova_log:log(error, ?TERM_RED ++ M ++ ?TERM_RESET)).
+-define(ERROR(M,Meta), nova_log:log(error, ?TERM_RED ++ M ++ ?TERM_RESET, Meta)).
+-define(DEPRECATION(M), nova_log:log(warning, ?TERM_YELLOW ++ "DEPRECATION WARNING! " ++ M ++ ?TERM_RESET)).
+-define(DEPRECATED(M), nova_log:log(error, ?TERM_RED ++ "DEPRECATION ERROR!!! " ++ M ++ ?TERM_RESET)).
