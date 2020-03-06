@@ -19,7 +19,7 @@ url(Variables, _Options) ->
     case nova_router:get_app(binary_to_atom(App, utf8)) of
         {error, _} ->
             ?WARNING("Could not find application: ~p. Called from erlydtl-tag 'url'.", [App]),
-            <<"">>;
+            <<"#">>;
         {ok, #{prefix := Prefix}} ->
             PrefixBin = list_to_binary(Prefix),
             << PrefixBin/binary, Url/binary >>
