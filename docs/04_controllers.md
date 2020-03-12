@@ -1,5 +1,7 @@
 # 04 - Controllers
 
+## HTML
+
 Controllers is located in `/src/controllers/` of your Nova application. A controller is basically a regular Erlang module but that exposes functions you've provided in
 the routing file. Such a module can look something like this:
 
@@ -36,3 +38,11 @@ A controller can return a set of different values;
 
 
 *Note; A controller does not need to have a corresponding view.*
+
+## REST
+
+A REST-controller is just a html-controller without the view part. You can return the same terms as for HTML-controller except for the `{ok, ...}` answer.
+
+## Websockets
+
+More info coming soon...

@@ -1,18 +1,17 @@
-# 01 - Introduction
+# Nova Documentation
 
 ## Content
 
 * 01 - Introduction
-  * Erlang
-  * What is nova?
+  * [What is nova?](01_introduction.md)
   * [Guides](./guides)
 * [02 - Quick start](02_quick-start.md)
-  * Use rebar3 and nova_rebar3
-  * nova_admin
+  * [Use rebar3 and nova_rebar3](02_quick-start.md#use-rebar3-and-nova)
+  * [nova_admin](02_quick-start.md#nova-admin)
 * [03 - Routing](03_routing.md)
-  * How to create routes
-  * Using prefix
-  * Secure routing
+  * [How to create routes](03_routing.md#how-to-create-routes)
+  * [Using prefix](03_routing.md#using-prefix)
+  * [Secure routing](03_routing.md#secure-routing)
 * [04 - Controllers](04_controllers.md)
   * HTML
   * REST
