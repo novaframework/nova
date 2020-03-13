@@ -50,3 +50,8 @@ a lot of progress-reports
 ```
 
 If you take a look at [http://localhost:8080](http://localhost:8080) you should be greeted by a Nova-page.
+
+
+## Nova admin
+
+This is a project we hope to be presenting with the nova release 0.5.

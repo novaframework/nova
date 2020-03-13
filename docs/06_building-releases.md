@@ -14,8 +14,8 @@ If you would include the application `nova_admin` into your app `testapp`, your 
     #{name => "testapp",
       routes_file => "priv/testapp.routes.erl"},
     #{name => "nova_admin",
-      routes_file => "priv/nova_admin.routes.erl"}
+      prefix => "/admin"}
     ]}.
 ```
 
-The routes_file-key is relative to the application it's associated to.
+This tells nova that you want to include the `nova_admin` application and prefix all of its paths with `/admin`.
