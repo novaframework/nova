@@ -249,7 +249,7 @@ apply_routes() ->
 init([]) ->
     process_flag(trap_exit, true),
     {ok, MainApplication} = application:get_application(),
-    Apps = application:get_env(nova_applications, MainApplication, []),
+    Apps = application:get_env(MainApplication, nova_applications, []),
     ?DEBUG("Bootstrapping router for application ~p, included_apps: ~p", [MainApplication, Apps]),
     [ process_routefile(NovaApp) || NovaApp <- Apps ],
     apply_routes(),
