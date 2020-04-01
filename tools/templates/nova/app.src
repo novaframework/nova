@@ -10,15 +10,7 @@
    [kernel,
     stdlib
    ]},
-  {env,[
-        {dev_mode, true},
-        {web_port, 8080},
-        {nova_applications, [
-                               #{
-                                 name => {{name}},
-                                 routes_file => "priv/{{name}}.routes.erl"
-                                }
-                              ]}
+  {env,[]}
 
        ]},
   {modules, []},
