@@ -251,7 +251,7 @@ init([]) ->
     {ok, MainApplication} = application:get_application(),
     Apps = application:get_env(nova_applications, MainApplication, []),
     ?DEBUG("Bootstrapping router for application ~p, included_apps: ~p", [MainApplication, Apps]),
-    [ process_routefile(NovaApp) || NovaApp <- [MainApplication|Apps] ],
+    [ process_routefile(#{name => NovaApp}) || NovaApp <- [MainApplication|Apps] ],
     apply_routes(),
     {ok, #state{
             main_app = MainApplication,
