@@ -78,7 +78,7 @@ register_handler(Handle, Callback) ->
 %% Unregisters a handler and makes it unavailable for all controllers.
 %% @end
 %%--------------------------------------------------------------------
--spec unregister_handler(Handle :: atom()) -> ok | {error, Reason :: atom()}.
+-spec unregister_handler(Handle :: atom()) -> ok.
 unregister_handler(Handle) ->
     gen_server:call(?SERVER, {unregister_handler, Handle}).
 
@@ -89,9 +89,14 @@ unregister_handler(Handle) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec get_handler(Handle :: atom()) -> {ok, Callback :: nova_handler_callback()} |
-                                       {error, Reason :: atom()}.
+                                       {error, not_found}.
 get_handler(Handle) ->
-    gen_server:call(?SERVER, {get_handler, Handle}).
+    case ets:lookup(?MODULE, Handle) of
+        [] ->
+            {error, not_found};
+        [{Handle, Callback}] ->
+            {ok, Callback}
+    end.
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -110,6 +115,7 @@ get_handler(Handle) ->
                               ignore.
 init([]) ->
     process_flag(trap_exit, true),
+    ets:new(?MODULE, [named_table, set, protected]),
     register_handler(json, fun nova_basic_handler:handle_json/4),
     register_handler(ok, fun nova_basic_handler:handle_ok/4),
     register_handler(status, fun nova_basic_handler:handle_status/4),
@@ -132,23 +138,10 @@ init([]) ->
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
                          {stop, Reason :: term(), NewState :: term()}.
-handle_call({unregister_handler, Handle}, _From, State = #state{handlers = Handlers}) ->
-    case proplists:delete(Handle, Handlers) of
-        Handlers ->
-            ?WARNING("Error when unregistering handler: Could not find handler ~p", [Handle]),
-            {reply, {error, not_found}, State};
-        Handlers0 ->
-            ?DEBUG("Removed handler ~p", [Handle]),
-            {reply, ok, Handlers0}
-    end;
-handle_call({get_handler, Handle}, _From, State = #state{handlers = Handlers}) ->
-    case proplists:get_value(Handle, Handlers) of
-        undefined ->
-            ?WARNING("Could not find handler ~p", [Handle]),
-            {reply, {error, not_found}, State};
-        Callback ->
-            {reply, {ok, Callback}, State}
-    end;
+handle_call({unregister_handler, Handle}, _From, State) ->
+    ets:delete(?MODULE, Handle),
+    ?DEBUG("Removed handler ~p", [Handle]),
+    {reply, ok, State};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -164,16 +157,17 @@ handle_call(_Request, _From, State) ->
                          {noreply, NewState :: term(), Timeout :: timeout()} |
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), NewState :: term()}.
-handle_cast({register_handler, Handle, Callback}, State = #state{handlers = Handlers}) ->
+handle_cast({register_handler, Handle, Callback}, State) ->
     Callback0 =
         case Callback of
             Callback when is_function(Callback) -> Callback;
             {Module, Function} -> fun Module:Function/4
         end,
-    case proplists:get_value(Handle, Handlers) of
-        undefined ->
+    case ets:lookup(?MODULE, Handle) of
+        [] ->
             ?DEBUG("Registered handler '~p'", [Handle]),
-            {noreply, State#state{handlers = [{Handle, Callback0}|Handlers]}};
+            ets:insert(?MODULE, {Handle, Callback0}),
+            {noreply, State};
         _ ->
             ?ERROR("Could not register handler ~p since there's already another one registered on that name", [Handle]),
             {noreply, State}
