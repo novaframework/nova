@@ -105,7 +105,7 @@ handle_call({get_value, SessionId, Key}, _From, State) ->
                 undefined ->
                     {reply, {error, not_found}, State};
                 Value ->
-                    {ok, Value}
+                    {reply, {ok, Value}, State}
             end
     end;
 handle_call({set_value, SessionId, Key, Value}, _From, State) ->
