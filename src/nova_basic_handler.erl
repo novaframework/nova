@@ -17,13 +17,15 @@
 %% @doc
 %% Handler for JSON. It takes two different return objects:
 %%
-%%   - <icode>{json, JSON :: map()}</icode> - returns the JSON encoded to the user.
+%% <options>
+%%   <option for="{json, JSON :: map()}"> returns the JSON encoded to the user.
 %%     If the operation was a POST the HTTP-status code will be 201, otherwise
-%%     200.
+%%     200.</option>
 %%
-%%   - <icode>{json, StatusCode :: integer(), Headers :: map(), JSON :: map()}</icode> - Same
+%%   <option for="{json, StatusCode :: integer(), Headers :: map(), JSON :: map()}"> Same
 %%     operation as the above except you can set custom status code and custom
-%%     headers.
+%%     headers.</option>
+%% </options>
 %% @end
 %%--------------------------------------------------------------------
 -spec handle_json({json, JSON :: map()} | {json, StatusCode :: integer(), Headers :: map(), JSON :: map()},
