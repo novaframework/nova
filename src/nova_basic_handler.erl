@@ -16,10 +16,12 @@
 %%--------------------------------------------------------------------
 %% @doc
 %% Handler for JSON. It takes two different return objects:
-%%   - {json, JSON :: map()} which returns the JSON encoded to the user.
+%%
+%%   - <icode>{json, JSON :: map()}</icode> - returns the JSON encoded to the user.
 %%     If the operation was a POST the HTTP-status code will be 201, otherwise
 %%     200.
-%%   - {json, StatusCode :: integer(), Headers :: map(), JSON :: map()} - Same
+%%
+%%   - <icode>{json, StatusCode :: integer(), Headers :: map(), JSON :: map()}</icode> - Same
 %%     operation as the above except you can set custom status code and custom
 %%     headers.
 %% @end
@@ -49,7 +51,24 @@ handle_json({json, JSON}, ModFun, Req = #{method := Method}, State) ->
 
 %%--------------------------------------------------------------------
 %% @doc
-%% Handler for regular views.
+%% Handler for regular views. This will render a template with given variables.
+%% If not another view is specified in options a view that corresponds to the controller will be
+%% rendered.
+%%
+%% <code title="Example of controller named 'app_main_controller.erl'">
+%% -module(my_first_controller).
+%% -compile(export_all).
+%%
+%% my_function(_Req) ->
+%%    {ok, []}.
+%% </code>
+%% The example above will then render the view named <icode>'app_main.dtl'</icode>
+%%
+%% Options can be specified as follows:
+%%
+%% - <icode>view</icode> - Specifies if another view should be rendered instead of default one
+%%
+%% - <icode>headers</icode> - Custom headers
 %% @end
 %%--------------------------------------------------------------------
 -spec handle_ok({ok, Variables :: erlydtl_vars()} | {ok, Variables :: erlydtl_vars(), Options :: map()},
@@ -73,6 +92,21 @@ handle_ok({ok, Variables, Options}, {Mod, _Func}, _Req, State) ->
         end,
     handle_view(View, Variables, Options, State).
 
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Handler for returning http status codes. There's three different ways one can
+%% return status code. The most basic case is <icode>{status, Status}</icode> where Status is
+%% the code that should be returned.
+%%
+%% If there's a need for additional headers to be sent along with the http code one can specify
+%% a third argument that is a map with header-fields.
+%%
+%% One can also send in a body as a fourth argument in the tuple. It can either be a binary or
+%% a map. If it's a map it will be concidered a JSON-structure and encoded.
+%%
+%% @end
+%%--------------------------------------------------------------------
 -spec handle_status({status, StatusCode :: integer()} |
                     {status, StatusCode :: integer(), ExtraHeaders :: map()} |
                     {status, StatusCode :: integer(), ExtraHeaders :: map(), Body :: binary() | map()},
@@ -97,6 +131,13 @@ handle_status({status, Status}, ModFun, Req, State) ->
     handle_status({status, Status, #{}}, ModFun, Req, State).
 
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Handles redirects. This will return a 302-status code with a location given
+%% by the user. Something like <icode>{redirect, "/login"}</icode> will send a
+%% 302 with <icode>location</icode> set to <icode>"/login"</icode>
+%% @end
+%%-----------------------------------------------------------------
 -spec handle_redirect({redirect, Route :: list()}, ModFun :: mod_fun(), Req :: cowboy_req:req(),
                       State :: nova_http_handler:nova_http_state()) ->
                              nova_handlers:handler_return().
