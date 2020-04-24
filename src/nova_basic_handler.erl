@@ -73,16 +73,24 @@ handle_ok({ok, Variables, Options}, {Mod, _Func}, _Req, State) ->
         end,
     handle_view(View, Variables, Options, State).
 
--spec handle_status({status, StatusCode :: integer()} | {status, StatusCode :: integer(), ExtraHeaders :: map()},
+-spec handle_status({status, StatusCode :: integer()} |
+                    {status, StatusCode :: integer(), ExtraHeaders :: map()} |
+                    {status, StatusCode :: integer(), ExtraHeaders :: map(), Body :: binary() | map()},
                     ModFun :: mod_fun(), Req :: cowboy_req:req(), State :: nova_http_handler:nova_http_state()) ->
                            nova_handlers:handler_return().
+handle_status({status, Status, ExtraHeaders, JSON}, _ModFun, _Req, State) when is_map(JSON) ->
+    %% We do not need to render a status page since we just return a JSON structure
+    Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, ExtraHeaders),
+    {ok, Status, Headers0, json:encode(JSON, [binary]), State};
+handle_status({status, Status, ExtraHeaders, Body}, _ModFun, _Req, State) when is_binary(Body) ->
+    %% Body is a binary - just send it out
+    {ok, Status, ExtraHeaders, Body, State};
 handle_status({status, Status, ExtraHeaders}, _ModFun, Req, State) ->
-
     case nova_router:status_page(Status, Req) of
         {ok, _StatusCode, StatusHeaders, StatusBody, _} ->
             Headers0 = maps:merge(ExtraHeaders, StatusHeaders),
             {ok, Status, Headers0, StatusBody, State};
-        _ ->
+        {error, not_found} ->
             {ok, Status, ExtraHeaders, <<>>, State}
     end;
 handle_status({status, Status}, ModFun, Req, State) ->
