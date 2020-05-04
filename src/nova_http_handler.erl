@@ -44,8 +44,13 @@ init(Req = #{method := ReqMethod}, State = #{methods := Methods}) ->
         true ->
             init(Req, State#{methods := '_'});
         false ->
-            {ok, StatusCode, Headers, Body, _} = nova_router:status_page(405, Req),
-            Req1 = cowboy_req:reply(StatusCode, Headers, Body, Req),
+            Req1 =
+                case nova_router:status_page(405, Req) of
+                    {ok, StatusCode, Headers, Body, _} ->
+                        cowboy_req:reply(StatusCode, Headers, Body, Req);
+                    _ ->
+                        cowboy_req:reply(405, #{}, <<>>, Req)
+                end,
             {ok, Req1, State}
     end;
 init(Req, State) ->
