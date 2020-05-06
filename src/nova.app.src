@@ -1,23 +1,12 @@
-{application, nova,
- [{description, "Nova is a web application framework"},
-  {vsn, "0.4.2"},
-  {registered, []},
-  {mod, { nova_app, []}},
-  {included_applications, [
-                           ranch,
-                           cowboy,
-                           compiler,
-                           erlydtl,
-                           jhn_stdlib,
-                           edoc
-                          ]},
-  {applications,
-   [kernel,
-    stdlib,
-    sasl
-   ]},
-  {env,[]},
-  {modules, [nova]},
-  {licenses, ["Apache 2.0"]},
-  {links, [{"GitHub", "https://github.com/novaframework/nova"}]}
- ]}.
+{application,nova,
+             [{description,"Nova is a web application framework"},
+              {vsn,"0.4.3"},
+              {registered,[]},
+              {mod,{nova_app,[]}},
+              {included_applications,[ranch,cowboy,compiler,erlydtl,
+                                      jhn_stdlib,edoc]},
+              {applications,[kernel,stdlib,sasl]},
+              {env,[]},
+              {modules,[nova]},
+              {licenses,["Apache 2.0"]},
+              {links,[{"GitHub","https://github.com/novaframework/nova"}]}]}.
