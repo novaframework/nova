@@ -28,8 +28,8 @@
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link() ->
-    supervisor:start_link({local, ?SERVER}, ?MODULE, []).
+start_link(Configuration) ->
+    supervisor:start_link({local, ?SERVER}, ?MODULE, Configuration).
 
 %%%===================================================================
 %%% Supervisor callbacks
@@ -48,31 +48,15 @@ start_link() ->
 %%                     {error, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([]) ->
+init(Configuration) ->
     %% This is a bit ugly, but we need to do this anyhow(?)
-    application:ensure_all_started(ranch),
-    case application:get_env(use_ssl) of
-        {ok, true} ->
-            {ok, Cert} = application:get_env(ssl_certfile),
-            {ok, CACert} = application:get_env(ssl_cacertfile),
-            ?INFO("Starting Nova with SSL support. Cert: ~s, CACert: ~s", [Cert, CACert]),
-            start_cowboy_secure(CACert, Cert);
-        _ ->
-            start_cowboy()
-    end,
-
     SupFlags = #{strategy => one_for_one,
                  intensity => 1,
                  period => 5},
 
-    SessionManager =
-        case application:get_env(session_manager) of
-            {ok, Manager} ->
-                Manager;
-            _ ->
-                %% Default to the nova_session_ets manager
-                nova_session_ets
-        end,
+    setup_cowboy(Configuration),
+
+    SessionManager = maps:get(session_manager, Configuration, nova_session_ets),
 
     Children = [
                 child(nova_router, nova_router),
@@ -80,14 +64,16 @@ init([]) ->
                 child(SessionManager, SessionManager)
                ],
 
-    case application:get_env(dev_mode) of
-        {ok, true} ->
-            ?INFO("Starting nova in developer mode...");
-        _ ->
-            ?INFO("Starting nova in production mode...")
+    case maps:get(dev_mode, Configuration, false) of
+        false ->
+            ?INFO("Starting nova in production mode...");
+        true ->
+            ?INFO("Starting nova in developer mode...")
     end,
-
     {ok, {SupFlags, Children}}.
+
+
+
 
 %%%===================================================================
 %%% Internal functions
@@ -100,32 +86,36 @@ child(Id, Mod) ->
       type => worker,
       modules => [Mod]}.
 
+setup_cowboy(Configuration) ->
+    case application:get_application(cowboy) of
+        undefined ->
+            %% Start cowboy
+            {ok, _} = start_cowboy(Configuration);
+        _Pid ->
+            %% Already started. Just run the routes
+            ok
+    end.
 
-start_cowboy() ->
-    Port =
-        case application:get_env(web_port) of
-            undefined ->
-                8080;
-            {ok, WebPort} ->
-                WebPort
-        end,
-    ?INFO("Nova is running on port ~p", [Port]),
-    {ok, _} = cowboy:start_clear(
-                nova_listener,
-                [{port, Port}],
-                #{middlewares => [cowboy_router, nova_security_handler, cowboy_handler],
-                  stream_handlers => [nova_stream_h, cowboy_compress_h, cowboy_stream_h],
-                  compress => true}).
-
-start_cowboy_secure(CACert, Cert) ->
-    Port = case application:get_env(ssl_port) of
-               undefined -> 8443;
-               {ok, SSLPort} -> SSLPort
-           end,
-    ?INFO("Nova is running SSL on port ~p", [Port]),
-    {ok, _} = cowboy:start_tls(nova_listener, [
-                                               {port, Port},
-                                               {certfile, Cert},
-                                               {cacertfile, CACert}
-                                              ],
-                               #{middlewares => [cowboy_router, nova_security_handler, cowboy_handler]}).
+start_cowboy(Configuration) ->
+    ?INFO("Nova is starting cowboy..."),
+    case maps:get(use_ssl, Configuration, false) of
+        false ->
+            cowboy:start_clear(
+              nova_listener,
+              [{port, maps:get(port, Configuration, 8080)}],
+              #{middlewares => [cowboy_router, nova_security_handler, cowboy_handler],
+                stream_handlers => [nova_stream_h, cowboy_compress_h, cowboy_stream_h],
+                compress => true});
+        _ ->
+            CACert = maps:get(ca_cert, Configuration),
+            Cert = maps:get(cert, Configuration),
+            Port = maps:get(ssl_port, Configuration, 8443),
+            ?INFO("Nova is starting SSL on port ~p", [Port]),
+            cowboy:start_tls(
+              nova_listener, [
+                              {port, Port},
+                              {certfile, Cert},
+                              {cacertfile, CACert}
+                             ],
+              #{middlewares => [cowboy_router, nova_security_handler, cowboy_handler]})
+    end.
