@@ -188,7 +188,7 @@ get_main_app() ->
 %% @end
 %%--------------------------------------------------------------------
 -spec process_routefile(#{name := atom(), routes_file => list()}) -> ok.
-process_routefile(#{name := Application, routes_file := RouteFile}) ->
+process_routefile(#{name := Application, routes_file := RouteFile}, IsMainApp) ->
     case code:lib_dir(Application) of
         {error, bad_name} ->
             ?WARNING("Could not find the application ~p. Check your config and rerun the application", [Application]),
