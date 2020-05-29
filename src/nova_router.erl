@@ -54,6 +54,7 @@
          add_route/2,
          get_all_routes/0,
          get_main_app/0,
+         set_main_app/1,
          apply_routes/0,
          get_app/1
         ]).
@@ -137,7 +138,7 @@ status_page(Status, Req) when is_integer(Status) ->
 
 %%--------------------------------------------------------------------
 %% @doc
-%% Add a route to nova.
+%% Add a single route to nova.
 %% @end
 %%--------------------------------------------------------------------
 -spec add_route(RouteInfo :: route_info(), Route :: route()) -> ok.
@@ -180,6 +181,17 @@ get_main_app() ->
 
 %%--------------------------------------------------------------------
 %% @doc
+%% Sets the main app. This is the app that will be used when returning
+%% configuration and that have the highest priority when it comes to
+%% routing.
+%% @end
+%%--------------------------------------------------------------------
+-spec set_main_app(App :: atom()) -> ok.
+set_main_app(App) ->
+    gen_server:call(?SERVER, {set_main_app, App}).
+
+%%--------------------------------------------------------------------
+%% @doc
 %% Process the routefile for the specified application and injects the
 %% resulting route-table into cowboy.
 %% @end
@@ -188,7 +200,7 @@ get_main_app() ->
 %% @end
 %%--------------------------------------------------------------------
 -spec process_routefile(#{name := atom(), routes_file => list()}) -> ok.
-process_routefile(#{name := Application, routes_file := RouteFile}, IsMainApp) ->
+process_routefile(#{name := Application, routes_file := RouteFile}) ->
     case code:lib_dir(Application) of
         {error, bad_name} ->
             ?WARNING("Could not find the application ~p. Check your config and rerun the application", [Application]),
@@ -249,13 +261,7 @@ apply_routes() ->
                               ignore.
 init([]) ->
     process_flag(trap_exit, true),
-    {ok, MainApplication} = application:get_application(),
-    Apps = application:get_env(MainApplication, nova_applications, []),
-    ?DEBUG("Bootstrapping router for application ~p, included_apps: ~p", [MainApplication, Apps]),
-    [ process_routefile(NovaApp) || NovaApp <- Apps ],
-    apply_routes(),
     {ok, #state{
-            main_app = MainApplication,
             route_table = [],
             apps = #{},
             static_route_table = #{}
@@ -279,6 +285,10 @@ init([]) ->
                          {stop, Reason :: term(), NewState :: term()}.
 handle_call(get_main_app, _From, State = #state{main_app = MainApp}) ->
     {reply, MainApp, State};
+handle_call({set_main_app, App}, _From, State) when is_atom(App) ->
+    Apps = get_all_apps([App]),
+    [ process_routefile(#{name => A}) || A <- Apps ],
+    {reply, ok, State#state{main_app = App}};
 handle_call({get_app, App}, _From, State = #state{apps = AppsInfo}) ->
     Reply =
         case maps:get(App, AppsInfo, undefined) of
@@ -288,7 +298,6 @@ handle_call({get_app, App}, _From, State = #state{apps = AppsInfo}) ->
                 {ok, AppInfo}
         end,
     {reply, Reply, State};
-
 handle_call({fetch_status_page, Status, Req}, _From,
             State = #state{static_route_table = StaticRouteTable}) ->
     case maps:get(Status, StaticRouteTable, undefined) of
@@ -459,6 +468,11 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+get_all_apps([]) -> [];
+get_all_apps([App|Tl]) ->
+    NovaApps = application:get_env(App, nova_application, []),
+    [App|get_all_apps(Tl ++ NovaApps)].
+
 get_methods(#{methods := M}) when is_list(M) ->
     Res = lists:map(fun(get)  -> <<"GET">>;
                        (post) -> <<"POST">>;
