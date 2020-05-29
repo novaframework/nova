@@ -3,11 +3,12 @@
   {vsn, "0.1.0"},
   {registered, []},
   {mod, { {{name}}_app, []}},
-  {included_applications, [
-                           nova
-                          ]},
+  {included_applications, []},
   {applications,
-   [kernel,
+   [
+    {{name}},
+    nova,
+    kernel,
     stdlib
    ]},
   {env,[]},

@@ -28,8 +28,8 @@
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link(Configuration) ->
-    supervisor:start_link({local, ?SERVER}, ?MODULE, Configuration).
+start_link() ->
+    supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
 %%%===================================================================
 %%% Supervisor callbacks
@@ -48,15 +48,17 @@ start_link(Configuration) ->
 %%                     {error, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init(Configuration) ->
+init([]) ->
     %% This is a bit ugly, but we need to do this anyhow(?)
     SupFlags = #{strategy => one_for_one,
                  intensity => 1,
                  period => 5},
 
+    {ok, Configuration} = application:get_env(nova, cowboy_configuration, #{}),
+
     setup_cowboy(Configuration),
 
-    SessionManager = maps:get(session_manager, Configuration, nova_session_ets),
+    SessionManager = application:get_env(nova, session_manager, nova_session_ets),
 
     Children = [
                 child(nova_router, nova_router),
@@ -64,7 +66,7 @@ init(Configuration) ->
                 child(SessionManager, SessionManager)
                ],
 
-    case maps:get(dev_mode, Configuration, false) of
+    case application:get_env(nova, dev_mode, false) of
         false ->
             ?INFO("Starting nova in production mode...");
         true ->
