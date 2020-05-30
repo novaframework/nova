@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: [23.0, 22.1, 21.0]
+        otp: [23.0.2, 22.1]
     steps:
     - uses: actions/checkout@v2
     - uses: gleam-lang/setup-erlang@v1.0.0
