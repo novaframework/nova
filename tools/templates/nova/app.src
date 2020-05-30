@@ -1,3 +1,4 @@
+%% -*- mode: erlang;erlang-indent-level: 4;indent-tabs-mode: nil -*-
 {application, {{name}},
  [{description, "{{name}} managed by Nova"},
   {vsn, "0.1.0"},

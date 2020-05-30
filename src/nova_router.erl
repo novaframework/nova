@@ -232,7 +232,9 @@ process_routefile(#{name := Application, routes_file := RouteFile}) ->
     end;
 process_routefile(AppInfo = #{name := Application}) ->
     Routename = lists:concat(["priv/", Application, ".routes.erl"]),
-    process_routefile(AppInfo#{routes_file => Routename}).
+    process_routefile(AppInfo#{routes_file => Routename});
+process_routefile(App) ->
+    process_routefile(#{name => App}).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -332,7 +334,8 @@ handle_cast({add_static, #{application := Application, prefix := Prefix,
             State = #state{route_table = RouteTable, apps = AppsInfo}) ->
     case code:lib_dir(Application, priv) of
         {error, _} ->
-            ?ERROR("Could not apply route ~p. Could not find priv dir of application ~p", [RouteDetails, Application]),
+            ?ERROR("Could not apply route ~p. Could not find priv dir of application ~p",
+                   [RouteDetails, Application]),
             {noreply, State};
         PrivDir ->
             CowboyRoute =
@@ -399,12 +402,12 @@ handle_cast({add_route, #{application := Application, prefix := Prefix,
                 ?WARNING("Could not parse route ~p", [Other]),
                 erlang:throw({route_error, Other})
         end,
-    ?DEBUG("Adding route: ~p", [RouteDetails]),
     AppsInfo0 = add_route_to_app(Application, Prefix, Host, Security, RouteDetails, AppsInfo),
     NewRouteTable = prop_upsert(Host, CowboyRoute, RouteTable),
     {noreply, State#state{route_table = NewRouteTable, apps = AppsInfo0}};
 handle_cast(apply_routes, State = #state{route_table = RouteTable}) ->
     Dispatch = cowboy_router:compile(RouteTable),
+    ?DEBUG("Applying routes: ~p", [RouteTable]),
     cowboy:set_env(nova_listener, dispatch, Dispatch),
     {noreply, State};
 handle_cast(Request, State) ->

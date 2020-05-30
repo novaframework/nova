@@ -54,7 +54,7 @@ init([]) ->
                  intensity => 1,
                  period => 5},
 
-    {ok, Configuration} = application:get_env(nova, cowboy_configuration, #{}),
+    Configuration = application:get_env(nova, cowboy_configuration, #{}),
 
     setup_cowboy(Configuration),
 
@@ -89,11 +89,11 @@ child(Id, Mod) ->
       modules => [Mod]}.
 
 setup_cowboy(Configuration) ->
-    case application:get_application(cowboy) of
-        undefined ->
+    case [ X || {X, _, _} <- application:which_applications(), X =:= cowboy ] of
+        [] ->
             %% Start cowboy
             {ok, _} = start_cowboy(Configuration);
-        _Pid ->
+        _ ->
             %% Already started. Just run the routes
             ok
     end.

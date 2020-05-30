@@ -28,6 +28,10 @@ After this is done use `rebar3` to generate a new project with Nova.
 rebar3 new nova my_first_nova
 ```
 
+## Supported Erlang versions
+
+Nova is supported with OTP 22 and above.
+
 ## Documentation
 
 Hex docs: https://hexdocs.pm/nova/
