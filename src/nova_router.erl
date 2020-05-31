@@ -54,6 +54,7 @@
          add_route/2,
          get_all_routes/0,
          get_main_app/0,
+         set_main_app/1,
          apply_routes/0,
          get_app/1
         ]).
@@ -137,7 +138,7 @@ status_page(Status, Req) when is_integer(Status) ->
 
 %%--------------------------------------------------------------------
 %% @doc
-%% Add a route to nova.
+%% Add a single route to nova.
 %% @end
 %%--------------------------------------------------------------------
 -spec add_route(RouteInfo :: route_info(), Route :: route()) -> ok.
@@ -177,6 +178,17 @@ get_app(App) ->
 -spec get_main_app() -> atom().
 get_main_app() ->
     gen_server:call(?SERVER, get_main_app).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Sets the main app. This is the app that will be used when returning
+%% configuration and that have the highest priority when it comes to
+%% routing.
+%% @end
+%%--------------------------------------------------------------------
+-spec set_main_app(App :: atom()) -> ok.
+set_main_app(App) ->
+    gen_server:call(?SERVER, {set_main_app, App}).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -220,7 +232,9 @@ process_routefile(#{name := Application, routes_file := RouteFile}) ->
     end;
 process_routefile(AppInfo = #{name := Application}) ->
     Routename = lists:concat(["priv/", Application, ".routes.erl"]),
-    process_routefile(AppInfo#{routes_file => Routename}).
+    process_routefile(AppInfo#{routes_file => Routename});
+process_routefile(App) ->
+    process_routefile(#{name => App}).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -249,13 +263,7 @@ apply_routes() ->
                               ignore.
 init([]) ->
     process_flag(trap_exit, true),
-    {ok, MainApplication} = application:get_application(),
-    Apps = application:get_env(MainApplication, nova_applications, []),
-    ?DEBUG("Bootstrapping router for application ~p, included_apps: ~p", [MainApplication, Apps]),
-    [ process_routefile(NovaApp) || NovaApp <- Apps ],
-    apply_routes(),
     {ok, #state{
-            main_app = MainApplication,
             route_table = [],
             apps = #{},
             static_route_table = #{}
@@ -279,6 +287,10 @@ init([]) ->
                          {stop, Reason :: term(), NewState :: term()}.
 handle_call(get_main_app, _From, State = #state{main_app = MainApp}) ->
     {reply, MainApp, State};
+handle_call({set_main_app, App}, _From, State) when is_atom(App) ->
+    Apps = get_all_apps([App]),
+    [ process_routefile(#{name => A}) || A <- Apps ],
+    {reply, ok, State#state{main_app = App}};
 handle_call({get_app, App}, _From, State = #state{apps = AppsInfo}) ->
     Reply =
         case maps:get(App, AppsInfo, undefined) of
@@ -288,7 +300,6 @@ handle_call({get_app, App}, _From, State = #state{apps = AppsInfo}) ->
                 {ok, AppInfo}
         end,
     {reply, Reply, State};
-
 handle_call({fetch_status_page, Status, Req}, _From,
             State = #state{static_route_table = StaticRouteTable}) ->
     case maps:get(Status, StaticRouteTable, undefined) of
@@ -323,7 +334,8 @@ handle_cast({add_static, #{application := Application, prefix := Prefix,
             State = #state{route_table = RouteTable, apps = AppsInfo}) ->
     case code:lib_dir(Application, priv) of
         {error, _} ->
-            ?ERROR("Could not apply route ~p. Could not find priv dir of application ~p", [RouteDetails, Application]),
+            ?ERROR("Could not apply route ~p. Could not find priv dir of application ~p",
+                   [RouteDetails, Application]),
             {noreply, State};
         PrivDir ->
             CowboyRoute =
@@ -390,12 +402,12 @@ handle_cast({add_route, #{application := Application, prefix := Prefix,
                 ?WARNING("Could not parse route ~p", [Other]),
                 erlang:throw({route_error, Other})
         end,
-    ?DEBUG("Adding route: ~p", [RouteDetails]),
     AppsInfo0 = add_route_to_app(Application, Prefix, Host, Security, RouteDetails, AppsInfo),
     NewRouteTable = prop_upsert(Host, CowboyRoute, RouteTable),
     {noreply, State#state{route_table = NewRouteTable, apps = AppsInfo0}};
 handle_cast(apply_routes, State = #state{route_table = RouteTable}) ->
     Dispatch = cowboy_router:compile(RouteTable),
+    ?DEBUG("Applying routes: ~p", [RouteTable]),
     cowboy:set_env(nova_listener, dispatch, Dispatch),
     {noreply, State};
 handle_cast(Request, State) ->
@@ -459,6 +471,11 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+get_all_apps([]) -> [];
+get_all_apps([App|Tl]) ->
+    NovaApps = application:get_env(App, nova_application, []),
+    [App|get_all_apps(Tl ++ NovaApps)].
+
 get_methods(#{methods := M}) when is_list(M) ->
     Res = lists:map(fun(get)  -> <<"GET">>;
                        (post) -> <<"POST">>;
