@@ -37,9 +37,9 @@ handle_json({json, StatusCode, Headers, JSON}, _ModFun, Req, State) ->
             Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, Headers),
             {ok, StatusCode, Headers0, EncodedJSON, State}
     catch
-        ?WITH_STACKTRACE(Type, Reason, Stacktrace)
-          ?ERROR("Error while processing JSON. Type: ~p Reason: ~p Stacktrace: ~p", [Type, Reason, Stacktrace]),
-          handle_status({status, 500}, undefined, Req, State)
+        Type:Reason:Stacktrace ->
+            ?ERROR("Error while processing JSON. Type: ~p Reason: ~p Stacktrace: ~p", [Type, Reason, Stacktrace]),
+            handle_status({status, 500}, undefined, Req, State)
     end;
 handle_json({json, JSON}, ModFun, Req = #{method := Method}, State) ->
     case Method of

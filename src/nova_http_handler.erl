@@ -54,9 +54,13 @@ init(Req = #{method := ReqMethod}, State = #{methods := Methods}) ->
             {ok, Req1, State}
     end;
 init(Req, State) ->
-    {ok, StatusCode, Headers, Body, _} = nova_router:status_page(404, Req),
-    Req1 = cowboy_req:reply(StatusCode, Headers, Body, Req),
-    {ok, Req1, State}.
+    case nova_router:status_page(404, Req) of
+        {ok, StatusCode, Headers, Body, _} ->
+            Req1 = cowboy_req:reply(StatusCode, Headers, Body, Req),
+            {ok, Req1, State};
+        _ ->
+            cowboy_req:reply(404, #{}, <<>>, Req)
+    end.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -86,22 +90,23 @@ handle(Mod, Fun, Req, State) ->
                     erlang:throw({unknown_handler_type, RetObj})
             end
     catch
-        ?WITH_STACKTRACE(Type, Reason, Stacktrace)
-          ?ERROR("Controller (~p:~p/1) failed with ~p:~p.~nStacktrace:~n~p", [Mod, Fun, Type, Reason, Stacktrace]),
-        case nova_router:status_page(500, Req) of
-            {error, not_found} ->
-                %% Render our own view. Hide information if we're not in dev_mode
-                DevMode = nova:get_env(dev_mode, false),
-                {ok, HTML} = nova_internal_error_dtl:render([{module, Mod},
-                                                             {function, Fun},
-                                                             {type, Type},
-                                                             {reason, Reason},
-                                                             {stacktrace, Stacktrace},
-                                                             {dev_mode, DevMode}], []),
-                {ok, 500, #{}, HTML, State};
-            Page ->
-                Page
-        end
+        Type:Reason:Stacktrace ->
+            ?ERROR("Controller (~p:~p/1) failed with ~p:~p.~nStacktrace:~n~p",
+                   [Mod, Fun, Type, Reason, Stacktrace]),
+            case nova_router:status_page(500, Req) of
+                {error, not_found} ->
+                    %% Render our own view. Hide information if we're not in dev_mode
+                    DevMode = nova:get_env(dev_mode, false),
+                    {ok, HTML} = nova_internal_error_dtl:render([{module, Mod},
+                                                                 {function, Fun},
+                                                                 {type, Type},
+                                                                 {reason, Reason},
+                                                                 {stacktrace, Stacktrace},
+                                                                 {dev_mode, DevMode}], []),
+                    {ok, 500, #{}, HTML, State};
+                Page ->
+                    Page
+            end
     end.
 
 

@@ -16,7 +16,6 @@
 
 start(_StartType, _StartArgs) ->
     logger:set_primary_config(level, debug),
-    nova_sup:start_link(),
     {{name}}_sup:start_link().
 
 %%--------------------------------------------------------------------

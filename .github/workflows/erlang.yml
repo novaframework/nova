@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: [22.1, 20.3.8.22]
+        otp: [23.0.2, 22.1]
     steps:
     - uses: actions/checkout@v2
     - uses: gleam-lang/setup-erlang@v1.0.0
@@ -20,7 +20,6 @@ jobs:
     - name: Compile
       run: rebar3 compile
     - name: Run dialyzer
-      if: matrix.otp != '20.3.8.22'
       run: rebar3 dialyzer
     - name: Run xref
       run: rebar3 xref

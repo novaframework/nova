@@ -8,6 +8,8 @@
 
 -behaviour(application).
 
+-include_lib("nova/include/nova.hrl").
+
 %% Application callbacks
 -export([start/2, stop/1]).
 

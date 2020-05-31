@@ -10,7 +10,6 @@
 {dir, "{{name}}/src/views"}.
 
 {template, "nova/sys.config", "{{name}}/config/sys.config"}.
-{template, "nova/start.sh", "{{name}}/start.sh"}.
 {template, "nova/routes.erl", "{{name}}/priv/{{name}}.routes.erl"}.
 {template, "nova/app.src", "{{name}}/src/{{name}}.app.src"}.
 {template, "nova/app.erl", "{{name}}/src/{{name}}_app.erl"}.

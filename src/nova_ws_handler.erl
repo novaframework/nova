@@ -64,10 +64,10 @@ handle_ws(Mod, Func, Args, State = #{substate := Substate}) ->
                 {ok, State}
         end
     catch
-        ?WITH_STACKTRACE(Type, Reason, Stacktrace)
-          ?ERROR("Websocket failed with ~p:~p.~nStacktrace:~n~p", [Type, Reason, Stacktrace]),
-          Substate
-     end;
+        Type:Reason:Stacktrace ->
+            ?ERROR("Websocket failed with ~p:~p.~nStacktrace:~n~p", [Type, Reason, Stacktrace]),
+            Substate
+    end;
 handle_ws(Mod, Func, Args, State) ->
     handle_ws(Mod, Func, Args, State#{substate => #{}}).
 
