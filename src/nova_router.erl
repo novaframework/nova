@@ -48,7 +48,7 @@
 
 %% API
 -export([
-         start_link/0,
+         start_link/1,
          process_routefile/1,
          status_page/2,
          add_route/2,
@@ -119,8 +119,8 @@
                       {error, Error :: {already_started, pid()}} |
                       {error, Error :: term()} |
                       ignore.
-start_link() ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+start_link(BootstrapApp) ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, BootstrapApp, []).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -233,6 +233,9 @@ process_routefile(#{name := Application, routes_file := RouteFile}) ->
 process_routefile(AppInfo = #{name := Application}) ->
     Routename = lists:concat(["priv/", Application, ".routes.erl"]),
     process_routefile(AppInfo#{routes_file => Routename});
+process_routefile(undefined) ->
+    logger:warning("bootstrap_application-directive is missing from configuration."),
+    ok;
 process_routefile(App) ->
     process_routefile(#{name => App}).
 
@@ -261,8 +264,9 @@ apply_routes() ->
                               {ok, State :: term(), hibernate} |
                               {stop, Reason :: term()} |
                               ignore.
-init([]) ->
+init(BootstrapApp) ->
     process_flag(trap_exit, true),
+    process_routefile(BootstrapApp),
     {ok, #state{
             route_table = [],
             apps = #{},

@@ -11,7 +11,13 @@
     kernel,
     stdlib
    ]},
-  {env,[]},
+  {env,[
+        %% Add application specific configuration here
+        {nova_applications, [
+                             %% Can be either an atom of the app or #{name => AppName, routes_file => Filepath}
+
+                            ]}
+       ]},
   {modules, []},
   {maintainers, []},
   {licenses, ["Apache 2.0"]},
