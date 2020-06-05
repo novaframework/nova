@@ -60,8 +60,10 @@ init([]) ->
 
     SessionManager = application:get_env(nova, session_manager, nova_session_ets),
 
+    BootstrapApp = application:get_env(nova, bootstrap_application, undefined),
+
     Children = [
-                child(nova_router, nova_router),
+                child(nova_router, nova_router, BootstrapApp),
                 child(nova_handlers, nova_handlers),
                 child(SessionManager, SessionManager)
                ],
@@ -80,13 +82,16 @@ init([]) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-child(Id, Mod) ->
+child(Id, Mod, Args) ->
     #{id => Id,
-      start => {Mod, start_link, []},
+      start => {Mod, start_link, Args},
       restart => permanent,
       shutdown => 5000,
       type => worker,
       modules => [Mod]}.
+
+child(Id, Mod) ->
+    child(Id, Mod, []).
 
 setup_cowboy(Configuration) ->
     case [ X || {X, _, _} <- application:which_applications(), X =:= cowboy ] of
