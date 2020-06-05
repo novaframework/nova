@@ -7,7 +7,6 @@
   {included_applications, []},
   {applications,
    [
-    {{name}},
     nova,
     kernel,
     stdlib
