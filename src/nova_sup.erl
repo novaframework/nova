@@ -63,7 +63,7 @@ init([]) ->
     BootstrapApp = application:get_env(nova, bootstrap_application, undefined),
 
     Children = [
-                child(nova_router, nova_router, BootstrapApp),
+                child(nova_router, nova_router, [BootstrapApp]),
                 child(nova_handlers, nova_handlers),
                 child(SessionManager, SessionManager)
                ],

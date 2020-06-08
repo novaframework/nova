@@ -76,7 +76,7 @@
 -define(STATIC_ROUTE_TABLE, static_route_table).
 
 -type route_info() :: #{application := atom(),
-                        prefix := atom(),
+                        prefix := string(),
                         host := atom() | string(),
                         security := false | {atom(), atom()},
                         _ => _}.
@@ -115,10 +115,10 @@
 %% @hidden
 %% @end
 %%--------------------------------------------------------------------
--spec start_link() -> {ok, Pid :: pid()} |
-                      {error, Error :: {already_started, pid()}} |
-                      {error, Error :: term()} |
-                      ignore.
+-spec start_link(BootstrapApp :: atom()) -> {ok, Pid :: pid()} |
+                                            {error, Error :: {already_started, pid()}} |
+                                            {error, Error :: term()} |
+                                            ignore.
 start_link(BootstrapApp) ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, BootstrapApp, []).
 
@@ -267,6 +267,7 @@ apply_routes() ->
 init(BootstrapApp) ->
     process_flag(trap_exit, true),
     process_routefile(BootstrapApp),
+    apply_routes(),
     {ok, #state{
             route_table = [],
             apps = #{},
