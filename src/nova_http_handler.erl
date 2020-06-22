@@ -43,7 +43,7 @@ init(Req, State) ->
         {error, Reason} ->
             %% What to do?
             ?ERROR("We got error when running prehandlers. Reason ~p", [Reason]),
-            cowboy_req:reply(500, #{}, <<>>)
+            cowboy_req:reply(500, Req)
     end.
 
 
@@ -126,13 +126,17 @@ handle(Mod, Fun, Req, State) ->
 run_pre_handlers([], Req) ->
     {ok, Req};
 run_pre_handlers([Handler|Tl], Req) ->
-    case Handler(Req) of
+    try Handler(Req) of
         {ok, Req0} ->
             run_pre_handlers(Tl, Req0);
         {stop, Req0} ->
             {ok, Req0};
         {error, Reason} ->
             ?ERROR("Pre handler failed with reason ~p", [Reason]),
+            {error, Reason}
+    catch
+        Type:Reason:Stacktrace ->
+            ?ERROR("Pre-handler failed in execution. Type: ~p Reason: ~p~nStacktrace:~n~p", [Type, Reason, Stacktrace]),
             {error, Reason}
     end.
 
