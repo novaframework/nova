@@ -66,8 +66,8 @@
 
 -define(SERVER, ?MODULE).
 
--define(HANDLERS_TABLE, "nova_handlers_handlers_table").
--define(PRE_HANDLERS_TABLE, "nova_handlers_pre_handlers_table").
+-define(HANDLERS_TABLE, nova_handlers_handlers_table).
+-define(PRE_HANDLERS_TABLE, nova_handlers_pre_handlers_table).
 
 -type handler_return() :: {ok, StatusCode :: integer(), Headers :: map(), Body :: binary(),
                            State :: nova_http_handler:nova_http_state()} |
@@ -168,7 +168,12 @@ get_handler(Handle) ->
             {ok, Callback}
     end.
 
-
+%%--------------------------------------------------------------------
+%% @doc
+%% Returns all pre-handlers associated with the given protocol (Eg http).
+%% @end
+%%--------------------------------------------------------------------
+-spec get_pre_handlers(Protocol :: atom()) -> {ok, Elements :: [nova_pre_handler_callback()]}.
 get_pre_handlers(Protocol) ->
     Elements = ets:lookup(?PRE_HANDLERS_TABLE, Protocol),
     %% Strip the keys
