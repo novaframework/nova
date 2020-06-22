@@ -42,6 +42,7 @@ init(Req, State) ->
             init0(Req0, State);
         {error, Reason} ->
             %% What to do?
+            ?ERROR("We got error when running prehandlers. Reason ~p", [Reason]),
             cowboy_req:reply(500, #{}, <<>>)
     end.
 
