@@ -35,11 +35,23 @@
 %%--------------------------------------------------------------------
 -spec init(Req :: cowboy_req:req(), State :: nova_http_state()) ->
                   {ok, Req1 :: cowboy_req:req(), State0 :: nova_http_state()}.
-init(Req, State = #{mod := Mod, func := Func, methods := '_'}) ->
+init(Req, State) ->
+    {ok, PreHandlers} = nova_handlers:get_pre_handlers(http),
+    case run_pre_handlers(PreHandlers, Req) of
+        {ok, Req0} ->
+            init0(Req0, State);
+        {error, Reason} ->
+            %% What to do?
+            ?ERROR("We got error when running prehandlers. Reason ~p", [Reason]),
+            cowboy_req:reply(500, Req)
+    end.
+
+
+init0(Req, State = #{mod := Mod, func := Func, methods := '_'}) ->
     {ok, StatusCode, Headers, Body, State0} = handle(Mod, Func, Req, State),
     Req1 = cowboy_req:reply(StatusCode, Headers, Body, Req),
     {ok, Req1, State0};
-init(Req = #{method := ReqMethod}, State = #{methods := Methods}) ->
+init0(Req = #{method := ReqMethod}, State = #{methods := Methods}) ->
     case lists:any(fun(X) -> X == ReqMethod end, Methods) of
         true ->
             init(Req, State#{methods := '_'});
@@ -53,7 +65,7 @@ init(Req = #{method := ReqMethod}, State = #{methods := Methods}) ->
                 end,
             {ok, Req1, State}
     end;
-init(Req, State) ->
+init0(Req, State) ->
     case nova_router:status_page(404, Req) of
         {ok, StatusCode, Headers, Body, _} ->
             Req1 = cowboy_req:reply(StatusCode, Headers, Body, Req),
@@ -61,6 +73,7 @@ init(Req, State) ->
         _ ->
             cowboy_req:reply(404, #{}, <<>>, Req)
     end.
+
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -109,6 +122,23 @@ handle(Mod, Fun, Req, State) ->
             end
     end.
 
+
+run_pre_handlers([], Req) ->
+    {ok, Req};
+run_pre_handlers([Handler|Tl], Req) ->
+    try Handler(Req) of
+        {ok, Req0} ->
+            run_pre_handlers(Tl, Req0);
+        {stop, Req0} ->
+            {ok, Req0};
+        {error, Reason} ->
+            ?ERROR("Pre handler failed with reason ~p", [Reason]),
+            {error, Reason}
+    catch
+        Type:Reason:Stacktrace ->
+            ?ERROR("Pre-handler failed in execution. Type: ~p Reason: ~p~nStacktrace:~n~p", [Type, Reason, Stacktrace]),
+            {error, Reason}
+    end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Eunit functions         %
