@@ -270,7 +270,7 @@ handle_cast({register_pre_handler, Protocol, Callback}, State) ->
             {Module, Function} -> fun Module:Function/1
         end,
     ets:insert(?PRE_HANDLERS_TABLE, {Protocol, Callback0}),
-    {reply, ok, State};
+    {noreply, State};
 
 handle_cast(_Request, State) ->
     {noreply, State}.
