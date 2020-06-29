@@ -161,7 +161,7 @@ unregister_handler(Handle) ->
 -spec get_handler(Handle :: atom()) -> {ok, Callback :: nova_handler_callback()} |
                                        {error, not_found}.
 get_handler(Handle) ->
-    case ets:lookup(?MODULE, Handle) of
+    case ets:lookup(?HANDLERS_TABLE, Handle) of
         [] ->
             {error, not_found};
         [{Handle, Callback}] ->
@@ -225,7 +225,7 @@ init([]) ->
                          {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
                          {stop, Reason :: term(), NewState :: term()}.
 handle_call({unregister_handler, Handle}, _From, State) ->
-    ets:delete(?MODULE, Handle),
+    ets:delete(?HANDLERS_TABLE, Handle),
     ?DEBUG("Removed handler ~p", [Handle]),
     {reply, ok, State};
 
