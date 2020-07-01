@@ -11,5 +11,5 @@
 %% @end
 %%--------------------------------------------------------------------
 inject_correlation_id(Req) ->
-    UUID = uuid:to_string(uuid:get_v4()),
+    UUID = uuid:uuid_to_string(uuid:get_v4()),
     {ok, cowboy_req:set_resp_header(<<"X-Correlation-ID">>, UUID, Req)}.
