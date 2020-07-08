@@ -20,7 +20,7 @@
                                     Env :: cowboy_middleware:env().
 execute(Req, Env = #{handler_opts := HandlerOpts = #{secure := {Mod, Func}}}) ->
     try Mod:Func(Req) of
-        {ok, AuthData} ->
+        {true, AuthData} ->
             {ok, Req, Env#{handler_opts => HandlerOpts#{auth_data => AuthData}}};
         true ->
             {ok, Req, Env};
