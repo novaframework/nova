@@ -147,7 +147,9 @@ get_all_plugins() ->
                          {ok, [Module :: atom()]}.
 get_plugins(RequestType, Protocol) when RequestType == pre_request orelse
                                        RequestType == post_request ->
-    {ok, ets:match(?NOVA_PLUGIN_TABLE, {{'_', RequestType, Protocol}, '$1'})}.
+    Plugins = ets:match(?NOVA_PLUGIN_TABLE, {{'_', RequestType, Protocol}, '$1'}),
+
+    {ok, [Module || [{_, Module}] <- Plugins]}.
 
 %%%===================================================================
 %%% gen_server callbacks
