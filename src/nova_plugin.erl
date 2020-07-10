@@ -144,8 +144,7 @@ get_all_plugins() ->
 %% @end
 %%--------------------------------------------------------------------
 -spec get_plugins(RequestType :: pre_request | post_request, Protocol :: http) ->
-                         {ok, [{{PluginId :: binary(), ReqType :: pre_request | post_request,
-                                 Protocol :: http}, Module :: atom()}]}.
+                         {ok, [Module :: atom()]}.
 get_plugins(RequestType, Protocol) when RequestType == pre_request orelse
                                        RequestType == post_request ->
     {ok, ets:match(?NOVA_PLUGIN_TABLE, {{'_', RequestType, Protocol}, '$1'})}.
