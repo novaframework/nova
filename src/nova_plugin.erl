@@ -2,9 +2,11 @@
 %%% @author Niclas Axelsson <niclas@burbas.se>
 %%% @copyright (C) 2020, Niclas Axelsson
 %%% @doc
-%%% Plugins can be run at two different times; either in the beginning or at the end of a request. They
-%%% can modify both the actual request or the nova-state. A plugin is implemented with the <icode>nova_plugin</icode> behaviour
-%%% and needs to implement three different functions: <icode>pre_request/2</icode>, <icode>post_request/2</icode> and <icode>plugin_info/0</icode>.
+%%% Plugins can be run at two different times; either in the beginning or at
+%% the end of a request. They can modify both the actual request or the nova-state.
+%% A plugin is implemented with the <icode>nova_plugin</icode> behaviour
+%%% and needs to implement three different functions: <icode>pre_request/2</icode>,
+%% <icode>post_request/2</icode> and <icode>plugin_info/0</icode>.
 %%%
 %%%
 %%% <code title="src/example_plugin.erl">
@@ -23,12 +25,15 @@
 %%%   {ok, Req, State}.
 %%%
 %%% plugin_info() ->
-%%%   {<<"Execution time plugin">>, <<"1.0.0">>, <<"Niclas Axelsson <niclas@burbas.se>">>, <<"Example plugin for nova">>}.
+%%%   {<<"Execution time plugin">>, <<"1.0.0">>, <<"Niclas Axelsson <niclas@burbas.se>">>,
+%%     <<"Example plugin for nova">>}.
 %%% </code>
 %%%
 %%%
-%%% To register the plugin above you have to call <icode>nova_plugin:register_plugin(RequestType, http, example_plugin).</icode> in order
-%%% to run it. <icode>RequestType</icode> can either be <icode>pre_request</icode> or <icode>post_request</icode>.
+%%% To register the plugin above you have to call
+%%  <icode>nova_plugin:register_plugin(RequestType, http, example_plugin).</icode> in order
+%%% to run it. <icode>RequestType</icode> can either be <icode>pre_request</icode> or
+%%  <icode>post_request</icode>.
 %%% @end
 %%% Created : 12 Feb 2020 by Niclas Axelsson <niclas@burbas.se>
 %%%-------------------------------------------------------------------

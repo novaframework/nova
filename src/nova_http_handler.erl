@@ -101,7 +101,8 @@ handle(Mod, Fun, Req, State) ->
                     Callback(RetObj, {Mod, Fun}, Req, State);
                 _ ->
                     ?ERROR("Unknown return object ~p returned from module: ~p function: ~p", [RetObj, Mod, Fun]),
-                    {ok, render_page(500, Req, {Mod, Fun, 1, "Unknown return object ~p returned from module: ~s:~s/1", [RetObj, Mod, Fun]}), State}
+                    {ok, render_page(500, Req, {Mod, Fun, 1, "Unknown return object ~p returned from module: ~s:~s/1",
+                                                [RetObj, Mod, Fun]}), State}
             end
     catch
         Type:Reason:Stacktrace ->
@@ -138,8 +139,10 @@ render_page(StatusCode, Req) ->
 %% does always contain a body.
 %% @end
 %%--------------------------------------------------------------------
--spec render_page(StatusCode :: integer(), Req :: cowboy_req:req(), {Module :: atom(), Function :: atom(), Arity :: integer(), Format :: list(), Args :: list()} |
-                  {Module :: atom(), Function :: atom(), Arity :: integer(), Type :: atom(), Reason :: atom(), Stacktrace :: any()}) ->
+-spec render_page(StatusCode :: integer(), Req :: cowboy_req:req(),
+                  {Module :: atom(), Function :: atom(), Arity :: integer(), Format :: list(), Args :: list()} |
+                  {Module :: atom(), Function :: atom(), Arity :: integer(), Type :: atom(),
+                   Reason :: atom(), Stacktrace :: any()}) ->
                          cowboy_req:req().
 render_page(500, Req, {Module, Function, Arity, Format, Args}) ->
     {ok, _, Headers, HTML, _} =
@@ -191,7 +194,9 @@ run_plugins(ReqType, Req, State) when ReqType == pre_request orelse
     {ok, Plugins} = nova_plugin:get_plugins(ReqType, http),
     run_plugins(Plugins, ReqType, Req, State).
 
--spec run_plugins(Plugins :: list(), CallbackFun :: pre_request | post_request, Req :: cowboy_req:req(), State :: nova_http_state()) ->
+-spec run_plugins(Plugins :: list(), CallbackFun :: pre_request |
+                                                    post_request, Req :: cowboy_req:req(), State :: nova_http_state()
+                 ) ->
                          {ok, Req0 :: cowboy_req:req(), State0 :: nova_http_state()} |
                          {error, Req0 :: cowboy_req:req()}.
 run_plugins([], _CallbackFun, Req, State) ->
@@ -205,13 +210,14 @@ run_plugins([Plugin|Tl], CallbackFun, Req, State) when CallbackFun == pre_reques
             {ok, Req0, State0};
         {error, Reason} ->
             ?ERROR("Pre handler returned error with reason ~p", [Reason]),
-            Req0 = render_page(500, Req, {?MODULE, run_plugins, 4, "Error when running pre-plugins. Plugin ~p:~p/2 exited with reason: ~p",
-                                          [Plugin, CallbackFun, Reason]}),
+            Msg = "Error when running pre-plugins. Plugin ~p:~p/2 exited with reason: ~p",
+            Req0 = render_page(500, Req, {?MODULE, run_plugins, 4, Msg, [Plugin, CallbackFun, Reason]}),
             {error, Req0}
     catch
         Type:Reason:Stacktrace ->
             ?ERROR("Pre-handler failed in execution. Type: ~p Reason: ~p~nStacktrace:~n~p", [Type, Reason, Stacktrace]),
-            Req0 = render_page(500, Req, {?MODULE, run_plugins, 4, "Error when running pre-plugins. One plugin exited with reason: ~p", [Reason]}),
+            Msg =  "Error when running pre-plugins. One plugin exited with reason: ~p",
+            Req0 = render_page(500, Req, {?MODULE, run_plugins, 4, Msg, [Reason]}),
             {error, Req0}
     end.
 
