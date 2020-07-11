@@ -7,7 +7,6 @@
   * [Guides](./guides)
 * [02 - Quick start](02_quick-start.md)
   * [Use rebar3 and nova_rebar3](02_quick-start.md#use-rebar3-and-nova)
-  * [nova_admin](02_quick-start.md#nova-admin)
 * [03 - Routing](03_routing.md)
   * [How to create routes](03_routing.md#how-to-create-routes)
   * [Using prefix](03_routing.md#using-prefix)
@@ -19,6 +18,7 @@
 * [05 - Views](05_views.md)
 * [06 - Building releases](06_building-releases.md)
   * [Include other nova applications](06_building-releases.md#include-other-nova-applications)
+* [07 - Plugins](07_plugins.md)
 * [07 - Books and links](07_books-and-links.md)
 * [XX - Future work and todos](xx_future-work-and-todos.md)
 
