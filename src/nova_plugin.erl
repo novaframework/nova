@@ -174,6 +174,8 @@ get_plugins(RequestType, Protocol) when RequestType == pre_request orelse
 init(_Args) ->
     process_flag(trap_exit, true),
     ets:new(?NOVA_PLUGIN_TABLE, [named_table, bag, protected]),
+    Plugins = application:get_env(nova, plugins, []),
+    [ register_plugin(ReqType, Protocol, Module) || {ReqType, Protocol, Module} <- Plugins ],
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------
