@@ -65,6 +65,7 @@ init([]) ->
     Children = [
                 child(nova_router, nova_router, [BootstrapApp]),
                 child(nova_handlers, nova_handlers),
+                child(nova_plugin, nova_plugin),
                 child(SessionManager, SessionManager)
                ],
 
