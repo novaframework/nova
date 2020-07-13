@@ -14,4 +14,4 @@
 {template, "nova/app.erl", "{{name}}/src/{{name}}_app.erl"}.
 {template, "nova/sup.erl", "{{name}}/src/{{name}}_sup.erl"}.
 {template, "nova/controller_rest.erl", "{{name}}/src/controllers/{{name}}_main_controller.erl"}.
-{template, "nova/rebar.config", "{{name}}/rebar.config"}.
+{template, "nova/rebar_rest.config", "{{name}}/rebar.config"}.
