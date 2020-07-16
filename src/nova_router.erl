@@ -486,6 +486,7 @@ get_methods(#{methods := M}) when is_list(M) ->
                        (post) -> <<"POST">>;
                        (put) -> <<"PUT">>;
                        (delete) -> <<"DELETE">>;
+		       (options) -> <<"OPTIONS">>;
                        (_) -> throw(unknown_method)
                     end, M),
     case length(Res) of
