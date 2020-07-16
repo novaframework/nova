@@ -41,13 +41,18 @@ init(Req, State) ->
     case run_plugins(pre_request, Req, State) of
         {ok, Req0, State0} ->
             %% Call the controller
-            {ok, Req1, State1} = invoke_controller(Req0, State0),
-            %% Invoke post_request plugins
-            case run_plugins(post_request, Req1, State1) of
-                {error, Req2} ->
-                    {ok, Req2, State1};
-                Reply ->
-                    Reply
+            case invoke_controller(Req0, State0) of
+                {stop, Req1, State1} ->
+                    {ok, Req1, State1};
+            {ok, StatusCode, Headers, Body, State1}  ->
+                    %% Invoke post_request plugins
+                    case run_plugins(post_request, Req0, State1) of
+                        {error, Req1} ->
+                            {ok, Req1, State1};
+                        {ok, Req1, State2} ->
+                            Req2 = cowboy_req:reply(StatusCode, Headers, Body, Req1),
+                            {ok, Req2, State2}
+                    end
             end;
         {error, Req0} ->
             {ok, Req0, State}
@@ -61,10 +66,7 @@ init(Req, State) ->
 %%--------------------------------------------------------------------
 %% Methods for this path is defined as a 'catch_all' so just continue executing
 invoke_controller(Req, State = #{mod := Mod, func := Func, methods := '_'}) ->
-    {ok, StatusCode, Headers, Body, State0} = handle(Mod, Func, Req, State),
-    Req1 = cowboy_req:reply(StatusCode, Headers, Body, Req),
-    {ok, Req1, State0};
-
+    handle(Mod, Func, Req, State);
 %% We have a list of methods we allow, so check if they match the one requested before continuing
 invoke_controller(Req = #{method := ReqMethod}, State = #{methods := Methods}) ->
     case lists:any(fun(X) -> X == ReqMethod end, Methods) of
