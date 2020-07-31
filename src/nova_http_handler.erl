@@ -42,9 +42,7 @@ init(Req, State) ->
         {ok, Req0, State0} ->
             %% Call the controller
             case invoke_controller(Req0, State0) of
-                {stop, Req1, State1} ->
-                    {ok, Req1, State1};
-            {ok, StatusCode, Headers, Body, State1}  ->
+              	{ok, StatusCode, Headers, Body, State1}  ->
                     %% Invoke post_request plugins
                     case run_plugins(post_request, Req0, State1) of
                         {error, Req1} ->
