@@ -183,12 +183,7 @@ render_page(500, Req, {Module, Function, Arity, Type, Reason, Stacktrace}) ->
 %%--------------------------------------------------------------------
 run_pre_plugins(Req, State) ->
     {ok, Plugins} = nova_plugin:get_plugins(pre_request, http),
-    case run_plugins(Plugins, pre_request, Req, State) of
-        {error, Req0} ->
-            {ok, Req0, State};
-        Result ->
-            Result
-    end.
+    run_plugins(Plugins, pre_request, Req, State).
 
 run_post_plugins(Req, State, {StatusCode, Headers, Body}) ->
     {ok, Plugins} = nova_plugin:get_plugins(post_request, http),
