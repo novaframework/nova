@@ -38,20 +38,12 @@
 -spec init(Req :: cowboy_req:req(), State :: nova_http_state()) ->
                   {ok, Req0 :: cowboy_req:req(), State0 :: nova_http_state()}.
 init(Req, State) ->
-    case run_plugins(pre_request, Req, State) of
+    case run_pre_plugins(Req, State) of
         {ok, Req0, State0} ->
             %% Call the controller
-            case invoke_controller(Req0, State0) of
-              	{ok, StatusCode, Headers, Body, State1}  ->
-                    %% Invoke post_request plugins
-                    case run_plugins(post_request, Req0, State1) of
-                        {error, Req1} ->
-                            {ok, Req1, State1};
-                        {ok, Req1, State2} ->
-                            Req2 = cowboy_req:reply(StatusCode, Headers, Body, Req1),
-                            {ok, Req2, State2}
-                    end
-            end;
+            {ok, StatusCode, Headers, Body, State1} = invoke_controller(Req0, State0),
+            %% Invoke post_request plugins
+            run_post_plugins(Req0, State1, {StatusCode, Headers, Body});
         {error, Req0} ->
             {ok, Req0, State}
     end.
@@ -189,10 +181,24 @@ render_page(500, Req, {Module, Function, Arity, Type, Reason, Stacktrace}) ->
 %% normally. If {error, Reason} is returned a 500-status page will be rendered and returned.
 %% @end
 %%--------------------------------------------------------------------
-run_plugins(ReqType, Req, State) when ReqType == pre_request orelse
-                                      ReqType == post_request ->
-    {ok, Plugins} = nova_plugin:get_plugins(ReqType, http),
-    run_plugins(Plugins, ReqType, Req, State).
+run_pre_plugins(Req, State) ->
+    {ok, Plugins} = nova_plugin:get_plugins(pre_request, http),
+    case run_plugins(Plugins, pre_request, Req, State) of
+        {error, Req0} ->
+            {ok, Req0, State};
+        Result ->
+            Result
+    end.
+
+run_post_plugins(Req, State, {StatusCode, Headers, Body}) ->
+    {ok, Plugins} = nova_plugin:get_plugins(post_request, http),
+    case run_plugins(Plugins, post_request, Req, State) of
+        {error, Req0} ->
+            {ok, Req0, State};
+        {ok, Req0, State0} ->
+            Req1 = cowboy_req:reply(StatusCode, Headers, Body, Req0),
+            {ok, Req1, State0}
+    end.
 
 -spec run_plugins(Plugins :: list(), CallbackFun :: pre_request |
                                                     post_request, Req :: cowboy_req:req(), State :: nova_http_state()
