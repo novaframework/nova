@@ -4,7 +4,7 @@
               {registered,[]},
               {mod,{nova_app,[]}},
               {included_applications,[cowboy,compiler,erlydtl,jhn_stdlib,
-                                      edoc]},
+                                      edoc, uuid]},
               {applications,[kernel,stdlib,sasl,ranch]},
               {env,[]},
               {modules,[nova]},
