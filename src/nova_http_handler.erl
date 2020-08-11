@@ -43,7 +43,7 @@
 %% @end
 %%--------------------------------------------------------------------
 -spec init(Req :: cowboy_req:req(), State :: nova_http_state()) ->
-		  {ok, Req0 :: cowboy_req:req(), State0 :: nova_http_state()}.
+                  {ok, Req0 :: cowboy_req:req(), State0 :: nova_http_state()}.
 init(Req, State) ->
     State0 = State#{resp_status => 200, req => Req},
 
