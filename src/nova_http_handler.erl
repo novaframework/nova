@@ -42,7 +42,7 @@
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec init(Req :: cowboy_req:req(), State :: nova_http_state()) -> {ok, State0 :: nova_http_state()}.
+-spec init(Req :: cowboy_req:req(), State :: nova_http_state()) -> {ok, Req0 :: cowboy_req:req(), State0 :: nova_http_state()}.
 init(Req, State) ->
     State0 = State#{resp_status => 200, req => Req},
 
@@ -51,7 +51,7 @@ init(Req, State) ->
         case run_plugins(PrePlugins, pre_request, State0) of
             {ok, State1} ->
                 %% Call the controller
-                State2 = invoke_controller(State1),
+                {ok, State2} = invoke_controller(State1),
                 %% Invoke post_request plugins
                 {ok, PostPlugins} = nova_plugin:get_plugins(post_request, http),
                 {_, State3} = run_plugins(PostPlugins, post_request, State2),
@@ -72,6 +72,7 @@ init(Req, State) ->
 %% @end
 %%--------------------------------------------------------------------
 %% Methods for this path is defined as a 'catch_all' so just continue executing
+-spec invoke_controller(State :: nova_http_state()) -> {ok, State0 :: nova_http_state()}.
 invoke_controller(State = #{mod := Mod, func := Func, methods := '_'}) ->
     handle(Mod, Func, State);
 %% We have a list of methods we allow, so check if they match the one requested before continuing
@@ -91,8 +92,7 @@ invoke_controller(State = #{req := #{method := ReqMethod}, methods := Methods}) 
 %% @end
 %%--------------------------------------------------------------------
 -spec handle(Mod :: atom(), Fun :: atom(), State :: nova_http_state()) ->
-                    {ok, StatusCode :: integer(), Headers :: cowboy:http_headers(), Body :: binary(),
-                     State0 :: nova_http_state()}.
+                    {ok, State0 :: nova_http_state()}.
 handle(Mod, Fun, State = #{req := Req, controller_data := ControllerData}) ->
     ?DEBUG("Handling request for ~p:~p", [Mod, Fun]),
     try Mod:Fun(ControllerData#{req => Req}) of
@@ -194,7 +194,7 @@ render_page(500, State = #{req := Req}, {Module, Function, Arity, Type, Reason, 
 %% normally. If {error, Reason} is returned a 500-status page will be rendered and returned.
 %% @end
 %%--------------------------------------------------------------------
--spec run_plugins(Plugins :: list(), CallbackFun :: pre_request | post_request, State :: nova_http_state()) ->
+-spec run_plugins(Plugins :: list(), CallbackFun :: atom(), State :: nova_http_state()) ->
                          {ok, State0 :: nova_http_state()} |
                          {stop, State0 :: nova_http_state()}.
 run_plugins([], _Callback, State) ->
@@ -221,7 +221,6 @@ run_plugins([{Plugin, Options}|Tl], Callback, State) ->
             {ok, State0} = render_page(500, State, {?MODULE, run_plugins, 3, Msg, [Reason]}),
             {stop, State0}
     end.
-
 
 set_resp(Headers, Body, Req) ->
     Req0 = cowboy_req:set_resp_headers(Headers, Req),

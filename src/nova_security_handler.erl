@@ -21,7 +21,8 @@
 execute(Req, Env = #{handler_opts := HandlerOpts = #{secure := {Mod, Func}}}) ->
     try Mod:Func(Req) of
         {true, AuthData} ->
-            {ok, Req, Env#{handler_opts => HandlerOpts#{auth_data => AuthData}}};
+            ControllerData = #{auth_data => AuthData},
+            {ok, Req, Env#{handler_opts => HandlerOpts#{controller_data => ControllerData}}};
         true ->
             {ok, Req, Env};
         false ->
