@@ -223,7 +223,8 @@ handle_call(_Request, _From, State) ->
                          {stop, Reason :: term(), NewState :: term()}.
 handle_cast({register_plugin, ReqType, Protocol, Module, Options}, State) ->
     PluginId = uuid:get_v4(),
-    ?DEBUG("Register plugin for protocol ~s request-type ~s with ID: ~s and options: ~p", [Protocol, ReqType, PluginId, Options]),
+    ?DEBUG("Register plugin for protocol ~s request-type ~s with ID: ~s and options: ~p",
+	   [Protocol, ReqType, PluginId, Options]),
     ets:insert(?NOVA_PLUGIN_TABLE, {{PluginId, ReqType, Protocol}, {Module, Options}}),
     {noreply, State};
 handle_cast(_Request, State) ->
