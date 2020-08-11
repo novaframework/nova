@@ -11,10 +11,11 @@ the routing file. Such a module can look something like this:
     index/1
     ]).
 
-index(#{method := <<"GET">>}) ->
+index(_NovaReq = #{req := #{method := <<"GET">>}}) ->
     {ok, []}.
 ```
 
+`NovaReq` is a `map` that contains information from Nova. You can find the raw `cowboy_req` object there under the key `req`. So in the above example we are actually checking the method from the `cowbot_req` object given.
 This means that if you have a route pointing to it, this module will only take GET-requests and will return a rendered template to the user. Returning `{ok, Parameters}` from a
 module means that it will render the corresponding template and return it to the user.
 
@@ -33,9 +34,6 @@ A controller can return a set of different values;
 `{status, StatusCode, ExtraHeaders}` Same as the above but with additional headers
 
 `{redirect, Route}` Returns a 302 togheter with a route to the user
-
-`{cowboy_req, Req}` This is a special return value that can be used if you want todo something extra that nova doesn't support but cowboy does.
-
 
 *Note; A controller does not need to have a corresponding view.*
 
