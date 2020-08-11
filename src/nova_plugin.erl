@@ -182,8 +182,9 @@ init(_Args) ->
     process_flag(trap_exit, true),
     ets:new(?NOVA_PLUGIN_TABLE, [named_table, bag, protected]),
     Plugins = application:get_env(nova, plugins, []),
-    [ register_plugin(ReqType, Protocol, Module, maps:get(options, Plugin, #{}))
-      || Plugin = {ReqType, Protocol, Module} <- Plugins ],
+    lists:foreach(fun({ReqType, Protocol, Module}) -> register_plugin(ReqType, Protocol, Module);
+                     ({ReqType, Protocol, Module, Options}) -> register_plugin(ReqType, Protocol, Module, Options)
+                  end, Plugins),
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------

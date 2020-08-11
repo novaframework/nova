@@ -4,9 +4,10 @@
  {<<"erlydtl">>,{pkg,<<"erlydtl">>,<<"0.13.1">>},0},
  {<<"jhn_stdlib">>,{pkg,<<"jhn_stdlib">>,<<"3.4.3">>},0},
  {<<"nova_modern">>,{pkg,<<"nova_modern">>,<<"0.1.3">>},0},
- {<<"quickrand">>,{pkg,<<"quickrand">>,<<"1.7.5">>},1},
+ {<<"quickrand">>,{pkg,<<"quickrand">>,<<"2.0.0">>},1},
  {<<"ranch">>,{pkg,<<"ranch">>,<<"1.7.1">>},1},
- {<<"uuid_erl">>,{pkg,<<"uuid_erl">>,<<"1.7.5">>},0}]}.
+ {<<"uuid">>,{pkg,<<"uuid_erl">>,<<"2.0.0">>},0},
+ {<<"uuid_erl">>,{pkg,<<"uuid_erl">>,<<"2.0.0">>},0}]}.
 [
 {pkg_hash,[
  {<<"cowboy">>, <<"F3DC62E35797ECD9AC1B50DB74611193C29815401E53BAC9A5C0577BD7BC667D">>},
@@ -14,7 +15,8 @@
  {<<"erlydtl">>, <<"91481928557544C843E2B33F8AA17693F16B65EEBC9EF08C71EBE90CBD1A84F1">>},
  {<<"jhn_stdlib">>, <<"F27A0F71F79C54AF79E8E7C1DFC5BE15969F8399ABC0EBDF5B201EB442FCDFD7">>},
  {<<"nova_modern">>, <<"A378ED8C84D030545353FD1621D44603F551C99595B9ADCD87544837A7ACA5D4">>},
- {<<"quickrand">>, <<"E3086A153EB13A057FC19192D05E2D4C6BB2BDBB55746A699BEAE9847AC17CA8">>},
+ {<<"quickrand">>, <<"665C49881808DA68A5C58DDEDA16EA60B16BE54DBB719B029EEA5835FD12DAE9">>},
  {<<"ranch">>, <<"6B1FAB51B49196860B733A49C07604465A47BDB78AA10C1C16A3D199F7F8C881">>},
- {<<"uuid_erl">>, <<"3862FF9A21C42566DFD0376B97512FA202922897129E09A05E2AFA0D9CAFD97A">>}]}
+ {<<"uuid">>, <<"02C713FAC0E73E5F366CBA541216F1E956E2F00C91C7530D4B21DEC7D3ADA164">>},
+ {<<"uuid_erl">>, <<"02C713FAC0E73E5F366CBA541216F1E956E2F00C91C7530D4B21DEC7D3ADA164">>}]}
 ].
