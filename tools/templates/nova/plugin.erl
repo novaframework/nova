@@ -27,12 +27,13 @@ pre_request(Req, State) ->
 %% Post-request callback
 %% @end
 %%--------------------------------------------------------------------
--spec post_request(Req :: cowboy_req:req(), State :: nova_http_handler:nova_http_state()) ->
-                          {ok, Req0 :: cowboy_req:req(), State0 :: nova_http_handler:nova_http_state()} |
+-spec post_request(Args :: nova_plugin:request_tuple(), Req :: cowboy_req:req(), State :: nova_http_handler:nova_http_state()) ->
+                          {ok, Args0 :: nova_plugin:request_tuple(), Req0 :: cowboy_req:req(),
+                           State0 :: nova_http_handler:nova_http_state()} |
                           {stop, Req0 :: cowboy_req:req(), State0 :: nova_http_handler:nova_http_state()} |
                           {error, Reason :: term()}.
-post_request(Req, State) ->
-    {ok, Req, State}.
+post_request(Args = {StatusCode, Headers, Body}, Req, State) ->
+    {ok, Args, Req, State}.
 
 
 %%--------------------------------------------------------------------

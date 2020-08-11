@@ -7,7 +7,7 @@
 
 -export([
          init/2,
-         handle/4
+         handle/3
         ]).
 
 -include_lib("nova/include/nova.hrl").
@@ -19,9 +19,18 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Public functions        %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
+-type controller_data() :: #{auth_data => term(),
+                             _ => _}.
+-export_type([controller_data/0]).
+
 -type nova_http_state() :: #{mod := atom(),
                              func := atom(),
                              methods := [binary()] | '_',
+                             %% Intermediate data blow
+                             resp_status => integer(),
+                             req => cowboy_req:req(),
+                             %% This structure is sent to the controller
+                             controller_data => controller_data(),
                              _ => _}.
 -export_type([nova_http_state/0]).
 
@@ -31,22 +40,30 @@
 %% Callback function from nova_handler. This is the initial call where
 %% all the logic is handed.
 %%
-%% @TODO This function needs to be refactored soon. It's way to cluttered
-%% and I really dislike how the case's are nested.
 %% @end
 %%--------------------------------------------------------------------
--spec init(Req :: cowboy_req:req(), State :: nova_http_state()) ->
-                  {ok, Req0 :: cowboy_req:req(), State0 :: nova_http_state()}.
+-spec init(Req :: cowboy_req:req(), State :: nova_http_state()) -> {ok, State0 :: nova_http_state()}.
 init(Req, State) ->
-    case run_pre_plugins(Req, State) of
-        {ok, Req0, State0} ->
-            %% Call the controller
-            {ok, StatusCode, Headers, Body, State1} = invoke_controller(Req0, State0),
-            %% Invoke post_request plugins
-            run_post_plugins(Req0, State1, {StatusCode, Headers, Body});
-        {error, Req0} ->
-            {ok, Req0, State}
-    end.
+    State0 = State#{resp_status => 200, req => Req},
+
+    {ok, PrePlugins} = nova_plugin:get_plugins(pre_request, http),
+    #{req := Req0, resp_status := StatusCode} =
+        case run_plugins(PrePlugins, pre_request, State0) of
+            {ok, State1} ->
+                %% Call the controller
+                State2 = invoke_controller(State1),
+                %% Invoke post_request plugins
+                {ok, PostPlugins} = nova_plugin:get_plugins(post_request, http),
+                {_, State3} = run_plugins(PostPlugins, post_request, State2),
+                State3;
+            {stop, State1} ->
+                State1
+        end,
+    %% Here we send out the response to the client
+    Req1 = cowboy_req:reply(StatusCode, Req0),
+    %% We return the initial state since we don't want to have the intermediate things stored in cowboy
+    {ok, Req1, State}.
+
 %%--------------------------------------------------------------------
 %% @doc
 %% @hidden
@@ -55,16 +72,15 @@ init(Req, State) ->
 %% @end
 %%--------------------------------------------------------------------
 %% Methods for this path is defined as a 'catch_all' so just continue executing
-invoke_controller(Req, State = #{mod := Mod, func := Func, methods := '_'}) ->
-    handle(Mod, Func, Req, State);
+invoke_controller(State = #{mod := Mod, func := Func, methods := '_'}) ->
+    handle(Mod, Func, State);
 %% We have a list of methods we allow, so check if they match the one requested before continuing
-invoke_controller(Req = #{method := ReqMethod}, State = #{methods := Methods}) ->
+invoke_controller(State = #{req := #{method := ReqMethod}, methods := Methods}) ->
     case lists:any(fun(X) -> X == ReqMethod end, Methods) of
         true ->
-            invoke_controller(Req, State#{methods := '_'});
+            invoke_controller(State#{methods := '_'});
         false ->
-            Req0 = render_page(405, Req),
-            {ok, Req0, State}
+            render_page(405, State)
     end.
 
 
@@ -74,33 +90,28 @@ invoke_controller(Req = #{method := ReqMethod}, State = #{methods := Methods}) -
 %% It returns the raw handle request instead of the aggregated result returned in init/2.
 %% @end
 %%--------------------------------------------------------------------
--spec handle(Mod :: atom(), Fun :: atom(), Req :: cowboy_req:req(), State :: nova_http_state()) ->
+-spec handle(Mod :: atom(), Fun :: atom(), State :: nova_http_state()) ->
                     {ok, StatusCode :: integer(), Headers :: cowboy:http_headers(), Body :: binary(),
                      State0 :: nova_http_state()}.
-handle(Mod, Fun, Req, State) ->
+handle(Mod, Fun, State = #{req := Req, controller_data := ControllerData}) ->
     ?DEBUG("Handling request for ~p:~p", [Mod, Fun]),
-    Args =
-        case maps:get(auth_data, State, undefined) of
-            undefined ->
-                [Req];
-            SecObject ->
-                [Req, SecObject]
-        end,
-    try erlang:apply(Mod, Fun, Args) of
+    try Mod:Fun(ControllerData#{req => Req}) of
         RetObj ->
             case nova_handlers:get_handler(element(1, RetObj)) of
                 {ok, Callback} ->
-                    Callback(RetObj, {Mod, Fun}, Req, State);
+                    {ok, StatusCode, Headers, Body, State0} = Callback(RetObj, {Mod, Fun}, State),
+                    Req0 = set_resp(Headers, Body, Req),
+                    {ok, State0#{req => Req0, resp_status => StatusCode}};
                 _ ->
                     ?ERROR("Unknown return object ~p returned from module: ~p function: ~p", [RetObj, Mod, Fun]),
-                    {ok, render_page(500, Req, {Mod, Fun, 1, "Unknown return object ~p returned from module: ~s:~s/1",
-                                                [RetObj, Mod, Fun]}), State}
+                    render_page(500, State, {Mod, Fun, 1, "Unknown return object ~p returned from module: ~s:~s/1",
+                                             [RetObj, Mod, Fun]})
             end
     catch
         Type:Reason:Stacktrace ->
             ?ERROR("Controller (~p:~p/1) failed with ~p:~p.~nStacktrace:~n~p",
                    [Mod, Fun, Type, Reason, Stacktrace]),
-            {ok, render_page(500, Req, {Mod, Fun, 1, Type, Reason, Stacktrace}), State}
+            render_page(500, State, {Mod, Fun, 1, Type, Reason, Stacktrace})
     end.
 
 
@@ -112,16 +123,17 @@ handle(Mod, Fun, Req, State) ->
 %% with the rendered body. Otherwise a request with a blank body will be returned.
 %% @end
 %%--------------------------------------------------------------------
--spec render_page(StatusCode :: integer(), Req :: cowboy_req:req()) -> cowboy_req:req().
-render_page(StatusCode, Req) ->
-    {ok, StatusCode, Headers, Body, _} =
-        case nova_router:status_page(StatusCode, Req) of
+-spec render_page(StatusCode :: integer(), State :: nova_http_state()) -> {ok, State0 :: nova_http_state()}.
+render_page(StatusCode, State = #{req := Req}) ->
+    {ok, StatusCode, Headers, Body, State0} =
+        case nova_router:status_page(StatusCode, State) of
             {error, _} ->
-                {ok, StatusCode, #{}, <<>>, Req};
+                {ok, StatusCode, #{}, <<>>, State};
             FoundPage ->
                 FoundPage
         end,
-    cowboy_req:reply(StatusCode, Headers, Body, Req).
+    Req0 = set_resp(Headers, Body, maps:get(req, State0, Req)),
+    {ok, State0#{resp_status => StatusCode, req => Req0}}.
 
 
 %%--------------------------------------------------------------------
@@ -131,45 +143,46 @@ render_page(StatusCode, Req) ->
 %% does always contain a body.
 %% @end
 %%--------------------------------------------------------------------
--spec render_page(StatusCode :: integer(), Req :: cowboy_req:req(),
+-spec render_page(StatusCode :: integer(), State :: nova_http_state(),
                   {Module :: atom(), Function :: atom(), Arity :: integer(), Format :: list(), Args :: list()} |
                   {Module :: atom(), Function :: atom(), Arity :: integer(), Type :: atom(),
                    Reason :: atom(), Stacktrace :: any()}) ->
-                         cowboy_req:req().
-render_page(500, Req, {Module, Function, Arity, Format, Args}) ->
-    {ok, _, Headers, HTML, _} =
+                         {ok, State0 :: nova_http_state()}.
+render_page(500, State = #{req := Req}, {Module, Function, Arity, Format, Args}) ->
+    {ok, StatusCode, Headers, Body, State0} =
         case nova_router:status_page(500, Req) of
             {error, not_found} ->
                 Msg = lists:flatten(io_lib:format(Format, Args)),
                 DevMode = nova:get_env(dev_mode, false),
-                {ok, HTML0} = nova_internal_error_dtl:render([{module, Module},
-                                                              {function, Function},
-                                                              {arity, Arity},
-                                                              {message, Msg},
-                                                              {dev_mode, DevMode}], []),
-                {ok, 500, #{}, HTML0, undefined};
-            Page ->
-                Page
+                {ok, HTML} = nova_internal_error_dtl:render([{module, Module},
+                                                             {function, Function},
+                                                             {arity, Arity},
+                                                             {message, Msg},
+                                                             {dev_mode, DevMode}], []),
+                {ok, 500, #{}, HTML, State};
+            FoundPage ->
+                FoundPage
         end,
-    cowboy_req:reply(500, Headers, HTML, Req);
-render_page(500, Req, {Module, Function, Arity, Type, Reason, Stacktrace}) ->
-    {ok, _, Headers, HTML, _} =
-        case nova_router:status_page(500, Req) of
+    Req0 = set_resp(Headers, Body, maps:get(req, State0, Req)),
+    {ok, State0#{req => Req0, resp_status => StatusCode}};
+render_page(500, State = #{req := Req}, {Module, Function, Arity, Type, Reason, Stacktrace}) ->
+    {ok, StatusCode, Headers, Body, State0} =
+        case nova_router:status_page(500, State) of
             {error, not_found} ->
                 DevMode = nova:get_env(dev_mode, false),
-                {ok, HTML0} = nova_internal_error_dtl:render([{module, Module},
-                                                              {function, Function},
-                                                              {arity, Arity},
-                                                              {type, Type},
-                                                              {reason, Reason},
-                                                              {stacktrace, Stacktrace},
-                                                              {dev_mode, DevMode}], []),
-                {ok, 500, #{}, HTML0, undefined};
+                {ok, HTML} = nova_internal_error_dtl:render([{module, Module},
+                                                             {function, Function},
+                                                             {arity, Arity},
+                                                             {type, Type},
+                                                             {reason, Reason},
+                                                             {stacktrace, Stacktrace},
+                                                             {dev_mode, DevMode}], []),
+                {ok, 500, #{}, HTML, State};
             Page ->
                 Page
         end,
-    cowboy_req:reply(500, Headers, HTML, Req).
-
+    Req0 = set_resp(Headers, Body, maps:get(req, State0, Req)),
+    {ok, State0#{req => Req0, resp_status => StatusCode}}.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -181,46 +194,38 @@ render_page(500, Req, {Module, Function, Arity, Type, Reason, Stacktrace}) ->
 %% normally. If {error, Reason} is returned a 500-status page will be rendered and returned.
 %% @end
 %%--------------------------------------------------------------------
-run_pre_plugins(Req, State) ->
-    {ok, Plugins} = nova_plugin:get_plugins(pre_request, http),
-    run_plugins(Plugins, pre_request, Req, State).
-
-run_post_plugins(Req, State, {StatusCode, Headers, Body}) ->
-    {ok, Plugins} = nova_plugin:get_plugins(post_request, http),
-    case run_plugins(Plugins, post_request, Req, State) of
-        {error, Req0} ->
-            {ok, Req0, State};
-        {ok, Req0, State0} ->
-            Req1 = cowboy_req:reply(StatusCode, Headers, Body, Req0),
-            {ok, Req1, State0}
-    end.
-
--spec run_plugins(Plugins :: list(), CallbackFun :: pre_request |
-                                                    post_request, Req :: cowboy_req:req(), State :: nova_http_state()
-                 ) ->
-                         {ok, Req0 :: cowboy_req:req(), State0 :: nova_http_state()} |
-                         {error, Req0 :: cowboy_req:req()}.
-run_plugins([], _CallbackFun, Req, State) ->
-    {ok, Req, State};
-run_plugins([Plugin|Tl], CallbackFun, Req, State) when CallbackFun == pre_request orelse
-                                                       CallbackFun == post_request ->
-    try Plugin:CallbackFun(Req, State) of
-        {ok, Req0, State0} ->
-            run_plugins(Tl, CallbackFun, Req0, State0);
-        {stop, Req0, State0} ->
-            {ok, Req0, State0};
+-spec run_plugins(Plugins :: list(), CallbackFun :: pre_request | post_request, State :: nova_http_state()) ->
+                         {ok, State0 :: nova_http_state()} |
+                         {stop, State0 :: nova_http_state()}.
+run_plugins([], _Callback, State) ->
+    {ok, State};
+run_plugins([{Plugin, Options}|Tl], Callback, State) ->
+    try Plugin:Callback(State, Options) of
+        {ok, State0} ->
+            run_plugins(Tl, Callback, State0);
+        %% Stop indicates that we want the entire pipe of plugins/controller to be stopped.
+        {stop, State0} ->
+            {stop, State0};
+        %% Break is used to signal that we are stopping further executing of plugins within the same Callback
+        {break, State0} ->
+            {ok, State0};
         {error, Reason} ->
-            ?ERROR("Pre handler returned error with reason ~p", [Reason]),
-            Msg = "Error when running pre-plugins. Plugin ~p:~p/2 exited with reason: ~p",
-            Req0 = render_page(500, Req, {?MODULE, run_plugins, 4, Msg, [Plugin, CallbackFun, Reason]}),
-            {error, Req0}
+            ?ERROR("Plugin returned error with reason ~p", [Reason]),
+            Msg = "Error when running plugins. Plugin ~p:~p/2 exited with reason: ~p",
+            {ok, State0} = render_page(500, State, {?MODULE, run_plugins, 3, Msg, [Plugin, pre_request, Reason]}),
+            {stop, State0}
     catch
         Type:Reason:Stacktrace ->
-            ?ERROR("Pre-handler failed in execution. Type: ~p Reason: ~p~nStacktrace:~n~p", [Type, Reason, Stacktrace]),
-            Msg =  "Error when running pre-plugins. One plugin exited with reason: ~p",
-            Req0 = render_page(500, Req, {?MODULE, run_plugins, 4, Msg, [Reason]}),
-            {error, Req0}
+            ?ERROR("Plugin failed in execution. Type: ~p Reason: ~p~nStacktrace:~n~p", [Type, Reason, Stacktrace]),
+            Msg =  "Error when running plugins. One plugin exited with reason: ~p",
+            {ok, State0} = render_page(500, State, {?MODULE, run_plugins, 3, Msg, [Reason]}),
+            {stop, State0}
     end.
+
+
+set_resp(Headers, Body, Req) ->
+    Req0 = cowboy_req:set_resp_headers(Headers, Req),
+    cowboy_req:set_resp_body(Body, Req0).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Eunit functions         %

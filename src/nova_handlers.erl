@@ -15,10 +15,10 @@
 %%% init() ->
 %%%    nova_handlers:register_handler(console, {my_handler, handle_console}).
 %%%
-%%% handle_console({console, Format, Args}, {Module, Function}, Request, State) ->
+%%% handle_console({console, Format, Args}, {Module, Function}, State) ->
 %%%    io:format("~n=====================~n", []).
 %%%    io:format("~p:~p was called.~n", []),
-%%%    io:format("Request: ~p~nState: ~p~n", [Request, State]),
+%%%    io:format("State: ~p~n", [State]),
 %%%    io:format(Format, Args),
 %%%    io:format("~n=====================~n", []),
 %%%    {ok, 200, #{}, <binary></binary>}.
@@ -202,11 +202,10 @@ init([]) ->
     process_flag(trap_exit, true),
     ets:new(?HANDLERS_TABLE, [named_table, set, protected]),
     ets:new(?PRE_HANDLERS_TABLE, [named_table, bag, protected]),
-    register_handler(json, fun nova_basic_handler:handle_json/4),
-    register_handler(ok, fun nova_basic_handler:handle_ok/4),
-    register_handler(status, fun nova_basic_handler:handle_status/4),
-    register_handler(redirect, fun nova_basic_handler:handle_redirect/4),
-    register_handler(cowboy_req, fun nova_basic_handler:handle_cowboy_req/4),
+    register_handler(json, fun nova_basic_handler:handle_json/3),
+    register_handler(ok, fun nova_basic_handler:handle_ok/3),
+    register_handler(status, fun nova_basic_handler:handle_status/3),
+    register_handler(redirect, fun nova_basic_handler:handle_redirect/3),
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------

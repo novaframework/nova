@@ -129,11 +129,11 @@ start_link(BootstrapApp) ->
 %% custom pages for status pages (Eg 404)
 %% @end
 %%--------------------------------------------------------------------
--spec status_page(Status :: integer(), Req :: cowboy_req:req()) ->
+-spec status_page(Status :: integer(), NovaHttpState :: nova_http_handler:nova_http_state()) ->
                          {ok, StatusCode :: integer(), Headers :: cowboy:http_headers(), Body :: binary(),
                           State0 :: nova_http_handler:nova_http_state()} | {error, not_found}.
-status_page(Status, Req) when is_integer(Status) ->
-    gen_server:call(?SERVER, {fetch_status_page, Status, Req}).
+status_page(Status, NovaHttpState) when is_integer(Status) ->
+    gen_server:call(?SERVER, {fetch_status_page, Status, NovaHttpState}).
 
 
 %%--------------------------------------------------------------------
@@ -305,13 +305,13 @@ handle_call({get_app, App}, _From, State = #state{apps = AppsInfo}) ->
                 {ok, AppInfo}
         end,
     {reply, Reply, State};
-handle_call({fetch_status_page, Status, Req}, _From,
+handle_call({fetch_status_page, Status, NovaHttpState}, _From,
             State = #state{static_route_table = StaticRouteTable}) ->
     case maps:get(Status, StaticRouteTable, undefined) of
         {Mod, Func} ->
-            Reply = nova_http_handler:handle(Mod, Func, Req, #{mod => dummy,
-                                                               func => dummy,
-                                                               methods => '_'}),
+            Reply = nova_http_handler:handle(Mod, Func, NovaHttpState#{mod => dummy,
+                                                                       func => dummy,
+                                                                       methods => '_'}),
             {reply, Reply, State};
         _ ->
             {reply, {error, not_found}, State}
