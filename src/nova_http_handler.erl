@@ -27,11 +27,11 @@
                              func := atom(),
                              methods := [binary()] | '_',
                              %% Intermediate data blow
-                             resp_status => integer(),
-                             req => cowboy_req:req(),
+                             resp_status := integer(),
+                             req := cowboy_req:req(),
                              %% This structure is sent to the controller
-                             controller_data => controller_data(),
-                             _ => _}.
+                             controller_data := controller_data(),
+                             _ := _}.
 -export_type([nova_http_state/0]).
 
 
