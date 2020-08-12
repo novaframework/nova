@@ -40,5 +40,8 @@ execute(Req, Env = #{handler_opts := HandlerOpts = #{secure := {Mod, Func}}}) ->
             ?ERROR("Security module ~p:~p failed with ~p/~p", [Mod, Func, Class, Reason]),
             {stop, cowboy_req:reply(500, Req)}
     end;
+execute(Req, #{handler_opts := HandlerOpts} = Env) ->
+    {ok, Req, Env#{handler_opts => HandlerOpts#{controller_data => #{}}}};
 execute(Req, Env) ->
-    {ok, Req, Env#{controller_data => #{}}}.
+    {ok, Req, Env#{handler_opts => #{controller_data => #{}}}}.
+
