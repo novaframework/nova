@@ -41,4 +41,4 @@ execute(Req, Env = #{handler_opts := HandlerOpts = #{secure := {Mod, Func}}}) ->
             {stop, cowboy_req:reply(500, Req)}
     end;
 execute(Req, Env) ->
-    {ok, Req, Env#{controller_data => #{}}.
+    {ok, Req, Env#{controller_data => #{}}}.
