@@ -236,7 +236,7 @@ process_routefile(AppInfo = #{name := Application}) ->
     Routename = lists:concat(["priv/", Application, ".routes.erl"]),
     process_routefile(AppInfo#{routes_file => Routename});
 process_routefile(undefined) ->
-    logger:warning("bootstrap_application-directive is missing from configuration."),
+    ?ERROR("bootstrap_application-directive is missing from configuration."),
     ok;
 process_routefile(App) ->
     process_routefile(#{name => App}).
