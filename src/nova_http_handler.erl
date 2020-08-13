@@ -218,7 +218,8 @@ run_plugins([{_Prio, #{id := Id, module := Module, options := Options}}|Tl], Cal
             {stop, State0}
     catch
         Type:Reason:Stacktrace ->
-            ?ERROR("Plugin with id: ~p failed in execution. Type: ~p Reason: ~p~nStacktrace:~n~p", [Id, Type, Reason, Stacktrace]),
+            ?ERROR("Plugin with id: ~p failed in execution. Type: ~p Reason: ~p~nStacktrace:~n~p",
+                   [Id, Type, Reason, Stacktrace]),
             Msg =  "Error when running plugins. One plugin exited with reason: ~p",
             {ok, State0} = render_page(500, State, {?MODULE, run_plugins, 3, Msg, [Reason]}),
             {stop, State0}
