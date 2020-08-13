@@ -7,7 +7,8 @@
 
 -export([
          init/2,
-         handle/3
+         handle/3,
+         render_page/2
         ]).
 
 -include_lib("nova/include/nova.hrl").

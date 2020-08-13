@@ -66,7 +66,7 @@
 
 -define(SERVER, ?MODULE).
 
--define(HANDLERS_TABLE, nova_handlers_handlers_table).
+-define(HANDLERS_TABLE, nova_handlers_table).
 -define(PRE_HANDLERS_TABLE, nova_handlers_pre_handlers_table).
 
 -type handler_return() :: {ok, StatusCode :: integer(), Headers :: map(), Body :: binary(),

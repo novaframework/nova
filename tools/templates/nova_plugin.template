@@ -1,6 +1,6 @@
 {description, "Template for nova plugin"}.
 {variables, [
-             {module, "module", "Module name"}
+             {name, "pluginname", "Plugin name"}
             ]}.
 
-{template, "nova/plugin.erl", "src/{{module}}.erl"}.
+{template, "nova/plugin.erl", "src/{{name}}.erl"}.
