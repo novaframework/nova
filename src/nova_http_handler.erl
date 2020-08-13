@@ -47,14 +47,14 @@
 init(Req, State) ->
     State0 = State#{resp_status => 200, req => Req},
 
-    {ok, PrePlugins} = nova_plugin:get_plugins(pre_request, http),
+    {ok, PrePlugins} = nova_plugin:get_plugins(pre_http_request),
     #{req := Req0, resp_status := StatusCode} =
         case run_plugins(PrePlugins, pre_request, State0) of
             {ok, State1} ->
                 %% Call the controller
                 {ok, State2} = invoke_controller(State1),
                 %% Invoke post_request plugins
-                {ok, PostPlugins} = nova_plugin:get_plugins(post_request, http),
+                {ok, PostPlugins} = nova_plugin:get_plugins(post_http_request),
                 {_, State3} = run_plugins(PostPlugins, post_request, State2),
                 State3;
             {stop, State1} ->
@@ -200,8 +200,8 @@ render_page(500, State = #{req := Req}, {Module, Function, Arity, Type, Reason, 
                          {stop, State0 :: nova_http_state()}.
 run_plugins([], _Callback, State) ->
     {ok, State};
-run_plugins([{Plugin, Options}|Tl], Callback, State) ->
-    try Plugin:Callback(State, Options) of
+run_plugins([{_Prio, #{id := Id, module := Module, options := Options}}|Tl], Callback, State) ->
+    try Module:Callback(State, Options) of
         {ok, State0} ->
             run_plugins(Tl, Callback, State0);
         %% Stop indicates that we want the entire pipe of plugins/controller to be stopped.
@@ -211,13 +211,13 @@ run_plugins([{Plugin, Options}|Tl], Callback, State) ->
         {break, State0} ->
             {ok, State0};
         {error, Reason} ->
-            ?ERROR("Plugin returned error with reason ~p", [Reason]),
+            ?ERROR("Plugin (~p:~p/2) with id: ~p returned error with reason ~p", [Module, Callback, Id, Reason]),
             Msg = "Error when running plugins. Plugin ~p:~p/2 exited with reason: ~p",
-            {ok, State0} = render_page(500, State, {?MODULE, run_plugins, 3, Msg, [Plugin, pre_request, Reason]}),
+            {ok, State0} = render_page(500, State, {?MODULE, run_plugins, 3, Msg, [Module, pre_request, Reason]}),
             {stop, State0}
     catch
         Type:Reason:Stacktrace ->
-            ?ERROR("Plugin failed in execution. Type: ~p Reason: ~p~nStacktrace:~n~p", [Type, Reason, Stacktrace]),
+            ?ERROR("Plugin with id: ~p failed in execution. Type: ~p Reason: ~p~nStacktrace:~n~p", [Id, Type, Reason, Stacktrace]),
             Msg =  "Error when running plugins. One plugin exited with reason: ~p",
             {ok, State0} = render_page(500, State, {?MODULE, run_plugins, 3, Msg, [Reason]}),
             {stop, State0}
