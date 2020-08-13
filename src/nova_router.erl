@@ -220,7 +220,9 @@ process_routefile(#{name := Application, routes_file := RouteFile}) ->
                                   RouteInfo = #{application => Application,
                                                 prefix => Prefix,
                                                 host => Host,
-                                                security => Secure},
+                                                security => Secure,
+                                                controller_data => #{}
+                                               },
                                   %% Check for handlers
                                   Handlers = maps:get(handlers, AppMap, []),
                                   [ nova_handlers:register_handler(Handle, Callback) ||
