@@ -20,8 +20,7 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Public functions        %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
--type controller_data() :: #{auth_data => term(),
-                             _ => _}.
+-type controller_data() :: #{_ => _}.
 -export_type([controller_data/0]).
 
 -type nova_http_state() :: #{mod := atom(),
