@@ -204,7 +204,8 @@ handle_call(get_all_plugins, _From, State) ->
     {reply, {ok, State}, State};
 handle_call({unregister_plugin, ID}, _From, State) ->
     ?DEBUG("Removing plugin with ID: ~s", [ID]),
-    State0 = [ maps:filter(fun(_, #{id := X}) -> X /= ID end, maps:get(PluginType, State)) || PluginType <- maps:keys(State) ],
+    State0 = [ maps:filter(fun(_, #{id := X}) -> X /= ID end, maps:get(PluginType, State)) ||
+                 PluginType <- maps:keys(State) ],
     {reply, ok, State0};
 handle_call(_Request, _From, State) ->
     Reply = ok,
@@ -297,4 +298,4 @@ insert_into_queue(Item, Priority, [{CurrentPrio, _}=CurrentItem|Tl]) when Priori
     [CurrentItem|insert_into_queue(Item, Priority, Tl)];
 insert_into_queue(Item, Priority, [{CurrentPrio, _}=CurrentItem|Tl]) when Priority == CurrentPrio orelse
                                                                           Priority < CurrentPrio ->
-    [{Priority, Item},CurrentItem|Tl].
+    [{Priority, Item}, CurrentItem|Tl].
