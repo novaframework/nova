@@ -223,7 +223,7 @@ handle_call(_Request, _From, State) ->
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), NewState :: term()}.
 handle_cast({register_plugin, ReqType, Module, Options, Priority}, State) ->
-    PluginId = uuid:get_v4(),
+    PluginId = uuid:uuid_to_string(uuid:get_v4()),
     ?DEBUG("Register plugin for request-type ~s with ID: ~s and options: ~p",
            [ReqType, PluginId, Options]),
     NewQueue =
