@@ -44,11 +44,12 @@
 %% API
 -export([
          start_link/0,
+         register_plugin/2,
          register_plugin/3,
          register_plugin/4,
          unregister_plugin/1,
          get_all_plugins/0,
-         get_plugins/2
+         get_plugins/1
         ]).
 
 %% gen_server callbacks
@@ -64,12 +65,10 @@
 
 -include_lib("nova/include/nova.hrl").
 
--type request_type() :: pre_request | post_request.
+-type request_type() :: pre_http_request | post_http_request.
 -export_type([request_type/0]).
 
--type protocol() :: http | websocket.
--export_type([protocol/0]).
-
+-define(REQUEST_TYPE(Type), Type == pre_http_request orelse Type == post_http_request).
 
 %% Define the callback functions for plugins
 -callback pre_request(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
@@ -87,11 +86,6 @@
 -define(SERVER, ?MODULE).
 
 -define(NOVA_PLUGIN_TABLE, nova_plugin_table).
-
-
-%% We don't currently use the state, but its good to have :-).
--record(state, {
-               }).
 
 
 %%%===================================================================
@@ -119,14 +113,15 @@ start_link() ->
 %% be stated in the logs.
 %% @end
 %%--------------------------------------------------------------------
--spec register_plugin(RequestType :: request_type(), Protocol :: protocol(), Module :: atom()) -> ok.
-register_plugin(RequestType, Protocol, Module) when RequestType == pre_request orelse
-                                                             RequestType == post_request ->
-    register_plugin(RequestType, Protocol, Module, #{}).
+-spec register_plugin(RequestType :: request_type(), Module :: atom()) -> ok.
+register_plugin(RequestType, Module) ->
+    register_plugin(RequestType, Module, #{}).
 
-register_plugin(RequestType, Protocol, Module, Options) when RequestType == pre_request orelse
-                                                             RequestType == post_request ->
-    gen_server:cast(?SERVER, {register_plugin, RequestType, Protocol, Module, Options}).
+register_plugin(RequestType, Module, Options) ->
+    register_plugin(RequestType, Module, Options, 50).
+
+register_plugin(RequestType, Module, Options, Priority) when ?REQUEST_TYPE(RequestType) ->
+    gen_server:cast(?SERVER, {register_plugin, RequestType, Module, Options, Priority}).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -144,24 +139,23 @@ unregister_plugin(Id) ->
 %% Returns all registered plugins.
 %% @end
 %%--------------------------------------------------------------------
--spec get_all_plugins() -> {ok, [{{PluginId :: binary(), ReqType :: pre_request | post_request,
-                                   Protocol :: http}, Module :: atom()}]}.
+-spec get_all_plugins() -> {ok, map()}.
 get_all_plugins() ->
-    {ok, ets:match(?NOVA_PLUGIN_TABLE, '$1')}.
+    gen_server:call(?SERVER, get_all_plugins).
 
 %%--------------------------------------------------------------------
 %% @doc
-%% Get all plugins that is associated with a specific <icode>RequestType</icode> and
-%% <icode>Protocol</icode>. Will return {ok, <icode>[{PluginModule, Options}]</icode>}.
+%% Get all plugins that is associated with a specific <icode>RequestType</icode>.
+%% Will return {ok, <icode>[{Priority :: integer(), Payload :: #{id => binary(),
+%% module => atom(), options => map()}]</icode>}.
 %% @end
 %%--------------------------------------------------------------------
--spec get_plugins(RequestType :: pre_request | post_request, Protocol :: http) ->
-                         {ok, [{Module :: atom(), Options :: map()}]}.
-get_plugins(RequestType, Protocol) when RequestType == pre_request orelse
-                                       RequestType == post_request ->
-    Plugins = ets:match(?NOVA_PLUGIN_TABLE, {{'_', RequestType, Protocol}, {'$1', '$2'}}),
-
-    {ok, [{Module, Options} || [Module, Options] <- Plugins]}.
+-spec get_plugins(RequestType :: request_type()) ->
+                         {ok, [{Priority :: integer(), Payload :: #{id => integer(),
+                                                                    module => atom(),
+                                                                    options => map()}}]}.
+get_plugins(RequestType) when ?REQUEST_TYPE(RequestType) ->
+    gen_server:call(?SERVER, {get_plugins, RequestType}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -182,10 +176,12 @@ init(_Args) ->
     process_flag(trap_exit, true),
     ets:new(?NOVA_PLUGIN_TABLE, [named_table, bag, protected]),
     Plugins = application:get_env(nova, plugins, []),
-    lists:foreach(fun({ReqType, Protocol, Module}) -> register_plugin(ReqType, Protocol, Module);
-                     ({ReqType, Protocol, Module, Options}) -> register_plugin(ReqType, Protocol, Module, Options)
+    lists:foreach(fun({ReqType, Module}) -> register_plugin(ReqType, Module);
+                     ({ReqType, Module, Options}) -> register_plugin(ReqType, Module, Options);
+                     ({ReqType, Module, Options, Priority}) -> register_plugin(ReqType, Module, Options, Priority)
                   end, Plugins),
-    {ok, #state{}}.
+    {ok, #{pre_plugins => [],
+           post_plugins => []}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -202,10 +198,14 @@ init(_Args) ->
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
                          {stop, Reason :: term(), NewState :: term()}.
+handle_call({get_plugins, RequestType}, _From, State) ->
+    {reply, {ok, maps:get(RequestType, State, [])}, State};
+handle_call(get_all_plugins, _From, State) ->
+    {reply, {ok, State}, State};
 handle_call({unregister_plugin, ID}, _From, State) ->
     ?DEBUG("Removing plugin with ID: ~s", [ID]),
-    true = ets:match_delete(?NOVA_PLUGIN_TABLE, {{ID, '_', '_'}, {'_', '_'}}),
-    {reply, ok, State};
+    State0 = [ maps:filter(fun(_, #{id := X}) -> X /= ID end, maps:get(PluginType, State)) || PluginType <- maps:keys(State) ],
+    {reply, ok, State0};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -221,12 +221,15 @@ handle_call(_Request, _From, State) ->
                          {noreply, NewState :: term(), Timeout :: timeout()} |
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), NewState :: term()}.
-handle_cast({register_plugin, ReqType, Protocol, Module, Options}, State) ->
+handle_cast({register_plugin, ReqType, Module, Options, Priority}, State) ->
     PluginId = uuid:get_v4(),
-    ?DEBUG("Register plugin for protocol ~s request-type ~s with ID: ~s and options: ~p",
-           [Protocol, ReqType, PluginId, Options]),
-    ets:insert(?NOVA_PLUGIN_TABLE, {{PluginId, ReqType, Protocol}, {Module, Options}}),
-    {noreply, State};
+    ?DEBUG("Register plugin for request-type ~s with ID: ~s and options: ~p",
+           [ReqType, PluginId, Options]),
+    NewQueue =
+        insert_into_queue(#{id => PluginId,
+                            module => Module,
+                            options => Options}, Priority, maps:get(ReqType, State, [])),
+    {noreply, maps:put(ReqType, NewQueue, State)};
 handle_cast(_Request, State) ->
     {noreply, State}.
 
@@ -287,3 +290,11 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+insert_into_queue(Item, Priority, []) ->
+    [{Priority, Item}];
+insert_into_queue(Item, Priority, [{CurrentPrio, _}=CurrentItem|Tl]) when Priority > CurrentPrio ->
+    [CurrentItem|insert_into_queue(Item, Priority, Tl)];
+insert_into_queue(Item, Priority, [{CurrentPrio, _}=CurrentItem|Tl]) when Priority == CurrentPrio orelse
+                                                                          Priority < CurrentPrio ->
+    [{Priority, Item},CurrentItem|Tl].
