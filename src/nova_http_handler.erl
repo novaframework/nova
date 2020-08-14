@@ -42,8 +42,27 @@
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec init(Req :: cowboy_req:req(), State :: nova_http_state()) ->
+-spec init(Req :: cowboy_req:req(), State :: nova_http_state() | no_route) ->
                   {ok, Req0 :: cowboy_req:req(), State0 :: nova_http_state()}.
+init(Req, no_route) ->
+    %% This is called on when cowboy matched the catch-all route.
+    State = #{resp_status => 404, req => Req, controller_data => #{}, mod => undefined,
+              func => undefined, methods => '_'},
+    {ok, PrePlugins} = nova_plugin:get_plugins(pre_http_request),
+    {ok, State0} = render_page(404, State),
+
+    #{req := Req0, resp_status := StatusCode} =
+        case run_plugins(PrePlugins, pre_request, State0) of
+            {ok, State1} ->
+                {ok, PostPlugins} = nova_plugin:get_plugins(post_http_request),
+                {_, State2} = run_plugins(PostPlugins, post_request, State1),
+                State2;
+            {stop, State1} ->
+                State1
+        end,
+    Req1 = cowboy_req:reply(StatusCode, Req0),
+    {ok, Req1, no_route}; %% Just continue with no_route as state
+
 init(Req, State) ->
     State0 = State#{resp_status => 200, req => Req},
 

@@ -414,8 +414,10 @@ handle_cast({add_route, #{application := Application, prefix := Prefix,
     NewRouteTable = prop_upsert(Host, CowboyRoute, RouteTable),
     {noreply, State#state{route_table = NewRouteTable, apps = AppsInfo0}};
 handle_cast(apply_routes, State = #state{route_table = RouteTable}) ->
+    %% We need to add an additional 'catch_all' route to handle 404 inside of Nova
+    RouteTable0 = RouteTable ++ [{'_', nova_http_handler, no_route}],
     Dispatch = cowboy_router:compile(RouteTable),
-    ?DEBUG("Applying routes: ~p", [RouteTable]),
+    ?DEBUG("Applying routes: ~p", [RouteTable0]),
     cowboy:set_env(nova_listener, dispatch, Dispatch),
     {noreply, State};
 handle_cast(Request, State) ->
