@@ -375,9 +375,10 @@ handle_cast({add_route, #{application := Application, prefix := Prefix,
     ?DEBUG("Applying status-route for code ~p, MF: ~p", [StatusCode, {Module, Function}]),
     {noreply, State#state{static_route_table = StaticRouteTable0, apps = AppsInfo0}};
 handle_cast({add_route, #{application := Application, prefix := Prefix,
-                          host := Host, security := Security}, RouteDetails},
+                          host := Host, security := Security, controller_data := ControllerData}, RouteDetails},
             State = #state{route_table = RouteTable, apps = AppsInfo}) ->
     InitialState = #{app => Application,
+                     controller_data => ControllerData,
                      secure => Security},
     CowboyRoute =
         case RouteDetails of
