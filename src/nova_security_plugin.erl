@@ -26,7 +26,8 @@ pre_request(State = #{req := Req, secure := {Module, Function}}, _Options) ->
         true ->
             {ok, State};
         false ->
-            {stop, nova_http_handler:render_page(401, State)};
+            {ok, State2} = nova_http_handler:render_page(401, State), 
+            {stop, State2};
         {redirect, Route} ->
             Req0 = cowboy_req:set_resp_headers(#{<<"Location">> => list_to_binary(Route)}, Req),
             {stop, State#{resp_status := 302, req := Req0}}
