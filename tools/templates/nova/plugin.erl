@@ -40,9 +40,11 @@ post_request(State, _Options) ->
 %% nova_plugin callback. Returns information about the plugin.
 %% @end
 %%--------------------------------------------------------------------
--spec plugin_info() -> {Title :: binary(), Version :: binary(), Author :: binary(), Description :: binary()}.
+-spec plugin_info() -> {Title :: binary(), Version :: binary(), Author :: binary(), Description :: binary(),
+                       [{Key :: atom(), OptionDescription :: atom()}]}.
 plugin_info() ->
     {<<"{{module}} plugin">>,
      <<"0.0.1">>,
      <<"User <user@email.com">>,
-     <<"Descriptive text">>}.
+     <<"Descriptive text">>,
+     []}. %% Options is specified as {Key, Description}

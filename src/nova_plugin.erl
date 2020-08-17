@@ -81,7 +81,8 @@
     {break, State0 :: nova_http_handler:nova_http_state()} |
     {stop, State0 :: nova_http_handler:nova_http_state()} |
     {error, Reason :: term()}.
--callback plugin_info() -> {Title :: binary(), Version :: binary(), Author :: binary(), Description :: binary()}.
+-callback plugin_info() -> {Title :: binary(), Version :: binary(), Author :: binary(), Description :: binary(),
+                            Options :: [{Key :: atom(), OptionDescription :: binary()}]}.
 
 -define(SERVER, ?MODULE).
 
