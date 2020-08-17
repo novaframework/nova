@@ -1,4 +1,4 @@
--module(nova_body_plugin).
+-module(nova_request_plugin).
 -behaviour(nova_plugin).
 
 -include_lib("nova/include/nova.hrl").
