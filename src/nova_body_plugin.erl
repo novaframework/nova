@@ -55,4 +55,4 @@ plugin_info() ->
     {<<"Nova body plugin">>,
      <<"0.0.1">>,
      <<"Nova team <info@novaframework.org">>,
-     <<"This plugin fetches the body from a request object and puts it into the nova_http_state-object under `body`">>}.
+     <<"This plugin modulates the body of a request.">>}.
