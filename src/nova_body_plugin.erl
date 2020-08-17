@@ -18,7 +18,13 @@
                          {ok, State0 :: nova_http_handler:nova_http_state()} |
                          {stop, State0 :: nova_http_handler:nova_http_state()} |
                          {error, Reason :: term()}.
-pre_request(State = #{req := Req}, _Options) ->
+pre_request(State = #{req := Req = #{headers := #{<<"content-type">> := <<"application/json">>}}}, #{decode_json := true}) ->
+    %% First read in the body
+    {ok, Data, Req0} = cowboy_req:read_body(Req),
+    %% Decode the data
+    JSON = json:decode(Data, [maps, binary]),
+    {ok, State#{req => Req0, json => JSON}};
+pre_request(State = #{req := Req}, #{read_body := true}) ->
     %% Fetch the body
     {ok, Data, Req0} = cowboy_req:read_body(Req),
     {ok, State#{req => Req0, body => Data}};
