@@ -59,9 +59,10 @@ post_request(State, _Options) ->
 %% nova_plugin callback. Returns information about the plugin.
 %% @end
 %%--------------------------------------------------------------------
--spec plugin_info() -> {Title :: binary(), Version :: binary(), Author :: binary(), Description :: binary()}.
+-spec plugin_info() -> {Title :: binary(), Version :: binary(), Author :: binary(), Description :: binary(), Options :: [{Key :: atom(), OptionDescription :: binary()}]}.
 plugin_info() ->
     {<<"Nova Security Plugin">>,
      <<"0.0.1">>,
      <<"Nova Team <info@novaframework.org">>,
-     <<"Plugin that handles the security around paths.">>}.
+     <<"Plugin that handles the security around paths.">>,
+    []}.
