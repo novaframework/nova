@@ -43,7 +43,11 @@ post_request(State, _Options) ->
 %% nova_plugin callback. Returns information about the plugin.
 %% @end
 %%--------------------------------------------------------------------
--spec plugin_info() -> {Title :: binary(), Version :: binary(), Author :: binary(), Description :: binary(), Options :: [{Key :: atom(), OptionDescription :: binary()}]}.
+-spec plugin_info() -> {Title :: binary(),
+                        Version :: binary(),
+                        Author :: binary(),
+                        Description :: binary(),
+                        Options :: [{Key :: atom(), OptionDescription :: binary()}]}.
 plugin_info() ->
     {<<"Nova body plugin">>,
      <<"0.0.1">>,
@@ -60,7 +64,8 @@ modulate_state(State, []) -> {ok, State};
 modulate_state(State = #{req := Req}, [parse_bindings|Tl]) ->
     Bindings = cowboy_req:bindings(Req),
     modulate_state(State#{bindings => Bindings}, Tl);
-modulate_state(State = #{req :=  Req = #{headers := #{<<"content-type">> := <<"application/json">>}}}, [decode_json_body|Tl]) ->
+modulate_state(State = #{req :=  Req = #{headers := #{<<"content-type">> := <<"application/json">>}}},
+               [decode_json_body|Tl]) ->
     %% First read in the body
     {ok, Data, Req0} = cowboy_req:read_body(Req),
     %% Decode the data
