@@ -70,19 +70,24 @@
 
 -define(REQUEST_TYPE(Type), Type == pre_http_request orelse Type == post_http_request).
 
-%% Define the callback functions for plugins
--callback pre_request(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
+%% Define the callback functions for HTTP-plugins
+-callback pre_http_request(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
     {ok, State0 :: nova_http_handler:nova_http_state()} |
     {break, State0 :: nova_http_handler:nova_http_state()} |
     {stop, State0 :: nova_http_handler:nova_http_state()} |
     {error, Reason :: term()}.
--callback post_request(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
+-optional_callbacks([pre_http_request/2]).
+
+-callback post_http_request(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
     {ok, State0 :: nova_http_handler:nova_http_state()} |
     {break, State0 :: nova_http_handler:nova_http_state()} |
     {stop, State0 :: nova_http_handler:nova_http_state()} |
     {error, Reason :: term()}.
+-optional_callbacks([post_http_request/2]).
+
 -callback plugin_info() -> {Title :: binary(), Version :: binary(), Author :: binary(), Description :: binary(),
                             Options :: [{Key :: atom(), OptionDescription :: binary()}]}.
+
 
 -define(SERVER, ?MODULE).
 
@@ -114,15 +119,26 @@ start_link() ->
 %% be stated in the logs.
 %% @end
 %%--------------------------------------------------------------------
--spec register_plugin(RequestType :: request_type(), Module :: atom()) -> ok.
+-spec register_plugin(RequestType :: request_type(), Module :: atom()) -> ok |
+                                                                          {error, Reason :: atom()}.
 register_plugin(RequestType, Module) ->
     register_plugin(RequestType, Module, #{}).
 
+-spec register_plugin(RequestType :: request_type(), Module :: atom(), Options :: map()) ->
+                             ok | {error, Reason :: atom()}.
 register_plugin(RequestType, Module, Options) ->
     register_plugin(RequestType, Module, Options, 50).
 
+-spec register_plugin(RequestType :: request_type(), Module :: atom(), Options :: map(),
+                      Priority :: integer()) -> ok | {error, Reason :: atom()}.
 register_plugin(RequestType, Module, Options, Priority) when ?REQUEST_TYPE(RequestType) ->
-    gen_server:cast(?SERVER, {register_plugin, RequestType, Module, Options, Priority}).
+    case erlang:function_exported(Module, RequestType, 2) of
+        false ->
+            ?ERROR("Plugin ~p is missing function ~p/2", [Module, RequestType]),
+            {error, function_not_exported};
+        _ ->
+            gen_server:cast(?SERVER, {register_plugin, RequestType, Module, Options, Priority})
+    end.
 
 %%--------------------------------------------------------------------
 %% @doc
