@@ -85,7 +85,10 @@
     {error, Reason :: term()}.
 -optional_callbacks([post_http_request/2]).
 
--callback plugin_info() -> {Title :: binary(), Version :: binary(), Author :: binary(), Description :: binary(),
+-callback plugin_info() -> {Title :: binary(),
+                            Version :: binary(),
+                            Author :: binary(),
+                            Description :: binary(),
                             Options :: [{Key :: atom(), OptionDescription :: binary()}]}.
 
 

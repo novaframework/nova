@@ -22,4 +22,4 @@ post_request(NovaState, _) ->
     {ok, NovaState}.
 
 plugin_info() ->
-    {<<"nova_cors_plugin">>, <<"0.1.0">>, <<"">>, <<"Add CORS headers to request">>}.
+    {<<"nova_cors_plugin">>, <<"0.1.0">>, <<"">>, <<"Add CORS headers to request">>, []}.
