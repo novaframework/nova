@@ -72,9 +72,10 @@ modulate_state(State = #{req :=  Req = #{headers := #{<<"content-type">> := <<"a
     %% Decode the data
     JSON = json:decode(Data, [maps, binary]),
     modulate_state(State#{req => Req0, controller_data => ControllerData#{json => JSON}}, Tl);
-modulate_state(State = #{req := Req}, [read_body|Tl]) ->
+modulate_state(State = #{req := Req,
+                         controller_data := ControllerData}, [read_body|Tl]) ->
     %% Fetch the body
     {ok, Data, Req0} = cowboy_req:read_body(Req),
-    modulate_state(State#{req => Req0, body => Data}, Tl);
+    modulate_state(State#{req => Req0, controller_data => ControllerData#{body => Data}}, Tl);
 modulate_state(State, [_|Tl]) ->
     modulate_state(State, Tl).
