@@ -64,13 +64,14 @@ modulate_state(State, []) -> {ok, State};
 modulate_state(State = #{req := Req}, [parse_bindings|Tl]) ->
     Bindings = cowboy_req:bindings(Req),
     modulate_state(State#{bindings => Bindings}, Tl);
-modulate_state(State = #{req :=  Req = #{headers := #{<<"content-type">> := <<"application/json">>}}},
+modulate_state(State = #{req :=  Req = #{headers := #{<<"content-type">> := <<"application/json">>}},
+                         controller_data := ControllerData},
                [decode_json_body|Tl]) ->
     %% First read in the body
     {ok, Data, Req0} = cowboy_req:read_body(Req),
     %% Decode the data
     JSON = json:decode(Data, [maps, binary]),
-    modulate_state(State#{req => Req0, json => JSON}, Tl);
+    modulate_state(State#{req => Req0, controller_data => ControllerData#{json => JSON}}, Tl);
 modulate_state(State = #{req := Req}, [read_body|Tl]) ->
     %% Fetch the body
     {ok, Data, Req0} = cowboy_req:read_body(Req),
