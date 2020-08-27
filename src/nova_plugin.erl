@@ -135,12 +135,18 @@ register_plugin(RequestType, Module, Options) ->
 -spec register_plugin(RequestType :: request_type(), Module :: atom(), Options :: map(),
                       Priority :: integer()) -> ok | {error, Reason :: atom()}.
 register_plugin(RequestType, Module, Options, Priority) when ?REQUEST_TYPE(RequestType) ->
-    case erlang:function_exported(Module, RequestType, 2) of
-        false ->
-            ?ERROR("Plugin ~p is missing function ~p/2", [Module, RequestType]),
-            {error, function_not_exported};
-        _ ->
-            gen_server:cast(?SERVER, {register_plugin, RequestType, Module, Options, Priority})
+    case code:load_file(Module) of
+        {module, _} ->
+            case erlang:function_exported(Module, RequestType, 2) of
+                false ->
+                    ?ERROR("Plugin ~p is missing function ~p/2", [Module, RequestType]),
+                    {error, function_not_exported};
+                _ ->
+                    gen_server:cast(?SERVER, {register_plugin, RequestType, Module, Options, Priority})
+            end;
+        {error, What} ->
+            ?ERROR("Could not load plugin ~p. Reason: ~p", [Module, What]),
+            {error, What}
     end.
 
 %%--------------------------------------------------------------------
