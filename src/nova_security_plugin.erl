@@ -4,8 +4,8 @@
 -include_lib("nova/include/nova.hrl").
 
 -export([
-         pre_request/2,
-         post_request/2,
+         pre_http_request/2,
+         post_http_request/2,
          plugin_info/0
         ]).
 
@@ -14,11 +14,11 @@
 %% Pre-request callback
 %% @end
 %%--------------------------------------------------------------------
--spec pre_request(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
-                         {ok, State0 :: nova_http_handler:nova_http_state()} |
-                         {stop, State0 :: nova_http_handler:nova_http_state()} |
-                         {error, Reason :: term()}.
-pre_request(State = #{req := Req, secure := {Module, Function}}, _Options) ->
+-spec pre_http_request(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
+                              {ok, State0 :: nova_http_handler:nova_http_state()} |
+                              {stop, State0 :: nova_http_handler:nova_http_state()} |
+                              {error, Reason :: term()}.
+pre_http_request(State = #{req := Req, secure := {Module, Function}}, _Options) ->
     try Module:Function(Req) of
         {true, AuthData} ->
             {ok, State#{controller_data =>
@@ -37,7 +37,7 @@ pre_request(State = #{req := Req, secure := {Module, Function}}, _Options) ->
             ?ERROR(Msg),
             {error, Msg}
     end;
-pre_request(State, _Options) ->
+pre_http_request(State, _Options) ->
     {ok, State}.
 
 
@@ -46,11 +46,11 @@ pre_request(State, _Options) ->
 %% Post-request callback
 %% @end
 %%--------------------------------------------------------------------
--spec post_request(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
-                          {ok, State0 :: nova_http_handler:nova_http_state()} |
-                          {stop, State0 :: nova_http_handler:nova_http_state()} |
-                          {error, Reason :: term()}.
-post_request(State, _Options) ->
+-spec post_http_request(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
+                               {ok, State0 :: nova_http_handler:nova_http_state()} |
+                               {stop, State0 :: nova_http_handler:nova_http_state()} |
+                               {error, Reason :: term()}.
+post_http_request(State, _Options) ->
     {ok, State}.
 
 
