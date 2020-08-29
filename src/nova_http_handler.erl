@@ -52,10 +52,10 @@ init(Req, no_route) ->
     {ok, State0} = render_page(404, State),
 
     #{req := Req0, resp_status := StatusCode} =
-        case run_plugins(PrePlugins, pre_request, State0) of
+        case run_plugins(PrePlugins, pre_http_request, State0) of
             {ok, State1} ->
                 {ok, PostPlugins} = nova_plugin:get_plugins(post_http_request),
-                {_, State2} = run_plugins(PostPlugins, post_request, State1),
+                {_, State2} = run_plugins(PostPlugins, post_http_request, State1),
                 State2;
             {stop, State1} ->
                 State1
@@ -68,13 +68,13 @@ init(Req, State) ->
 
     {ok, PrePlugins} = nova_plugin:get_plugins(pre_http_request),
     #{req := Req0, resp_status := StatusCode} =
-        case run_plugins(PrePlugins, pre_request, State0) of
+        case run_plugins(PrePlugins, pre_http_request, State0) of
             {ok, State1} ->
                 %% Call the controller
                 {ok, State2} = invoke_controller(State1),
-                %% Invoke post_request plugins
+                %% Invoke post_http_request plugins
                 {ok, PostPlugins} = nova_plugin:get_plugins(post_http_request),
-                {_, State3} = run_plugins(PostPlugins, post_request, State2),
+                {_, State3} = run_plugins(PostPlugins, post_http_request, State2),
                 State3;
             {stop, State1} ->
                 State1
@@ -232,7 +232,7 @@ run_plugins([{_Prio, #{id := Id, module := Module, options := Options}}|Tl], Cal
         {error, Reason} ->
             ?ERROR("Plugin (~p:~p/2) with id: ~p returned error with reason ~p", [Module, Callback, Id, Reason]),
             Msg = "Error when running plugins. Plugin ~p:~p/2 exited with reason: ~p",
-            {ok, State0} = render_page(500, State, {?MODULE, run_plugins, 3, Msg, [Module, pre_request, Reason]}),
+            {ok, State0} = render_page(500, State, {?MODULE, run_plugins, 3, Msg, [Module, Callback, Reason]}),
             {stop, State0}
     catch
         Type:Reason:Stacktrace ->
