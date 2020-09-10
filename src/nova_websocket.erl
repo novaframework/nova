@@ -1,12 +1,12 @@
 -module(nova_websocket).
 
--type call_result() :: {ok, State :: any()} |
-                       {ok, State :: any(), hibernate} |
+-type call_result() :: {ok, State :: map()} |
+                       {ok, State :: map(), hibernate} |
                        {reply, OutFrame :: cow_ws:frame() | [OutFrame :: cow_ws:frame()],
-                        State :: any()} |
+                        State :: map()} |
                        {reply, OutFrame :: cow_ws:frame() | [OutFrame :: cow_ws:frame()],
-                        State :: any(), hibernate} |
-                       {stop, State :: any()}.
+                        State :: map(), hibernate} |
+                       {stop, State :: map()}.
 -export_type([call_result/0]).
 
 -type in_frame() :: ping | pong | {text | binary | ping | pong, binary()}.
@@ -17,10 +17,11 @@
                    {error, badencoding | badframe | closed | atom()} |
                    {crash, error | exit | throw, any()}.
 
--callback websocket_init() -> Result :: call_result().
--optional_callbacks([websocket_init/0]).
+-callback init(State :: map()) -> {ok, State0 :: map()} | any().
+-callback websocket_init(State :: map()) -> Result :: call_result().
+-optional_callbacks([websocket_init/1]).
 
--callback websocket_handle(Frame :: in_frame(), State :: any()) -> call_result().
--callback websocket_info(Info :: any(), State :: any()) -> call_result().
--callback terminate(Reason :: reason(), PartialReq :: map(), State :: any()) -> ok.
+-callback websocket_handle(Frame :: in_frame(), State :: map()) -> call_result().
+-callback websocket_info(Info :: any(), State :: map()) -> call_result().
+-callback terminate(Reason :: reason(), PartialReq :: map(), State :: map()) -> ok.
 -optional_callbacks([terminate/3]).

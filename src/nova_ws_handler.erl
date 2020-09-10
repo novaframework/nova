@@ -19,7 +19,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--type nova_ws_state() :: #{controller_data := any(),
+-type nova_ws_state() :: #{controller_data := map(),
                            mod := atom(),
                            subprotocols := [any()],
                            nova_handler := nova_ws_handler,
@@ -30,10 +30,12 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Public functions      %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
-init(Req, State = #{mod := Mod}) ->
-    case Mod:init(Req) of
-        {ok, ControllerData} ->
-            {cowboy_websocket, Req, State#{controller_data => ControllerData}};
+init(Req, State = #{mod := Mod, controller_data := ControllerData}) ->
+    %% Call the http-handler in order to correctly handle potential plugins for the http-request
+    ControllerData0 = ControllerData#{req => Req},
+    case Mod:init(ControllerData0) of
+        {ok, NewControllerData} ->
+            {cowboy_websocket, Req, State#{controller_data => NewControllerData}};
         Error ->
             ?ERROR("Websocket handler ~p returned unkown result ~p", [Mod, Error]),
             Req1 = cowboy_req:reply(500, Req),
@@ -41,7 +43,12 @@ init(Req, State = #{mod := Mod}) ->
     end.
 
 websocket_init(State = #{mod := Mod}) ->
-    handle_ws(Mod, websocket_init, [], State).
+    case erlang:function_exported(Mod, websocket_init, 1) of
+        true ->
+            handle_ws(Mod, websocket_init, [], State);
+        _ ->
+            {ok, State}
+    end.
 
 websocket_handle(Frame, State = #{mod := Mod}) ->
     handle_ws(Mod, websocket_handle, [Frame], State).
@@ -50,8 +57,12 @@ websocket_info(Msg, State = #{mod := Mod}) ->
     handle_ws(Mod, websocket_info, [Msg], State).
 
 terminate(Reason, PartialReq, State = #{mod := Mod}) ->
-    handle_ws(Mod, terminate, [Reason, PartialReq], State),
-    ok.
+    case erlang:function_exported(Mod, terminate, 3) of
+        true ->
+            handle_ws(Mod, terminate, [Reason, PartialReq], State);
+        _ ->
+            ok
+    end.
 
 
 
@@ -113,25 +124,27 @@ run_post_plugin(ControllerResult) ->
     {ok, PostPlugins} = nova_plugin:get_plugins(post_ws_request),
     Hibernate = element(size(ControllerResult), ControllerResult) == hibernate,
 
-    case lists_run_while(fun(X) when element(1, X) == ok orelse
-                                     element(1, X) == reply ->
-                                 {true, X};
-                            (Y) ->
-                                 Y
-                         end,
-                         fun({_, #{module := PluginMod, options := Options}}, Ack) ->
-                                 Options0 = case Hibernate of
-                                                true -> Options#{hibernate => true};
-                                                _ -> Options
-                                            end,
-                                 case size(Ack) of
-                                     3 ->
-                                         PluginMod:post_ws_request(Ack, Options0);
-                                     _ ->
-                                         {ControlCode, State} = Ack,
-                                         PluginMod:post_ws_request({ControlCode, [], State}, Options0)
-                                 end
-                         end, ControllerResult, PostPlugins) of
+    PluginRes =
+        lists_run_while(fun(X) when element(1, X) == ok orelse
+                                    element(1, X) == reply ->
+                                {true, X};
+                           (Y) ->
+                                Y
+                        end,
+                        fun({_, #{module := PluginMod, options := Options}}, Ack) ->
+                                Options0 = case Hibernate of
+                                               true -> Options#{hibernate => true};
+                                               _ -> Options
+                                           end,
+                                case size(Ack) of
+                                    3 ->
+                                        PluginMod:post_ws_request(Ack, Options0);
+                                    _ ->
+                                        {ControlCode, State} = Ack,
+                                        PluginMod:post_ws_request({ControlCode, [], State}, Options0)
+                                end
+                        end, ControllerResult, PostPlugins),
+    case PluginRes of
         %% Returning {ok, ...} is the same as {break, ...}
         {OkOrBreake, Frames, State0, Options} when OkOrBreake == reply orelse
                                                    OkOrBreake == break ->
