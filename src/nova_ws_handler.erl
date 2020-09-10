@@ -65,14 +65,15 @@ handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData}) ->
                          fun({_, #{module := PluginMod, options := Options}}, Ack) ->
                                  PluginMod:pre_ws_request(Ack, Options)
                          end, State, PrePlugins) of
-        {Cont, State0} when Cont == ok orelse
-                            Cont == break ->
+        {break, State0} ->
             invoke_controller(Mod, Func, Args, State0);
         {stop, State0} ->
             {stop, State0};
         {error, Reason} ->
             ?ERROR("Websocket plugin (~p:~p) stopped with error ~p", [Mod, Func, Reason]),
-            {stop, State}
+            {stop, State};
+        State0 ->
+            invoke_controller(Mod, Func, Args, State0)
     end;
 handle_ws(Mod, Func, Args, State) ->
     handle_ws(Mod, Func, Args, State#{controller_data => #{}}).
