@@ -13,8 +13,7 @@ version() -> 1.
 inventory(filters) -> [];
 inventory(tags) -> [url].
 
-url(Variables, _Options) ->
-    Url = proplists:get_value(url, Variables),
+url([Url|Variables], _Options) ->
     App = proplists:get_value(application, Variables),
     case nova_router:get_app(binary_to_atom(App, utf8)) of
         {error, _} ->
