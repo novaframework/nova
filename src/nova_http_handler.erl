@@ -20,9 +20,6 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Public functions        %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
--type controller_data() :: #{_ => _}.
--export_type([controller_data/0]).
-
 -type nova_http_state() :: #{mod := atom(),
                              func := atom(),
                              methods := [binary()] | '_',
@@ -30,7 +27,7 @@
                              resp_status := integer(),
                              req := cowboy_req:req(),
                              %% This structure is sent to the controller
-                             controller_data := controller_data(),
+                             controller_data := map(),
                              _ := _}.
 -export_type([nova_http_state/0]).
 

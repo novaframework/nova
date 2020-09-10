@@ -1,0 +1,6 @@
+{description, "Nova websocket module"}.
+{variables, [
+    {modname, "Module name"}
+]}.
+
+{file, "nova/websocket.erl", "{{name}}/src/views/{{name}}_main.dtl"}.

@@ -1,4 +1,4 @@
--module({{module}}).
+-module({{pluginname}}_plugin).
 -behaviour(nova_plugin).
 
 -include_lib("nova/include/nova.hrl").
@@ -43,7 +43,7 @@ post_request(State, _Options) ->
 -spec plugin_info() -> {Title :: binary(), Version :: binary(), Author :: binary(), Description :: binary(),
                        [{Key :: atom(), OptionDescription :: atom()}]}.
 plugin_info() ->
-    {<<"{{module}} plugin">>,
+    {<<"{{pluginname}} plugin">>,
      <<"0.0.1">>,
      <<"User <user@email.com">>,
      <<"Descriptive text">>,
