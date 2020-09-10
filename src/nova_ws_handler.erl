@@ -19,13 +19,21 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
+-type nova_ws_state() :: #{controller_data := any(),
+                           mod := atom(),
+                           subprotocols := [any()],
+                           nova_handler := nova_ws_handler,
+                           _ := _}.
+
+-export_type([nova_ws_state/0]).
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Public functions        %
+%% Public functions      %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 init(Req, State = #{mod := Mod}) ->
     case Mod:init(Req) of
-        {ok, Substate} ->
-            {cowboy_websocket, Req, State#{substate => Substate}};
+        {ok, ControllerData} ->
+            {cowboy_websocket, Req, State#{controller_data => ControllerData}};
         Error ->
             ?ERROR("Websocket handler ~p returned unkown result ~p", [Mod, Error]),
             Req1 = cowboy_req:reply(500, Req),
@@ -47,29 +55,100 @@ terminate(Reason, PartialReq, State = #{mod := Mod}) ->
 
 
 
-handle_ws(Mod, Func, Args, State = #{substate := Substate}) ->
-    try
-        case erlang:apply(Mod, Func, Args ++ [Substate]) of
-            {reply, Frame, NewSubstate} ->
-                {reply, Frame, State#{substate => NewSubstate}};
-            {reply, Frame, NewSubstate, hibernate} ->
-                {reply, Frame, State#{substate => NewSubstate}, hibernate};
-            {ok, NewSubstate} ->
-                {ok, State#{substate => NewSubstate}};
-            {ok, NewSubstate, hibernate} ->
-                {ok, State#{substate => NewSubstate}, hibernate};
-            {stop, NewSubstate} ->
-                {stop, State#{substate => NewSubstate}};
-            ok ->
-                {ok, State}
-        end
-    catch
-        Type:Reason:Stacktrace ->
-            ?ERROR("Websocket failed with ~p:~p.~nStacktrace:~n~p", [Type, Reason, Stacktrace]),
-            Substate
+handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData}) ->
+    {ok, PrePlugins} = nova_plugin:get_plugins(pre_ws_request),
+    case lists_run_while(fun({ok, State0}) ->
+                                 {true, State0};
+                            (X) ->
+                                 X
+                         end,
+                         fun({_, #{module := PluginMod, options := Options}}, Ack) ->
+                                 PluginMod:pre_ws_request(Ack, Options)
+                         end, State, PrePlugins) of
+        {Cont, State0} when Cont == ok orelse
+                            Cont == break ->
+            invoke_controller(Mod, Func, Args, State0);
+        {stop, State0} ->
+            {stop, State0};
+        {error, Reason} ->
+            ?ERROR("Websocket plugin (~p:~p) stopped with error ~p", [Mod, Func, Reason]),
+            {stop, State}
     end;
 handle_ws(Mod, Func, Args, State) ->
-    handle_ws(Mod, Func, Args, State#{substate => #{}}).
+    handle_ws(Mod, Func, Args, State#{controller_data => #{}}).
+
+invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData}) ->
+    try
+        ControllerResult =
+            case erlang:apply(Mod, Func, Args ++ [ControllerData]) of
+                {reply, Frame, NewControllerData} ->
+                    {reply, Frame, State#{controller_data => NewControllerData}};
+                {reply, Frame, NewControllerData, hibernate} ->
+                    {reply, Frame, State#{controller_data => NewControllerData}, hibernate};
+                {ok, NewControllerData} ->
+                    {ok, State#{controller_data => NewControllerData}};
+                {ok, NewControllerData, hibernate} ->
+                    {ok, State#{controller_data => NewControllerData}, hibernate};
+                {stop, NewControllerData} ->
+                    {stop, State#{controller_data => NewControllerData}};
+                ok ->
+                    {ok, State}
+            end,
+        %% Invoke the post plugins
+        {ok, PostPlugins} = nova_plugin:get_plugins(post_ws_request),
+        case lists_run_while(fun(X) when element(1, X) == ok ->
+                                     {true, X};
+                                (Y) ->
+                                     Y
+                             end,
+                             fun({_, #{module := PluginMod, options := Options}}, Ack) ->
+                                     PluginMod:post_ws_request(Ack, Options)
+                             end, ControllerResult, PostPlugins) of
+            %% Returning {ok, ...} is the same as {break, ...}
+            {OkOrBreake, Frames, State0, Options} when OkOrBreake == reply orelse
+                                                       OkOrBreake == break ->
+                %% There must be a nicer way to achive the following case but I can't figure it out now.
+                %% TODO! Rewrite into something better
+                case maps:get(hibernate, Options, false) of
+                    true ->
+                        {reply, Frames, State0, hibernate};
+                    _ ->
+                        {reply, Frames, State0}
+                end;
+            {OkOrBreake, State0, Options} when OkOrBreake == reply orelse
+                                               OkOrBreake == break ->
+                %% TODO! Rewrite this case aswell.
+                case maps:get(hibernate, Options, false) of
+                    true ->
+                        {ok, State0, hibernate};
+                    _ ->
+                        {ok, State0}
+                end;
+            {stop, State0} ->
+                {stop, State0};
+            {error, Reason} ->
+                %% Just output the error message. Maybe include information about which plugin that
+                %% returned the error?
+                ?ERROR("Post-plugin exited with reason ~p. Closing connection.", [Reason]),
+                {stop, State}
+        end
+    catch
+        Type:Reasons:Stacktrace ->
+            ?ERROR("Websocket failed with ~p:~p.~nStacktrace:~n~p", [Type, Reasons, Stacktrace]),
+            {stop, State}
+    end.
+
+
+
+lists_run_while(_Cond, _Func, Ack, []) -> {ok, Ack};
+lists_run_while(Cond, Func, Ack, [E|Tl]) ->
+    Ack0 = Func(E, Ack),
+    case Cond(Ack0) of
+        {true, Ack1} ->
+            lists_run_while(Cond, Func, Ack1, Tl);
+        Error ->
+            Error
+    end.
 
 
 -ifdef(TEST).

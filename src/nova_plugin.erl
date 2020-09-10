@@ -65,10 +65,13 @@
 
 -include_lib("nova/include/nova.hrl").
 
--type request_type() :: pre_http_request | post_http_request.
+-type request_type() :: pre_http_request | post_http_request | pre_ws_request | post_ws_request.
 -export_type([request_type/0]).
 
--define(REQUEST_TYPE(Type), Type == pre_http_request orelse Type == post_http_request).
+-define(REQUEST_TYPE(Type), Type == pre_http_request orelse
+        Type == post_http_request orelse
+        Type == pre_ws_request orelse
+        Type == post_ws_request).
 
 %% Define the callback functions for HTTP-plugins
 -callback pre_http_request(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
@@ -84,6 +87,24 @@
     {stop, State0 :: nova_http_handler:nova_http_state()} |
     {error, Reason :: term()}.
 -optional_callbacks([post_http_request/2]).
+
+-callback pre_ws_request(State :: nova_ws_handler:nova_ws_state(), Options :: map()) ->
+    {ok, State :: nova_ws_handler:nova_ws_state()} |
+    {break, State :: nova_ws_handler:nova_ws_state()} |
+    {break, OutFrame :: cow_ws:frame() | [cow_ws:frame()], State :: nova_ws_handler:nova_ws_state()} |
+    {stop, State0 :: nova_ws_handler:nova_ws_state()} |
+    {error, Reason :: term()}.
+-optional_callbacks([pre_ws_request/2]).
+
+-callback post_ws_request({ControlCode :: reply | ok | stop, Frame :: cow_ws:frame() | [cow_ws:frame()],
+                           State :: nova_ws_handler:nova_ws_state()}, Options :: map()) ->
+    {reply, Frame :: cow_ws:frame() | [cow_ws:frame()], State :: nova_ws_handler:nova_ws_state(), Options :: map()} |
+    {noreply, State :: nova_ws_handler:nova_ws_state(), Options :: map()} |
+    {break, State :: nova_ws_handler:nova_ws_state(), Options :: map()} |
+    {break, OutFrame :: cow_ws:frame() | [cow_ws:frame()], State :: nova_ws_handler:nova_ws_state(), Options :: map()} |
+    {stop, State0 :: nova_ws_handler:nova_ws_state()} |
+    {error, Reason :: term()}.
+-optional_callbacks([post_ws_request/2]).
 
 -callback plugin_info() -> {Title :: binary(),
                             Version :: binary(),
