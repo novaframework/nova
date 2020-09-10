@@ -102,7 +102,13 @@ invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData})
                                      Y
                              end,
                              fun({_, #{module := PluginMod, options := Options}}, Ack) ->
-                                     PluginMod:post_ws_request(Ack, Options)
+                                     case size(Ack) of
+                                         3 ->
+                                             PluginMod:post_ws_request(Ack, Options);
+                                         _ ->
+                                             {ControlCode, State} = Ack,
+                                             PluginMod:post_ws_request({ControlCode, [], State}, Options)
+                                     end
                              end, ControllerResult, PostPlugins) of
             %% Returning {ok, ...} is the same as {break, ...}
             {OkOrBreake, Frames, State0, Options} when OkOrBreake == reply orelse
