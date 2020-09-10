@@ -1,4 +1,4 @@
-![nova logo](https://raw.githubusercontent.com/novaframework/nova/nova-plugins-state/priv/static/nova.png)
+![nova logo](https://raw.githubusercontent.com/novaframework/nova/master/priv/static/nova.png)
 
 > ### Simple. Fault-tolerant. Distributed.
 > - Create a basic webpage in minutes
