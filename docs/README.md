@@ -12,10 +12,10 @@
   * [Using prefix](03_routing.md#using-prefix)
   * [Secure routing](03_routing.md#secure-routing)
 * [04 - Controllers](04_controllers.md)
-  * HTML
+  * [04a - HTML](04a_views.md)
   * REST
   * Websockets
-* [05 - Views](05_views.md)
+* [05 - Plugins and handlers](05_plugins_and_handlers.md)
 * [06 - Building releases](06_building-releases.md)
   * [Include other nova applications](06_building-releases.md#include-other-nova-applications)
 * [07 - Plugins](07_plugins.md)

@@ -95,13 +95,11 @@ child(Id, Mod) ->
     child(Id, Mod, []).
 
 setup_cowboy(Configuration) ->
-    case [ X || {X, _, _} <- application:which_applications(), X =:= cowboy ] of
-        [] ->
-            %% Start cowboy
-            {ok, _} = start_cowboy(Configuration);
-        _ ->
-            %% Already started. Just run the routes
-            ok
+    case start_cowboy(Configuration) of
+        {ok, _} ->
+            ok;
+        {error, Error} ->
+            ?WARNING("Cowboy could not start reason: ~p", [Error])
     end.
 
 start_cowboy(Configuration) ->
@@ -111,7 +109,7 @@ start_cowboy(Configuration) ->
             cowboy:start_clear(
               nova_listener,
               [{port, maps:get(port, Configuration, 8080)}],
-              #{middlewares => [cowboy_router, nova_security_handler, cowboy_handler],
+              #{middlewares => [cowboy_router, cowboy_handler],
                 stream_handlers => [nova_stream_h, cowboy_compress_h, cowboy_stream_h],
                 compress => true});
         _ ->
@@ -125,5 +123,5 @@ start_cowboy(Configuration) ->
                               {certfile, Cert},
                               {cacertfile, CACert}
                              ],
-              #{middlewares => [cowboy_router, nova_security_handler, cowboy_handler]})
+              #{middlewares => [cowboy_router, cowboy_handler]})
     end.

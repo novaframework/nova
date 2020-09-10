@@ -129,11 +129,11 @@ start_link(BootstrapApp) ->
 %% custom pages for status pages (Eg 404)
 %% @end
 %%--------------------------------------------------------------------
--spec status_page(Status :: integer(), Req :: cowboy_req:req()) ->
+-spec status_page(Status :: integer(), NovaHttpState :: nova_http_handler:nova_http_state()) ->
                          {ok, StatusCode :: integer(), Headers :: cowboy:http_headers(), Body :: binary(),
                           State0 :: nova_http_handler:nova_http_state()} | {error, not_found}.
-status_page(Status, Req) when is_integer(Status) ->
-    gen_server:call(?SERVER, {fetch_status_page, Status, Req}).
+status_page(Status, NovaHttpState) when is_integer(Status) ->
+    gen_server:call(?SERVER, {fetch_status_page, Status, NovaHttpState}).
 
 
 %%--------------------------------------------------------------------
@@ -220,7 +220,9 @@ process_routefile(#{name := Application, routes_file := RouteFile}) ->
                                   RouteInfo = #{application => Application,
                                                 prefix => Prefix,
                                                 host => Host,
-                                                security => Secure},
+                                                security => Secure,
+                                                controller_data => #{}
+                                               },
                                   %% Check for handlers
                                   Handlers = maps:get(handlers, AppMap, []),
                                   [ nova_handlers:register_handler(Handle, Callback) ||
@@ -234,7 +236,7 @@ process_routefile(AppInfo = #{name := Application}) ->
     Routename = lists:concat(["priv/", Application, ".routes.erl"]),
     process_routefile(AppInfo#{routes_file => Routename});
 process_routefile(undefined) ->
-    logger:warning("bootstrap_application-directive is missing from configuration."),
+    ?ERROR("bootstrap_application-directive is missing from configuration."),
     ok;
 process_routefile(App) ->
     process_routefile(#{name => App}).
@@ -305,13 +307,13 @@ handle_call({get_app, App}, _From, State = #state{apps = AppsInfo}) ->
                 {ok, AppInfo}
         end,
     {reply, Reply, State};
-handle_call({fetch_status_page, Status, Req}, _From,
+handle_call({fetch_status_page, Status, NovaHttpState}, _From,
             State = #state{static_route_table = StaticRouteTable}) ->
     case maps:get(Status, StaticRouteTable, undefined) of
         {Mod, Func} ->
-            Reply = nova_http_handler:handle(Mod, Func, Req, #{mod => dummy,
-                                                               func => dummy,
-                                                               methods => '_'}),
+            Reply = nova_http_handler:handle(Mod, Func, NovaHttpState#{mod => dummy,
+                                                                       func => dummy,
+                                                                       methods => '_'}),
             {reply, Reply, State};
         _ ->
             {reply, {error, not_found}, State}
@@ -373,9 +375,10 @@ handle_cast({add_route, #{application := Application, prefix := Prefix,
     ?DEBUG("Applying status-route for code ~p, MF: ~p", [StatusCode, {Module, Function}]),
     {noreply, State#state{static_route_table = StaticRouteTable0, apps = AppsInfo0}};
 handle_cast({add_route, #{application := Application, prefix := Prefix,
-                          host := Host, security := Security}, RouteDetails},
+                          host := Host, security := Security, controller_data := ControllerData}, RouteDetails},
             State = #state{route_table = RouteTable, apps = AppsInfo}) ->
     InitialState = #{app => Application,
+                     controller_data => ControllerData,
                      secure => Security},
     CowboyRoute =
         case RouteDetails of
@@ -411,8 +414,10 @@ handle_cast({add_route, #{application := Application, prefix := Prefix,
     NewRouteTable = prop_upsert(Host, CowboyRoute, RouteTable),
     {noreply, State#state{route_table = NewRouteTable, apps = AppsInfo0}};
 handle_cast(apply_routes, State = #state{route_table = RouteTable}) ->
+    %% We need to add an additional 'catch_all' route to handle 404 inside of Nova
+    RouteTable0 = RouteTable ++ [{'_', nova_http_handler, no_route}],
     Dispatch = cowboy_router:compile(RouteTable),
-    ?DEBUG("Applying routes: ~p", [RouteTable]),
+    ?DEBUG("Applying routes: ~p", [RouteTable0]),
     cowboy:set_env(nova_listener, dispatch, Dispatch),
     {noreply, State};
 handle_cast(Request, State) ->

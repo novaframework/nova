@@ -1,10 +1,9 @@
 -module(nova_basic_handler).
 -export([
-         handle_json/4,
-         handle_ok/4,
-         handle_status/4,
-         handle_redirect/4,
-         handle_cowboy_req/4
+         handle_json/3,
+         handle_ok/3,
+         handle_status/3,
+         handle_redirect/3
         ]).
 
 -include_lib("nova/include/nova.hrl").
@@ -29,9 +28,9 @@
 %% @end
 %%--------------------------------------------------------------------
 -spec handle_json({json, JSON :: map()} | {json, StatusCode :: integer(), Headers :: map(), JSON :: map()},
-                  ModFun :: mod_fun(), Req :: cowboy_req:req(), State :: nova_http_handler:nova_http_state()) ->
+                  ModFun :: mod_fun(), State :: nova_http_handler:nova_http_state()) ->
                          nova_handlers:handler_return() | no_return().
-handle_json({json, StatusCode, Headers, JSON}, _ModFun, Req, State) ->
+handle_json({json, StatusCode, Headers, JSON}, _ModFun, State) ->
     try json:encode(JSON, [binary, maps]) of
         EncodedJSON ->
             Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, Headers),
@@ -39,14 +38,14 @@ handle_json({json, StatusCode, Headers, JSON}, _ModFun, Req, State) ->
     catch
         Type:Reason:Stacktrace ->
             ?ERROR("Error while processing JSON. Type: ~p Reason: ~p Stacktrace: ~p", [Type, Reason, Stacktrace]),
-            handle_status({status, 500}, undefined, Req, State)
+            handle_status({status, 500}, undefined, State)
     end;
-handle_json({json, JSON}, ModFun, Req = #{method := Method}, State) ->
+handle_json({json, JSON}, ModFun, State = #{req := #{method := Method}}) ->
     case Method of
         <<"POST">> ->
-            handle_json({json, 201, #{}, JSON}, ModFun, Req, State);
+            handle_json({json, 201, #{}, JSON}, ModFun, State);
         _ ->
-            handle_json({json, 200, #{}, JSON}, ModFun, Req, State)
+            handle_json({json, 200, #{}, JSON}, ModFun, State)
     end.
 
 
@@ -74,13 +73,13 @@ handle_json({json, JSON}, ModFun, Req = #{method := Method}, State) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec handle_ok({ok, Variables :: erlydtl_vars()} | {ok, Variables :: erlydtl_vars(), Options :: map()},
-                ModFun :: mod_fun(), Req :: cowboy_req:req(), State :: nova_http_handler:nova_http_state()) ->
+                ModFun :: mod_fun(), State :: nova_http_handler:nova_http_state()) ->
                        nova_handlers:handler_return() | no_return().
-handle_ok({ok, Variables}, {Mod, _Func}, _Req, State) ->
+handle_ok({ok, Variables}, {Mod, _Func}, State) ->
     %% Derive the view from module
     ViewNameAtom = get_view_name(Mod),
     handle_view(ViewNameAtom, Variables, #{}, State);
-handle_ok({ok, Variables, Options}, {Mod, _Func}, _Req, State) ->
+handle_ok({ok, Variables, Options}, {Mod, _Func}, State) ->
     View =
         case maps:get(view, Options, undefined) of
             undefined ->
@@ -112,16 +111,16 @@ handle_ok({ok, Variables, Options}, {Mod, _Func}, _Req, State) ->
 -spec handle_status({status, StatusCode :: integer()} |
                     {status, StatusCode :: integer(), ExtraHeaders :: map()} |
                     {status, StatusCode :: integer(), ExtraHeaders :: map(), Body :: binary() | map()},
-                    ModFun :: mod_fun(), Req :: cowboy_req:req(), State :: nova_http_handler:nova_http_state()) ->
+                    ModFun :: mod_fun(), State :: nova_http_handler:nova_http_state()) ->
                            nova_handlers:handler_return().
-handle_status({status, Status, ExtraHeaders, JSON}, _ModFun, _Req, State) when is_map(JSON) ->
+handle_status({status, Status, ExtraHeaders, JSON}, _ModFun, State) when is_map(JSON) ->
     %% We do not need to render a status page since we just return a JSON structure
     Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, ExtraHeaders),
     {ok, Status, Headers0, json:encode(JSON, [binary]), State};
-handle_status({status, Status, ExtraHeaders, Body}, _ModFun, _Req, State) when is_binary(Body) ->
+handle_status({status, Status, ExtraHeaders, Body}, _ModFun, State) when is_binary(Body) ->
     %% Body is a binary - just send it out
     {ok, Status, ExtraHeaders, Body, State};
-handle_status({status, Status, ExtraHeaders}, _ModFun, Req, State) ->
+handle_status({status, Status, ExtraHeaders}, _ModFun, State = #{req := Req}) ->
     case nova_router:status_page(Status, Req) of
         {ok, _StatusCode, StatusHeaders, StatusBody, _} ->
             Headers0 = maps:merge(ExtraHeaders, StatusHeaders),
@@ -129,8 +128,8 @@ handle_status({status, Status, ExtraHeaders}, _ModFun, Req, State) ->
         {error, not_found} ->
             {ok, Status, ExtraHeaders, <<>>, State}
     end;
-handle_status({status, Status}, ModFun, Req, State) ->
-    handle_status({status, Status, #{}}, ModFun, Req, State).
+handle_status({status, Status}, ModFun, State) ->
+    handle_status({status, Status, #{}}, ModFun, State).
 
 
 %%--------------------------------------------------------------------
@@ -140,20 +139,12 @@ handle_status({status, Status}, ModFun, Req, State) ->
 %% 302 with <icode>location</icode> set to <icode>"/login"</icode>
 %% @end
 %%-----------------------------------------------------------------
--spec handle_redirect({redirect, Route :: list()}, ModFun :: mod_fun(), Req :: cowboy_req:req(),
+-spec handle_redirect({redirect, Route :: list()}, ModFun :: mod_fun(),
                       State :: nova_http_handler:nova_http_state()) ->
                              nova_handlers:handler_return().
-handle_redirect({redirect, Route}, _ModFun, _Req, State) ->
+handle_redirect({redirect, Route}, _ModFun, State) ->
     Headers = #{<<"Location">> => list_to_binary(Route)},
     {ok, 302, Headers, <<>>, State}.
-
-handle_cowboy_req({cowboy_req, CowboyReq}, _ModFun, _Req, State) ->
-    {ok, CowboyReq, State}.
-
-
-
-
-
 
 %%%===================================================================
 %%% Internal functions

@@ -1,4 +1,4 @@
--module({{module}}).
+-module({{pluginname}}_plugin).
 -behaviour(nova_plugin).
 
 -include_lib("nova/include/nova.hrl").
@@ -14,12 +14,12 @@
 %% Pre-request callback
 %% @end
 %%--------------------------------------------------------------------
--spec pre_request(Req :: cowboy_req:req(), State :: nova_http_handler:nova_http_state()) ->
-                         {ok, Req0 :: cowboy_req:req(), State0 :: nova_http_handler:nova_http_state()} |
-                         {stop, Req0 :: cowboy_req:req(), State0 :: nova_http_handler:nova_http_state()} |
+-spec pre_request(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
+                         {ok, State0 :: nova_http_handler:nova_http_state()} |
+                         {stop, State0 :: nova_http_handler:nova_http_state()} |
                          {error, Reason :: term()}.
-pre_request(Req, State) ->
-    {ok, Req, State}.
+pre_request(State, _Options) ->
+    {ok, State}.
 
 
 %%--------------------------------------------------------------------
@@ -27,12 +27,12 @@ pre_request(Req, State) ->
 %% Post-request callback
 %% @end
 %%--------------------------------------------------------------------
--spec post_request(Req :: cowboy_req:req(), State :: nova_http_handler:nova_http_state()) ->
-                          {ok, Req0 :: cowboy_req:req(), State0 :: nova_http_handler:nova_http_state()} |
-                          {stop, Req0 :: cowboy_req:req(), State0 :: nova_http_handler:nova_http_state()} |
+-spec post_request(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
+                          {ok, State0 :: nova_http_handler:nova_http_state()} |
+                          {stop, State0 :: nova_http_handler:nova_http_state()} |
                           {error, Reason :: term()}.
-post_request(Req, State) ->
-    {ok, Req, State}.
+post_request(State, _Options) ->
+    {ok, State}.
 
 
 %%--------------------------------------------------------------------
@@ -40,9 +40,11 @@ post_request(Req, State) ->
 %% nova_plugin callback. Returns information about the plugin.
 %% @end
 %%--------------------------------------------------------------------
--spec plugin_info() -> {Title :: binary(), Version :: binary(), Author :: binary(), Description :: binary()}.
+-spec plugin_info() -> {Title :: binary(), Version :: binary(), Author :: binary(), Description :: binary(),
+                       [{Key :: atom(), OptionDescription :: atom()}]}.
 plugin_info() ->
-    {<<"{{module}} plugin">>,
+    {<<"{{pluginname}} plugin">>,
      <<"0.0.1">>,
      <<"User <user@email.com">>,
-     <<"Descriptive text">>}.
+     <<"Descriptive text">>,
+     []}. %% Options is specified as {Key, Description}
