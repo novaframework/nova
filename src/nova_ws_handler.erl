@@ -94,55 +94,72 @@ invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData})
                 ok ->
                     {ok, State}
             end,
-        %% Invoke the post plugins
-        {ok, PostPlugins} = nova_plugin:get_plugins(post_ws_request),
-        case lists_run_while(fun(X) when element(1, X) == ok ->
-                                     {true, X};
-                                (Y) ->
-                                     Y
-                             end,
-                             fun({_, #{module := PluginMod, options := Options}}, Ack) ->
-                                     case size(Ack) of
-                                         3 ->
-                                             PluginMod:post_ws_request(Ack, Options);
-                                         _ ->
-                                             {ControlCode, State} = Ack,
-                                             PluginMod:post_ws_request({ControlCode, [], State}, Options)
-                                     end
-                             end, ControllerResult, PostPlugins) of
-            %% Returning {ok, ...} is the same as {break, ...}
-            {OkOrBreake, Frames, State0, Options} when OkOrBreake == reply orelse
-                                                       OkOrBreake == break ->
-                %% There must be a nicer way to achive the following case but I can't figure it out now.
-                %% TODO! Rewrite into something better
-                case maps:get(hibernate, Options, false) of
-                    true ->
-                        {reply, Frames, State0, hibernate};
-                    _ ->
-                        {reply, Frames, State0}
-                end;
-            {OkOrBreake, State0, Options} when OkOrBreake == reply orelse
-                                               OkOrBreake == break ->
-                %% TODO! Rewrite this case aswell.
-                case maps:get(hibernate, Options, false) of
-                    true ->
-                        {ok, State0, hibernate};
-                    _ ->
-                        {ok, State0}
-                end;
-            {stop, State0} ->
-                {stop, State0};
-            {error, Reason} ->
-                %% Just output the error message. Maybe include information about which plugin that
-                %% returned the error?
-                ?ERROR("Post-plugin exited with reason ~p. Closing connection.", [Reason]),
-                {stop, State}
+        case ControllerResult of
+            {stop, _} = Stop ->
+                Stop;
+            _ ->
+                run_post_plugin(ControllerResult)
         end
     catch
         Type:Reasons:Stacktrace ->
             ?ERROR("Websocket failed with ~p:~p.~nStacktrace:~n~p", [Type, Reasons, Stacktrace]),
             {stop, State}
     end.
+
+run_post_plugin(ControllerResult) ->
+
+    %% Invoke the post plugins
+    {ok, PostPlugins} = nova_plugin:get_plugins(post_ws_request),
+    Hibernate = element(size(ControllerResult), ControllerResult) == hibernate,
+
+    case lists_run_while(fun(X) when element(1, X) == ok orelse
+                                     element(1, X) == reply ->
+                                 {true, X};
+                            (Y) ->
+                                 Y
+                         end,
+                         fun({_, #{module := PluginMod, options := Options}}, Ack) ->
+                                 Options0 = case Hibernate of
+                                                true -> Options#{hibernate => true};
+                                                _ -> Options
+                                            end,
+                                 case size(Ack) of
+                                     3 ->
+                                         PluginMod:post_ws_request(Ack, Options0);
+                                     _ ->
+                                         {ControlCode, State} = Ack,
+                                         PluginMod:post_ws_request({ControlCode, [], State}, Options0)
+                                 end
+                         end, ControllerResult, PostPlugins) of
+        %% Returning {ok, ...} is the same as {break, ...}
+        {OkOrBreake, Frames, State0, Options} when OkOrBreake == reply orelse
+                                                   OkOrBreake == break ->
+            %% There must be a nicer way to achive the following case but I can't figure it out now.
+            %% TODO! Rewrite into something better
+            case maps:get(hibernate, Options, false) of
+                true ->
+                    {reply, Frames, State0, hibernate};
+                _ ->
+                    {reply, Frames, State0}
+            end;
+        {OkOrBreake, State0, Options} when OkOrBreake == ok orelse
+                                           OkOrBreake == break ->
+            %% TODO! Rewrite this case aswell.
+            case maps:get(hibernate, Options, false) of
+                true ->
+                    {ok, State0, hibernate};
+                _ ->
+                    {ok, State0}
+            end;
+        {stop, State0} ->
+            {stop, State0};
+        {error, Reason} ->
+            %% Just output the error message. Maybe include information about which plugin that
+            %% returned the error?
+            ?ERROR("Post-plugin exited with reason ~p. Closing connection.", [Reason]),
+            {stop, no_state}
+    end.
+
 
 
 
