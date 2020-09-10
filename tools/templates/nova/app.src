@@ -11,8 +11,7 @@
     stdlib,
     nova
    ]},
-  {env,[]}
-       ]},
+  {env,[]},
   {modules, []},
   {maintainers, []},
   {licenses, ["Apache 2.0"]},
