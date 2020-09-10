@@ -95,9 +95,7 @@ main() {
 	EOF
 	echo " Installation complete. You can now run:${RESET}"
 	echo "	 rebar3 new nova my_first_nova"
-	echo " ${YELLOW}to create your first Nova-based project OR${RESET}"
-	echo "	 rebar3 new nova_rest my_first_nova_rest"
-	echo " ${YELLOW}to skip webviews and create a REST-only project${RESET}"
+	echo " ${YELLOW}to create your first Nova-based project${RESET}"
     fi
 }
 

@@ -7,16 +7,11 @@
   {included_applications, []},
   {applications,
    [
-    nova,
     kernel,
-    stdlib
+    stdlib,
+    nova
    ]},
-  {env,[
-        %% Add application specific configuration here
-        {nova_applications, [
-                             %% Can be either an atom of the app or #{name => AppName, routes_file => Filepath}
-
-                            ]}
+  {env,[]}
        ]},
   {modules, []},
   {maintainers, []},
