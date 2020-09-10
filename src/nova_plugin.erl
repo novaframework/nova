@@ -98,8 +98,8 @@
 
 -callback post_ws_request({ControlCode :: reply | ok | stop, Frame :: cow_ws:frame() | [cow_ws:frame()],
                            State :: nova_ws_handler:nova_ws_state()}, Options :: map()) ->
-    {reply, Frame :: cow_ws:frame() | [cow_ws:frame()], State :: nova_ws_handler:nova_ws_state(), Options :: map()} |
-    {noreply, State :: nova_ws_handler:nova_ws_state(), Options :: map()} |
+    {ok, State0 :: nova_ws_handler:nova_ws_state(), Options :: map()} |
+    {ok, Frames :: cow_ws:frame() | [cow_ws:frame()], State0 :: nova_ws_handler:nova_ws_state(), Options :: map()} |
     {break, State :: nova_ws_handler:nova_ws_state(), Options :: map()} |
     {break, OutFrame :: cow_ws:frame() | [cow_ws:frame()], State :: nova_ws_handler:nova_ws_state(), Options :: map()} |
     {stop, State0 :: nova_ws_handler:nova_ws_state()} |
