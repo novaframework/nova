@@ -163,7 +163,7 @@ run_post_plugin(ControllerResult) ->
 
 
 
-lists_run_while(_Cond, _Func, Ack, []) -> {ok, Ack};
+lists_run_while(_Cond, _Func, Ack, []) -> Ack;
 lists_run_while(Cond, Func, Ack, [E|Tl]) ->
     Ack0 = Func(E, Ack),
     case Cond(Ack0) of
