@@ -156,8 +156,8 @@ register_plugin(RequestType, Module, Options) ->
 -spec register_plugin(RequestType :: request_type(), Module :: atom(), Options :: map(),
                       Priority :: integer()) -> ok | {error, Reason :: atom()}.
 register_plugin(RequestType, Module, Options, Priority) when ?REQUEST_TYPE(RequestType) ->
-    case code:load_file(Module) of
-        {module, _} ->
+    case load_plugin(Module) of
+        ok ->
             case erlang:function_exported(Module, RequestType, 2) of
                 false ->
                     ?ERROR("Plugin ~p is missing function ~p/2", [Module, RequestType]),
@@ -346,3 +346,14 @@ insert_into_queue(Item, Priority, [{CurrentPrio, _}=CurrentItem|Tl]) when Priori
 insert_into_queue(Item, Priority, [{CurrentPrio, _}=CurrentItem|Tl]) when Priority == CurrentPrio orelse
                                                                           Priority < CurrentPrio ->
     [{Priority, Item}, CurrentItem|Tl].
+
+load_plugin(Module) ->
+    case code:is_loaded(Module) of
+        {file, _} ->
+            ok;
+        _ ->
+            case code:load_file(Module) of
+                {module, _} -> ok;
+                {error, What} -> {error, What}
+            end
+    end.
