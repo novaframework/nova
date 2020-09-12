@@ -351,7 +351,7 @@ load_plugin(Module) ->
     case code:is_loaded(Module) of
         {file, _} ->
             ok;
-        _ ->
+        false ->
             case code:load_file(Module) of
                 {module, _} -> ok;
                 {error, What} -> {error, What}
