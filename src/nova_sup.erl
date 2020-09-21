@@ -104,14 +104,20 @@ setup_cowboy(Configuration) ->
 
 start_cowboy(Configuration) ->
     ?INFO("Nova is starting cowboy..."),
+    Middlewares = maps:get(middlewares, Configuration, [cowboy_router, cowboy_handler]),
+    StreamHandlers = maps:get(stream_handlers, Configuration, [nova_stream_h, cowboy_compress_h, cowboy_stream_h]),
+    Options = maps:get(options, Configuration, #{compress => true}),
+
+    %% Build the options map
+    CowboyOptions = Options#{middlewares => Middlewares,
+                             stream_handlers => StreamHandlers},
+
     case maps:get(use_ssl, Configuration, false) of
         false ->
             cowboy:start_clear(
               nova_listener,
               [{port, maps:get(port, Configuration, 8080)}],
-              #{middlewares => [cowboy_router, cowboy_handler],
-                stream_handlers => [nova_stream_h, cowboy_compress_h, cowboy_stream_h],
-                compress => true});
+              CowboyOptions);
         _ ->
             CACert = maps:get(ca_cert, Configuration),
             Cert = maps:get(cert, Configuration),
@@ -123,5 +129,5 @@ start_cowboy(Configuration) ->
                               {certfile, Cert},
                               {cacertfile, CACert}
                              ],
-              #{middlewares => [cowboy_router, cowboy_handler]})
+              CowboyOptions)
     end.
