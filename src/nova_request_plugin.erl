@@ -60,6 +60,10 @@ plugin_info() ->
      ]}.
 
 
+%%%%%%%%%%%%%%%%%%%%%%
+%% Private functions
+%%%%%%%%%%%%%%%%%%%%%%
+
 modulate_state(State, []) -> {ok, State};
 modulate_state(State = #{req := Req, controller_data := ControllerData}, [parse_bindings|Tl]) ->
     Bindings = cowboy_req:bindings(Req),
