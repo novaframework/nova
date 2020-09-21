@@ -64,18 +64,9 @@ terminate(Reason, PartialReq, State = #{mod := Mod}) ->
             ok
     end.
 
-
-
 handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData}) ->
     {ok, PrePlugins} = nova_plugin:get_plugins(pre_ws_request),
-    case lists_run_while(fun({ok, State0}) ->
-                                 {true, State0};
-                            (X) ->
-                                 X
-                         end,
-                         fun({_, #{module := PluginMod, options := Options}}, Ack) ->
-                                 PluginMod:pre_ws_request(Ack, Options)
-                         end, State, PrePlugins) of
+    case pre_process(State, PrePlugins) of
         {break, State0} ->
             invoke_controller(Mod, Func, Args, State0);
         {stop, State0} ->
@@ -88,6 +79,19 @@ handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData}) ->
     end;
 handle_ws(Mod, Func, Args, State) ->
     handle_ws(Mod, Func, Args, State#{controller_data => #{}}).
+
+pre_process(State, []) ->
+    State;
+pre_process(State, [{_, #{module := PluginMod, options := Options}}|T]) ->
+    case PluginMod:pre_ws_request(State, Options) of
+        {ok, State0} ->
+            pre_process(State0, T);
+        Error ->
+            Error
+    end;
+pre_process(State, [_|T]) ->
+    pre_process(State, T).
+
 
 invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData}) ->
     try
@@ -110,7 +114,8 @@ invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData})
             {stop, _} = Stop ->
                 Stop;
             _ ->
-                run_post_plugin(ControllerResult)
+                {ok, PostPlugins} = nova_plugin:get_plugins(post_ws_request),
+                run_post_plugin(ControllerResult, PostPlugins)
         end
     catch
         Type:Reasons:Stacktrace ->
@@ -118,33 +123,11 @@ invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData})
             {stop, State}
     end.
 
-run_post_plugin(ControllerResult) ->
-
-    %% Invoke the post plugins
-    {ok, PostPlugins} = nova_plugin:get_plugins(post_ws_request),
+run_post_plugin(ControllerResult, []) ->
+    ControllerResult;
+run_post_plugin(ControllerResult, PostPlugins) ->
     Hibernate = element(size(ControllerResult), ControllerResult) == hibernate,
-
-    PluginRes =
-        lists_run_while(fun(X) when element(1, X) == ok orelse
-                                    element(1, X) == reply ->
-                                {true, X};
-                           (Y) ->
-                                Y
-                        end,
-                        fun({_, #{module := PluginMod, options := Options}}, Ack) ->
-                                Options0 = case Hibernate of
-                                               true -> Options#{hibernate => true};
-                                               _ -> Options
-                                           end,
-                                case size(Ack) of
-                                    3 ->
-                                        PluginMod:post_ws_request(Ack, Options0);
-                                    _ ->
-                                        {ControlCode, State} = Ack,
-                                        PluginMod:post_ws_request({ControlCode, [], State}, Options0)
-                                end
-                        end, ControllerResult, PostPlugins),
-    case PluginRes of
+    case post_process(ControllerResult, Hibernate, PostPlugins) of
         %% Returning {ok, ...} is the same as {break, ...}
         {OkOrBreake, Frames, State0, Options} when OkOrBreake == reply orelse
                                                    OkOrBreake == break ->
@@ -174,19 +157,29 @@ run_post_plugin(ControllerResult) ->
             {stop, no_state}
     end.
 
-
-
-
-lists_run_while(_Cond, _Func, Ack, []) -> Ack;
-lists_run_while(Cond, Func, Ack, [E|Tl]) ->
-    Ack0 = Func(E, Ack),
-    case Cond(Ack0) of
-        {true, Ack1} ->
-            lists_run_while(Cond, Func, Ack1, Tl);
+post_process(ControllerResult, _, []) ->
+    ControllerResult;
+post_process(ControllerResult, Hibernate, [{_, #{module := PluginMod, options := Options}} | T]) ->
+    Options0 = case Hibernate of
+                   true ->
+                       Options#{hibernate => true};
+                   _ ->
+                       Options
+               end,
+    Result = case size(ControllerResult) of
+                 3 ->
+                     PluginMod:post_ws_request(ControllerResult, Options0);
+                 _ ->
+                     {ControlCode, State} = ControllerResult,
+                     PluginMod:post_ws_request({ControlCode, [], State}, Options0)
+             end,
+    case Result of
+        X when element(1, X) == ok orelse
+               element(1, X) == reply ->
+            post_process(X, Hibernate, T);
         Error ->
             Error
     end.
-
 
 -ifdef(TEST).
 
