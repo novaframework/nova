@@ -30,7 +30,7 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Public functions      %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
-init(Req, State = #{mod := Mod, controller_data := ControllerData}) ->
+init(Req, State = #{mod := Mod, controller_data := ControllerData, secure := false}) ->
     %% Call the http-handler in order to correctly handle potential plugins for the http-request
     ControllerData0 = ControllerData#{req => Req},
     case Mod:init(ControllerData0) of
@@ -40,8 +40,23 @@ init(Req, State = #{mod := Mod, controller_data := ControllerData}) ->
             ?ERROR("Websocket handler ~p returned unkown result ~p", [Mod, Error]),
             Req1 = cowboy_req:reply(500, Req),
             {ok, Req1, State}
+    end;
+init(Req, State) ->
+    %% We have something that needs securing
+    case nova_security_plugin:pre_http_request(State, #{}) of
+        {ok, State0 = #{req := Req}} ->
+            %% Recurse with secure set to false. This is hacky, but we can live with that now
+            init(Req, State0#{secure => false});
+        {stop, State0 = #{req := Req}} ->
+            %% We have no way to exit other than marking this is a unauthrized attempt and close in
+            %% websocket_init/1 function
+            init(Req, State0#{should_terminate => true,
+                              secure => false})
     end.
 
+
+websocket_init(#{should_terminate := true}) ->
+    {close, 1008, <<"Unauthorized">>};
 websocket_init(State = #{mod := Mod}) ->
     case erlang:function_exported(Mod, websocket_init, 1) of
         true ->
