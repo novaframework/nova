@@ -32,7 +32,7 @@ pre_http_request(State = #{req := Req, secure := {Module, Function}}, _Options) 
             {ok, #{req := Req0} = State2} = nova_http_handler:render_page(401, State),
             Headers0 = cowboy_req:resp_headers(Req0),
             Req1 = cowboy_req:set_resp_headers(maps:merge(Headers0, Headers), Req0),
-            {ok, State2#{req => Req1}};
+            {stop, State2#{req => Req1}};
         {redirect, Route} ->
             Req0 = cowboy_req:set_resp_headers(#{<<"Location">> => list_to_binary(Route)}, Req),
             {stop, State#{resp_status := 302, req := Req0}}
