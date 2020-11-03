@@ -4,10 +4,13 @@
 -include_lib("nova/include/nova.hrl").
 
 -export([
+         pre_ws_upgrade/2,
          pre_http_request/2,
          post_http_request/2,
          plugin_info/0
         ]).
+
+
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -43,6 +46,41 @@ pre_http_request(State = #{req := Req, secure := {Module, Function}}, _Options) 
             {error, Msg}
     end;
 pre_http_request(State, _Options) ->
+    {ok, State}.
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Will be called on if a websocket route is defined as secure in the same
+%% way a http route is. This will check in the upgrade flow if the client
+%% is allowed to continue.
+%% @end
+%%--------------------------------------------------------------------
+-spec pre_ws_upgrade(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
+                            {ok, State0 :: nova_http_handler:nova_http_state()} |
+                            {stop, State0 :: nova_http_handler:nova_http_state()} |
+                            {error, Reason :: term()}.
+pre_ws_upgrade(State = #{req := Req, secure := {Module, Function}}, _Options) ->
+    try Module:Function(Req) of
+        {true, AuthData} ->
+            {ok, State#{controller_data =>
+                            #{auth_data => AuthData}}};
+        true ->
+            {ok, State};
+        false ->
+            Req0 = cowboy_req:reply(401, Req),
+            {stop, State#{req => Req0}};
+        {false, Headers} ->
+            Headers0 = cowboy_req:resp_headers(Req),
+            Req0 = cowboy_req:set_resp_headers(maps:merge(Headers0, Headers), Req),
+            Req1 = cowboy_req:reply(401, Headers, Req0),
+            {stop, State#{req => Req1}}
+    catch
+        Class:Reason ->
+            Msg = io_lib:format("Security module: ~p:~p failed with ~p/~p", [Module, Function, Class, Reason]),
+            ?ERROR(Msg),
+            {error, Msg}
+    end;
+pre_ws_upgrade(State, _Options) ->
     {ok, State}.
 
 
