@@ -53,19 +53,9 @@ rebar3 new nova my_first_nova
 That will generate a Nova project for you.
 
 ```bash
-rebar3 shell
+rebar3 nova serve
 ```
 
 This will fetch all dependencies and compile. After the compilation it will start a shell that says which port it is running on and a few debug lines.
 
 When the shell is started, open a browser and go to localhost:8080 which will point to the `my_first_nova` server running Nova.
-
-#### Using auto reloading (BETA)
-
-If you want to be able to change a src-file and have it automatically compiled and reload you can use the `auto` plugin for rebar3:
-
-```bash
-rebar3 auto
-```
-
-This has only been tested briefly and therefore we mark it as *BETA*.
