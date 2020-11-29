@@ -41,9 +41,8 @@ pre_http_request(State = #{req := Req, secure := {Module, Function}}, _Options) 
             {stop, State#{resp_status := 302, req := Req0}}
     catch
         Class:Reason ->
-            Msg = io_lib:format("Security module: ~p:~p failed with ~p/~p", [Module, Function, Class, Reason]),
-            ?ERROR(Msg),
-            {error, Msg}
+            ?ERROR("pre_http_request: ~p:~p failed with ~p/~p", [Module, Function, Class, Reason]),
+            {error, Reason}
     end;
 pre_http_request(State, _Options) ->
     {ok, State}.
@@ -76,9 +75,8 @@ pre_ws_upgrade(State = #{req := Req, secure := {Module, Function}}, _Options) ->
             {stop, State#{req => Req1}}
     catch
         Class:Reason ->
-            Msg = io_lib:format("Security module: ~p:~p failed with ~p/~p", [Module, Function, Class, Reason]),
-            ?ERROR(Msg),
-            {error, Msg}
+            ?ERROR("pre_ws_upgrade: ~p:~p failed with ~p/~p", [Module, Function, Class, Reason]),
+            {error, Reason}
     end;
 pre_ws_upgrade(State, _Options) ->
     {ok, State}.
