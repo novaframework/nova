@@ -200,22 +200,23 @@ set_main_app(App) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec process_routefile(#{name := atom(), routes_file => list()}) -> ok.
-process_routefile(#{name := Application, routes_file := RouteFile}) ->
+process_routefile(#{name := Application, routes_file := RouteFile} = AppRoute) ->
     case code:lib_dir(Application) of
         {error, bad_name} ->
             ?WARNING("Could not find the application ~p. Check your config and rerun the application", [Application]),
             ok;
         Filepath ->
             ?DEBUG("Processing routefile: ~p", [Filepath]),
+            AppPrefix = maps:get(prefix, AppRoute, ""),
             RouteFilePath = filename:join([Filepath, RouteFile]),
             {ok, AppRoutes} = file:consult(RouteFilePath),
             lists:foreach(fun(AppMap) ->
                                   %% Extract information
-                                  Prefix = maps:get(prefix, AppMap, ""),
+                                  Prefix = filename:join([AppPrefix, maps:get(prefix, AppMap, "")]),
                                   Host = maps:get(host, AppMap, '_'),
                                   Routes = maps:get(routes, AppMap, []),
                                   Statics = maps:get(statics, AppMap, []),
-                                  Secure = maps:get(security, AppMap, false),
+                                  Secure = maps:get(security, AppRoute, maps:get(security, AppMap, false)),
                                   %% Built intermediate object
                                   RouteInfo = #{application => Application,
                                                 prefix => Prefix,
@@ -483,7 +484,7 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 get_all_apps([]) -> [];
 get_all_apps([App|Tl]) ->
-    NovaApps = application:get_env(App, nova_application, []),
+    NovaApps = application:get_env(App, nova_applications, []),
     [App|get_all_apps(Tl ++ NovaApps)].
 
 get_methods(#{methods := M}) when is_list(M) ->
