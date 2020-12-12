@@ -65,11 +65,12 @@
 
 -include_lib("nova/include/nova.hrl").
 
--type request_type() :: pre_http_request | post_http_request | pre_ws_request | post_ws_request.
+-type request_type() :: pre_http_request | post_http_request | pre_ws_upgrade | pre_ws_request | post_ws_request.
 -export_type([request_type/0]).
 
 -define(REQUEST_TYPE(Type), Type == pre_http_request orelse
         Type == post_http_request orelse
+        Type == pre_ws_upgrade orelse
         Type == pre_ws_request orelse
         Type == post_ws_request).
 

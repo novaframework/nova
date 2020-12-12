@@ -30,16 +30,22 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Public functions      %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
-init(Req, State = #{mod := Mod, controller_data := ControllerData}) ->
+init(Req, State) ->
     %% Call the http-handler in order to correctly handle potential plugins for the http-request
-    ControllerData0 = ControllerData#{req => Req},
-    case Mod:init(ControllerData0) of
-        {ok, NewControllerData} ->
-            {cowboy_websocket, Req, State#{controller_data => NewControllerData}};
-        Error ->
-            ?ERROR("Websocket handler ~p returned unkown result ~p", [Mod, Error]),
-            Req1 = cowboy_req:reply(500, Req),
-            {ok, Req1, State}
+    {ok, PrePlugins} = nova_plugin:get_plugins(pre_ws_upgrade),
+    case run_plugins(PrePlugins, pre_ws_upgrade, State) of
+        {ok, State0 = #{controller_data := ControllerData, mod := Mod}} ->
+            ControllerData0 = ControllerData#{req => Req},
+            case Mod:init(ControllerData0) of
+                {ok, NewControllerData} ->
+                    {cowboy_websocket, Req, State0#{controller_data => NewControllerData}};
+                Error ->
+                    ?ERROR("Websocket handler ~p returned unkown result ~p", [Mod, Error]),
+                    Req1 = cowboy_req:reply(500, Req),
+                    {ok, Req1, State0}
+            end;
+        Stop ->
+            Stop
     end.
 
 websocket_init(State = #{mod := Mod}) ->
@@ -66,32 +72,14 @@ terminate(Reason, PartialReq, State = #{mod := Mod}) ->
 
 handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData}) ->
     {ok, PrePlugins} = nova_plugin:get_plugins(pre_ws_request),
-    case pre_process(State, PrePlugins) of
-        {break, State0} ->
+    case run_plugins(PrePlugins, pre_ws_request, State) of
+        {ok, State0} ->
             invoke_controller(Mod, Func, Args, State0);
-        {stop, State0} ->
-            {stop, State0};
-        {error, Reason} ->
-            ?ERROR("Websocket plugin (~p:~p) stopped with error ~p", [Mod, Func, Reason]),
-            {stop, State};
-        State0 ->
-            invoke_controller(Mod, Func, Args, State0)
+        Stop ->
+            Stop
     end;
 handle_ws(Mod, Func, Args, State) ->
     handle_ws(Mod, Func, Args, State#{controller_data => #{}}).
-
-pre_process(State, []) ->
-    State;
-pre_process(State, [{_, #{module := PluginMod, options := Options}}|T]) ->
-    case PluginMod:pre_ws_request(State, Options) of
-        {ok, State0} ->
-            pre_process(State0, T);
-        Error ->
-            Error
-    end;
-pre_process(State, [_|T]) ->
-    pre_process(State, T).
-
 
 invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData}) ->
     try
@@ -113,9 +101,11 @@ invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData})
         case ControllerResult of
             {stop, _} = Stop ->
                 Stop;
-            _ ->
+            {_, State0} ->
                 {ok, PostPlugins} = nova_plugin:get_plugins(post_ws_request),
-                run_post_plugin(ControllerResult, PostPlugins)
+                run_plugins(PostPlugins, post_ws_request, State0);
+            _ ->
+                ok
         end
     catch
         Type:Reasons:Stacktrace ->
@@ -123,63 +113,29 @@ invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData})
             {stop, State}
     end.
 
-run_post_plugin(ControllerResult, []) ->
-    ControllerResult;
-run_post_plugin(ControllerResult, PostPlugins) ->
-    Hibernate = element(size(ControllerResult), ControllerResult) == hibernate,
-    case post_process(ControllerResult, Hibernate, PostPlugins) of
-        %% Returning {ok, ...} is the same as {break, ...}
-        {OkOrBreake, Frames, State0, Options} when OkOrBreake == reply orelse
-                                                   OkOrBreake == break ->
-            %% There must be a nicer way to achive the following case but I can't figure it out now.
-            %% TODO! Rewrite into something better
-            case maps:get(hibernate, Options, false) of
-                true ->
-                    {reply, Frames, State0, hibernate};
-                _ ->
-                    {reply, Frames, State0}
-            end;
-        {OkOrBreake, State0, Options} when OkOrBreake == ok orelse
-                                           OkOrBreake == break ->
-            %% TODO! Rewrite this case aswell.
-            case maps:get(hibernate, Options, false) of
-                true ->
-                    {ok, State0, hibernate};
-                _ ->
-                    {ok, State0}
-            end;
+
+run_plugins([], _Callback, State) ->
+    {ok, State};
+run_plugins([{_Prio, #{id := Id, module := Module, options := Options}}|Tl], Callback, State) ->
+    try Module:Callback(State, Options) of
+        {ok, State0} ->
+            run_plugins(Tl, Callback, State0);
+        %% Stop indicates that we want the entire pipe of plugins/controller to be stopped.
         {stop, State0} ->
             {stop, State0};
+        %% Break is used to signal that we are stopping further executing of plugins within the same Callback
+        {break, State0} ->
+            {ok, State0};
         {error, Reason} ->
-            %% Just output the error message. Maybe include information about which plugin that
-            %% returned the error?
-            ?ERROR("Post-plugin exited with reason ~p. Closing connection.", [Reason]),
-            {stop, no_state}
+            ?ERROR("Plugin (~p:~p/2) with id: ~p returned error with reason ~p", [Module, Callback, Id, Reason]),
+            {stop, State}
+    catch
+        Type:Reason:Stacktrace ->
+            ?ERROR("Plugin with id: ~p failed in execution. Type: ~p Reason: ~p~nStacktrace:~n~p",
+                   [Id, Type, Reason, Stacktrace]),
+            {stop, State}
     end.
 
-post_process(ControllerResult, _, []) ->
-    ControllerResult;
-post_process(ControllerResult, Hibernate, [{_, #{module := PluginMod, options := Options}} | T]) ->
-    Options0 = case Hibernate of
-                   true ->
-                       Options#{hibernate => true};
-                   _ ->
-                       Options
-               end,
-    Result = case size(ControllerResult) of
-                 3 ->
-                     PluginMod:post_ws_request(ControllerResult, Options0);
-                 _ ->
-                     {ControlCode, State} = ControllerResult,
-                     PluginMod:post_ws_request({ControlCode, [], State}, Options0)
-             end,
-    case Result of
-        X when element(1, X) == ok orelse
-               element(1, X) == reply ->
-            post_process(X, Hibernate, T);
-        Error ->
-            Error
-    end.
 
 -ifdef(TEST).
 
