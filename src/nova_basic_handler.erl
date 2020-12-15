@@ -3,7 +3,8 @@
          handle_json/3,
          handle_ok/3,
          handle_status/3,
-         handle_redirect/3
+         handle_redirect/3,
+         handle_sendfile/3
         ]).
 
 -include_lib("nova/include/nova.hrl").
@@ -145,6 +146,21 @@ handle_status({status, Status}, ModFun, State) ->
 handle_redirect({redirect, Route}, _ModFun, State) ->
     Headers = #{<<"Location">> => list_to_binary(Route)},
     {ok, 302, Headers, <<>>, State}.
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Handles sendfile.
+%% @end
+%%-----------------------------------------------------------------
+-spec handle_sendfile({sendfile, StatusCode :: integer(), Headers :: map(), {Offset :: integer(),
+                                                                             Length :: integer(),
+                                                                             Path :: list()}, Mime :: binary()},
+                  ModFun :: mod_fun(), State :: nova_http_handler:nova_http_state()) ->
+                         nova_handlers:handler_return() | no_return().
+handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _ModFun, State) ->
+    Headers0 = maps:merge(#{<<"content-type">> => Mime}, Headers),
+    {ok, StatusCode, Headers0, {sendfile, Offset, Length, Path}, State}.
+
 
 %%%===================================================================
 %%% Internal functions
