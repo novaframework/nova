@@ -56,7 +56,8 @@ plugin_info() ->
      [
       {parse_bindings, <<"Used to parse bindings and put them in state under `bindings` key">>},
       {read_body, <<"Reads the body and put it under the `body`">>},
-      {decode_json_body, <<"Decodes the body as JSON and puts it under `json`">>}
+      {decode_json_body, <<"Decodes the body as JSON and puts it under `json`">>},
+      {parse_qs, <<"Used to parse qs and put hem in state under `qs` key">>}
      ]}.
 
 
@@ -86,5 +87,8 @@ modulate_state(State = #{req := Req,
     %% Fetch the body
     {ok, Data, Req0} = cowboy_req:read_body(Req),
     modulate_state(State#{req => Req0, controller_data => ControllerData#{body => Data}}, Tl);
+modulate_state(State = #{req := Req, controller_data := ControllerData}, [parse_qs|T1]) ->
+    Qs = cowboy_req:parse_qs(Req),
+    modulate_state(State#{controller_data => ControllerData#{qs => Qs}}, T1);
 modulate_state(State, [_|Tl]) ->
     modulate_state(State, Tl).

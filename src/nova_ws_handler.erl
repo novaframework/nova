@@ -105,7 +105,7 @@ invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData})
                 {ok, PostPlugins} = nova_plugin:get_plugins(post_ws_request),
                 run_plugins(PostPlugins, post_ws_request, State0);
             _ ->
-                ok
+                ControllerResult
         end
     catch
         Type:Reasons:Stacktrace ->
