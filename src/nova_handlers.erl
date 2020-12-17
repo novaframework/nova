@@ -69,7 +69,7 @@
 -define(HANDLERS_TABLE, nova_handlers_table).
 -define(PRE_HANDLERS_TABLE, nova_handlers_pre_handlers_table).
 
--type handler_return() :: {ok, StatusCode :: integer(), Headers :: map(), Body :: binary(),
+-type handler_return() :: {ok, StatusCode :: integer(), Headers :: map(), Body :: binary() | tuple(),
                            State :: nova_http_handler:nova_http_state()} |
                           {error, Reason :: any()}.
 
