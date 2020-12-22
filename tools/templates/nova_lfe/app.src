@@ -1,0 +1,19 @@
+%% -*- mode: erlang;erlang-indent-level: 4;indent-tabs-mode: nil -*-
+{application, {{name}},
+ [{description, "{{name}} managed by Nova"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, { {{name}}_app, []}},
+  {included_applications, []},
+  {applications,
+   [
+    kernel,
+    stdlib,
+    nova
+   ]},
+  {env,[]},
+  {modules, []},
+  {maintainers, []},
+  {licenses, ["Apache 2.0"]},
+  {links, []}
+ ]}.
