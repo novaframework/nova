@@ -10,11 +10,11 @@
 {dir, "{{name}}/src/views"}.
 
 {template, "nova_lfe/sys.config", "{{name}}/config/sys.config"}.
-{template, "nova_lfe/routes.erl", "{{name}}/priv/{{name}}.routes.lfe"}.
+{template, "nova_lfe/routes.lfe", "{{name}}/priv/{{name}}.routes.lfe"}.
 {template, "nova_lfe/app.src", "{{name}}/src/{{name}}.app.src"}.
-{template, "nova_lfe/app.erl", "{{name}}/src/app.lfe"}.
-{template, "nova_lfe/sup.erl", "{{name}}/src/sup.lfe"}.
-{template, "nova_lfe/controller.erl", "{{name}}/src/controllers/{{name}}_main_controller.lfe"}.
+{template, "nova_lfe/app.lfe", "{{name}}/src/app.lfe"}.
+{template, "nova_lfe/sup.lfe", "{{name}}/src/sup.lfe"}.
+{template, "nova_lfe/controller.lfe", "{{name}}/src/controllers/{{name}}_main_controller.lfe"}.
 {template, "nova_lfe/rebar.config", "{{name}}/rebar.config"}.
 
 {file, "nova_lfe/controller.dtl", "{{name}}/src/views/{{name}}_main.dtl"}.
