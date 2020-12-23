@@ -8,6 +8,5 @@
   ;;
   ;; GET Handler
   ;;
-  ((`#m(req #m(method #"GET"
-               bindings #m(petid ,pet-id))))
-    #(ok, (list (#(message, "nova is running!"))))
+  ((`#m(req #m(method #"GET")))
+    `#(ok (#(message "nova is running!")))))
