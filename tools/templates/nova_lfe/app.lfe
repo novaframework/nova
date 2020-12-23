@@ -1,4 +1,4 @@
-(defmodule {{name}}.app
+(defmodule {{name}}_app
   (behaviour gen_server)
   (export
     ;; app implementation
