@@ -1,4 +1,4 @@
-(defmodule {{name}}.main.controller
+(defmodule {{name}}_main_controller
   (export
    (index 1)))
 
