@@ -1,5 +1,5 @@
 #m(prefix ""
    security false
    routes (#("/"
-             #({{name}}.controllers.main index)
+             #({{name}}_main_controller index)
              #M(methods (get)))))

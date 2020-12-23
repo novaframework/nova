@@ -13,8 +13,6 @@
 
 (defun start (_type _args)
   (log-info "Starting {{name}} application ...")
-  (ets:new ({{name}}.config:table-name)
-           ({{name}}.config:table-opts))
   ({{name}}.sup:start_link))
 
 (defun stop ()
