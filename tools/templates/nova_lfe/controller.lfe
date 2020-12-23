@@ -10,4 +10,4 @@
   ;;
   ((`#m(req #m(method #"GET"
                bindings #m(petid ,pet-id))))
-    `{ok, [{message, "Nova is running!"}]}}
+    #(ok, (list (#(message, "nova is running!"))))
