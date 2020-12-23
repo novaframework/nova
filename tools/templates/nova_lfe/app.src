@@ -3,7 +3,7 @@
  [{description, "{{name}} managed by Nova"},
   {vsn, "0.1.0"},
   {registered, []},
-  {mod, { {{name}}_app, []}},
+  {mod, { {{name}}.app, []}},
   {included_applications, []},
   {applications,
    [
