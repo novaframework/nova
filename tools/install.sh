@@ -4,7 +4,7 @@
 
 REPO=${REPO:-novaframework/nova}
 REMOTE=${REMOTE:-https://github.com/${REPO}.git}
-BRANCH=${BRANCH:-master}
+BRANCH=${BRANCH:-lfe-templating}
 TEMPLATE_DIR=${TEMPLATE_DIR:-~/.config/rebar3/templates}
 
 command_exists() {
