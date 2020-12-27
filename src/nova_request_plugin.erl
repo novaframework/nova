@@ -57,6 +57,7 @@ plugin_info() ->
       {parse_bindings, <<"Used to parse bindings and put them in state under `bindings` key">>},
       {read_body, <<"Reads the body and put it under the `body`">>},
       {decode_json_body, <<"Decodes the body as JSON and puts it under `json`">>},
+      {deocde_json_body_atom_keys, <<"Decodes the body as JSON with keys as atoms and puts it under `json`">>},
       {parse_qs, <<"Used to parse qs and put hem in state under `qs` key">>}
      ]}.
 
@@ -69,15 +70,20 @@ modulate_state(State, []) -> {ok, State};
 modulate_state(State = #{req := Req, controller_data := ControllerData}, [parse_bindings|Tl]) ->
     Bindings = cowboy_req:bindings(Req),
     modulate_state(State#{controller_data => ControllerData#{bindings => Bindings}}, Tl);
+modulate_state(State, [decode_json_body|Tl]) ->
+    modulate_state(State, [{decode_json, []}|Tl]);
+modulate_state(State, [decode_json_body_atom_keys | Tl]) ->
+    modulate_state(State, [{decode_json, [atom_keys]}| Tl]);
 modulate_state(State = #{req :=  Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}},
                          controller_data := ControllerData},
-               [decode_json_body|Tl]) ->
+               [{decode_json, Opts}|Tl]) ->
     case cowboy_req:has_body(Req) of
         true ->
             %% First read in the body
             {ok, Data, Req0} = cowboy_req:read_body(Req),
             %% Decode the data
-            JSON = json:decode(Data, [maps, binary]),
+
+            JSON = json:decode(Data, [maps] ++ Opts),
             modulate_state(State#{req => Req0, controller_data => ControllerData#{json => JSON}}, Tl);
         false ->
             modulate_state(State#{controller_data => ControllerData#{json => #{}}}, Tl)
