@@ -47,6 +47,8 @@
 
 -behaviour(gen_server).
 
+-callback parse_routefile(Appname :: atom()) -> any().
+
 %% API
 -export([
          start_link/1,
@@ -72,6 +74,10 @@
 
 -include_lib("include/nova.hrl").
 -include("nova.hrl").
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
 
 -type route_info() :: #{application := atom(),
                         prefix := string(),
@@ -364,8 +370,15 @@ parse_route(Other, _Prefix, _InitialState) ->
 
 
 
-get_methods(#{methods := M}) when length(M) == 7 -> '_';
 get_methods(#{methods := M}) when is_list(M) ->
+    case get_methods(M) of
+        L when length(L) == 7 -> '_';
+        Res -> Res
+    end;
+get_methods(#{methods := M}) ->
+    get_methods(#{methods => [M]});
+get_methods(#{}) -> '_';
+get_methods(M) when is_list(M) ->
     lists:map(fun(get)  -> <<"GET">>;
                  (post) -> <<"POST">>;
                  (put) -> <<"PUT">>;
@@ -374,11 +387,7 @@ get_methods(#{methods := M}) when is_list(M) ->
                  (patch) -> <<"PATCH">>;
                  (head) -> <<"HEAD">>;
                  (_) -> throw(unknown_method)
-              end, M);
-get_methods(#{methods := M}) ->
-    get_methods(#{methods => [M]});
-get_methods(_) ->
-    '_'.
+              end, M).
 
 
 add_route_to_app(App, Prefix, Host, Security, Route, AppMap) when is_map(AppMap) ->
@@ -460,12 +469,65 @@ get_routefile_path(Application) when is_atom(Application) ->
     get_routefile_path(#{name => Application}).
 
 
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
 
-statics_tests_() ->
+-ifdef(TEST).
+
+static_routes_test_() ->
+    [ static_routes(X) || X <- ["", "/v1"] ].
+
+static_routes(Prefix) ->
     [
-     ?_assert(parse_route({static, {"/nova.png", <<"static/nova.png">>}}, "", #{app => nova}) /= false)
+     ?_assertEqual(parse_route({static, {"/nova.png", <<"static/nova.png">>}}, Prefix, #{app => nova}), {static, {Prefix++"/nova.png", cowboy_static, {priv_file, nova, <<"static/nova.png">>}}}),
+     ?_assertEqual(parse_route({static, {"/not_found.png", <<"static/404.png">>}}, Prefix, #{app => nova}), false),
+     ?_assertEqual(parse_route({static, {"/secret_dir", <<"static">>}}, Prefix, #{app => nova}), {static,{Prefix++"/secret_dir",cowboy_static, {priv_dir,nova,<<"static">>}}})
     ].
+
+regular_routes_test_() ->
+    [ regular_routes(X) || X <- ["", "/v1"] ].
+
+regular_routes(Prefix) ->
+    [
+     ?_assertEqual(parse_route({"/index", {dummy_mod, dummy_func}}, Prefix, #{}), {route,{Prefix++"/index",nova_http_handler,
+                                                                                          #{func => dummy_func, methods => '_', mod => dummy_mod,
+                                                                                            nova_handler => nova_http_handler}}}),
+     ?_assertEqual(parse_route({"/ws", some_ws_mod, #{protocol => ws}}, Prefix, #{}), {route,{Prefix++"/ws",nova_ws_handler,
+                                                                                          #{mod => some_ws_mod, nova_handler => nova_ws_handler,
+                                                                                            subprotocols => []}}}),
+     ?_assertEqual(parse_route({"/route2", {dummy_mod, dummy_func}, #{}}, Prefix, #{}), {route,{Prefix++"/route2",nova_http_handler,
+                                                                                            #{func => dummy_func, methods => '_', mod => dummy_mod,
+                                                                                              nova_handler => nova_http_handler}}}),
+     ?_assertEqual(parse_route({"/route3", dummy_mod, dummy_func}, Prefix, #{}), false),
+     ?_assertEqual(parse_route(illegal_route, Prefix, #{}), false)
+    ].
+
+status_code_routes_test_() ->
+    [ status_code_routes(X) || X <- ["", "/v1"] ].
+
+status_code_routes(Prefix) ->
+    [
+     ?_assertEqual(parse_route({404, {dummy_mod, dummy_func}}, Prefix, #{}), {status,{404,{dummy_mod,dummy_func}}}),
+     ?_assertEqual(parse_route({500, {dummy_mod, dummy_func}}, Prefix, #{}), {status,{500,{dummy_mod,dummy_func}}})
+    ].
+
+
+get_methods_test_() ->
+    [ ?_assertEqual(get_methods(#{methods => X}), Y) || {X, Y} <- [
+                                                                   {[get,post,put,delete,options,patch,head], '_'},
+                                                                   {[get], [<<"GET">>]},
+                                                                   {[post], [<<"POST">>]},
+                                                                   {[put], [<<"PUT">>]},
+                                                                   {[delete], [<<"DELETE">>]},
+                                                                   {[options], [<<"OPTIONS">>]},
+                                                                   {[patch], [<<"PATCH">>]},
+                                                                   {[head], [<<"HEAD">>]},
+                                                                   {[get,post], [<<"GET">>, <<"POST">>]},
+                                                                   {[get,delete,post], [<<"GET">>, <<"DELETE">>, <<"POST">>]}
+                                                                  ] ].
+get_methods_illegal_test_() ->
+    [ ?_assertThrow(unknown_method, get_methods(#{methods => [wrong, get]})),
+      ?_assertThrow(unknown_method, get_methods(#{methods => [w1, w2, w3, w4, w5, w6, w7]}))
+    ].
+
+
 
 -endif.
