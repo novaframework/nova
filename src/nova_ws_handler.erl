@@ -33,7 +33,7 @@
 init(Req, State) ->
     %% Call the http-handler in order to correctly handle potential plugins for the http-request
     {ok, PrePlugins} = nova_plugin:get_plugins(pre_ws_upgrade),
-    case run_plugins(PrePlugins, pre_ws_upgrade, State) of
+    case run_plugins(PrePlugins, pre_ws_upgrade, State#{req => Req}) of
         {ok, State0 = #{controller_data := ControllerData, mod := Mod}} ->
             ControllerData0 = ControllerData#{req => Req},
             case Mod:init(ControllerData0) of
