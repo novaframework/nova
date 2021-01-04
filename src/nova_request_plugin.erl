@@ -73,7 +73,7 @@ modulate_state(State = #{req := Req, controller_data := ControllerData}, [parse_
 modulate_state(State, [decode_json_body|Tl]) ->
     modulate_state(State, [{decode_json, []}|Tl]);
 modulate_state(State, [decode_json_body_atom_keys | Tl]) ->
-    modulate_state(State, [{decode_json, [atom_keys]}| Tl]);
+    modulate_state(State, [{decode_json, [existing_atom_keys]}| Tl]);
 modulate_state(State = #{req :=  Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}},
                          controller_data := ControllerData},
                [{decode_json, Opts}|Tl]) ->
