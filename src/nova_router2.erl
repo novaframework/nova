@@ -109,7 +109,7 @@
                 worker_pid :: pid(),
                 main_app :: atom(),
                 apps :: app_info() | #{},
-                route_table :: [{binary(), list()}] | [],
+                route_table :: #{binary() => list()},
                 static_route_table :: #{StatusCode :: integer() => {Mod :: atom(), Func :: atom()}}
                }).
 
@@ -181,7 +181,7 @@ add_route(RouteInfo, Route) ->
 init(BootstrapApp) ->
     process_flag(trap_exit, true),
     collect_routes(),
-    {ok, #state{route_table = [],
+    {ok, #state{route_table = #{},
                 apps = #{},
                 static_route_table = #{},
                 main_app = BootstrapApp
@@ -234,18 +234,20 @@ handle_cast({add_route, #{application := Application, prefix := Prefix,
             {noreply, State#state{static_route_table = SRT0, apps = AppsInfo0}};
         {static, CowboyRoute} ->
             AppsInfo0 = add_route_to_app(Application, Prefix, Host, false, RouteDetails, AppsInfo),
-            NewRouteTable = prop_upsert(Host, CowboyRoute, RouteTable),
+            HostRoutes = maps:get(Host, RouteTable, []),
+            NewRouteTable = RouteTable#{Host => [CowboyRoute|HostRoutes]},
             {noreply, State#state{route_table = NewRouteTable, apps = AppsInfo0}};
         {route, CowboyRoute} ->
             AppsInfo0 = add_route_to_app(Application, Prefix, Host, Secure, RouteDetails, AppsInfo),
-            NewRouteTable = prop_upsert(Host, CowboyRoute, RouteTable),
+            HostRoutes = maps:get(Host, RouteTable, []),
+            NewRouteTable = RouteTable#{Host => [CowboyRoute|HostRoutes]},
             {noreply, State#state{route_table = NewRouteTable, apps = AppsInfo0}};
         false ->
             %% Do not change anything - Something was wrong with this route
             {noreply, State}
     end;
 handle_cast(apply_routes, State = #state{route_table = RouteTable}) ->
-    RouteTable0 = RouteTable ++ [{'_', nova_http_handler, no_route}],
+    RouteTable0 = maps:to_list(RouteTable) ++ [{'_', nova_http_handler, no_route}],
     Dispatch = cowboy_router:compile(RouteTable0),
     ?DEBUG("Applying routes: ~p", [Dispatch]),
     cowboy:set_env(?NOVA_LISTENER, dispatch, Dispatch),
@@ -401,15 +403,6 @@ add_route_to_app(App, Prefix, Host, Security, Route, AppMap) when is_map(AppMap)
         Result ->
             AppMap#{App => Result#{routes => [Route|maps:get(routes, Result)]}}
     end.
-
-prop_upsert(Key, NewEntry, Proplist) ->
-    case proplists:lookup(Key, Proplist) of
-        none ->
-            [{Key, [NewEntry]}|Proplist];
-        {Key, OldList} ->
-            [{Key, [NewEntry|OldList]}|proplists:delete(Key, Proplist)]
-    end.
-
 
 
 
