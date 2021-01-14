@@ -16,6 +16,6 @@
 {template, "nova_lfe/sup.lfe", "{{name}}/src/sup.lfe"}.
 {template, "nova_lfe/controller.lfe", "{{name}}/src/controllers/{{name}}_main_controller.lfe"}.
 {template, "nova_lfe/rebar.config", "{{name}}/rebar.config"}.
-{template, "nova_lfe/vm.args", "{{name}}/config/vm.args"}.
+{template, "nova/vm.args", "{{name}}/config/vm.args"}.
 
 {file, "nova/controller.dtl", "{{name}}/src/views/{{name}}_main.dtl"}.
