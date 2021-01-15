@@ -10,16 +10,12 @@
 
 ## Getting started
 
-Start by adding the `rebar3` template for Nova. This can be done by running the installation script;
+Start by adding the `rebar3_nova` plugin for Nova. This can be done by adding the plugin config to `~/.config/rebar3/rebar.config`
 
-*Via curl*
-```bash
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/novaframework/nova/master/tools/install.sh)"
-```
-
-*Via wget*
-```bash
-sh -c "$(wget -O- https://raw.githubusercontent.com/novaframework/nova/master/tools/install.sh)"
+```erlang
+{plugins, [
+           {rebar3_nova, {git, "https://github.com/novaframework/rebar3_nova.git"}}
+          ]}.
 ```
 
 After this is done use `rebar3` to generate a new project with Nova.
