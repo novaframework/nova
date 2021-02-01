@@ -20,15 +20,18 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Public functions        %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 -type nova_http_state() :: #{mod := atom(),
                              func := atom(),
-                             methods := [binary()] | '_',
-                             %% Intermediate data blow
+                             options := map(),
+                             secure := false | {atom(), atom()},
+                             app := atom(),
                              resp_status := integer(),
                              req := cowboy_req:req(),
                              %% This structure is sent to the controller
                              controller_data := map(),
                              _ := _}.
+
 -export_type([nova_http_state/0]).
 
 
@@ -43,8 +46,9 @@
                   {ok, Req0 :: cowboy_req:req(), State0 :: nova_http_state()}.
 init(Req, no_route) ->
     %% This is called on when cowboy matched the catch-all route.
-    State = #{resp_status => 404, req => Req, controller_data => #{}, mod => undefined,
-              func => undefined, methods => '_'},
+    State = #{resp_status => 404,
+              req => Req, controller_data => #{}
+             },
     {ok, PrePlugins} = nova_plugin:get_plugins(pre_http_request),
     {ok, State0} = render_page(404, State),
 
@@ -60,26 +64,33 @@ init(Req, no_route) ->
     Req1 = cowboy_req:reply(StatusCode, Req0),
     {ok, Req1, no_route}; %% Just continue with no_route as state
 
-init(Req, State) ->
-    State0 = State#{resp_status => 200, req => Req},
-
-    {ok, PrePlugins} = nova_plugin:get_plugins(pre_http_request),
-    #{req := Req0, resp_status := StatusCode} =
-        case run_plugins(PrePlugins, pre_http_request, State0) of
-            {ok, State1} ->
-                %% Call the controller
-                {ok, State2} = invoke_controller(State1),
-                %% Invoke post_http_request plugins
-                {ok, PostPlugins} = nova_plugin:get_plugins(post_http_request),
-                {_, State3} = run_plugins(PostPlugins, post_http_request, State2),
-                State3;
-            {stop, State1} ->
-                State1
-        end,
-    %% Here we send out the response to the client
-    Req1 = cowboy_req:reply(StatusCode, Req0),
-    %% We return the initial state since we don't want to have the intermediate things stored in cowboy
-    {ok, Req1, State}.
+init(Req = #{method := Method}, State = #{entries := Routes}) ->
+    case maps:get(Method, Routes, undefined) of
+        undefined ->
+            Req1 = cowboy_req:reply(405, Req),
+            {ok, Req1, State#{resp_status => 405, req => Req1}};
+        RouteDetails ->
+            NormalizedState = maps:remove(entries, State),
+            NormalizedState0 = maps:merge(NormalizedState, RouteDetails),
+            State0 = NormalizedState0#{resp_status => 200, req => Req},
+            {ok, PrePlugins} = nova_plugin:get_plugins(pre_http_request),
+            #{req := Req0, resp_status := StatusCode} =
+                case run_plugins(PrePlugins, pre_http_request, State0) of
+                    {ok, State1} ->
+                        %% Call the controller
+                        {ok, State2} = invoke_controller(State1),
+                        %% Invoke post_http_request plugins
+                        {ok, PostPlugins} = nova_plugin:get_plugins(post_http_request),
+                        {_, State3} = run_plugins(PostPlugins, post_http_request, State2),
+                        State3;
+                    {stop, State1} ->
+                        State1
+                end,
+            %% Here we send out the response to the client
+            Req1 = cowboy_req:reply(StatusCode, Req0),
+            %% We return the initial state since we don't want to have the intermediate things stored in cowboy
+            {ok, Req1, State}
+    end.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -90,16 +101,8 @@ init(Req, State) ->
 %%--------------------------------------------------------------------
 %% Methods for this path is defined as a 'catch_all' so just continue executing
 -spec invoke_controller(State :: nova_http_state()) -> {ok, State0 :: nova_http_state()}.
-invoke_controller(State = #{mod := Mod, func := Func, methods := '_'}) ->
-    handle(Mod, Func, State);
-%% We have a list of methods we allow, so check if they match the one requested before continuing
-invoke_controller(State = #{req := #{method := ReqMethod}, methods := Methods}) ->
-    case lists:any(fun(X) -> X == ReqMethod end, Methods) of
-        true ->
-            invoke_controller(State#{methods := '_'});
-        false ->
-            render_page(405, State)
-    end.
+invoke_controller(State = #{mod := Mod, func := Func}) ->
+    handle(Mod, Func, State).
 
 
 %%--------------------------------------------------------------------

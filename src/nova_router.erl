@@ -40,23 +40,26 @@
 %%% @end
 %%% @todo Extend the introduction to how routing works.
 %%% @end
-%%% Created : 17 Nov 2019 by Niclas Axelsson <niclas@burbas.se>
+%%% Created : 17 Nov 2019 by Niclas Axelsson <niclas@burbasconsulting.com>
+%%% Updated : 28 Dec 2020 by Niclas Axelsson <niclas@burbasconsulting.com>
 %%%-------------------------------------------------------------------
 -module(nova_router).
 
 -behaviour(gen_server).
 
+-callback parse_routefile(Appname :: atom()) -> any().
+
 %% API
 -export([
          start_link/1,
-         process_routefile/1,
-         status_page/2,
          add_route/2,
-         get_all_routes/0,
-         get_main_app/0,
-         set_main_app/1,
          apply_routes/0,
-         get_app/1
+         status_page/2
+        ]).
+
+%% Utility functions
+-export([
+         parse_routefile/1
         ]).
 
 %% gen_server callbacks
@@ -70,10 +73,12 @@
          format_status/2
         ]).
 
--include_lib("nova/include/nova.hrl").
+-include("include/nova.hrl").
+-include("nova.hrl").
 
--define(SERVER, ?MODULE).
--define(STATIC_ROUTE_TABLE, static_route_table).
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
 
 -type route_info() :: #{application := atom(),
                         prefix := string(),
@@ -90,6 +95,7 @@
                  {Route :: string(), Filename :: string()}.
 -export_type([route/0]).
 
+
 -type app_info() :: #{name := atom(),
                       prefix := string(),
                       host := atom() | string(),
@@ -98,10 +104,14 @@
 -export_type([app_info/0]).
 
 
+
+-define(SERVER, ?MODULE).
+
 -record(state, {
+                worker_pid :: pid(),
                 main_app :: atom(),
                 apps :: app_info() | #{},
-                route_table :: [{binary(), list()}] | [],
+                route_table :: #{binary() => list()},
                 static_route_table :: #{StatusCode :: integer() => {Mod :: atom(), Func :: atom()}}
                }).
 
@@ -112,7 +122,6 @@
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
-%% @hidden
 %% @end
 %%--------------------------------------------------------------------
 -spec start_link(BootstrapApp :: atom()) -> {ok, Pid :: pid()} |
@@ -122,19 +131,31 @@
 start_link(BootstrapApp) ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, BootstrapApp, []).
 
+
+
+status_page(StatusCode, NovaHttpState) when is_integer(StatusCode) ->
+    gen_server:call(?SERVER, {status_page, StatusCode, NovaHttpState}).
+
+
 %%--------------------------------------------------------------------
 %% @doc
-%% Checks if there is a route for a special "status page" in the route
-%% table. This is done outside of cowboy since they does not support having
-%% custom pages for status pages (Eg 404)
+%% Applying all routes read by nova_router
 %% @end
 %%--------------------------------------------------------------------
--spec status_page(Status :: integer(), NovaHttpState :: nova_http_handler:nova_http_state()) ->
-                         {ok, StatusCode :: integer(), Headers :: cowboy:http_headers(), Body :: binary(),
-                          State0 :: nova_http_handler:nova_http_state()} | {error, not_found}.
-status_page(Status, NovaHttpState) when is_integer(Status) ->
-    gen_server:call(?SERVER, {fetch_status_page, Status, NovaHttpState}).
+-spec apply_routes() -> ok.
+apply_routes() ->
+    gen_server:cast(?SERVER, apply_routes).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Collects all the routes for the application and it's included apps.
+%% Starts by using the application marked as 'bootstrap_application'
+%% from the config.
+%% @end
+%%--------------------------------------------------------------------
+-spec collect_routes() -> ok.
+collect_routes() ->
+    gen_server:cast(?SERVER, collect_routes).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -148,109 +169,6 @@ add_route(RouteInfo, Route) ->
     gen_server:cast(?SERVER, {add_route, RouteInfo, Route}).
 
 
-%%--------------------------------------------------------------------
-%% @doc
-%% Returns all the routes for this node. The RouteTable contains all
-%% routes injected into cowboy while the StaticRouteTable contains
-%% route information about status pages (eg 404).
-%% @end
-%%--------------------------------------------------------------------
--spec get_all_routes() -> {ok, {RouteTable :: list(), StaticRouteTable :: map()}}.
-get_all_routes() ->
-    gen_server:call(?SERVER, get_all_routes).
-
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Returns all the information about a certain app and all of it's
-%% routes.
-%% @end
-%%--------------------------------------------------------------------
--spec get_app(App :: atom()) -> {ok, app_info()} | {error, Reason :: atom()}.
-get_app(App) ->
-    gen_server:call(?SERVER, {get_app, App}).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Returns the name of the application that intiated the start.
-%% @end
-%%--------------------------------------------------------------------
--spec get_main_app() -> atom().
-get_main_app() ->
-    gen_server:call(?SERVER, get_main_app).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Sets the main app. This is the app that will be used when returning
-%% configuration and that have the highest priority when it comes to
-%% routing.
-%% @end
-%%--------------------------------------------------------------------
--spec set_main_app(App :: atom()) -> ok.
-set_main_app(App) ->
-    gen_server:call(?SERVER, {set_main_app, App}).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Process the routefile for the specified application and injects the
-%% resulting route-table into cowboy.
-%% @end
-%% @todo
-%% We need this to work in a recursive manner.
-%% @end
-%%--------------------------------------------------------------------
--spec process_routefile(#{name := atom(), routes_file => list()}) -> ok.
-process_routefile(#{name := Application, routes_file := RouteFile} = AppRoute) ->
-    case code:lib_dir(Application) of
-        {error, bad_name} ->
-            ?WARNING("Could not find the application ~p. Check your config and rerun the application", [Application]),
-            ok;
-        Filepath ->
-            ?DEBUG("Processing routefile: ~p", [Filepath]),
-            AppPrefix = maps:get(prefix, AppRoute, ""),
-            RouteFilePath = filename:join([Filepath, RouteFile]),
-            {ok, AppRoutes} = file:consult(RouteFilePath),
-            lists:foreach(fun(AppMap) ->
-                                  %% Extract information
-                                  Prefix = filename:join([AppPrefix, maps:get(prefix, AppMap, "")]),
-                                  Host = maps:get(host, AppMap, '_'),
-                                  Routes = maps:get(routes, AppMap, []),
-                                  Statics = maps:get(statics, AppMap, []),
-                                  Secure = maps:get(security, AppRoute, maps:get(security, AppMap, false)),
-                                  %% Built intermediate object
-                                  RouteInfo = #{application => Application,
-                                                prefix => Prefix,
-                                                host => Host,
-                                                security => Secure,
-                                                controller_data => #{}
-                                               },
-                                  %% Check for handlers
-                                  Handlers = maps:get(handlers, AppMap, []),
-                                  [ nova_handlers:register_handler(Handle, Callback) ||
-                                      {Handle, Callback} <- Handlers ],
-
-                                  %% Add routes
-                                  [ add_route(RouteInfo, Route) || Route <- Routes ++ Statics ]
-                          end, AppRoutes)
-    end;
-process_routefile(AppInfo = #{name := Application}) ->
-    Routename = lists:concat(["priv/", Application, ".routes.erl"]),
-    process_routefile(AppInfo#{routes_file => Routename});
-process_routefile(undefined) ->
-    ?ERROR("bootstrap_application-directive is missing from configuration."),
-    ok;
-process_routefile(App) ->
-    process_routefile(#{name => App}).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Takes all the routes in nova_router and applies them in cowboy_router.
-%% The changes should be instant.
-%% @end
-%%--------------------------------------------------------------------
--spec apply_routes() -> ok.
-apply_routes() ->
-    gen_server:cast(?SERVER, apply_routes).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -262,20 +180,19 @@ apply_routes() ->
 %% Initializes the server
 %% @end
 %%--------------------------------------------------------------------
--spec init(Args :: term()) -> {ok, State :: term()} |
-                              {ok, State :: term(), Timeout :: timeout()} |
-                              {ok, State :: term(), hibernate} |
-                              {stop, Reason :: term()} |
-                              ignore.
+-spec init(BootstrapApp :: atom()) -> {ok, State :: term()} |
+                                      {ok, State :: term(), Timeout :: timeout()} |
+                                      {ok, State :: term(), hibernate} |
+                                      {stop, Reason :: term()} |
+                                      ignore.
 init(BootstrapApp) ->
     process_flag(trap_exit, true),
-    process_routefile(BootstrapApp),
-    apply_routes(),
-    {ok, #state{
-            route_table = [],
-            apps = #{},
-            static_route_table = #{}
-           }}.
+    collect_routes(),
+    {ok, #state{route_table = #{},
+                apps = #{},
+                static_route_table = #{},
+                main_app = BootstrapApp
+               }}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -283,8 +200,7 @@ init(BootstrapApp) ->
 %% Handling call messages
 %% @end
 %%--------------------------------------------------------------------
--spec handle_call(Request :: term() | {fetch_status_page, Status :: integer(), Req :: cowboy_req:req()},
-                  From :: {pid(), term()}, State :: term()) ->
+-spec handle_call(Request :: term(), From :: {pid(), term()}, State :: term()) ->
                          {reply, Reply :: term(), NewState :: term()} |
                          {reply, Reply :: term(), NewState :: term(), Timeout :: timeout()} |
                          {reply, Reply :: term(), NewState :: term(), hibernate} |
@@ -293,24 +209,8 @@ init(BootstrapApp) ->
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
                          {stop, Reason :: term(), NewState :: term()}.
-handle_call(get_main_app, _From, State = #state{main_app = MainApp}) ->
-    {reply, MainApp, State};
-handle_call({set_main_app, App}, _From, State) when is_atom(App) ->
-    Apps = get_all_apps([App]),
-    [ process_routefile(#{name => A}) || A <- Apps ],
-    {reply, ok, State#state{main_app = App}};
-handle_call({get_app, App}, _From, State = #state{apps = AppsInfo}) ->
-    Reply =
-        case maps:get(App, AppsInfo, undefined) of
-            undefined ->
-                {error, not_found};
-            AppInfo ->
-                {ok, AppInfo}
-        end,
-    {reply, Reply, State};
-handle_call({fetch_status_page, Status, NovaHttpState}, _From,
-            State = #state{static_route_table = StaticRouteTable}) ->
-    case maps:get(Status, StaticRouteTable, undefined) of
+handle_call({status_page, StatusCode, NovaHttpState}, _From, State = #state{static_route_table = SRT}) ->
+    case maps:get(StatusCode, SRT, undefined) of
         {Mod, Func} ->
             Reply = nova_http_handler:handle(Mod, Func, NovaHttpState#{mod => dummy,
                                                                        func => dummy,
@@ -319,12 +219,9 @@ handle_call({fetch_status_page, Status, NovaHttpState}, _From,
         _ ->
             {reply, {error, not_found}, State}
     end;
-handle_call(get_all_routes, _From, State = #state{route_table = RoutesTable,
-                                                  static_route_table = StaticRouteTable}) ->
-    {reply, {ok, {RoutesTable, StaticRouteTable}}, State};
-handle_call(Request, _From, State) ->
-    ?WARNING("Unknown request: ~p when state: ~p", [Request, State]),
-    {reply, error, State}.
+handle_call(_Request, _From, State) ->
+    Reply = ok,
+    {reply, Reply, State}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -337,92 +234,49 @@ handle_call(Request, _From, State) ->
                          {noreply, NewState :: term(), Timeout :: timeout()} |
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), NewState :: term()}.
-handle_cast({add_static, #{application := Application, prefix := Prefix,
-                           host := Host, security := _Security}, RouteDetails = {Route, DirOrFile}},
-            State = #state{route_table = RouteTable, apps = AppsInfo}) ->
-    case code:lib_dir(Application, priv) of
-        {error, _} ->
-            ?ERROR("Could not apply route ~p. Could not find priv dir of application ~p",
-                   [RouteDetails, Application]),
-            {noreply, State};
-        PrivDir ->
-            CowboyRoute =
-                case {filelib:is_dir(filename:join([PrivDir, DirOrFile])),
-                      filelib:is_file(filename:join([PrivDir, DirOrFile]))} of
-                    {true, _} ->
-                        {Prefix ++ Route, cowboy_static, {priv_dir, Application, DirOrFile}};
-                    {false, true} ->
-                        {Prefix ++ Route, cowboy_static, {priv_file, Application, DirOrFile}};
-                    _ ->
-                        ?WARNING("Could not find the static file ~p which is reffered from the route ~p. " ++
-                                     "Ignoring route", [DirOrFile, RouteDetails]),
-                        false
-                end,
-            case CowboyRoute of
-                false ->
-                    {noreply, State};
-                _ ->
-                    AppsInfo0 = add_route_to_app(Application, Prefix, Host, false, RouteDetails, AppsInfo),
-                    NewRouteTable = prop_upsert(Host, CowboyRoute, RouteTable),
-                    {noreply, State#state{route_table = NewRouteTable, apps = AppsInfo0}}
-            end
-    end;
+handle_cast(collect_routes, State = #state{worker_pid = undefined, main_app = MainApp}) ->
+    {ParseMod, ParseFun} = application:get_env(nova, route_parse_mf, {?MODULE, parse_routefile}),
+    WorkerPid = spawn_link(ParseMod, ParseFun, [MainApp]),
+    {noreply, State#state{worker_pid = WorkerPid}};
 handle_cast({add_route, #{application := Application, prefix := Prefix,
-                          host := Host}, RouteDetails = {StatusCode, {Module, Function}}},
-            State = #state{static_route_table = StaticRouteTable, apps = AppsInfo}) when is_integer(StatusCode) ->
-    %% Do something with the status code
-    StaticRouteTable0 = maps:put(StatusCode, {Module, Function}, StaticRouteTable),
-    AppsInfo0 = add_route_to_app(Application, Prefix, Host, false, RouteDetails, AppsInfo),
-    ?DEBUG("Applying status-route for code ~p, MF: ~p", [StatusCode, {Module, Function}]),
-    {noreply, State#state{static_route_table = StaticRouteTable0, apps = AppsInfo0}};
-handle_cast({add_route, #{application := Application, prefix := Prefix,
-                          host := Host, security := Security, controller_data := ControllerData}, RouteDetails},
-            State = #state{route_table = RouteTable, apps = AppsInfo}) ->
+                          host := Host, security := Secure, controller_data := ControllerData}, RouteDetails},
+            State = #state{static_route_table = SRT, route_table = RouteTable, apps = AppsInfo}) ->
     InitialState = #{app => Application,
-                     controller_data => ControllerData,
-                     secure => Security},
-    CowboyRoute =
-        case RouteDetails of
-            {Route, {Module, Function}} ->
-                {Prefix ++ Route,
-                 nova_http_handler,
-                 InitialState#{mod => Module,
-                               func => Function,
-                               methods => '_',
-                               nova_handler => nova_http_handler}};
-            {Route, CallbackInfo, Options = #{protocol := ws}} ->
-                {Prefix ++ Route,
-                 nova_ws_handler,
-                 InitialState#{mod => CallbackInfo,
-                               subprotocols => maps:get(subprotocols, Options, []),
-                               nova_handler => nova_ws_handler}};
-            {Route, {Module, Function}, Options} ->
-                {Prefix ++ Route,
-                 nova_http_handler,
-                 InitialState#{mod => Module,
-                               func => Function,
-                               methods => get_methods(Options),
-                               nova_handler => nova_http_handler}};
-            {_Route, _Module, _Function} ->
-                %% This is to keep legacy-format. Deprecated
-                ?DEPRECATED("Route of format {Route, Module, Function} is deprecated!"),
-                erlang:throw({deprecated_route_format,  RouteDetails});
-            Other ->
-                ?WARNING("Could not parse route ~p", [Other]),
-                erlang:throw({route_error, Other})
-        end,
-    AppsInfo0 = add_route_to_app(Application, Prefix, Host, Security, RouteDetails, AppsInfo),
-    NewRouteTable = prop_upsert(Host, CowboyRoute, RouteTable),
-    {noreply, State#state{route_table = NewRouteTable, apps = AppsInfo0}};
+                     controller_data => ControllerData},
+    case parse_route(RouteDetails, Prefix, Secure, InitialState) of
+        {status, {StatusCode, {Module, Function}}} ->
+            SRT0 = maps:put(StatusCode, {Module, Function}, SRT),
+            AppsInfo0 = add_route_to_app(Application, Prefix, Host, false, RouteDetails, AppsInfo),
+            {noreply, State#state{static_route_table = SRT0, apps = AppsInfo0}};
+        {Label, #{route := Route, entries := RouteEntry} = NovaRouteObj} when Label == route orelse
+                                                                              Label == static ->
+
+            AppsInfo0 = add_route_to_app(Application, Prefix, Host, Secure, RouteDetails, AppsInfo),
+            HostRoutes = maps:get(Host, RouteTable, #{}),
+            RouteObj =
+                case maps:get(Route, HostRoutes, false) of
+                    false ->
+                        %% There's no previous record of this route - Just add it
+                        NovaRouteObj;
+                    #{entries := ExistingMethods} ->
+                        %% Just merge the existing objects with the route we have
+                        NovaRouteObj#{entries => maps:merge(RouteEntry, ExistingMethods)}
+                end,
+            NewRouteTable = RouteTable#{Host => HostRoutes#{Route => RouteObj}},
+            {noreply, State#state{route_table = NewRouteTable, apps = AppsInfo0}};
+        false ->
+            %% Do not change anything - Something was wrong with this route
+            {noreply, State}
+    end;
 handle_cast(apply_routes, State = #state{route_table = RouteTable}) ->
-    %% We need to add an additional 'catch_all' route to handle 404 inside of Nova
-    RouteTable0 = RouteTable ++ [{'_', nova_http_handler, no_route}],
-    Dispatch = cowboy_router:compile(RouteTable),
-    ?DEBUG("Applying routes: ~p", [RouteTable0]),
-    cowboy:set_env(nova_listener, dispatch, Dispatch),
+    CatchAllRoute = [{'_', [{'_', nova_http_handler, no_route}]}],
+    HostList = maps:to_list(RouteTable),
+    CowboyRoutes = [ to_cowboy_routes(Host, Routes) || {Host, Routes} <- HostList ],
+    Dispatch = cowboy_router:compile(CowboyRoutes ++ CatchAllRoute),
+    ?DEBUG("Applying routes: ~p", [CowboyRoutes]),
+    cowboy:set_env(?NOVA_LISTENER, dispatch, Dispatch),
     {noreply, State};
-handle_cast(Request, State) ->
-    ?WARNING("Got unknown cast in router: ~p", [Request]),
+handle_cast(_Request, State) ->
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -436,6 +290,14 @@ handle_cast(Request, State) ->
                          {noreply, NewState :: term(), Timeout :: timeout()} |
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: normal | term(), NewState :: term()}.
+handle_info({'EXIT', WorkerPid, normal}, State = #state{worker_pid = WorkerPid}) ->
+    ?DEBUG("WorkerPid ~p exited with reason normal", [WorkerPid]),
+    apply_routes(),
+    {noreply, State#state{worker_pid = undefined}};
+handle_info({'EXIT', WorkerPid, Reason}, State = #state{worker_pid = WorkerPid}) ->
+    ?WARNING("WorkerPid exited with reason ~p. Restarting process", [Reason]),
+    collect_routes(),
+    {noreply, State#state{worker_pid = undefined}};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -482,36 +344,73 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-get_all_apps([]) -> [];
-get_all_apps([App|Tl]) ->
-    NovaApps = application:get_env(App, nova_applications, []),
-    [App|get_all_apps(Tl ++ NovaApps)].
 
-get_methods(#{methods := M}) when is_list(M) ->
-    Res = lists:map(fun(get)  -> <<"GET">>;
-                       (post) -> <<"POST">>;
-                       (put) -> <<"PUT">>;
-                       (delete) -> <<"DELETE">>;
-                       (options) -> <<"OPTIONS">>;
-                       (_) -> throw(unknown_method)
-                    end, M),
-    case length(Res) of
-        4 -> '_';
-        _ -> Res
+parse_route({StatusCode, {Module, Function}}, _Prefix, _Secure, _InitialState) when is_integer(StatusCode) ->
+    {status, {StatusCode, {Module, Function}}};
+parse_route({static, {Route, DirOrFile}}, Prefix, Secure, InitialState) ->
+    parse_route({static, {Route, DirOrFile}, #{}}, Prefix, Secure, InitialState);
+parse_route({static, {Route, DirOrFile}, Options}, Prefix, Secure, InitialState) ->
+    Application = maps:get(app, InitialState),
+    case code:lib_dir(Application, priv) of
+        {error, Error} ->
+            ?ERROR("Could not apply route ~s. Could not find priv dir of application ~s, got error: ~p",
+                   [Route, Application, Error]),
+            false;
+        PrivDir ->
+            Filename = filename:join([PrivDir, DirOrFile]),
+            case {filelib:is_dir(Filename), filelib:is_file(Filename)} of
+                {true, _} ->
+                    MethodRoutes = [{X, #{type => priv_dir,
+                                          secure => Secure,
+                                          path => DirOrFile}} || X <- [ get_method(Y) || Y <- maps:get(methods, Options, [all]) ] ],
+                    {static, InitialState#{route => Prefix ++ Route,
+                                           entries => maps:from_list(MethodRoutes)}};
+                {_, true} ->
+                    MethodRoutes = [{X, #{type => priv_file,
+                                          secure => Secure,
+                                          path => DirOrFile}} || X <- [ get_method(Y) || Y <- maps:get(methods, Options, [all]) ] ],
+                    {static, InitialState#{route => Prefix ++ Route,
+                                           entries => maps:from_list(MethodRoutes)}};
+                _ ->
+                    ?WARNING("Could not find static file ~s which is reffered from the route ~s (app: ~s). " ++
+                                 "Ignoring route", [DirOrFile, Application, Route]),
+                    false
+            end
     end;
-get_methods(#{methods := M}) ->
-    get_methods(#{methods => [M]});
-get_methods(_) ->
-    '_'.
+parse_route({Route, {Module, Function}}, Prefix, Secure, InitialState) ->
+    parse_route({Route, {Module, Function}, #{}}, Prefix, Secure, InitialState);
+parse_route({Route, CallbackInfo, #{protocol := ws} = Options}, Prefix, Secure, InitialState) ->
+    MethodRoutes = [{X, #{mod => CallbackInfo,
+                          secure => Secure,
+                          options => Options,
+                          nova_handler => nova_ws_handler}} || X <- [ get_method(Y) || Y <- maps:get(methods, Options, [all]) ] ],
+    {route, InitialState#{route => Prefix ++ Route,
+                          entries => maps:from_list(MethodRoutes)}};
+parse_route({Route, {Module, Function}, Options}, Prefix, Secure, InitialState) ->
+    MethodRoutes = [{X, #{mod => Module,
+                          func => Function,
+                          options => Options,
+                          secure => Secure,
+                          nova_handler => nova_http_handler}} || X <- [ get_method(Y) || Y <- maps:get(methods, Options, [all]) ] ],
+    {route, InitialState#{route => Prefix ++ Route,
+                          entries => maps:from_list(MethodRoutes)}};
+parse_route({_Route, _Module, _Function}, _Prefix, _Secure, _InitialState) ->
+    ?DEPRECATED("Route of format {Route, Module, Function} is deprecated!"),
+    false;
+parse_route(Other, _Prefix, _Secure, _InitialState) ->
+    ?WARNING("Could not parse route ~p", [Other]),
+    false.
 
 
-prop_upsert(Key, NewEntry, Proplist) ->
-    case proplists:lookup(Key, Proplist) of
-        none ->
-            [{Key, [NewEntry]}|Proplist];
-        {Key, OldList} ->
-            [{Key, [NewEntry|OldList]}|proplists:delete(Key, Proplist)]
-    end.
+get_method(get)  -> <<"GET">>;
+get_method(post) -> <<"POST">>;
+get_method(put) -> <<"PUT">>;
+get_method(delete) -> <<"DELETE">>;
+get_method(options) -> <<"OPTIONS">>;
+get_method(patch) -> <<"PATCH">>;
+get_method(head) -> <<"HEAD">>;
+get_method(all) -> '_';
+get_method(_) -> throw(unknown_method).
 
 
 add_route_to_app(App, Prefix, Host, Security, Route, AppMap) when is_map(AppMap) ->
@@ -525,3 +424,137 @@ add_route_to_app(App, Prefix, Host, Security, Route, AppMap) when is_map(AppMap)
         Result ->
             AppMap#{App => Result#{routes => [Route|maps:get(routes, Result)]}}
     end.
+
+
+to_cowboy_routes(Host, Routes) when is_map(Routes) ->
+    %% Each key is a route. Transform into a list of [{Route :: binary(), InitialState :: map()}]
+    RoutesList = maps:to_list(Routes),
+    {Host, lists:map(fun({Route, InitialState = #{entries := Entries}}) ->
+                             [K|_] = maps:keys(Entries),
+                             FirstRoute = maps:get(K, Entries),
+                             case maps:get(nova_handler, FirstRoute, undefined) of
+                                 undefined ->
+                                     %% This is a static resource
+                                     Type = maps:get(type, FirstRoute),
+                                     {Route, cowboy_static, {Type, maps:get(app, InitialState), maps:get(path, FirstRoute)}};
+                                 NovaHandler ->
+                                     {Route, NovaHandler, InitialState}
+                             end
+                     end, RoutesList)}.
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Standard implementation of parsing the routefile. This can be
+%% overriden by config.
+%% @end
+%%--------------------------------------------------------------------
+-spec parse_routefile(Application :: atom() | #{name := atom(), routes_file => list()}) -> ok.
+parse_routefile(#{name := Application, routes_file := RoutesFile} = AppRoute) ->
+    %% This is the parsing function. It should send path info back to the gen_server and
+    %% exit normally when finished
+    case code:lib_dir(Application) of
+        {error, _} ->
+            ?WARNING("Could not find the application ~s. Check your config and re-run your project!", [Application]),
+            ok;
+        Filepath ->
+            ?DEBUG("Processing routefile ~s", [Filepath]),
+            AppPrefix = maps:get(prefix, AppRoute, ""),
+            RouteFilePath = filename:join([Filepath, RoutesFile]),
+            {ok, AppRoutes} = file:consult(RouteFilePath),
+            lists:foreach(fun(AppMap) ->
+                                  %% Extract the information from routes
+                                  Prefix = filename:join([AppPrefix, maps:get(prefix, AppMap, "")]),
+                                  Host = maps:get(host, AppMap, '_'),
+                                  Routes = maps:get(routes, AppMap, []),
+                                  Statics = maps:get(statics, AppMap, []),
+                                  Security = maps:get(security, AppRoute, maps:get(security, AppMap, false)),
+                                  %% Build intermediate object
+                                  RouteInfo = #{
+                                                application => Application,
+                                                prefix => Prefix,
+                                                host => Host,
+                                                security => Security,
+                                                controller_data => #{}
+                                               },
+                                  %% Check for handlers
+                                  [ nova_handlers:register_handler(Handle, Callback) ||
+                                      {Handle, Callback} <- maps:get(handlers, AppMap, []) ],
+
+                                  %% Add routes
+                                  [ add_route(RouteInfo, Route) || Route <- Routes ++ Statics ]
+                          end, AppRoutes),
+            %% Parse routefile for nova applications this app have included
+            OtherApps = application:get_env(Application, nova_applications, []),
+            [ parse_routefile(OtherAppRoute) || OtherAppRoute <- OtherApps ]
+    end;
+parse_routefile(Application) when is_atom(Application) ->
+    parse_routefile(#{name => Application, routes_file => get_routefile_path(Application)}).
+
+
+get_routefile_path(#{name := Application}) ->
+    lists:concat(["priv/", Application, ".routes.erl"]);
+get_routefile_path(Application) when is_atom(Application) ->
+    get_routefile_path(#{name => Application}).
+
+
+
+-ifdef(TEST).
+
+static_routes_test_() ->
+    [ static_routes(X) || X <- ["", "/v1"] ].
+
+static_routes(Prefix) ->
+    [
+     ?_assertEqual(parse_route({static, {"/nova.png", <<"static/nova.png">>}}, Prefix, #{app => nova}), {static, {Prefix++"/nova.png", cowboy_static, {priv_file, nova, <<"static/nova.png">>}}}),
+     ?_assertEqual(parse_route({static, {"/not_found.png", <<"static/404.png">>}}, Prefix, #{app => nova}), false),
+     ?_assertEqual(parse_route({static, {"/secret_dir", <<"static">>}}, Prefix, #{app => nova}), {static,{Prefix++"/secret_dir",cowboy_static, {priv_dir,nova,<<"static">>}}})
+    ].
+
+regular_routes_test_() ->
+    [ regular_routes(X) || X <- ["", "/v1"] ].
+
+regular_routes(Prefix) ->
+    [
+     ?_assertEqual(parse_route({"/index", {dummy_mod, dummy_func}}, Prefix, #{}), {route,{Prefix++"/index",nova_http_handler,
+                                                                                          #{func => dummy_func, methods => '_', mod => dummy_mod,
+                                                                                            nova_handler => nova_http_handler}}}),
+     ?_assertEqual(parse_route({"/ws", some_ws_mod, #{protocol => ws}}, Prefix, #{}), {route,{Prefix++"/ws",nova_ws_handler,
+                                                                                          #{mod => some_ws_mod, nova_handler => nova_ws_handler,
+                                                                                            subprotocols => []}}}),
+     ?_assertEqual(parse_route({"/route2", {dummy_mod, dummy_func}, #{}}, Prefix, #{}), {route,{Prefix++"/route2",nova_http_handler,
+                                                                                            #{func => dummy_func, methods => '_', mod => dummy_mod,
+                                                                                              nova_handler => nova_http_handler}}}),
+     ?_assertEqual(parse_route({"/route3", dummy_mod, dummy_func}, Prefix, #{}), false),
+     ?_assertEqual(parse_route(illegal_route, Prefix, #{}), false)
+    ].
+
+status_code_routes_test_() ->
+    [ status_code_routes(X) || X <- ["", "/v1"] ].
+
+status_code_routes(Prefix) ->
+    [
+     ?_assertEqual(parse_route({404, {dummy_mod, dummy_func}}, Prefix, #{}), {status,{404,{dummy_mod,dummy_func}}}),
+     ?_assertEqual(parse_route({500, {dummy_mod, dummy_func}}, Prefix, #{}), {status,{500,{dummy_mod,dummy_func}}})
+    ].
+
+
+get_method_test_() ->
+    [ ?_assertEqual(get_method(X), Y) || {X, Y} <- [
+                                                    {all, '_'},
+                                                    {get, [<<"GET">>]},
+                                                    {post, [<<"POST">>]},
+                                                    {put, [<<"PUT">>]},
+                                                    {delete, [<<"DELETE">>]},
+                                                    {options, [<<"OPTIONS">>]},
+                                                    {patch, [<<"PATCH">>]},
+                                                    {head, [<<"HEAD">>]}
+                                                   ] ].
+get_method_illegal_test_() ->
+    [ ?_assertThrow(unknown_method, get_method(wrong)),
+      ?_assertThrow(unknown_method, get_method(hehe))
+    ].
+
+
+
+-endif.

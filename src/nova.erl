@@ -21,7 +21,7 @@
 %%--------------------------------------------------------------------
 -spec get_main_app() -> {ok, Application :: atom()}.
 get_main_app() ->
-    {ok, nova_router:get_main_app()}.
+    application:get_env(nova, bootstrap_application).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -47,4 +47,4 @@ application_loaded(Application) ->
 %%--------------------------------------------------------------------
 -spec get_env(Parameter :: atom(), Default :: any()) -> any().
 get_env(Parameter, Default) ->
-    application:get_env(nova_router:get_main_app(), Parameter, Default).
+    application:get_env(get_main_app(), Parameter, Default).
