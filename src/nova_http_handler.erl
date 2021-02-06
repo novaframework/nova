@@ -65,8 +65,9 @@ init(Req, no_route) ->
     {ok, Req1, no_route}; %% Just continue with no_route as state
 
 init(Req = #{method := Method}, State = #{entries := Routes}) ->
-    case maps:get(Method, Routes, undefined) of
+    case get_route(Method, Routes) of
         undefined ->
+            %% We need to check that there's no '_' in entries
             Req1 = cowboy_req:reply(405, Req),
             {ok, Req1, State#{resp_status => 405, req => Req1}};
         RouteDetails ->
@@ -246,6 +247,12 @@ run_plugins([{_Prio, #{id := Id, module := Module, options := Options}}|Tl], Cal
 set_resp(Headers, Body, Req) ->
     Req0 = cowboy_req:set_resp_headers(Headers, Req),
     cowboy_req:set_resp_body(Body, Req0).
+
+
+get_route(Route, Routes = #{'_' := V}) ->
+    maps:get(Route, Routes, V);
+get_route(Route, Routes) ->
+    maps:get(Route, Routes, undefined).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Eunit functions         %

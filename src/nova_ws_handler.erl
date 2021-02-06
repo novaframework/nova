@@ -30,22 +30,33 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Public functions      %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
-init(Req, State) ->
-    %% Call the http-handler in order to correctly handle potential plugins for the http-request
-    {ok, PrePlugins} = nova_plugin:get_plugins(pre_ws_upgrade),
-    case run_plugins(PrePlugins, pre_ws_upgrade, State) of
-        {ok, State0 = #{controller_data := ControllerData, mod := Mod}} ->
-            ControllerData0 = ControllerData#{req => Req},
-            case Mod:init(ControllerData0) of
-                {ok, NewControllerData} ->
-                    {cowboy_websocket, Req, State0#{controller_data => NewControllerData}};
-                Error ->
-                    ?ERROR("Websocket handler ~p returned unkown result ~p", [Mod, Error]),
-                    Req1 = cowboy_req:reply(500, Req),
-                    {ok, Req1, State0}
-            end;
-        Stop ->
-            Stop
+init(Req = #{method := Method}, State = #{entries := Routes}) ->
+    %% Normalize the state. This is a temporary thing and should not be kept, but for now it's a
+    %% quick fix to prove that the new way of routing works :-)
+    case get_route(Method, Routes) of
+        undefined ->
+            Req1 = cowboy_req:reply(405, Req),
+            {ok, Req1, State#{resp_status => 405, req => Req1}};
+        Route ->
+            NormalizedState = maps:remove(entries, State),
+            NormalizedState0 = maps:merge(NormalizedState, Route),
+
+            %% Call the http-handler in order to correctly handle potential plugins for the http-request
+            {ok, PrePlugins} = nova_plugin:get_plugins(pre_ws_upgrade),
+            case run_plugins(PrePlugins, pre_ws_upgrade, NormalizedState0) of
+                {ok, State0 = #{controller_data := ControllerData, mod := Mod}} ->
+                    ControllerData0 = ControllerData#{req => Req},
+                    case Mod:init(ControllerData0) of
+                        {ok, NewControllerData} ->
+                            {cowboy_websocket, Req, State0#{controller_data => NewControllerData}};
+                        Error ->
+                            ?ERROR("Websocket handler ~p returned unkown result ~p", [Mod, Error]),
+                            Req1 = cowboy_req:reply(500, Req),
+                            {ok, Req1, State0}
+                    end;
+                Stop ->
+                    Stop
+            end
     end.
 
 websocket_init(State = #{mod := Mod}) ->
@@ -135,6 +146,12 @@ run_plugins([{_Prio, #{id := Id, module := Module, options := Options}}|Tl], Cal
                    [Id, Type, Reason, Stacktrace]),
             {stop, State}
     end.
+
+
+get_route(Route, Routes = #{'_' := V}) ->
+    maps:get(Route, Routes, V);
+get_route(Route, Routes) ->
+    maps:get(Route, Routes, undefined).
 
 
 -ifdef(TEST).
