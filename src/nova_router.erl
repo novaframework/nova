@@ -460,8 +460,14 @@ parse_routefile(#{name := Application, routes_file := RoutesFile} = AppRoute) ->
         Filepath ->
             ?DEBUG("Processing routefile ~s", [Filepath]),
             AppPrefix = maps:get(prefix, AppRoute, ""),
-            RouteFilePath = filename:join([Filepath, RoutesFile]),
-            {ok, AppRoutes} = file:consult(RouteFilePath),
+            AppRoutes = case application:get_env(nova, routing, undefined) of
+                            undefined ->
+                                RouteFilePath = filename:join([Filepath, RoutesFile]),
+                                {ok, FileRoutes} = file:consult(RouteFilePath),
+                                FileRoutes;
+                            {ok, Module} ->
+                                Module:routes()
+                        end,
             lists:foreach(fun(AppMap) ->
                                   %% Extract the information from routes
                                   Prefix = filename:join([AppPrefix, maps:get(prefix, AppMap, "")]),
