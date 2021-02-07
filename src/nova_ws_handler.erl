@@ -46,17 +46,20 @@ init(Req = #{method := Method}, State = #{entries := Routes}) ->
             case run_plugins(PrePlugins, pre_ws_upgrade, NormalizedState0) of
                 {ok, State0 = #{controller_data := ControllerData, mod := Mod}} ->
                     ControllerData0 = ControllerData#{req => Req},
-                    case Mod:init(ControllerData0) of
-                        {ok, NewControllerData} ->
-                            {cowboy_websocket, Req, State0#{controller_data => NewControllerData}};
-                        Error ->
-                            ?ERROR("Websocket handler ~p returned unkown result ~p", [Mod, Error]),
-                            Req1 = cowboy_req:reply(500, Req),
-                            {ok, Req1, State0}
-                    end;
+                    upgrade_ws(Mod, Req, State0, ControllerData0);
                 Stop ->
                     Stop
             end
+    end.
+
+upgrade_ws(Module, Req, State, ControllerData) ->
+    case Module:init(ControllerData) of
+        {ok, NewControllerData} ->
+            {cowboy_websocket, Req, State#{controller_data => NewControllerData}};
+        Error ->
+            ?ERROR("Websocket handler ~p returned unkown result ~p", [Module, Error]),
+            Req1 = cowboy_req:reply(500, Req),
+            {ok, Req1, State}
     end.
 
 websocket_init(State = #{mod := Mod}) ->
