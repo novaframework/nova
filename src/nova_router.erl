@@ -392,13 +392,15 @@ parse_route({static, {Route, DirOrFile}, Options}, Prefix, Secure, InitialState)
                 {true, _} ->
                     MethodRoutes = [{X, #{type => priv_dir,
                                           secure => Secure,
-                                          path => DirOrFile}} || X <- [ get_method(Y) || Y <- maps:get(methods, Options, [all]) ] ],
+                                          path => DirOrFile}} || X <- [ get_method(Y) ||
+                                                                          Y <- maps:get(methods, Options, [all]) ] ],
                     {static, InitialState#{route => Prefix ++ Route,
                                            entries => maps:from_list(MethodRoutes)}};
                 {_, true} ->
                     MethodRoutes = [{X, #{type => priv_file,
                                           secure => Secure,
-                                          path => DirOrFile}} || X <- [ get_method(Y) || Y <- maps:get(methods, Options, [all]) ] ],
+                                          path => DirOrFile}} || X <- [ get_method(Y) ||
+                                                                          Y <- maps:get(methods, Options, [all]) ] ],
                     {static, InitialState#{route => Prefix ++ Route,
                                            entries => maps:from_list(MethodRoutes)}};
                 _ ->
@@ -413,7 +415,8 @@ parse_route({Route, CallbackInfo, #{protocol := ws} = Options}, Prefix, Secure, 
     MethodRoutes = [{X, #{mod => CallbackInfo,
                           secure => Secure,
                           options => Options,
-                          nova_handler => nova_ws_handler}} || X <- [ get_method(Y) || Y <- maps:get(methods, Options, [all]) ] ],
+                          nova_handler => nova_ws_handler}} || X <- [ get_method(Y) ||
+                                                                        Y <- maps:get(methods, Options, [all]) ] ],
     {route, InitialState#{route => Prefix ++ Route,
                           entries => maps:from_list(MethodRoutes)}};
 parse_route({Route, {Module, Function}, Options}, Prefix, Secure, InitialState) ->
@@ -421,7 +424,8 @@ parse_route({Route, {Module, Function}, Options}, Prefix, Secure, InitialState) 
                           func => Function,
                           options => Options,
                           secure => Secure,
-                          nova_handler => nova_http_handler}} || X <- [ get_method(Y) || Y <- maps:get(methods, Options, [all]) ] ],
+                          nova_handler => nova_http_handler}} || X <- [ get_method(Y) ||
+                                                                          Y <- maps:get(methods, Options, [all]) ] ],
     {route, InitialState#{route => Prefix ++ Route,
                           entries => maps:from_list(MethodRoutes)}};
 parse_route({_Route, _Module, _Function}, _Prefix, _Secure, _InitialState) ->
@@ -466,7 +470,8 @@ to_cowboy_routes(Host, Routes) when is_map(Routes) ->
                                  undefined ->
                                      %% This is a static resource
                                      Type = maps:get(type, FirstRoute),
-                                     {Route, cowboy_static, {Type, maps:get(app, InitialState), maps:get(path, FirstRoute)}};
+                                     {Route, cowboy_static, {Type, maps:get(app, InitialState),
+                                                             maps:get(path, FirstRoute)}};
                                  NovaHandler ->
                                      {Route, NovaHandler, InitialState}
                              end
@@ -536,9 +541,11 @@ static_routes_test_() ->
 
 static_routes(Prefix) ->
     [
-     ?_assertEqual(parse_route({static, {"/nova.png", <<"static/nova.png">>}}, Prefix, #{app => nova}), {static, {Prefix++"/nova.png", cowboy_static, {priv_file, nova, <<"static/nova.png">>}}}),
+     ?_assertEqual(parse_route({static, {"/nova.png", <<"static/nova.png">>}}, Prefix, #{app => nova}),
+                   {static, {Prefix ++ "/nova.png", cowboy_static, {priv_file, nova, <<"static/nova.png">>}}}),
      ?_assertEqual(parse_route({static, {"/not_found.png", <<"static/404.png">>}}, Prefix, #{app => nova}), false),
-     ?_assertEqual(parse_route({static, {"/secret_dir", <<"static">>}}, Prefix, #{app => nova}), {static,{Prefix++"/secret_dir",cowboy_static, {priv_dir,nova,<<"static">>}}})
+     ?_assertEqual(parse_route({static, {"/secret_dir", <<"static">>}}, Prefix, #{app => nova}),
+                   {static, {Prefix ++ "/secret_dir", cowboy_static, {priv_dir, nova, <<"static">>}}})
     ].
 
 regular_routes_test_() ->
@@ -546,15 +553,18 @@ regular_routes_test_() ->
 
 regular_routes(Prefix) ->
     [
-     ?_assertEqual(parse_route({"/index", {dummy_mod, dummy_func}}, Prefix, #{}), {route,{Prefix++"/index",nova_http_handler,
-                                                                                          #{func => dummy_func, methods => '_', mod => dummy_mod,
-                                                                                            nova_handler => nova_http_handler}}}),
-     ?_assertEqual(parse_route({"/ws", some_ws_mod, #{protocol => ws}}, Prefix, #{}), {route,{Prefix++"/ws",nova_ws_handler,
-                                                                                          #{mod => some_ws_mod, nova_handler => nova_ws_handler,
-                                                                                            subprotocols => []}}}),
-     ?_assertEqual(parse_route({"/route2", {dummy_mod, dummy_func}, #{}}, Prefix, #{}), {route,{Prefix++"/route2",nova_http_handler,
-                                                                                            #{func => dummy_func, methods => '_', mod => dummy_mod,
-                                                                                              nova_handler => nova_http_handler}}}),
+     ?_assertEqual(parse_route({"/index", {dummy_mod, dummy_func}}, Prefix, #{}),
+                   {route, {Prefix ++ "/index", nova_http_handler,
+                            #{func => dummy_func, methods => '_', mod => dummy_mod,
+                              nova_handler => nova_http_handler}}}),
+     ?_assertEqual(parse_route({"/ws", some_ws_mod, #{protocol => ws}}, Prefix, #{}),
+                   {route, {Prefix ++ "/ws", nova_ws_handler,
+                            #{mod => some_ws_mod, nova_handler => nova_ws_handler,
+                              subprotocols => []}}}),
+     ?_assertEqual(parse_route({"/route2", {dummy_mod, dummy_func}, #{}}, Prefix, #{}),
+                   {route, {Prefix ++ "/route2", nova_http_handler,
+                            #{func => dummy_func, methods => '_', mod => dummy_mod,
+                              nova_handler => nova_http_handler}}}),
      ?_assertEqual(parse_route({"/route3", dummy_mod, dummy_func}, Prefix, #{}), false),
      ?_assertEqual(parse_route(illegal_route, Prefix, #{}), false)
     ].
@@ -564,8 +574,8 @@ status_code_routes_test_() ->
 
 status_code_routes(Prefix) ->
     [
-     ?_assertEqual(parse_route({404, {dummy_mod, dummy_func}}, Prefix, #{}), {status,{404,{dummy_mod,dummy_func}}}),
-     ?_assertEqual(parse_route({500, {dummy_mod, dummy_func}}, Prefix, #{}), {status,{500,{dummy_mod,dummy_func}}})
+     ?_assertEqual(parse_route({404, {dummy_mod, dummy_func}}, Prefix, #{}), {status, {404, {dummy_mod, dummy_func}}}),
+     ?_assertEqual(parse_route({500, {dummy_mod, dummy_func}}, Prefix, #{}), {status, {500, {dummy_mod, dummy_func}}})
     ].
 
 
