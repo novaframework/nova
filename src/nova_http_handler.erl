@@ -47,8 +47,15 @@
 init(Req, no_route) ->
     %% This is called on when cowboy matched the catch-all route.
     State = #{resp_status => 404,
-              req => Req, controller_data => #{}
+              req => Req,
+              controller_data => #{},
+              app => '__dummy__',
+              mod => '__dummy__',
+              func => '__dummy__',
+              options => #{},
+              secure => false
              },
+
     {ok, PrePlugins} = nova_plugin:get_plugins(pre_http_request),
     {ok, State0} = render_page(404, State),
 
@@ -121,8 +128,10 @@ handle(Mod, Fun, State = #{req := Req, controller_data := ControllerData}) ->
             case nova_handlers:get_handler(element(1, RetObj)) of
                 {ok, Callback} ->
                     {ok, StatusCode, Headers, Body, State0} = Callback(RetObj, {Mod, Fun}, State),
-                    Req0 = set_resp(Headers, Body, Req),
-                    {ok, State0#{req => Req0, resp_status => StatusCode}};
+                    Req0 = nova_http:set_headers(Headers, Req),
+                    Req1 = nova_http:set_body(Body, Req0),
+                    Req2 = nova_http:set_status(StatusCode, Req1),
+                    {ok, State0#{req => Req2, resp_status => StatusCode}};
                 _ ->
                     ?ERROR("Unknown return object ~p returned from module: ~p function: ~p", [RetObj, Mod, Fun]),
                     render_page(500, State, {Mod, Fun, 1, "Unknown return object ~p returned from module: ~s:~s/1",
@@ -144,17 +153,15 @@ handle(Mod, Fun, State = #{req := Req, controller_data := ControllerData}) ->
 %% with the rendered body. Otherwise a request with a blank body will be returned.
 %% @end
 %%--------------------------------------------------------------------
--spec render_page(StatusCode :: integer(), State :: nova_http_state()) -> {ok, State0 :: nova_http_state()}.
-render_page(StatusCode, State = #{req := Req}) ->
-    {ok, StatusCode, Headers, Body, State0} =
-        case nova_router:status_page(StatusCode, State) of
-            {error, _} ->
-                {ok, StatusCode, #{}, <<>>, State};
-            FoundPage ->
-                FoundPage
-        end,
-    Req0 = set_resp(Headers, Body, maps:get(req, State0, Req)),
-    {ok, State0#{resp_status => StatusCode, req => Req0}}.
+-spec render_page(StatusCode :: integer(), State) -> {ok, State} when State :: nova_http_state().
+render_page(StatusCode, State) ->
+    case nova_router:status_page(StatusCode, State) of
+        {error, _} ->
+            State0 = nova_http:set_status(StatusCode, State),
+            {ok, State0};
+        {ok, State0} ->
+            {ok, State0}
+    end.
 
 
 %%--------------------------------------------------------------------
@@ -184,8 +191,10 @@ render_page(500, State = #{req := Req}, {Module, Function, Arity, Format, Args})
             FoundPage ->
                 FoundPage
         end,
-    Req0 = set_resp(Headers, Body, maps:get(req, State0, Req)),
-    {ok, State0#{req => Req0, resp_status => StatusCode}};
+    Req0 = nova_http:set_headers(Headers, Req),
+    Req1 = nova_http:set_body(Body, Req0),
+    Req2 = nova_http:set_status(StatusCode, Req1),
+    {ok, State0#{req => Req2, resp_status => StatusCode}};
 render_page(500, State = #{req := Req}, {Module, Function, Arity, Type, Reason, Stacktrace}) ->
     {ok, StatusCode, Headers, Body, State0} =
         case nova_router:status_page(500, State) of
@@ -202,8 +211,10 @@ render_page(500, State = #{req := Req}, {Module, Function, Arity, Type, Reason, 
             Page ->
                 Page
         end,
-    Req0 = set_resp(Headers, Body, maps:get(req, State0, Req)),
-    {ok, State0#{req => Req0, resp_status => StatusCode}}.
+    Req0 = nova_http:set_headers(Headers, Req),
+    Req1 = nova_http:set_body(Body, Req0),
+    Req2 = nova_http:set_status(StatusCode, Req1),
+    {ok, State0#{req => Req2, resp_status => StatusCode}}.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -243,11 +254,6 @@ run_plugins([{_Prio, #{id := Id, module := Module, options := Options}}|Tl], Cal
             {ok, State0} = render_page(500, State, {?MODULE, run_plugins, 3, Msg, [Reason]}),
             {stop, State0}
     end.
-
-set_resp(Headers, Body, Req) ->
-    Req0 = cowboy_req:set_resp_headers(Headers, Req),
-    cowboy_req:set_resp_body(Body, Req0).
-
 
 get_route(Route, Routes = #{'_' := V}) ->
     maps:get(Route, Routes, V);
