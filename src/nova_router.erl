@@ -52,6 +52,7 @@
 %% API
 -export([
          start_link/1,
+         get_app_info/1,
          add_route/2,
          apply_routes/0,
          status_page/2
@@ -108,9 +109,9 @@
 -define(SERVER, ?MODULE).
 
 -record(state, {
-                worker_pid :: pid(),
+                worker_pid :: pid() | undefined,
                 main_app :: atom(),
-                apps :: app_info() | #{},
+                apps :: #{AppName :: atom() => app_info()} | #{},
                 route_table :: #{binary() => list()},
                 static_route_table :: #{StatusCode :: integer() => {Mod :: atom(), Func :: atom()}}
                }).
@@ -133,9 +134,29 @@ start_link(BootstrapApp) ->
 
 
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Tries and fetch a status page from the routing table. If a page was
+%% found it will be returned to the requester. If not an error will be
+%% returned.
+%% @end
+%%--------------------------------------------------------------------
+-spec status_page(StatusCode :: integer(), NovaHttpState :: nova_http_handler:nova_http_state()) ->
+                         {ok, NovaHttpState0 :: nova_http_handler:nova_http_state()} |
+                                           {error, not_found}.
 status_page(StatusCode, NovaHttpState) when is_integer(StatusCode) ->
     gen_server:call(?SERVER, {status_page, StatusCode, NovaHttpState}).
 
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Returns information about a specified app. This information contains
+%% route-prefix, host, security rules etc.
+%% @end
+%%--------------------------------------------------------------------
+-spec get_app_info(App :: atom()) -> {ok, app_info()} | {error, not_found}.
+get_app_info(App) ->
+    gen_server:call(?SERVER, {get_app_prefix, App}).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -219,6 +240,15 @@ handle_call({status_page, StatusCode, NovaHttpState}, _From, State = #state{stat
         _ ->
             {reply, {error, not_found}, State}
     end;
+handle_call({get_app, App}, _From, State = #state{apps = AppsInfo}) ->
+    Return =
+        case maps:get(App, AppsInfo, undefined) of
+            undefined ->
+                {error, not_found};
+            AppInfo ->
+                {ok, AppInfo}
+        end,
+    {reply, Return, State};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
