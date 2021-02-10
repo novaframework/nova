@@ -100,7 +100,7 @@ setup_cowboy(Configuration) ->
         {ok, _} ->
             ok;
         {error, Error} ->
-            ?WARNING("Cowboy could not start reason: ~p", [Error])
+            ?ERROR("Cowboy could not start reason: ~p", [Error])
     end.
 
 start_cowboy(Configuration) ->
