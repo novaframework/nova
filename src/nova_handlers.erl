@@ -69,14 +69,13 @@
 -define(HANDLERS_TABLE, nova_handlers_table).
 -define(PRE_HANDLERS_TABLE, nova_handlers_pre_handlers_table).
 
--type handler_return() :: {ok, StatusCode :: integer(), Headers :: map(), Body :: binary() | tuple(),
-                           State :: nova_http_handler:nova_http_state()} |
+-type handler_return() :: {ok, State :: nova_http_handler:nova_http_state()} |
                           {error, Reason :: any()}.
 
 -export_type([handler_return/0]).
 
--type pre_handler_return() :: {ok, Req :: cowboy_req:req()} |
-                              {stop, Req :: cowboy_req:req() | undefined } |
+-type pre_handler_return() :: {ok, State :: nova_http_handler:nova_http_state()} |
+                              {stop, State :: nova_http_handler:nova_http_state() | undefined } |
                               {error, Reason :: atom()}.
 -export_type([pre_handler_return/0]).
 

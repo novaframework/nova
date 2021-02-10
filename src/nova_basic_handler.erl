@@ -29,13 +29,16 @@
 %% @end
 %%--------------------------------------------------------------------
 -spec handle_json({json, JSON :: map()} | {json, StatusCode :: integer(), Headers :: map(), JSON :: map()},
-                  ModFun :: mod_fun(), State :: nova_http_handler:nova_http_state()) ->
-                         nova_handlers:handler_return() | no_return().
+                  ModFun :: mod_fun(), State) -> {ok, State} when
+      State :: nova_http_handler:nova_http_state().
 handle_json({json, StatusCode, Headers, JSON}, _ModFun, State) ->
     try json:encode(JSON, [binary, maps]) of
         EncodedJSON ->
             Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, Headers),
-            {ok, StatusCode, Headers0, EncodedJSON, State}
+            State0 = nova_http:set_headers(Headers0, State),
+            State1 = nova_http:set_body(EncodedJSON, State0),
+            State2 = nova_http:set_status(StatusCode, State1),
+            {ok, State2}
     catch
         Type:Reason:Stacktrace ->
             ?ERROR("Error while processing JSON. Type: ~p Reason: ~p Stacktrace: ~p", [Type, Reason, Stacktrace]),
@@ -74,8 +77,8 @@ handle_json({json, JSON}, ModFun, State = #{req := #{method := Method}}) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec handle_ok({ok, Variables :: erlydtl_vars()} | {ok, Variables :: erlydtl_vars(), Options :: map()},
-                ModFun :: mod_fun(), State :: nova_http_handler:nova_http_state()) ->
-                       nova_handlers:handler_return() | no_return().
+                ModFun :: mod_fun(), State) -> {ok, State} when
+      State :: nova_http_handler:nova_http_state().
 handle_ok({ok, Variables}, {Mod, _Func}, State) ->
     %% Derive the view from module
     ViewNameAtom = get_view_name(Mod),
@@ -112,22 +115,29 @@ handle_ok({ok, Variables, Options}, {Mod, _Func}, State) ->
 -spec handle_status({status, StatusCode :: integer()} |
                     {status, StatusCode :: integer(), ExtraHeaders :: map()} |
                     {status, StatusCode :: integer(), ExtraHeaders :: map(), Body :: binary() | map()},
-                    ModFun :: mod_fun(), State :: nova_http_handler:nova_http_state()) ->
-                           nova_handlers:handler_return().
+                    ModFun :: mod_fun(), State) -> {ok, State} when
+      State :: nova_http_handler:nova_http_state().
 handle_status({status, Status, ExtraHeaders, JSON}, _ModFun, State) when is_map(JSON) ->
     %% We do not need to render a status page since we just return a JSON structure
     Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, ExtraHeaders),
-    {ok, Status, Headers0, json:encode(JSON, [binary]), State};
+    State0 = nova_http:set_headers(Headers0, State),
+    State1 = nova_http:set_status(Status, State0),
+    State2 = nova_http:set_body(json:encode(JSON, [binary]), State1),
+    {ok, State2};
 handle_status({status, Status, ExtraHeaders, Body}, _ModFun, State) when is_binary(Body) ->
     %% Body is a binary - just send it out
-    {ok, Status, ExtraHeaders, Body, State};
-handle_status({status, Status, ExtraHeaders}, _ModFun, State = #{req := Req}) ->
-    case nova_router:status_page(Status, Req) of
-        {ok, _StatusCode, StatusHeaders, StatusBody, _} ->
-            Headers0 = maps:merge(ExtraHeaders, StatusHeaders),
-            {ok, Status, Headers0, StatusBody, State};
+    State0 = nova_http:set_headers(ExtraHeaders, State),
+    State1 = nova_http:set_status(Status, State0),
+    State2 = nova_http:set_body(Body, State1),
+    {ok, State2};
+handle_status({status, Status, ExtraHeaders}, _ModFun, State = #{req := _Req}) ->
+    State0 = nova_http:set_headers(ExtraHeaders, State),
+    State1 = nova_http:set_status(Status, State0),
+    case nova_router:status_page(Status, State1) of
+        {ok, State2} ->
+            {ok, State2};
         {error, not_found} ->
-            {ok, Status, ExtraHeaders, <<>>, State}
+            {ok, State1}
     end;
 handle_status({status, Status}, ModFun, State) ->
     handle_status({status, Status, #{}}, ModFun, State).
@@ -141,11 +151,12 @@ handle_status({status, Status}, ModFun, State) ->
 %% @end
 %%-----------------------------------------------------------------
 -spec handle_redirect({redirect, Route :: list()}, ModFun :: mod_fun(),
-                      State :: nova_http_handler:nova_http_state()) ->
-                             nova_handlers:handler_return().
+                      State) -> {ok, State} when State :: nova_http_handler:nova_http_state().
 handle_redirect({redirect, Route}, _ModFun, State) ->
     Headers = #{<<"Location">> => list_to_binary(Route)},
-    {ok, 302, Headers, <<>>, State}.
+    State0 = nova_http:set_headers(Headers, State),
+    State1 = nova_http:set_status(302, State0),
+    {ok, State1}.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -155,11 +166,13 @@ handle_redirect({redirect, Route}, _ModFun, State) ->
 -spec handle_sendfile({sendfile, StatusCode :: integer(), Headers :: map(), {Offset :: integer(),
                                                                              Length :: integer(),
                                                                              Path :: list()}, Mime :: binary()},
-                  ModFun :: mod_fun(), State :: nova_http_handler:nova_http_state()) ->
-                         nova_handlers:handler_return() | no_return().
+                  ModFun :: mod_fun(), State) -> {ok, State} when State :: nova_http_handler:nova_http_state().
 handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _ModFun, State) ->
     Headers0 = maps:merge(#{<<"content-type">> => Mime}, Headers),
-    {ok, StatusCode, Headers0, {sendfile, Offset, Length, Path}, State}.
+    State0 = nova_http:set_headers(Headers0, State),
+    State1 = nova_http:set_body({sendfile, Offset, Length, Path}, State0),
+    State2 = nova_http:set_status(StatusCode, State1),
+    {ok, State2}.
 
 
 %%%===================================================================
@@ -176,8 +189,10 @@ handle_view(View, Variables, Options, State) ->
                 UserHeaders
         end,
     StatusCode = maps:get(status_code, Options, 200),
-    {ok, StatusCode, Headers, HTML, State}.
-
+    State0 = nova_http:set_headers(Headers, State),
+    State1 = nova_http:set_body(HTML, State0),
+    State2 = nova_http:set_status(StatusCode, State1),
+    {ok, State2}.
 
 render_dtl(View, Variables, Options) ->
     case code:is_loaded(View) of

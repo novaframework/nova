@@ -20,15 +20,18 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Public functions        %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 -type nova_http_state() :: #{mod := atom(),
                              func := atom(),
-                             methods := [binary()] | '_',
-                             %% Intermediate data blow
+                             options := map(),
+                             secure := false | {atom(), atom()},
+                             app := atom(),
                              resp_status := integer(),
                              req := cowboy_req:req(),
                              %% This structure is sent to the controller
                              controller_data := map(),
                              _ := _}.
+
 -export_type([nova_http_state/0]).
 
 
@@ -43,8 +46,16 @@
                   {ok, Req0 :: cowboy_req:req(), State0 :: nova_http_state()}.
 init(Req, no_route) ->
     %% This is called on when cowboy matched the catch-all route.
-    State = #{resp_status => 404, req => Req, controller_data => #{}, mod => undefined,
-              func => undefined, methods => '_'},
+    State = #{resp_status => 404,
+              req => Req,
+              controller_data => #{},
+              app => '__dummy__',
+              mod => '__dummy__',
+              func => '__dummy__',
+              options => #{},
+              secure => false
+             },
+
     {ok, PrePlugins} = nova_plugin:get_plugins(pre_http_request),
     {ok, State0} = render_page(404, State),
 
@@ -60,26 +71,34 @@ init(Req, no_route) ->
     Req1 = cowboy_req:reply(StatusCode, Req0),
     {ok, Req1, no_route}; %% Just continue with no_route as state
 
-init(Req, State) ->
-    State0 = State#{resp_status => 200, req => Req},
-
-    {ok, PrePlugins} = nova_plugin:get_plugins(pre_http_request),
-    #{req := Req0, resp_status := StatusCode} =
-        case run_plugins(PrePlugins, pre_http_request, State0) of
-            {ok, State1} ->
-                %% Call the controller
-                {ok, State2} = invoke_controller(State1),
-                %% Invoke post_http_request plugins
-                {ok, PostPlugins} = nova_plugin:get_plugins(post_http_request),
-                {_, State3} = run_plugins(PostPlugins, post_http_request, State2),
-                State3;
-            {stop, State1} ->
-                State1
-        end,
-    %% Here we send out the response to the client
-    Req1 = cowboy_req:reply(StatusCode, Req0),
-    %% We return the initial state since we don't want to have the intermediate things stored in cowboy
-    {ok, Req1, State}.
+init(Req = #{method := Method}, State = #{entries := Routes}) ->
+    case get_route(Method, Routes) of
+        undefined ->
+            %% We need to check that there's no '_' in entries
+            Req1 = cowboy_req:reply(405, Req),
+            {ok, Req1, State#{resp_status => 405, req => Req1}};
+        RouteDetails ->
+            NormalizedState = maps:remove(entries, State),
+            NormalizedState0 = maps:merge(NormalizedState, RouteDetails),
+            State0 = NormalizedState0#{resp_status => 200, req => Req},
+            {ok, PrePlugins} = nova_plugin:get_plugins(pre_http_request),
+            #{req := Req0, resp_status := StatusCode} =
+                case run_plugins(PrePlugins, pre_http_request, State0) of
+                    {ok, State1} ->
+                        %% Call the controller
+                        {ok, State2} = invoke_controller(State1),
+                        %% Invoke post_http_request plugins
+                        {ok, PostPlugins} = nova_plugin:get_plugins(post_http_request),
+                        {_, State3} = run_plugins(PostPlugins, post_http_request, State2),
+                        State3;
+                    {stop, State1} ->
+                        State1
+                end,
+            %% Here we send out the response to the client
+            Req1 = cowboy_req:reply(StatusCode, Req0),
+            %% We return the initial state since we don't want to have the intermediate things stored in cowboy
+            {ok, Req1, State}
+    end.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -90,16 +109,8 @@ init(Req, State) ->
 %%--------------------------------------------------------------------
 %% Methods for this path is defined as a 'catch_all' so just continue executing
 -spec invoke_controller(State :: nova_http_state()) -> {ok, State0 :: nova_http_state()}.
-invoke_controller(State = #{mod := Mod, func := Func, methods := '_'}) ->
-    handle(Mod, Func, State);
-%% We have a list of methods we allow, so check if they match the one requested before continuing
-invoke_controller(State = #{req := #{method := ReqMethod}, methods := Methods}) ->
-    case lists:any(fun(X) -> X == ReqMethod end, Methods) of
-        true ->
-            invoke_controller(State#{methods := '_'});
-        false ->
-            render_page(405, State)
-    end.
+invoke_controller(State = #{mod := Mod, func := Func}) ->
+    handle(Mod, Func, State).
 
 
 %%--------------------------------------------------------------------
@@ -116,9 +127,7 @@ handle(Mod, Fun, State = #{req := Req, controller_data := ControllerData}) ->
         RetObj ->
             case nova_handlers:get_handler(element(1, RetObj)) of
                 {ok, Callback} ->
-                    {ok, StatusCode, Headers, Body, State0} = Callback(RetObj, {Mod, Fun}, State),
-                    Req0 = set_resp(Headers, Body, Req),
-                    {ok, State0#{req => Req0, resp_status => StatusCode}};
+                    {ok, _} = Callback(RetObj, {Mod, Fun}, State);
                 _ ->
                     ?ERROR("Unknown return object ~p returned from module: ~p function: ~p", [RetObj, Mod, Fun]),
                     render_page(500, State, {Mod, Fun, 1, "Unknown return object ~p returned from module: ~s:~s/1",
@@ -140,17 +149,15 @@ handle(Mod, Fun, State = #{req := Req, controller_data := ControllerData}) ->
 %% with the rendered body. Otherwise a request with a blank body will be returned.
 %% @end
 %%--------------------------------------------------------------------
--spec render_page(StatusCode :: integer(), State :: nova_http_state()) -> {ok, State0 :: nova_http_state()}.
-render_page(StatusCode, State = #{req := Req}) ->
-    {ok, StatusCode, Headers, Body, State0} =
-        case nova_router:status_page(StatusCode, State) of
-            {error, _} ->
-                {ok, StatusCode, #{}, <<>>, State};
-            FoundPage ->
-                FoundPage
-        end,
-    Req0 = set_resp(Headers, Body, maps:get(req, State0, Req)),
-    {ok, State0#{resp_status => StatusCode, req => Req0}}.
+-spec render_page(StatusCode :: integer(), State) -> {ok, State} when State :: nova_http_state().
+render_page(StatusCode, State) ->
+    case nova_router:status_page(StatusCode, State) of
+        {error, _} ->
+            State0 = nova_http:set_status(StatusCode, State),
+            {ok, State0};
+        {ok, State0} ->
+            {ok, State0}
+    end.
 
 
 %%--------------------------------------------------------------------
@@ -180,8 +187,10 @@ render_page(500, State = #{req := Req}, {Module, Function, Arity, Format, Args})
             FoundPage ->
                 FoundPage
         end,
-    Req0 = set_resp(Headers, Body, maps:get(req, State0, Req)),
-    {ok, State0#{req => Req0, resp_status => StatusCode}};
+    Req0 = nova_http:set_headers(Headers, Req),
+    Req1 = nova_http:set_body(Body, Req0),
+    Req2 = nova_http:set_status(StatusCode, Req1),
+    {ok, State0#{req => Req2, resp_status => StatusCode}};
 render_page(500, State = #{req := Req}, {Module, Function, Arity, Type, Reason, Stacktrace}) ->
     {ok, StatusCode, Headers, Body, State0} =
         case nova_router:status_page(500, State) of
@@ -198,8 +207,10 @@ render_page(500, State = #{req := Req}, {Module, Function, Arity, Type, Reason, 
             Page ->
                 Page
         end,
-    Req0 = set_resp(Headers, Body, maps:get(req, State0, Req)),
-    {ok, State0#{req => Req0, resp_status => StatusCode}}.
+    Req0 = nova_http:set_headers(Headers, Req),
+    Req1 = nova_http:set_body(Body, Req0),
+    Req2 = nova_http:set_status(StatusCode, Req1),
+    {ok, State0#{req => Req2, resp_status => StatusCode}}.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -240,9 +251,10 @@ run_plugins([{_Prio, #{id := Id, module := Module, options := Options}}|Tl], Cal
             {stop, State0}
     end.
 
-set_resp(Headers, Body, Req) ->
-    Req0 = cowboy_req:set_resp_headers(Headers, Req),
-    cowboy_req:set_resp_body(Body, Req0).
+get_route(Route, Routes = #{'_' := V}) ->
+    maps:get(Route, Routes, V);
+get_route(Route, Routes) ->
+    maps:get(Route, Routes, undefined).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Eunit functions         %
