@@ -9,7 +9,8 @@
 {dir, "{{name}}/src/controllers"}.
 {dir, "{{name}}/src/views"}.
 
-{template, "nova/sys.config", "{{name}}/config/sys.config"}.
+{template, "nova/dev_sys.config", "{{name}}/config/dev_sys.config"}.
+{template, "nova/prod_sys.config", "{{name}}/config/prod_sys.config"}.
 {template, "nova/routes.erl", "{{name}}/priv/{{name}}.routes.erl"}.
 {template, "nova/app.src", "{{name}}/src/{{name}}.app.src"}.
 {template, "nova/app.erl", "{{name}}/src/{{name}}_app.erl"}.

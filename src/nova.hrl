@@ -1,0 +1,3 @@
+-define(NOVA_LISTENER, nova_listener).
+-define(NOVA_STD_PORT, 8080).
+-define(NOVA_STD_SSL_PORT, 8443).

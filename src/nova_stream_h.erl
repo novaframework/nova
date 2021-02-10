@@ -48,7 +48,9 @@ data(StreamID, IsFin, Data, State = #state{next = Next}) ->
 info(StreamID, {response, Code, _Headers, _Body} = Info, State = #state{next = Next, req = Req})
   when is_integer(Code) ->
     case nova_router:status_page(Code, Req) of
-        {ok, StatusCode, StatusHeaders, StatusBody, _} ->
+        {ok, _NovaHttpState = #{req := Req, resp_status := StatusCode}} ->
+            StatusHeaders = cowboy_req:resp_headers(Req),
+            StatusBody = maps:get(resp_body, Req, <<"">>),
             {[{error_response, StatusCode, StatusHeaders, StatusBody},
               stop], State};
         _ ->
@@ -69,7 +71,9 @@ terminate(StreamID, Reason, #state{next = Next}) ->
                         when Resp::cowboy_stream:resp_command().
 early_error(StreamID, Reason, PartialReq, {_, Status, _Headers, _} = Resp, Opts) ->
     case nova_router:status_page(Status, PartialReq) of
-        {ok, StatusCode, StatusHeaders, StatusBody, _} ->
+        {ok, _NovaHttpState = #{req := Req, resp_status := StatusCode}} ->
+            StatusHeaders = cowboy_req:resp_headers(Req),
+            StatusBody = maps:get(resp_body, Req, <<"">>),
             {response, StatusCode, StatusHeaders, StatusBody};
         _ ->
             cowboy_stream:early_error(StreamID, Reason, PartialReq, Resp, Opts)

@@ -15,7 +15,7 @@ inventory(tags) -> [url].
 
 url([Url|Variables], _Options) ->
     App = proplists:get_value(application, Variables),
-    case nova_router:get_app(binary_to_atom(App, utf8)) of
+    case nova_router:get_app_info(binary_to_atom(App, utf8)) of
         {error, _} ->
             ?WARNING("Could not find application: ~p. Called from erlydtl-tag 'url'.", [App]),
             <<"#">>;

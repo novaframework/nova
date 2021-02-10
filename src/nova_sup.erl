@@ -13,7 +13,8 @@
 %% Supervisor callbacks
 -export([init/1]).
 
--include_lib("nova/include/nova.hrl").
+-include("include/nova.hrl").
+-include("nova.hrl").
 
 -define(SERVER, ?MODULE).
 
@@ -99,7 +100,7 @@ setup_cowboy(Configuration) ->
         {ok, _} ->
             ok;
         {error, Error} ->
-            ?WARNING("Cowboy could not start reason: ~p", [Error])
+            ?ERROR("Cowboy could not start reason: ~p", [Error])
     end.
 
 start_cowboy(Configuration) ->
@@ -115,19 +116,19 @@ start_cowboy(Configuration) ->
     case maps:get(use_ssl, Configuration, false) of
         false ->
             cowboy:start_clear(
-              nova_listener,
-              [{port, maps:get(port, Configuration, 8080)}],
+              ?NOVA_LISTENER,
+              [{port, maps:get(port, Configuration, ?NOVA_STD_PORT)}],
               CowboyOptions);
         _ ->
             CACert = maps:get(ca_cert, Configuration),
             Cert = maps:get(cert, Configuration),
-            Port = maps:get(ssl_port, Configuration, 8443),
+            Port = maps:get(ssl_port, Configuration, ?NOVA_STD_SSL_PORT),
             ?INFO("Nova is starting SSL on port ~p", [Port]),
             cowboy:start_tls(
-              nova_listener, [
-                              {port, Port},
-                              {certfile, Cert},
-                              {cacertfile, CACert}
-                             ],
+              ?NOVA_LISTENER, [
+                               {port, Port},
+                               {certfile, Cert},
+                               {cacertfile, CACert}
+                              ],
               CowboyOptions)
     end.
