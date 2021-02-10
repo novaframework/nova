@@ -7,7 +7,7 @@
   {applications,[
                  kernel,
                  stdlib,
-                 %%sasl,
+                 sasl,
                  ranch,
                  cowboy,
                  compiler,
