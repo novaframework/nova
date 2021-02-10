@@ -130,7 +130,7 @@ handle_status({status, Status, ExtraHeaders, Body}, _ModFun, State) when is_bina
     State1 = nova_http:set_status(Status, State0),
     State2 = nova_http:set_body(Body, State1),
     {ok, State2};
-handle_status({status, Status, ExtraHeaders}, _ModFun, State = #{req := Req}) ->
+handle_status({status, Status, ExtraHeaders}, _ModFun, State = #{req := _Req}) ->
     State0 = nova_http:set_headers(ExtraHeaders, State),
     State1 = nova_http:set_status(Status, State0),
     case nova_router:status_page(Status, State1) of

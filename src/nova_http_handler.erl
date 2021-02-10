@@ -127,11 +127,7 @@ handle(Mod, Fun, State = #{req := Req, controller_data := ControllerData}) ->
         RetObj ->
             case nova_handlers:get_handler(element(1, RetObj)) of
                 {ok, Callback} ->
-                    {ok, StatusCode, Headers, Body, State0} = Callback(RetObj, {Mod, Fun}, State),
-                    Req0 = nova_http:set_headers(Headers, Req),
-                    Req1 = nova_http:set_body(Body, Req0),
-                    Req2 = nova_http:set_status(StatusCode, Req1),
-                    {ok, State0#{req => Req2, resp_status => StatusCode}};
+                    {ok, _} = Callback(RetObj, {Mod, Fun}, State);
                 _ ->
                     ?ERROR("Unknown return object ~p returned from module: ~p function: ~p", [RetObj, Mod, Fun]),
                     render_page(500, State, {Mod, Fun, 1, "Unknown return object ~p returned from module: ~s:~s/1",
