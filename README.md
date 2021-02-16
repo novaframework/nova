@@ -22,11 +22,21 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/novaframework/nova/master/
 sh -c "$(wget -O- https://raw.githubusercontent.com/novaframework/nova/master/tools/install.sh)"
 ```
 
+*via plugin*
+Add rebar3_nova to ~/.config/rebar3/rebar.config
+```erlang
+{project_plugins, [rebar3_nova]}
+```
+
+
 After this is done use `rebar3` to generate a new project with Nova.
 
 ```bash
 rebar3 new nova my_first_nova
 ```
+
+
+
 
 ## Supported Erlang versions
 
