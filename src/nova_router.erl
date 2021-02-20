@@ -185,7 +185,7 @@ collect_routes() ->
 %%--------------------------------------------------------------------
 -spec add_route(RouteInfo :: route_info(), Route :: route()) -> ok.
 add_route(RouteInfo, Route = {_, FileOrDir}) when is_list(FileOrDir) ->
-    gen_server:cast(?SERVER, {add_static, RouteInfo, Route});
+    gen_server:cast(?SERVER, {add_route, RouteInfo, {static, Route}});
 add_route(RouteInfo, Route) ->
     gen_server:cast(?SERVER, {add_route, RouteInfo, Route}).
 
@@ -280,7 +280,6 @@ handle_cast({add_route, #{application := Application, prefix := Prefix,
             {noreply, State#state{static_route_table = SRT0, apps = AppsInfo0}};
         {Label, #{route := Route, entries := RouteEntry} = NovaRouteObj} when Label == route orelse
                                                                               Label == static ->
-
             AppsInfo0 = add_route_to_app(Application, Prefix, Host, Secure, RouteDetails, AppsInfo),
             HostRoutes = maps:get(Host, RouteTable, #{}),
             RouteObj =
