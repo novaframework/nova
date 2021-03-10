@@ -67,7 +67,8 @@ init([]) ->
                 child(nova_router, nova_router, [BootstrapApp]),
                 child(nova_handlers, nova_handlers),
                 child(nova_plugin, nova_plugin),
-                child(SessionManager, SessionManager)
+                child(SessionManager, SessionManager),
+                child(nova_watcher, nova_watcher)
                ],
 
     case application:get_env(nova, dev_mode, false) of
@@ -76,6 +77,7 @@ init([]) ->
         true ->
             ?INFO("Starting nova in developer mode...")
     end,
+
     {ok, {SupFlags, Children}}.
 
 
