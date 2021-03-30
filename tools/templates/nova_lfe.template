@@ -9,8 +9,7 @@
 {dir, "{{name}}/src/controllers"}.
 {dir, "{{name}}/src/views"}.
 
-{template, "nova/sys.config", "{{name}}/config/sys.config"}.
-{template, "nova_lfe/routes.lfe", "{{name}}/priv/{{name}}.routes.lfe"}.
+{template, "nova/dev_sys.config", "{{name}}/config/sys.config"}.
 {template, "nova/app.src", "{{name}}/src/{{name}}.app.src"}.
 {template, "nova_lfe/app.lfe", "{{name}}/src/app.lfe"}.
 {template, "nova_lfe/sup.lfe", "{{name}}/src/sup.lfe"}.
