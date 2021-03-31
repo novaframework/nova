@@ -53,6 +53,7 @@
 -export([
          start_link/1,
          get_app_info/1,
+         get_all_routes/0,
          add_route/2,
          apply_routes/0,
          status_page/2
@@ -147,7 +148,14 @@ start_link(BootstrapApp) ->
 status_page(StatusCode, NovaHttpState) when is_integer(StatusCode) ->
     gen_server:call(?SERVER, {status_page, StatusCode, NovaHttpState}).
 
-
+%%--------------------------------------------------------------------
+%% @doc
+%% Returns all routes that's been processed by the router.
+%% @end
+%%--------------------------------------------------------------------
+-spec get_all_routes() -> {ok, #{route_table => map(), static_routes => map()}}.
+get_all_routes() ->
+    gen_server:call(?SERVER, {get_all_routes}).
 %%--------------------------------------------------------------------
 %% @doc
 %% Returns information about a specified app. This information contains
@@ -249,6 +257,10 @@ handle_call({get_app, App}, _From, State = #state{apps = AppsInfo}) ->
                 {ok, AppInfo}
         end,
     {reply, Return, State};
+handle_call({get_all_routes}, _From, State = #state{static_route_table = SRT,
+                                                    route_table = RT}) ->
+    {reply, {ok, #{static_routes => SRT,
+                   route_table => RT}}, State};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
