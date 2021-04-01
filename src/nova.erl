@@ -8,7 +8,8 @@
 -export([
          get_main_app/0,
          application_loaded/1,
-         get_env/2
+         get_env/2,
+         set_env/2
         ]).
 
 
@@ -52,4 +53,20 @@ get_env(Parameter, Default) ->
             application:get_env(App, Parameter, Default);
         _ ->
             undefined
+    end.
+
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Sets an environment variable for the main application.
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec set_env(Key :: atom(), Value :: any()) -> ok | {error, main_app_not_found}.
+set_env(Key, Value) ->
+    case get_main_app() of
+        {ok, App} ->
+            application:set_env(App, Key, Value);
+        _ ->
+            {error, main_app_not_found}
     end.

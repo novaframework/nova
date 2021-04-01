@@ -47,8 +47,8 @@ init(Req = #{method := Method}, State = #{entries := Routes}) ->
                 {ok, State0 = #{controller_data := ControllerData, mod := Mod}} ->
                     ControllerData0 = ControllerData#{req => Req},
                     upgrade_ws(Mod, Req, State0, ControllerData0);
-                Stop ->
-                    Stop
+                {stop, State0} ->
+                    {ok, Req, State0}
             end
     end.
 
