@@ -10,18 +10,6 @@
 
 ## Getting started
 
-Start by adding the `rebar3` template for Nova. This can be done by running the installation script;
-
-*Via curl*
-```bash
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/novaframework/nova/master/tools/install.sh)"
-```
-
-*Via wget*
-```bash
-sh -c "$(wget -O- https://raw.githubusercontent.com/novaframework/nova/master/tools/install.sh)"
-```
-
 *via plugin*
 Add rebar3_nova to ~/.config/rebar3/rebar.config
 ```erlang
