@@ -4,20 +4,22 @@
 %%% @doc
 %%%
 %%% @end
-%%% Created :  3 Mar 2021 by Niclas Axelsson <niclas@burbas.se>
+%%% Created : 22 May 2021 by Niclas Axelsson <niclas@burbas.se>
 %%%-------------------------------------------------------------------
--module(nova_watcher).
+-module(nova_cache).
 
 -behaviour(gen_server).
 
 %% API
 -export([
-         start_link/0,
-         async_cast/4,
-         async_cast/3,
-         async_cast/2,
-         async_cast/1,
-         stop/0
+         start_link/1,
+         init_cache/1,
+         remove_cache/1,
+         get/2,
+         set/4,
+         set/3,
+         delete/2,
+         flush/1
         ]).
 
 %% gen_server callbacks
@@ -31,13 +33,11 @@
          format_status/2
         ]).
 
--include_lib("nova/include/nova.hrl").
-
--define(SERVER, ?MODULE).
-
 -record(state, {
-                process_refs = [] :: [pid()]
+                table
                }).
+
+-define(DEFAULT_TTL, 3600000).
 
 %%%===================================================================
 %%% API
@@ -48,28 +48,42 @@
 %% Starts the server
 %% @end
 %%--------------------------------------------------------------------
--spec start_link() -> {ok, Pid :: pid()} |
-                      {error, Error :: {already_started, pid()}} |
-                      {error, Error :: term()} |
-                      ignore.
-start_link() ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+-spec start_link(Cache :: atom()) -> {ok, Pid :: pid()} |
+                                     {error, Error :: {already_started, pid()}} |
+                                     {error, Error :: term()} |
+                                     ignore.
+start_link(Cache) ->
+    gen_server:start_link(?MODULE, Cache, []).
 
-async_cast(Application, Cmd, Args, Options) ->
-    gen_server:cast(?SERVER, {async, Application, Cmd, Args, Options}).
+remove_cache(Cachename) ->
+    nova_cache_sup:remove_cache(Cachename).
 
-async_cast(Application, Cmd, Options) ->
-    async_cast(Application, Cmd, [], Options).
+init_cache(Cachename) ->
+    nova_cache_sup:init_cache(Cachename).
 
-async_cast(Cmd, Options) ->
-    async_cast(nova:get_main_app(), Cmd, Options).
+get(Cache, Key) ->
+    %% Since the values is in a protected ETS table we are allowed to read but not write
+    case ets:lookup(Cache, Key) of
+        [] ->
+            {error, not_found};
+        [{_Key, Value, _TimerRef}] ->
+            {ok, Value}
+    end.
 
-async_cast(Cmd) ->
-    async_cast(Cmd, #{}).
+set(Cache, Key, Value, TTL) ->
+    {ok, Id} = nova_cache_sup:get_cache(Cache),
+    gen_server:call(Id, {set, Key, Value, TTL}).
 
+set(Cache, Key, Value) ->
+    set(Cache, Key, Value, ?DEFAULT_TTL).
 
-stop() ->
-    gen_server:call(?SERVER, stop).
+delete(Cache, Key) ->
+    {ok, Id} = nova_cache_sup:get_cache(Cache),
+    gen_server:call(Id, {delete, Key}).
+
+flush(_Cache) ->
+    ok.
+
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -86,11 +100,14 @@ stop() ->
                               {ok, State :: term(), hibernate} |
                               {stop, Reason :: term()} |
                               ignore.
-init([]) ->
+init(Cache) ->
     process_flag(trap_exit, true),
-    CmdList = nova:get_env(watchers, []),
-    [ async_cast(Cmd, Args) || {Cmd, Args} <- CmdList ],
-    {ok, #state{}}.
+    Tid = ets:new(Cache, [protected,
+                          {read_concurrency, true},
+                          {write_concurrency, false},
+                          named_table,
+                          set]),
+    {ok, #state{table = Tid}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -107,11 +124,23 @@ init([]) ->
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
                          {stop, Reason :: term(), NewState :: term()}.
-handle_call(stop, _From, State) ->
-    {stop, normal, ok, State};
-handle_call(Request, _From, State) ->
+handle_call({set, Key, Value, TTL}, _From, State = #state{table = Table}) ->
+    case ets:lookup(Table, Key) of
+        [] ->
+            %% Start timer to invalidate the cache
+            TimerRef = erlang:send_after(TTL, self(), {invalidate, Key}),
+            %% Insert
+            ets:insert(Table, {Key, Value, TimerRef});
+        [{Key, _OtherValue, OldTimerRef}] ->
+            %% Cancel old timer
+            erlang:cancel_timer(OldTimerRef),
+            TimerRef = erlang:send_after(TTL, self(), {invalidate, Key}),
+            %% Insert
+            ets:insert(Table, {Key, Value, TimerRef})
+    end,
+    {reply, ok, State};
+handle_call(_Request, _From, State) ->
     Reply = ok,
-    ?ERROR("Unknown request: ~p", [Request]),
     {reply, Reply, State}.
 
 %%--------------------------------------------------------------------
@@ -125,21 +154,6 @@ handle_call(Request, _From, State) ->
                          {noreply, NewState :: term(), Timeout :: timeout()} |
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), NewState :: term()}.
-handle_cast({async, Application, Cmd, Args, Options}, State = #state{process_refs = ProcessRefs}) ->
-    LibDir = code:lib_dir(Application),
-    Workdir =
-        case maps:get(workdir, Options, undefined) of
-            undefined ->
-                LibDir;
-            Subdir ->
-                filename:join([LibDir, Subdir])
-        end,
-    %% Set working directory
-    file:set_cwd(Workdir),
-    ArgList = string:join(Args, " "),
-    Port = erlang:open_port({spawn, Cmd ++ " " ++ ArgList}, []),
-    ?INFO("[NOVA_WATCHER] Started command ~s with args ~s", [Cmd, ArgList]),
-    {noreply, State#state{process_refs = [Port|ProcessRefs]}};
 handle_cast(_Request, State) ->
     {noreply, State}.
 
@@ -154,19 +168,10 @@ handle_cast(_Request, State) ->
                          {noreply, NewState :: term(), Timeout :: timeout()} |
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: normal | term(), NewState :: term()}.
-handle_info({_ProcessRef, {data, Data}}, State) ->
-    ?DEBUG("[NOVA_WATCHER] ~s", [Data]),
+handle_info({invalidate, Key}, State = #state{table = Table}) ->
+    %% This is an event that should only be used by erlang:send_after/3 so no need to cancel the timer
+    ets:delete(Table, Key),
     {noreply, State};
-handle_info({'EXIT', Ref, Reason}, State = #state{process_refs = Refs}) ->
-    %% Remove the port from our list
-    Refs2 = lists:delete(Ref, Refs),
-    case Reason of
-        normal ->
-            ok;
-        _ ->
-            ?WARNING("[NOVA_WATCHER] Process exited with reason: ~p", [Reason])
-    end,
-    {noreply, State#state{process_refs = Refs2}};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -181,11 +186,11 @@ handle_info(_Info, State) ->
 %%--------------------------------------------------------------------
 -spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
                 State :: term()) -> any().
-terminate(_Reason, #state{process_refs = Refs}) ->
-    %% Clean up the ports
-    lists:foreach(fun(PortRef) ->
-                          erlang:port_close(PortRef)
-                  end, Refs),
+terminate(_Reason, #state{table = Table}) ->
+    %% Cancel all the timers
+    [ erlang:cancel_timer(TimerRef) || {_, _, TimerRef} <- ets:tab2list(Table) ],
+    %% Delete the table
+    ets:delete(Table),
     ok.
 
 %%--------------------------------------------------------------------
@@ -217,29 +222,3 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-
-
-
-
-
-
-%%%===================================================================
-%%% Tests
-%%%===================================================================
-
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
-
-simple_ls_test_() ->
-    {setup,
-     fun() ->
-             ?MODULE:start_link()
-     end,
-     fun(_) ->
-             ?MODULE:stop()
-     end,
-     fun(_) ->
-             [?_assertEqual(?MODULE:async_cast("ls"), ok)]
-     end}.
-
--endif.
