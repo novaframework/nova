@@ -1,599 +1,449 @@
 %%%-------------------------------------------------------------------
 %%% @author Niclas Axelsson <niclas@burbas.se>
+%%% @copyright (C) 2021, Niclas Axelsson
 %%% @doc
-%%% <i>Nova router</i> is in charge of all routing in Nova. When a nova application
-%%% is started its routing-file is read and processed by the router. You should
-%%% not use this module directly if you're not certain of what you are doing.
 %%%
-%%% A basic routing file could look something like this;
-%%% <code title="priv/my_demo_app.routes.erl">
-%%% #{prefix => "",
-%%%   security => false,
-%%%   routes => [
-%%%              {"/", {hello_world_controller, index}},
-%%%              {"/blog", {my_blog_controller, index}},
-%%%              {404, {error_controller, not_found}}
-%%%             ],
-%%%   statics => [
-%%%               {"/assets/[...]", "assets"}
-%%%              ]
-%%%  }.
-%%% </code>
-%%% Lets go through it in sections.
-%%%
-%%% <icode>prefix</icode> - This tells us if the routes should have a common prefix (Eg "/v1" or similar)
-%%%
-%%% <icode>security</icode> - If this is a tuple of type <icode>{Module, Function}</icode> Nova will try and call
-%%% that function each time a page from the <i>routes</i>-section is visited. That function could return either
-%%% true or false, telling nova if the user should be allowed to visit the page or not.
-%%%
-%%% <icode>routes</icode> - Describes the routes inside this block. (An application can have several of these maps
-%%% defined)
-%%%
-%%% <icode>statics</icode> - Routes for all the static assets
-%%%
-%%% <h3>Routing more in detail</h3>
-%%% There's three different ways of describing a route, depending on what kind of protocol (http, websocket) or what
-%%% options you have.
-%%%
-%%% <icode>{Route, {Module, Function}}</icode> - This is a regular route used for HTTP.
 %%% @end
-%%% @todo Extend the introduction to how routing works.
-%%% @end
-%%% Created : 17 Nov 2019 by Niclas Axelsson <niclas@burbasconsulting.com>
-%%% Updated : 28 Dec 2020 by Niclas Axelsson <niclas@burbasconsulting.com>
+%%% Created : 10 Mar 2021 by Niclas Axelsson <niclas@burbas.se>
 %%%-------------------------------------------------------------------
 -module(nova_router).
+-behaviour(cowboy_middleware).
 
--behaviour(gen_server).
-
--callback parse_routefile(Appname :: atom()) -> any().
-
-%% API
 -export([
-         start_link/1,
-         get_app_info/1,
-         add_route/2,
-         apply_routes/0,
-         status_page/2
+         compile/1,
+         execute/2
         ]).
 
-%% Utility functions
--export([
-         parse_routefile/1
-        ]).
+-include_lib("nova/include/nova.hrl").
 
-%% gen_server callbacks
--export([
-         init/1,
-         handle_call/3,
-         handle_cast/2,
-         handle_info/2,
-         terminate/2,
-         code_change/3,
-         format_status/2
-        ]).
+-record(options, {
+                  use_strict = true :: binary(),
+                  bindings = #{} :: map()
+                 }).
 
--include("include/nova.hrl").
--include("nova.hrl").
+%% Method, Module, Function-record
+-record(mmf, {
+              method = '_' :: binary() | '_',
+              app :: atom(),
+              module :: atom(),
+              function :: atom(),
+              secure = false :: false | {Mod :: atom(), Fun :: atom()},
+              extra_state :: any(),
+              protocol = http :: http | static | ws
+             }).
 
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
--endif.
+-record(node, {
+               key = <<>> :: binary() | '__ROOT__',
+               mmf = [] :: [#mmf{}], %% MMF = Method Module Function
+               children = [] :: [#node{}],
+               is_binding = false :: boolean()
+              }).
 
--type route_info() :: #{application := atom(),
-                        prefix := string(),
-                        host := atom() | string(),
-                        security := false | {atom(), atom()},
-                        _ => _}.
--export_type([route_info/0]).
+%% Route information
+-type status_route()      :: {StatusCode :: integer(), {Mod :: atom(), Fun :: atom()}}.
+-type status_route_opt()  :: {StatusCode :: integer(), {Mod :: atom(), Fun :: atom()}, Options :: map()}.
+-type regular_route()     :: {Path :: string(), {Mod :: atom(), Fun :: atom()}}.
+-type regular_route_opt() :: {Path :: string(), {Mod :: atom(), Fun :: atom()}, Options :: map()}.
+-type static_route()      :: {Path :: string(), DirOrFile :: string()}.
+-type static_route_opt()  :: {Path :: string(), DirOrFile :: string(), Options :: map()}.
 
--type route() :: {Route :: string(), {Module :: atom(), Function :: atom()}} |
-                 {Route :: string(), {Module :: atom(), Function :: atom()}, Options :: map()} |
-                 {Route :: string(), Module :: atom(), Function :: atom()} |
-                 {Route :: string(), CallbackInfo :: atom(), Options :: map()} |
-                 {StatusCode :: integer(), {Module :: atom(), Function :: atom()}} |
-                 {Route :: string(), Filename :: string()}.
--export_type([route/0]).
-
-
--type app_info() :: #{name := atom(),
-                      prefix := string(),
-                      host := atom() | string(),
-                      security := false | {atom(), atom()},
-                      routes := [route()]}.
--export_type([app_info/0]).
+-type route() :: status_route() |
+                 status_route_opt() |
+                 regular_route() |
+                 regular_route_opt() |
+                 static_route() |
+                 static_route_opt().
 
 
+-type route_info() :: #{
+                        prefix => string(),
+                        security => false | {Mod :: atom(), Fun :: atom()},
+                        extra_state => any(),
+                        routes => [route()]
+                       }.
 
--define(SERVER, ?MODULE).
+-type dispatch_rules() :: [{Host :: '_' | binary(), #node{}}].
 
--record(state, {
-                worker_pid :: pid() | undefined,
-                main_app :: atom(),
-                apps :: #{AppName :: atom() => app_info()} | #{},
-                route_table :: #{binary() => list()},
-                static_route_table :: #{StatusCode :: integer() => {Mod :: atom(), Func :: atom()}}
-               }).
+-type bindings() :: #{binary() := binary()}.
+-export_type([bindings/0]).
 
-%%%===================================================================
-%%% API
-%%%===================================================================
+compile(Apps) ->
+    compile(Apps, [], #{}).
 
-%%--------------------------------------------------------------------
-%% @doc
-%% Starts the server
-%% @end
-%%--------------------------------------------------------------------
--spec start_link(BootstrapApp :: atom()) -> {ok, Pid :: pid()} |
-                                            {error, Error :: {already_started, pid()}} |
-                                            {error, Error :: term()} |
-                                            ignore.
-start_link(BootstrapApp) ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, BootstrapApp, []).
+-spec compile([route_info()]) -> dispatch_rules().
+compile([], Dispatch, _Options) -> Dispatch;
+compile([App|Tl], Dispatch, Options) ->
+    {M, F} = application:get_env(nova, route_reader, {file, consult}),
+    RoutePath = filename:join([code:priv_dir(App), erlang:atom_to_list(App) ++ ".routes.erl"]),
+    {ok, Routes} = M:F(RoutePath),
 
+    Options1 = case maps:get(prefix, Options, undefined) of
+                   undefined -> Options;
+                   Prefix -> Options#{prefix => Prefix}
+               end,
+    Options2 = case maps:get(secure, Options1, undefined) of
+                   undefined -> Options1;
+                   Secure -> Options1#{secure => Secure}
+               end,
+    Options3 = case maps:get(host, Options2, undefined) of
+                   undefined -> Options2;
+                   Host -> Options2#{host => Host}
+               end,
 
+    Options4 = Options3#{app => App},
 
-%%--------------------------------------------------------------------
-%% @doc
-%% Tries and fetch a status page from the routing table. If a page was
-%% found it will be returned to the requester. If not an error will be
-%% returned.
-%% @end
-%%--------------------------------------------------------------------
--spec status_page(StatusCode :: integer(), NovaHttpState :: nova_http_handler:nova_http_state()) ->
-                         {ok, NovaHttpState0 :: nova_http_handler:nova_http_state()} |
-                                           {error, not_found}.
-status_page(StatusCode, NovaHttpState) when is_integer(StatusCode) ->
-    gen_server:call(?SERVER, {status_page, StatusCode, NovaHttpState}).
+    {ok, Dispatch1, _Options5} = compile_paths(Routes, Dispatch, Options4),
+    compile(Tl, Dispatch1, Options).
 
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Returns information about a specified app. This information contains
-%% route-prefix, host, security rules etc.
-%% @end
-%%--------------------------------------------------------------------
--spec get_app_info(App :: atom()) -> {ok, app_info()} | {error, not_found}.
-get_app_info(App) ->
-    gen_server:call(?SERVER, {get_app_prefix, App}).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Applying all routes read by nova_router
-%% @end
-%%--------------------------------------------------------------------
--spec apply_routes() -> ok.
-apply_routes() ->
-    gen_server:cast(?SERVER, apply_routes).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Collects all the routes for the application and it's included apps.
-%% Starts by using the application marked as 'bootstrap_application'
-%% from the config.
-%% @end
-%%--------------------------------------------------------------------
--spec collect_routes() -> ok.
-collect_routes() ->
-    gen_server:cast(?SERVER, collect_routes).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Add a single route to nova.
-%% @end
-%%--------------------------------------------------------------------
--spec add_route(RouteInfo :: route_info(), Route :: route()) -> ok.
-add_route(RouteInfo, Route = {_, FileOrDir}) when is_list(FileOrDir) ->
-    gen_server:cast(?SERVER, {add_route, RouteInfo, {static, Route}});
-add_route(RouteInfo, Route) ->
-    gen_server:cast(?SERVER, {add_route, RouteInfo, Route}).
-
-
-
-%%%===================================================================
-%%% gen_server callbacks
-%%%===================================================================
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Initializes the server
-%% @end
-%%--------------------------------------------------------------------
--spec init(BootstrapApp :: atom()) -> {ok, State :: term()} |
-                                      {ok, State :: term(), Timeout :: timeout()} |
-                                      {ok, State :: term(), hibernate} |
-                                      {stop, Reason :: term()} |
-                                      ignore.
-init(BootstrapApp) ->
-    process_flag(trap_exit, true),
-    collect_routes(),
-    {ok, #state{route_table = #{},
-                apps = #{},
-                static_route_table = #{},
-                main_app = BootstrapApp
-               }}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling call messages
-%% @end
-%%--------------------------------------------------------------------
--spec handle_call(Request :: term(), From :: {pid(), term()}, State :: term()) ->
-                         {reply, Reply :: term(), NewState :: term()} |
-                         {reply, Reply :: term(), NewState :: term(), Timeout :: timeout()} |
-                         {reply, Reply :: term(), NewState :: term(), hibernate} |
-                         {noreply, NewState :: term()} |
-                         {noreply, NewState :: term(), Timeout :: timeout()} |
-                         {noreply, NewState :: term(), hibernate} |
-                         {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
-                         {stop, Reason :: term(), NewState :: term()}.
-handle_call({status_page, StatusCode, NovaHttpState}, _From, State = #state{static_route_table = SRT}) ->
-    case maps:get(StatusCode, SRT, undefined) of
-        {Mod, Func} ->
-            Reply = nova_http_handler:handle(Mod, Func, NovaHttpState#{mod => dummy,
-                                                                       func => dummy,
-                                                                       methods => '_'}),
-            {reply, Reply, State};
-        _ ->
-            {reply, {error, not_found}, State}
-    end;
-handle_call({get_app, App}, _From, State = #state{apps = AppsInfo}) ->
-    Return =
-        case maps:get(App, AppsInfo, undefined) of
-            undefined ->
-                {error, not_found};
-            AppInfo ->
-                {ok, AppInfo}
-        end,
-    {reply, Return, State};
-handle_call(_Request, _From, State) ->
-    Reply = ok,
-    {reply, Reply, State}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling cast messages
-%% @end
-%%--------------------------------------------------------------------
--spec handle_cast(Request :: term(), State :: term()) ->
-                         {noreply, NewState :: term()} |
-                         {noreply, NewState :: term(), Timeout :: timeout()} |
-                         {noreply, NewState :: term(), hibernate} |
-                         {stop, Reason :: term(), NewState :: term()}.
-handle_cast(collect_routes, State = #state{worker_pid = undefined, main_app = MainApp}) ->
-    {ParseMod, ParseFun} = application:get_env(nova, route_parse_mf, {?MODULE, parse_routefile}),
-    WorkerPid = spawn_link(ParseMod, ParseFun, [MainApp]),
-    {noreply, State#state{worker_pid = WorkerPid}};
-handle_cast({add_route, #{application := Application, prefix := Prefix,
-                          host := Host, security := Secure, controller_data := ControllerData}, RouteDetails},
-            State = #state{static_route_table = SRT, route_table = RouteTable, apps = AppsInfo}) ->
-    InitialState = #{app => Application,
-                     controller_data => ControllerData},
-    case parse_route(RouteDetails, Prefix, Secure, InitialState) of
-        {status, {StatusCode, {Module, Function}}} ->
-            SRT0 = maps:put(StatusCode, {Module, Function}, SRT),
-            AppsInfo0 = add_route_to_app(Application, Prefix, Host, false, RouteDetails, AppsInfo),
-            {noreply, State#state{static_route_table = SRT0, apps = AppsInfo0}};
-        {Label, #{route := Route, entries := RouteEntry} = NovaRouteObj} when Label == route orelse
-                                                                              Label == static ->
-            AppsInfo0 = add_route_to_app(Application, Prefix, Host, Secure, RouteDetails, AppsInfo),
-            HostRoutes = maps:get(Host, RouteTable, #{}),
-            RouteObj =
-                case maps:get(Route, HostRoutes, false) of
-                    false ->
-                        %% There's no previous record of this route - Just add it
-                        NovaRouteObj;
-                    #{entries := ExistingMethods} ->
-                        %% Just merge the existing objects with the route we have
-                        NovaRouteObj#{entries => maps:merge(RouteEntry, ExistingMethods)}
-                end,
-            NewRouteTable = RouteTable#{Host => HostRoutes#{Route => RouteObj}},
-            {noreply, State#state{route_table = NewRouteTable, apps = AppsInfo0}};
-        false ->
-            %% Do not change anything - Something was wrong with this route
-            {noreply, State}
-    end;
-handle_cast(apply_routes, State = #state{route_table = RouteTable}) ->
-    CatchAllRoute = [{'_', [{'_', nova_http_handler, no_route}]}],
-    HostList = maps:to_list(RouteTable),
-    CowboyRoutes = [ to_cowboy_routes(Host, Routes) || {Host, Routes} <- HostList ],
-    Dispatch = cowboy_router:compile(CowboyRoutes ++ CatchAllRoute),
-    ?DEBUG("Applying routes: ~p", [CowboyRoutes]),
-    cowboy:set_env(?NOVA_LISTENER, dispatch, Dispatch),
-    {noreply, State};
-handle_cast(_Request, State) ->
-    {noreply, State}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling all non call/cast messages
-%% @end
-%%--------------------------------------------------------------------
--spec handle_info(Info :: timeout() | term(), State :: term()) ->
-                         {noreply, NewState :: term()} |
-                         {noreply, NewState :: term(), Timeout :: timeout()} |
-                         {noreply, NewState :: term(), hibernate} |
-                         {stop, Reason :: normal | term(), NewState :: term()}.
-handle_info({'EXIT', WorkerPid, normal}, State = #state{worker_pid = WorkerPid}) ->
-    ?DEBUG("WorkerPid ~p exited with reason normal", [WorkerPid]),
-    apply_routes(),
-    {noreply, State#state{worker_pid = undefined}};
-handle_info({'EXIT', WorkerPid, Reason}, State = #state{worker_pid = WorkerPid}) ->
-    ?WARNING("WorkerPid exited with reason ~p. Restarting process", [Reason]),
-    collect_routes(),
-    {noreply, State#state{worker_pid = undefined}};
-handle_info(_Info, State) ->
-    {noreply, State}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% This function is called by a gen_server when it is about to
-%% terminate. It should be the opposite of Module:init/1 and do any
-%% necessary cleaning up. When it returns, the gen_server terminates
-%% with Reason. The return value is ignored.
-%% @end
-%%--------------------------------------------------------------------
--spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
-                State :: term()) -> any().
-terminate(_Reason, _State) ->
-    ok.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Convert process state when code is changed
-%% @end
-%%--------------------------------------------------------------------
--spec code_change(OldVsn :: term() | {down, term()},
-                  State :: term(),
-                  Extra :: term()) -> {ok, NewState :: term()} |
-                                      {error, Reason :: term()}.
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% This function is called for changing the form and appearance
-%% of gen_server status when it is returned from sys:get_status/1,2
-%% or when it appears in termination error logs.
-%% @end
-%%--------------------------------------------------------------------
--spec format_status(Opt :: normal | terminate,
-                    Status :: list()) -> Status :: term().
-format_status(_Opt, Status) ->
-    Status.
-
-%%%===================================================================
-%%% Internal functions
-%%%===================================================================
-
-parse_route({StatusCode, {Module, Function}}, _Prefix, _Secure, _InitialState) when is_integer(StatusCode) ->
-    {status, {StatusCode, {Module, Function}}};
-parse_route({static, {Route, DirOrFile}}, Prefix, Secure, InitialState) ->
-    parse_route({static, {Route, DirOrFile}, #{}}, Prefix, Secure, InitialState);
-parse_route({static, {Route, DirOrFile}, Options}, Prefix, Secure, InitialState) ->
-    Application = maps:get(app, InitialState),
-    case code:lib_dir(Application, priv) of
-        {error, Error} ->
-            ?ERROR("Could not apply route ~s. Could not find priv dir of application ~s, got error: ~p",
-                   [Route, Application, Error]),
-            false;
-        PrivDir ->
-            Filename = filename:join([PrivDir, DirOrFile]),
-            case {filelib:is_dir(Filename), filelib:is_file(Filename)} of
-                {true, _} ->
-                    MethodRoutes = [{X, #{type => priv_dir,
-                                          secure => Secure,
-                                          path => DirOrFile}} || X <- [ get_method(Y) ||
-                                                                          Y <- maps:get(methods, Options, [all]) ] ],
-                    {static, InitialState#{route => Prefix ++ Route,
-                                           entries => maps:from_list(MethodRoutes)}};
-                {_, true} ->
-                    MethodRoutes = [{X, #{type => priv_file,
-                                          secure => Secure,
-                                          path => DirOrFile}} || X <- [ get_method(Y) ||
-                                                                          Y <- maps:get(methods, Options, [all]) ] ],
-                    {static, InitialState#{route => Prefix ++ Route,
-                                           entries => maps:from_list(MethodRoutes)}};
-                _ ->
-                    ?WARNING("Could not find static file ~s which is reffered from the route ~s (app: ~s). " ++
-                                 "Ignoring route", [DirOrFile, Application, Route]),
-                    false
-            end
-    end;
-parse_route({Route, {Module, Function}}, Prefix, Secure, InitialState) ->
-    parse_route({Route, {Module, Function}, #{}}, Prefix, Secure, InitialState);
-parse_route({Route, CallbackInfo, #{protocol := ws} = Options}, Prefix, Secure, InitialState) ->
-    MethodRoutes = [{X, #{mod => CallbackInfo,
-                          secure => Secure,
-                          options => Options,
-                          nova_handler => nova_ws_handler}} || X <- [ get_method(Y) ||
-                                                                        Y <- maps:get(methods, Options, [all]) ] ],
-    {route, InitialState#{route => Prefix ++ Route,
-                          entries => maps:from_list(MethodRoutes)}};
-parse_route({Route, {Module, Function}, Options}, Prefix, Secure, InitialState) ->
-    MethodRoutes = [{X, #{mod => Module,
-                          func => Function,
-                          options => Options,
-                          secure => Secure,
-                          nova_handler => nova_http_handler}} || X <- [ get_method(Y) ||
-                                                                          Y <- maps:get(methods, Options, [all]) ] ],
-    {route, InitialState#{route => Prefix ++ Route,
-                          entries => maps:from_list(MethodRoutes)}};
-parse_route({_Route, _Module, _Function}, _Prefix, _Secure, _InitialState) ->
-    ?DEPRECATED("Route of format {Route, Module, Function} is deprecated!"),
-    false;
-parse_route(Other, _Prefix, _Secure, _InitialState) ->
-    ?WARNING("Could not parse route ~p", [Other]),
-    false.
-
-
-get_method(get)  -> <<"GET">>;
-get_method(post) -> <<"POST">>;
-get_method(put) -> <<"PUT">>;
-get_method(delete) -> <<"DELETE">>;
-get_method(options) -> <<"OPTIONS">>;
-get_method(patch) -> <<"PATCH">>;
-get_method(head) -> <<"HEAD">>;
-get_method(all) -> '_';
-get_method(_) -> throw(unknown_method).
-
-
-add_route_to_app(App, Prefix, Host, Security, Route, AppMap) when is_map(AppMap) ->
-    case maps:get(App, AppMap, undefined) of
-        undefined ->
-            #{App => #{name => App,
-                       prefix => Prefix,
-                       host => Host,
-                       security => Security,
-                       routes => [Route]}};
-        Result ->
-            AppMap#{App => Result#{routes => [Route|maps:get(routes, Result)]}}
+-spec execute(Req, Env)
+             -> {ok, Req, Env} | {stop, Req}
+                    when Req::cowboy_req:req(), Env::cowboy_middleware:env().
+execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch := Dispatch}) ->
+    case find_endpoint(Host, Path, Method, Dispatch) of
+        %% TODO! Fix so we can route on HTTP-codes
+        {error, not_found, path} -> {stop, cowboy_req:reply(404, Req)};
+        {error, not_found, host} -> {stop, cowboy_req:reply(400, Req)};
+        {ok, #mmf{app = App, module = Module, function = Function, secure = Secure, extra_state = ExtraState}, Bindings} ->
+            {ok,
+             Req,
+             Env#{app => App,
+                  module => Module,
+                  function => Function,
+                  secure => Secure,
+                  controller_data => #{},
+                  bindings => Bindings,
+                  extra_state => ExtraState}
+            };
+        _Error ->
+            %% TODO! Fix rendering of an error-page
+            {stop, cowboy_req:reply(404, Req)}
     end.
 
 
-to_cowboy_routes(Host, Routes) when is_map(Routes) ->
-    %% Each key is a route. Transform into a list of [{Route :: binary(), InitialState :: map()}]
-    RoutesList = maps:to_list(Routes),
-    {Host, lists:map(fun({Route, InitialState = #{entries := Entries}}) ->
-                             [K|_] = maps:keys(Entries),
-                             FirstRoute = maps:get(K, Entries),
-                             case maps:get(nova_handler, FirstRoute, undefined) of
-                                 undefined ->
-                                     %% This is a static resource
-                                     Type = maps:get(type, FirstRoute),
-                                     {Route, cowboy_static, {Type, maps:get(app, InitialState),
-                                                             maps:get(path, FirstRoute)}};
-                                 NovaHandler ->
-                                     {Route, NovaHandler, InitialState}
-                             end
-                     end, RoutesList)}.
+%%%%%%%%%%%%%%%%%%%%%%%%
+%% INTERNAL FUNCTIONS %%
+%%%%%%%%%%%%%%%%%%%%%%%%
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Standard implementation of parsing the routefile. This can be
-%% overriden by config.
-%% @end
-%%--------------------------------------------------------------------
--spec parse_routefile(Application :: atom() | #{name := atom(), routes_file => list()}) -> ok.
-parse_routefile(#{name := Application, routes_file := RoutesFile} = AppRoute) ->
-    %% This is the parsing function. It should send path info back to the gen_server and
-    %% exit normally when finished
-    case code:lib_dir(Application) of
-        {error, _} ->
-            ?WARNING("Could not find the application ~s. Check your config and re-run your project!", [Application]),
-            ok;
-        Filepath ->
-            ?DEBUG("Processing routefile ~s", [Filepath]),
-            AppPrefix = maps:get(prefix, AppRoute, ""),
-            RouteFilePath = filename:join([Filepath, RoutesFile]),
-            {ok, AppRoutes} = file:consult(RouteFilePath),
-            lists:foreach(fun(AppMap) ->
-                                  %% Extract the information from routes
-                                  Prefix = filename:join([AppPrefix, maps:get(prefix, AppMap, "")]),
-                                  Host = maps:get(host, AppMap, '_'),
-                                  Routes = maps:get(routes, AppMap, []),
-                                  Statics = maps:get(statics, AppMap, []),
-                                  Security = maps:get(security, AppRoute, maps:get(security, AppMap, false)),
-                                  %% Build intermediate object
-                                  RouteInfo = #{
-                                                application => Application,
-                                                prefix => Prefix,
-                                                host => Host,
-                                                security => Security,
-                                                controller_data => #{}
-                                               },
-                                  %% Check for handlers
-                                  [ nova_handlers:register_handler(Handle, Callback) ||
-                                      {Handle, Callback} <- maps:get(handlers, AppMap, []) ],
+compile_paths([], Dispatch, Options) -> {ok, Dispatch, Options};
+compile_paths([RouteInfo|Tl], Dispatch, Options) ->
+    MMF = #mmf{secure = maps:get(secure, Options, maps:get(secure, RouteInfo, false)),
+               app = maps:get(app, Options),
+               extra_state = maps:get(extra_state, RouteInfo, #{})},
+    Host = maps:get(host, Options, maps:get(host, RouteInfo, '_')),
+    Prefix = maps:get(prefix, Options, maps:get(prefix, RouteInfo, "")),
+    SubApps = maps:get(apps, RouteInfo, []),
+    Dispatch1 = lists:foldl(fun({Path, {M,F}=MF}, Tree) when is_list(Path),
+                                                             is_atom(M),
+                                                             is_atom(F) ->
+                                    parse_url(Host, {Prefix ++ Path, MF, #{}}, MMF, Tree);
+                               ({Path, MF, Options}, Tree) when is_list(Path),
+                                                                is_tuple(MF),
+                                                                is_map(Options) ->
+                                    parse_url(Host, {Prefix ++ Path, MF, Options}, MMF, Tree);
+                               ({Path, DirOrFile}, Tree) when is_list(Path),
+                                                              is_list(DirOrFile) ->
+                                    parse_url(Host, {Prefix ++ Path, DirOrFile}, MMF, Tree);
+                               ({Path, DirOrFile, Options}, Tree) when is_list(Path),
+                                                                       is_list(DirOrFile),
+                                                                       is_map(Options) ->
+                                    parse_url(Host, {Prefix ++ Path, DirOrFile}, MMF, Tree);
+                               ({StatusCode, MF, Options}, Tree) when is_integer(StatusCode),
+                                                                      is_tuple(MF),
+                                                                      is_map(Options) ->
+                                    parse_url(Host, {StatusCode, MF, Options}, MMF, Tree);
+                               (Path, Tree) ->
+                                    ?ERROR("~p~n", [Path])
+                            end, Dispatch, maps:get(routes, RouteInfo, [])),
+    Dispatch2 = compile(SubApps, Dispatch1, Options),
+    compile_paths(Tl, Dispatch2, Options).
 
-                                  %% Add routes
-                                  [ add_route(RouteInfo, Route) || Route <- Routes ++ Statics ]
-                          end, AppRoutes),
-            %% Parse routefile for nova applications this app have included
-            OtherApps = application:get_env(Application, nova_applications, []),
-            [ parse_routefile(OtherAppRoute) || OtherAppRoute <- OtherApps ]
+
+read_routefile(App) ->
+    {M, F} = application:get_env(nova, route_reader, {file, consult}),
+    Filepath = filename:join([code:priv_dir(App), erlang:atom_to_list(App) ++ ".routes.erl"]),
+    M:F(Filepath).
+
+parse_url(Host, {Path, {Mod, Func}, Options}, MMF, HostsTree) ->
+    RealPath = case Path of
+                   _ when is_list(Path) -> erlang:list_to_binary(Path);
+                   _ when is_integer(Path) -> Path;
+                   _ -> throw({unknown_path, Path})
+              end,
+    Methods = maps:get(methods, Options, ['_']),
+    HostTree = proplists:get_value(Host, HostsTree, new()),
+
+    CompiledPaths =
+        lists:foldl(
+          fun(Method, Tree) ->
+                  BinMethod = method_to_binary(Method),
+                  MMF0 = MMF#mmf{method = BinMethod,
+                                 module = Mod,
+                                 function = Func,
+                                 protocol = maps:get(protocol, Options, http)
+                                },
+                  insert(RealPath, <<>>, MMF0, Tree, #options{use_strict = false})
+          end, HostTree, Methods),
+    [{Host, CompiledPaths}|proplists:delete(Host, HostsTree)].
+
+find_endpoint(Host, Path, Method, HostTree) when is_binary(Path) ->
+    case proplists:lookup(Host, HostTree) of
+        none ->
+            case proplists:lookup('_', HostTree) of
+                none ->
+                    {error, not_found, host};
+                {_, Tree} ->
+                    lookup(Path, Method, Tree)
+            end;
+        Tree ->
+            lookup(Path, Method, Tree)
     end;
-parse_routefile(Application) when is_atom(Application) ->
-    parse_routefile(#{name => Application, routes_file => get_routefile_path(Application)}).
+find_endpoint(Host, Path, Method, Tree) ->
+    find_endpoint(Host, Path, Method, Tree).
+
+lookup(Path, Method, Tree) when is_binary(Method) ->
+    lookup(Path, Method, <<>>, Tree, #{bindings => #{}});
+lookup(Path, Method, Tree) ->
+    lookup(Path, method_to_binary(Method), Tree).
 
 
-get_routefile_path(#{name := Application}) ->
-    lists:concat(["priv/", Application, ".routes.erl"]);
-get_routefile_path(Application) when is_atom(Application) ->
-    get_routefile_path(#{name => Application}).
 
+%%%%%%%%%%%%%%%%%%%%%%%%
+%% TREE FUNCTIONS     %%
+%%%%%%%%%%%%%%%%%%%%%%%%
+
+new() ->
+    #node{key = '__ROOT__'}.
+
+lookup(<<>>, Method, Acc, #node{children = Children}, #{bindings := Bindings} = State) ->
+    case find_node(Acc, Method, Children, []) of
+        {ok, path, {_Node, MMF}} ->
+            {ok, MMF, Bindings};
+        {ok, binding, {#node{key = Key}, MMF}} ->
+            {ok, MMF, State#{bindings => Bindings#{Key => Acc}}};
+        {error, Reason} -> {error, Reason}
+    end;
+lookup(<<$/, Rest/binary>>, Method, <<>>, Tree, Options) ->
+    %% Ignore since double /
+    lookup(Rest, Method, <<>>, Tree, Options);
+lookup(<<$/, Rest/binary>>, Method, Acc, #node{children = Children}, #{bindings := Bindings} = State) ->
+    case find_node(Acc, false, Children, []) of
+        {error, _Class, _Type} = Err ->
+            Err;
+        {ok, path, {Node, _MMF}} ->
+            lookup(Rest, Method, <<>>, Node, State);
+        {ok, binding, {#node{key = Key}=Node, undefined}} ->
+            lookup(Rest, Method, <<>>, Node, State#{bindings => Bindings#{Key => Acc}})
+    end;
+lookup(<<X, Rest/binary>>, Method, Acc, Tree, State) ->
+    lookup(Rest, Method, <<Acc/binary, X>>, Tree, State).
+
+
+insert(HTTPCode, Acc, MMF, #node{children = Children} = T, _Options) when is_integer(HTTPCode) ->
+    case lists:keyfind(Acc, #node.key, Children) of
+        false ->
+            #node{key = HTTPCode,
+                  mmf = [MMF]};
+        _ ->
+            ?WARNING("An HTTP code is already defined in the route table. Skipping"),
+            T
+    end;
+insert(<<>>, Acc, MMF, #node{children = Children}, _Options) ->
+    case lists:keyfind(Acc, #node.key, Children) of
+        false ->
+            #node{key = Acc,
+                  mmf = [MMF]};
+        Result ->
+            %% We need to check all the methods of the results with all the methods given my this path
+            case find_method(MMF, [Result]) of
+                {error, not_found} ->
+                    Result#node{mmf = [MMF|Result#node.mmf]};
+                _Node ->
+                    %% We have a conflict
+                    ?ERROR("Duplicated paths detected using the same method. Check your route-file"),
+                    throw({duplicated_paths})
+            end
+    end;
+insert(<<$/, Rest/binary>>, <<>>, MMF, #node{key = '__ROOT__'} = N, Options) ->
+    Child= insert(Rest, <<>>, MMF, N, Options),
+    N#node{children = [Child|without_child(Child, N#node.children)]};
+insert(<<$/, Rest/binary>>, <<>>, MMF, PrevNode, Options) ->
+    %% Ignore since this was either the root or a double /
+    insert(Rest, <<>>, MMF, PrevNode, Options);
+insert(<<$/, Rest/binary>>, Acc, MMF, #node{children = Children}, Options) when size(Rest) > 0 ->
+    warn_if_bindings(Children),
+    case lists:keyfind(Acc, #node.key, Children) of
+        false ->
+            #node{key = Acc,
+                  children = [insert(Rest, <<>>, MMF, new(), Options)]};
+        Subtree ->
+            %% Already exist so just go down in tree
+            Child = insert(Rest, <<>>, MMF, Subtree, Options),
+            Subtree#node{children = [Child|without_child(Child, Subtree#node.children)]}
+    end;
+insert(<<$:, Rest/binary>>, _Acc, MMF, #node{children = Children}, Options) ->
+    %% No worries here, just continue
+    case parse_binding(Rest, <<>>) of
+        {Binding, <<>>} ->
+            case lists:search(fun(#node{key = Key, is_binding = true}) when Key =:= Binding -> true; (_) -> false end, Children) of
+                false ->
+                    #node{key = Binding,
+                          is_binding = true,
+                          mmf = [MMF]};
+                {value, Element} ->
+                    Element#node{is_binding = true,
+                                 mmf = [MMF|Element#node.mmf]}
+            end;
+        {Binding, Rest0} ->
+            case lists:search(fun(#node{key = Key, is_binding = true}) when Key =:= Binding -> true; (_) -> false end, Children) of
+                false ->
+                    #node{key = Binding,
+                          is_binding = true,
+                          children = [insert(Rest0, <<>>, MMF, new(), Options)]};
+                {value, Element} ->
+                    Child = insert(Rest0, <<>>, MMF, Element, Options),
+                    Element#node{key = Binding, is_binding = true, children = [Child|without_child(Child, Element#node.children)]}
+            end
+    end;
+insert(<<X, Rest/bits>>, Acc, MMF, PrevNode, Options) ->
+    insert(Rest, <<Acc/binary, X>>, MMF, PrevNode, Options).
+
+
+parse_binding(<<>>, Acc) ->
+    {Acc, <<>>};
+parse_binding(<<$/, Rest/bits>>, Acc) ->
+    {Acc, <<Rest/binary>>};
+parse_binding(<<C, Rest/bits>>, Acc) ->
+    parse_binding(Rest, << Acc/binary, C >>).
+
+
+warn_if_bindings(Nodes) ->
+    case has_bindings(Nodes) of
+        false -> ok;
+        _ ->
+            ?WARNING("There's a potential issue in your routes. You are trying to set a fixed route in the same space as a binding. If this is intentional you can skip this warning!"),
+            ok
+    end.
+
+has_bindings([]) -> false;
+has_bindings([#node{is_binding = true}|_Tl]) -> true;
+has_bindings([_|Tl]) -> has_bindings(Tl).
+
+find_node(_, _, [], []) -> {error, not_found, path};
+find_node(_, _, [], Binding) -> {ok, binding, Binding};
+find_node(Key, false, [#node{is_binding = true}=N|Children], _Binding) ->
+    find_node(Key, false, Children, {N, undefined});
+find_node(Key, Method, [#node{is_binding = true, mmf=MMFs}|Children], Binding) ->
+    case find_method(#mmf{method = Method}, MMFs) of
+        {error, not_found} -> find_node(Key, Method, Children, Binding);
+        {Node, MMF} -> find_node(Key, Method, Children, {Node, MMF})
+    end;
+find_node(Key, false, [#node{key = Key}=N|_Children], _Binding) ->
+    {ok, path, {N, undefined}};
+find_node(Key, Method, [#node{key = Key, mmf = MMFs}|_Children], _Binding) ->
+    case find_method(#mmf{method = Method}, MMFs) of
+        {error, not_found} -> {error, not_found, method};
+        {Node, MMF}-> {ok, path, {Node, MMF}}
+    end;
+find_node(_, _, _, _) ->
+    {error, not_found}.
+
+find_method(#mmf{method = Method}, Nodes) ->
+    find_method(Method, Nodes);
+find_method(_Method, []) -> {error, not_found};
+find_method(Method, [#mmf{method = Method}=MMF|Tl]) ->
+    {undefined, MMF};
+find_method(Method, [_|Tl]) ->
+    find_method(Method, Tl).
+
+
+without_child(_Node, []) -> [];
+without_child(#node{key = Key}, [#node{key = Key}|Children]) ->
+    Children;
+without_child(Node, [Hd|Tl]) ->
+    [Hd|without_child(Node, Tl)].
+
+
+method_to_binary(get) -> <<"GET">>;
+method_to_binary(post) -> <<"POST">>;
+method_to_binary(put) -> <<"PUT">>;
+method_to_binary(delete) -> <<"DELETE">>;
+method_to_binary(options) -> <<"OPTIONS">>;
+method_to_binary(head) -> <<"HEAD">>;
+method_to_binary(connect) -> <<"CONNECT">>;
+method_to_binary(trace) -> <<"TRACE">>;
+method_to_binary(path) -> <<"PATCH">>;
+method_to_binary(_) -> '_'.
 
 
 -ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
 
-static_routes_test_() ->
-    [ static_routes(X) || X <- ["", "/v1"] ].
+basic_insert_test() ->
+    Routes = [#{
+                routes => [{"/messages", {dummy_mod, dummy_func}, #{methods => [post]}}]
+               }],
 
-static_routes(Prefix) ->
-    [
-     ?_assertEqual(parse_route({static, {"/nova.png", <<"static/nova.png">>}}, Prefix, #{app => nova}),
-                   {static, {Prefix ++ "/nova.png", cowboy_static, {priv_file, nova, <<"static/nova.png">>}}}),
-     ?_assertEqual(parse_route({static, {"/not_found.png", <<"static/404.png">>}}, Prefix, #{app => nova}), false),
-     ?_assertEqual(parse_route({static, {"/secret_dir", <<"static">>}}, Prefix, #{app => nova}),
-                   {static, {Prefix ++ "/secret_dir", cowboy_static, {priv_dir, nova, <<"static">>}}})
-    ].
+    ?assertMatch([{'_', #node{key = '__ROOT__', mmf = [],
+                              children = [#node{key = <<"messages">>,
+                                                mmf = [#mmf{method = <<"POST">>, module = dummy_mod,
+                                                            function = dummy_func}]}]}}], compile(Routes)).
 
-regular_routes_test_() ->
-    [ regular_routes(X) || X <- ["", "/v1"] ].
+basic_root_insertion() ->
+    Routes = [#{
+                routes => [{"/", {dummy_mod, dummy_func}, #{methods => [post]}}]
+               }],
+    ?assertMatch([{'_', #node{key = '__ROOT__', mmf = [#mmf{method = <<"POST">>, module = dummy_mod,
+                                                            function = dummy_func}]}}], compile(Routes)).
 
-regular_routes(Prefix) ->
-    [
-     ?_assertEqual(parse_route({"/index", {dummy_mod, dummy_func}}, Prefix, #{}),
-                   {route, {Prefix ++ "/index", nova_http_handler,
-                            #{func => dummy_func, methods => '_', mod => dummy_mod,
-                              nova_handler => nova_http_handler}}}),
-     ?_assertEqual(parse_route({"/ws", some_ws_mod, #{protocol => ws}}, Prefix, #{}),
-                   {route, {Prefix ++ "/ws", nova_ws_handler,
-                            #{mod => some_ws_mod, nova_handler => nova_ws_handler,
-                              subprotocols => []}}}),
-     ?_assertEqual(parse_route({"/route2", {dummy_mod, dummy_func}, #{}}, Prefix, #{}),
-                   {route, {Prefix ++ "/route2", nova_http_handler,
-                            #{func => dummy_func, methods => '_', mod => dummy_mod,
-                              nova_handler => nova_http_handler}}}),
-     ?_assertEqual(parse_route({"/route3", dummy_mod, dummy_func}, Prefix, #{}), false),
-     ?_assertEqual(parse_route(illegal_route, Prefix, #{}), false)
-    ].
+duplicated_paths_test() ->
+    Routes = [#{
+                routes => [
+                           {"/user/test", {dummy_mod, dummy_func}, #{method => [get]}},
+                           {"/user/test", {dummy_mod2, dummy_func2}, #{method => [get]}}
+                          ]
+               }],
+    ?assertException(throw, {duplicated_paths}, compile(Routes)).
 
-status_code_routes_test_() ->
-    [ status_code_routes(X) || X <- ["", "/v1"] ].
+insert_complex_test() ->
+    Routes = [#{
+                routes => [
+                           {"/messages", {dummy_mod, dummy_func}, #{methods => [get]}},
+                           {"/messages/dummy", {dummy_mod, dummy_func}, #{methods => [post]}},
+                           {"/messages", {dummy_mod, dummy_func}, #{methods => [post]}},
+                           {"/messages/dummy/:id", {dummy_mod, dummy_func}, #{methods => [post]}}
+                          ]
+               }],
+    Expected =
+        [{'_',#node{key = '__ROOT__',mmf = [],
+                    children = [#node{key = <<"messages">>,
+                                      mmf = [#mmf{method = <<"POST">>,module = dummy_mod,
+                                                  function = dummy_func,secure = false,extra_state = #{}},
+                                             #mmf{method = <<"GET">>,module = dummy_mod,
+                                                  function = dummy_func,secure = false,extra_state = #{}}],
+                                      children = [#node{key = <<"dummy">>,
+                                                        mmf = [#mmf{method = <<"POST">>,module = dummy_mod,
+                                                                    function = dummy_func,secure = false,extra_state = #{}}],
+                                                        children = [#node{key = <<"id">>,
+                                                                          mmf = [#mmf{method = <<"POST">>,module = dummy_mod,
+                                                                                      function = dummy_func,secure = false,extra_state = #{}}],
+                                                                          children = [],is_binding = true}],
+                                                        is_binding = false}],
+                                      is_binding = false}],
+                    is_binding = false}}],
 
-status_code_routes(Prefix) ->
-    [
-     ?_assertEqual(parse_route({404, {dummy_mod, dummy_func}}, Prefix, #{}), {status, {404, {dummy_mod, dummy_func}}}),
-     ?_assertEqual(parse_route({500, {dummy_mod, dummy_func}}, Prefix, #{}), {status, {500, {dummy_mod, dummy_func}}})
-    ].
+    ?assertMatch(Expected, compile(Routes)).
 
-
-get_method_test_() ->
-    [ ?_assertEqual(get_method(X), Y) || {X, Y} <- [
-                                                    {all, '_'},
-                                                    {get, [<<"GET">>]},
-                                                    {post, [<<"POST">>]},
-                                                    {put, [<<"PUT">>]},
-                                                    {delete, [<<"DELETE">>]},
-                                                    {options, [<<"OPTIONS">>]},
-                                                    {patch, [<<"PATCH">>]},
-                                                    {head, [<<"HEAD">>]}
-                                                   ] ].
-get_method_illegal_test_() ->
-    [ ?_assertThrow(unknown_method, get_method(wrong)),
-      ?_assertThrow(unknown_method, get_method(hehe))
-    ].
-
+basic_route_root_lookup_test() ->
+    Routes = [{'_',{node,'__ROOT__',[],
+                    [{node,<<>>,
+                      [{mmf,<<"GET">>,test_main_controller,index,false,
+                        #{}}],
+                      [],false}],
+                    false}}],
+    ?assertMatch({node,<<>>,
+                  [{mmf,<<"GET">>,test_main_controller,index,false,
+                    #{}}],
+                  [],false}, find_endpoint(<<"localhost">>, <<"/">>, <<"GET">>, Routes)).
 
 
 -endif.

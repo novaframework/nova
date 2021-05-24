@@ -43,12 +43,9 @@
 %% API
 -export([
          start_link/0,
-         register_pre_handler/2,
          register_handler/2,
-         unregister_pre_handler/2,
          unregister_handler/1,
-         get_handler/1,
-         get_pre_handlers/1
+         get_handler/1
         ]).
 
 %% gen_server callbacks
@@ -67,28 +64,15 @@
 -define(SERVER, ?MODULE).
 
 -define(HANDLERS_TABLE, nova_handlers_table).
--define(PRE_HANDLERS_TABLE, nova_handlers_pre_handlers_table).
 
--type handler_return() :: {ok, State :: nova_http_handler:nova_http_state()} |
-                          {error, Reason :: any()}.
-
+-type handler_return() :: {ok, State2 :: nova:state()} | {Module :: atom(), State :: nova:state()} | {error, Reason :: any()}.
 -export_type([handler_return/0]).
 
--type pre_handler_return() :: {ok, State :: nova_http_handler:nova_http_state()} |
-                              {stop, State :: nova_http_handler:nova_http_state() | undefined } |
-                              {error, Reason :: atom()}.
--export_type([pre_handler_return/0]).
-
-
--type nova_handler_callback() :: {Module :: atom(), Function :: atom()} |
-                                 fun((...) -> handler_return()).
-
--type nova_pre_handler_callback() :: {Module :: atom(), Function :: atom()} |
-                                     fun((...) -> pre_handler_return()).
-
-
+-type handler_callback() :: {Module :: atom(), Function :: atom()} |
+                            fun((...) -> handler_return()).
 
 -record(state, {
+
                }).
 
 %%%===================================================================
@@ -111,36 +95,14 @@ start_link() ->
 
 %%--------------------------------------------------------------------
 %% @doc
-%% Registers a new pre handler. These handlers are a bit special in the
-%% sense that they does not require a special handle. Every pre handler
-%% that's registered will be called on for each request.
-%% @end
-%%--------------------------------------------------------------------
--spec register_pre_handler(Protocol :: http, Callback :: nova_pre_handler_callback()) ->
-                                  ok | {error, Reason :: atom()}.
-register_pre_handler(Protocol, Callback) ->
-    gen_server:cast(?SERVER, {register_pre_handler, Protocol, Callback}).
-
-%%--------------------------------------------------------------------
-%% @doc
 %% Registers a new handler. This can then be used in a nova controller
 %% by returning a tuple where the first element is the name of the handler.
 %% @end
 %%--------------------------------------------------------------------
--spec register_handler(Handle :: atom(), Callback :: nova_handler_callback()) ->
+-spec register_handler(Handle :: atom(), Callback :: handler_callback()) ->
                               ok | {error, Reason :: atom()}.
 register_handler(Handle, Callback) ->
     gen_server:cast(?SERVER, {register_handler, Handle, Callback}).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Unregisters a handler and makes it unavailable for all controllers.
-%% @end
-%%--------------------------------------------------------------------
--spec unregister_pre_handler(Protocol :: http, Callback :: nova_pre_handler_callback()) ->
-                                    ok.
-unregister_pre_handler(Protocol, Callback) ->
-    gen_server:call(?SERVER, {unregister_pre_handler, Protocol, Callback}).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -157,7 +119,7 @@ unregister_handler(Handle) ->
 %% function for it.
 %% @end
 %%--------------------------------------------------------------------
--spec get_handler(Handle :: atom()) -> {ok, Callback :: nova_handler_callback()} |
+-spec get_handler(Handle :: atom()) -> {ok, Callback :: handler_callback()} |
                                        {error, not_found}.
 get_handler(Handle) ->
     case ets:lookup(?HANDLERS_TABLE, Handle) of
@@ -166,21 +128,6 @@ get_handler(Handle) ->
         [{Handle, Callback}] ->
             {ok, Callback}
     end.
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Returns all pre-handlers associated with the given protocol (Eg http).
-%% @end
-%%--------------------------------------------------------------------
--spec get_pre_handlers(Protocol :: atom()) -> {ok, Elements :: [nova_pre_handler_callback()]}.
-get_pre_handlers(Protocol) ->
-    Elements = ets:lookup(?PRE_HANDLERS_TABLE, Protocol),
-    %% Strip the keys
-    Elements0 =
-        lists:map(fun({_P, H}) ->
-                          H
-                  end, Elements),
-    {ok, Elements0}.
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -200,7 +147,6 @@ get_pre_handlers(Protocol) ->
 init([]) ->
     process_flag(trap_exit, true),
     ets:new(?HANDLERS_TABLE, [named_table, set, protected]),
-    ets:new(?PRE_HANDLERS_TABLE, [named_table, bag, protected]),
     register_handler(json, fun nova_basic_handler:handle_json/3),
     register_handler(ok, fun nova_basic_handler:handle_ok/3),
     register_handler(status, fun nova_basic_handler:handle_status/3),
@@ -226,10 +172,6 @@ init([]) ->
 handle_call({unregister_handler, Handle}, _From, State) ->
     ets:delete(?HANDLERS_TABLE, Handle),
     ?DEBUG("Removed handler ~p", [Handle]),
-    {reply, ok, State};
-
-handle_call({unregister_pre_handler, Protocol, Handler}, _From, State) ->
-    ets:delete_object(?PRE_HANDLERS_TABLE, {Protocol, Handler}),
     {reply, ok, State};
 
 handle_call(_Request, _From, State) ->
@@ -262,15 +204,6 @@ handle_cast({register_handler, Handle, Callback}, State) ->
             ?ERROR("Could not register handler ~p since there's already another one registered on that name", [Handle]),
             {noreply, State}
     end;
-handle_cast({register_pre_handler, Protocol, Callback}, State) ->
-    Callback0 =
-        case Callback of
-            Callback when is_function(Callback) -> Callback;
-            {Module, Function} -> fun Module:Function/1
-        end,
-    ets:insert(?PRE_HANDLERS_TABLE, {Protocol, Callback0}),
-    {noreply, State};
-
 handle_cast(_Request, State) ->
     {noreply, State}.
 

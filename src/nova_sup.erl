@@ -61,13 +61,11 @@ init([]) ->
 
     SessionManager = application:get_env(nova, session_manager, nova_session_ets),
 
-    BootstrapApp = application:get_env(nova, bootstrap_application, undefined),
-
     Children = [
-                child(nova_router, nova_router, [BootstrapApp]),
                 child(nova_handlers, nova_handlers),
                 child(nova_plugin, nova_plugin),
                 child(SessionManager, SessionManager),
+                child(nova_cache_sup, supervisor, nova_cache_sup),
                 child(nova_watcher, nova_watcher)
                ],
 
@@ -86,16 +84,19 @@ init([]) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-child(Id, Mod, Args) ->
+child(Id, Type, Mod, Args) ->
     #{id => Id,
       start => {Mod, start_link, Args},
       restart => permanent,
       shutdown => 5000,
-      type => worker,
+      type => Type,
       modules => [Mod]}.
 
+child(Id, Type, Mod) ->
+    child(Id, Type, Mod, []).
+
 child(Id, Mod) ->
-    child(Id, Mod, []).
+    child(Id, worker, Mod).
 
 setup_cowboy(Configuration) ->
     case start_cowboy(Configuration) of
@@ -107,20 +108,32 @@ setup_cowboy(Configuration) ->
 
 start_cowboy(Configuration) ->
     ?INFO("Nova is starting cowboy..."),
-    Middlewares = maps:get(middlewares, Configuration, [cowboy_router, cowboy_handler]),
+    Middlewares = maps:get(middlewares, Configuration, [nova_router, nova_handler]),
     StreamHandlers = maps:get(stream_handlers, Configuration, [nova_stream_h, cowboy_compress_h, cowboy_stream_h]),
     Options = maps:get(options, Configuration, #{compress => true}),
 
     %% Build the options map
-    CowboyOptions = Options#{middlewares => Middlewares,
-                             stream_handlers => StreamHandlers},
+    CowboyOptions1 = Options#{middlewares => Middlewares,
+                              stream_handlers => StreamHandlers},
+
+    %% Compile the routes
+    Dispatch =
+        case application:get_env(nova, bootstrap_application, undefined) of
+            undefined ->
+                ?ERROR("You do not have a main nova application defined. Add the following in your sys.config-file:~n{nova, [~n  {bootstrap_application, your_application}~n..."),
+                throw({error, no_nova_app_defined});
+            App ->
+                nova_router:compile([App])
+        end,
+
+    CowboyOptions2 = CowboyOptions1#{env => #{dispatch => Dispatch}},
 
     case maps:get(use_ssl, Configuration, false) of
         false ->
             cowboy:start_clear(
               ?NOVA_LISTENER,
               [{port, maps:get(port, Configuration, ?NOVA_STD_PORT)}],
-              CowboyOptions);
+              CowboyOptions2);
         _ ->
             CACert = maps:get(ca_cert, Configuration),
             Cert = maps:get(cert, Configuration),
@@ -132,5 +145,5 @@ start_cowboy(Configuration) ->
                                {certfile, Cert},
                                {cacertfile, CACert}
                               ],
-              CowboyOptions)
+              CowboyOptions2)
     end.

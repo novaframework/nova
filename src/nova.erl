@@ -12,6 +12,13 @@
          set_env/2
         ]).
 
+-type state() :: #{
+                   req := cowboy_req:req(),
+                   controller_data := any(),
+                   method := binary(),
+                   bindings := [{binary(), binary()}]
+                  }.
+-export_type([state/0]).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -52,7 +59,7 @@ get_env(Parameter, Default) ->
         {ok, App} ->
             application:get_env(App, Parameter, Default);
         _ ->
-            undefined
+            Default
     end.
 
 

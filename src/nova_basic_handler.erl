@@ -4,13 +4,15 @@
          handle_ok/3,
          handle_status/3,
          handle_redirect/3,
-         handle_sendfile/3
+         handle_sendfile/3,
+         handle_websocket/3
         ]).
 
 -include_lib("nova/include/nova.hrl").
 
 -type mod_fun() :: {Module :: atom(), Function :: atom()} | undefined.
 -type erlydtl_vars() :: map() | [{Key :: atom() | binary() | string(), Value :: any()}].
+
 
 
 %%--------------------------------------------------------------------
@@ -29,7 +31,7 @@
 %% @end
 %%--------------------------------------------------------------------
 -spec handle_json({json, JSON :: map()} | {json, StatusCode :: integer(), Headers :: map(), JSON :: map()},
-                  ModFun :: mod_fun(), State) -> {ok, State} when
+                  ModFun :: mod_fun(), State) -> {ok, State} | {Module :: atom(), State} when
       State :: nova_http_handler:nova_http_state().
 handle_json({json, StatusCode, Headers, JSON}, _ModFun, State) ->
     try json:encode(JSON, [binary, maps]) of
@@ -173,6 +175,24 @@ handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _
     State1 = nova_http:set_body({sendfile, Offset, Length, Path}, State0),
     State2 = nova_http:set_status(StatusCode, State1),
     {ok, State2}.
+
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Handles upgrading to websocket
+%% @end
+%%-----------------------------------------------------------------
+-spec handle_websocket({websocket, ControllerData :: any()}, ModFun :: mod_fun(), State :: nova:state()) ->
+                              {ok, State :: nova:state()}.
+handle_websocket({websocket, ControllerData}, {Module, Fun_}, State = #{req := Req}) ->
+    case Module:init(ControllerData) of
+        {ok, NewControllerData} ->
+            {cowboy_websocket, Req, State#{controller_data => NewControllerData}};
+        Error ->
+            ?ERROR("Websocket handler ~p returned unkown result ~p", [Module, Error]),
+            %% Render 500
+            {ok, State}
+    end.
 
 
 %%%===================================================================
