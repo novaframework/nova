@@ -40,18 +40,39 @@
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Initializes the cache.
+%% @end
+%%--------------------------------------------------------------------
+-spec init_cache(Cachename :: atom()) -> {ok, Child} |
+                                         {ok, Child, Info :: term()} |
+                                         {error, {already_started, pid()} | {shutdown, term()} | term()}
+                                             when Child :: undefined | pid().
 init_cache(Cachename) when is_atom(Cachename) ->
     supervisor:start_child(?SERVER, child_spec(Cachename, nova_cache)).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Removes a cache. This terminates the corresponding process.
+%% @end
+%%--------------------------------------------------------------------
+-spec remove_cache(Cachename :: atom()) -> ok | {error, Reason :: not_found | simple_one_for_one}.
 remove_cache(Cachename) when is_atom(Cachename) ->
     case get_cache(Cachename) of
         {ok, Id} ->
             %% Let's terminate the child
-            supervisor:delete_child(?SERVER, Id);
+            supervisor:terminate_child(?SERVER, Id);
         _ ->
             ok
     end.
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Returns the pid of a cache.
+%% @end
+%%--------------------------------------------------------------------
+-spec get_cache(Cachename :: atom()) -> {ok, Id :: pid()} | {error, not_found}.
 get_cache(Cachename) when is_atom(Cachename) ->
     Children = supervisor:which_children(?SERVER),
     case lists:keyfind(Cachename, 1, Children) of
