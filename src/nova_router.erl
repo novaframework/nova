@@ -11,7 +11,8 @@
 
 -export([
          compile/1,
-         execute/2
+         execute/2,
+         route_reader/1
         ]).
 
 -include_lib("nova/include/nova.hrl").
@@ -73,9 +74,8 @@ compile(Apps) ->
 -spec compile([route_info()]) -> dispatch_rules().
 compile([], Dispatch, _Options) -> Dispatch;
 compile([App|Tl], Dispatch, Options) ->
-    {M, F} = application:get_env(nova, route_reader, {file, consult}),
-    RoutePath = filename:join([code:priv_dir(App), erlang:atom_to_list(App) ++ ".routes.erl"]),
-    {ok, Routes} = M:F(RoutePath),
+    {M, F} = application:get_env(nova, route_reader, {?MODULE, route_reader}),
+    {ok, Routes} = M:F(App),
 
     Options1 = case maps:get(prefix, Options, undefined) of
                    undefined -> Options;
@@ -118,6 +118,10 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch 
             %% TODO! Fix rendering of an error-page
             {stop, cowboy_req:reply(404, Req)}
     end.
+
+route_reader(App) ->
+    RoutePath = filename:join([code:priv_dir(App), erlang:atom_to_list(App) ++ ".routes.erl"]),
+    file:consult(RoutePath).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%
@@ -377,6 +381,7 @@ method_to_binary(connect) -> <<"CONNECT">>;
 method_to_binary(trace) -> <<"TRACE">>;
 method_to_binary(path) -> <<"PATCH">>;
 method_to_binary(_) -> '_'.
+
 
 
 -ifdef(TEST).
