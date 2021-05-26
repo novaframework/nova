@@ -2,7 +2,12 @@
 %%% @author Niclas Axelsson <niclas@burbas.se>
 %%% @copyright (C) 2021, Niclas Axelsson
 %%% @doc
+%%% <i>nova_cache</i> is a basic in-memory cache that uses ETS as backend.
+%%% When a cache is initialized a process is spawned and associated for that
+%%% particular cache. This process is kept alive through out the whole life
+%%% time of the cache and is the owner of the ETS table that is used for storage.
 %%%
+%%% The TTLs is implemented using erlang:send_after/4.
 %%% @end
 %%% Created : 22 May 2021 by Niclas Axelsson <niclas@burbas.se>
 %%%-------------------------------------------------------------------
@@ -55,12 +60,33 @@
 start_link(Cache) ->
     gen_server:start_link(?MODULE, Cache, []).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Removes the cache and frees up the memory.
+%% @end
+%%--------------------------------------------------------------------
+-spec remove_cache(Cachename :: atom()) -> ok.
 remove_cache(Cachename) ->
     nova_cache_sup:remove_cache(Cachename).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Initializes a cache.
+%% @end
+%%--------------------------------------------------------------------
+-spec init_cache(Cachename :: atom()) -> {ok, Child} |
+                                         {ok, Child, Info :: term()} |
+                                         {error, {already_started, pid()} | {shutdown, term()} | term()}
+                                             when Child :: undefined | pid().
 init_cache(Cachename) ->
     nova_cache_sup:init_cache(Cachename).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Gets an entriy from the cache.
+%% @end
+%%--------------------------------------------------------------------
+-spec get(Cache :: atom(), Key :: term()) -> {ok, Value :: any()} | {error, not_found}.
 get(Cache, Key) ->
     %% Since the values is in a protected ETS table we are allowed to read but not write
     case ets:lookup(Cache, Key) of
@@ -70,19 +96,46 @@ get(Cache, Key) ->
             {ok, Value}
     end.
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Sets a cache value with a TTL. To refresh an entry one need to use
+%% the set-function again.
+%% @end
+%%--------------------------------------------------------------------
+-spec set(Cache :: atom(), Key :: term(), Value :: any(), TTL :: non_neg_integer()) -> ok.
 set(Cache, Key, Value, TTL) ->
     {ok, Id} = nova_cache_sup:get_cache(Cache),
     gen_server:call(Id, {set, Key, Value, TTL}).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Same as set/4 but uses the default time for TTL which is defined
+%% as 3600000 (3600 seconds)
+%% @end
+%%--------------------------------------------------------------------
+-spec set(Cache :: atom(), Key :: term(), Value :: any()) -> ok.
 set(Cache, Key, Value) ->
     set(Cache, Key, Value, ?DEFAULT_TTL).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Deletes an entry in the cache.
+%% @end
+%%--------------------------------------------------------------------
+-spec delete(Cache :: atom(), Key :: term()) -> ok.
 delete(Cache, Key) ->
     {ok, Id} = nova_cache_sup:get_cache(Cache),
     gen_server:call(Id, {delete, Key}).
 
-flush(_Cache) ->
-    ok.
+%%--------------------------------------------------------------------
+%% @doc
+%% Removes all entries for a cache.
+%% @end
+%%--------------------------------------------------------------------
+-spec flush(Cache :: atom()) -> ok.
+flush(Cache) ->
+    {ok, Id} = nova_cache_sup:get_cache(Cache),
+    gen_server:call(Id, flush).
 
 
 %%%===================================================================
@@ -138,6 +191,9 @@ handle_call({set, Key, Value, TTL}, _From, State = #state{table = Table}) ->
             %% Insert
             ets:insert(Table, {Key, Value, TimerRef})
     end,
+    {reply, ok, State};
+handle_call(flush, _From, State = #state{table = Table}) ->
+    [ erlang:cancel_timer(TimerRef) || {_, _, TimerRef} <- ets:tab2list(Table) ],
     {reply, ok, State};
 handle_call(_Request, _From, State) ->
     Reply = ok,

@@ -147,6 +147,10 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
                                                                        is_list(DirOrFile),
                                                                        is_map(Options) ->
                                     parse_url(Host, {Prefix ++ Path, DirOrFile}, MMF, Tree);
+                               ({Path, LocalPath}, Tree) when is_list(Path),
+                                                        is_list(LocalPath) ->
+                                    %% Static
+                                    parse_url(Host, {Prefix ++ Path, LocalPath}, MMF, Tree);
                                ({StatusCode, MF, Options}, Tree) when is_integer(StatusCode),
                                                                       is_tuple(MF),
                                                                       is_map(Options) ->
