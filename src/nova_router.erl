@@ -68,10 +68,10 @@
 -type bindings() :: #{binary() := binary()}.
 -export_type([bindings/0]).
 
+-spec compile([route_info()]) -> dispatch_rules().
 compile(Apps) ->
     compile(Apps, [], #{}).
 
--spec compile([route_info()]) -> dispatch_rules().
 compile([], Dispatch, _Options) -> Dispatch;
 compile([App|Tl], Dispatch, Options) ->
     {M, F} = application:get_env(nova, route_reader, {?MODULE, route_reader}),
@@ -160,7 +160,8 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
                                                                       is_map(Options) ->
                                     parse_url(Host, {StatusCode, MF, Options}, MMF, Tree);
                                (Path, Tree) ->
-                                    ?ERROR("~p~n", [Path])
+                                    ?ERROR("~p~n", [Path]),
+                                    []
                             end, Dispatch, maps:get(routes, RouteInfo, [])),
     Dispatch2 = compile(SubApps, Dispatch1, Options),
     compile_paths(Tl, Dispatch2, Options).
