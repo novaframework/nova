@@ -68,7 +68,7 @@
 -type bindings() :: #{binary() := binary()}.
 -export_type([bindings/0]).
 
--spec compile([route_info()]) -> dispatch_rules().
+-spec compile([atom()]) -> dispatch_rules().
 compile(Apps) ->
     compile(Apps, [], #{}).
 
