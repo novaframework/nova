@@ -13,7 +13,8 @@
                  compiler,
                  erlydtl,
                  jhn_stdlib,
-                 uuid
+                 uuid,
+                 erldb
                 ]},
   {env,[]},
   {modules,[nova]},

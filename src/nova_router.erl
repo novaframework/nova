@@ -1,10 +1,8 @@
 %%%-------------------------------------------------------------------
 %%% @author Niclas Axelsson <niclas@burbas.se>
-%%% @copyright (C) 2021, Niclas Axelsson
 %%% @doc
 %%%
 %%% @end
-%%% Created : 10 Mar 2021 by Niclas Axelsson <niclas@burbas.se>
 %%%-------------------------------------------------------------------
 -module(nova_router).
 -behaviour(cowboy_middleware).
@@ -12,7 +10,11 @@
 -export([
          compile/1,
          execute/2,
-         route_reader/1
+         route_reader/1,
+
+         lookup_url/1,
+         lookup_url/2,
+         lookup_url/3
         ]).
 
 -include_lib("nova/include/nova.hrl").
@@ -41,7 +43,8 @@
               }).
 
 %% Route information
--type status_route()      :: {StatusCode :: integer(), {Mod :: atom(), Fun :: atom()}}.
+-type status_route()      :: {StatusCode :: integer(), {Mod :: atom(), Fun :: atom()}} |
+                             {StatusCode :: integer(), StaticFile :: string()}.
 -type status_route_opt()  :: {StatusCode :: integer(), {Mod :: atom(), Fun :: atom()}, Options :: map()}.
 -type regular_route()     :: {Path :: string(), {Mod :: atom(), Fun :: atom()}}.
 -type regular_route_opt() :: {Path :: string(), {Mod :: atom(), Fun :: atom()}, Options :: map()}.
@@ -69,7 +72,9 @@
 -export_type([bindings/0]).
 
 compile(Apps) ->
-    compile(Apps, [], #{}).
+    Dispatch = compile(Apps, [], #{}),
+    persistent_term:put(nova_dispatch, Dispatch),
+    Dispatch.
 
 -spec compile([route_info()]) -> dispatch_rules().
 compile([], Dispatch, _Options) -> Dispatch;
@@ -98,12 +103,26 @@ compile([App|Tl], Dispatch, Options) ->
 -spec execute(Req, Env)
              -> {ok, Req, Env} | {stop, Req}
                     when Req::cowboy_req:req(), Env::cowboy_middleware:env().
+
+lookup_url(Path) when is_binary(Path);
+                      is_integer(Path) ->
+    lookup_url(Path, <<"*">>, '_').
+
+lookup_url(Path, Host) when is_binary(Path);
+                            is_integer(Path) ->
+    lookup_url(Path, Host, '_').
+lookup_url(Path, Host, Method) when is_binary(Path);
+                                is_integer(Path) ->
+    HostTree = persistent_term:get(nova_dispatch),
+    find_endpoint(Host, Path, Method, HostTree).
+
 execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch := Dispatch}) ->
     case find_endpoint(Host, Path, Method, Dispatch) of
         %% TODO! Fix so we can route on HTTP-codes
-        {error, not_found, path} -> {stop, cowboy_req:reply(404, Req)};
-        {error, not_found, host} -> {stop, cowboy_req:reply(400, Req)};
-        {ok, #mmf{app = App, module = Module, function = Function, secure = Secure, extra_state = ExtraState}, Bindings} ->
+        {error, not_found, path} -> render_status_page(404, Req, Env);
+        {error, not_found, host} -> render_status_page(400, Req, Env);
+        {ok, #mmf{app = App, module = Module, function = Function,
+                  secure = Secure, extra_state = ExtraState}, Bindings} ->
             {ok,
              Req,
              Env#{app => App,
@@ -116,7 +135,7 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch 
             };
         _Error ->
             %% TODO! Fix rendering of an error-page
-            {stop, cowboy_req:reply(404, Req)}
+            render_status_page(404, Req, Env)
     end.
 
 route_reader(App) ->
@@ -140,37 +159,54 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
                                                              is_atom(M),
                                                              is_atom(F) ->
                                     parse_url(Host, {Prefix ++ Path, MF, #{}}, MMF, Tree);
-                               ({Path, MF, Options}, Tree) when is_list(Path),
-                                                                is_tuple(MF),
-                                                                is_map(Options) ->
-                                    parse_url(Host, {Prefix ++ Path, MF, Options}, MMF, Tree);
+                               ({Path, MF, Opts}, Tree) when is_list(Path),
+                                                             is_tuple(MF),
+                                                             is_map(Opts) ->
+                                    parse_url(Host, {Prefix ++ Path, MF, Opts}, MMF, Tree);
                                ({Path, DirOrFile}, Tree) when is_list(Path),
                                                               is_list(DirOrFile) ->
                                     parse_url(Host, {Prefix ++ Path, DirOrFile}, MMF, Tree);
-                               ({Path, DirOrFile, Options}, Tree) when is_list(Path),
-                                                                       is_list(DirOrFile),
-                                                                       is_map(Options) ->
+                               ({Path, DirOrFile, Opts}, Tree) when is_list(Path),
+                                                                    is_list(DirOrFile),
+                                                                    is_map(Opts) ->
                                     parse_url(Host, {Prefix ++ Path, DirOrFile}, MMF, Tree);
                                ({Path, LocalPath}, Tree) when is_list(Path),
-                                                        is_list(LocalPath) ->
+                                                              is_list(LocalPath) ->
                                     %% Static
                                     parse_url(Host, {Prefix ++ Path, LocalPath}, MMF, Tree);
-                               ({StatusCode, MF, Options}, Tree) when is_integer(StatusCode),
-                                                                      is_tuple(MF),
-                                                                      is_map(Options) ->
-                                    parse_url(Host, {StatusCode, MF, Options}, MMF, Tree);
+                               ({StatusCode, StaticFile}, Tree) when is_integer(StatusCode),
+                                                                     is_list(StaticFile) ->
+                                    parse_url(Host, {StatusCode, StaticFile}, MMF, Tree);
+                               ({StatusCode, MF, Opts}, Tree) when is_integer(StatusCode),
+                                                                   is_tuple(MF),
+                                                                   is_map(Opts) ->
+                                    parse_url(Host, {StatusCode, MF, Opts}, MMF, Tree);
                                (Path, Tree) ->
-                                    ?ERROR("~p~n", [Path])
+                                    ?ERROR("~p~n", [Path]),
+                                    Tree
                             end, Dispatch, maps:get(routes, RouteInfo, [])),
     Dispatch2 = compile(SubApps, Dispatch1, Options),
     compile_paths(Tl, Dispatch2, Options).
 
 
 read_routefile(App) ->
-    {M, F} = application:get_env(nova, route_reader, {file, consult}),
     Filepath = filename:join([code:priv_dir(App), erlang:atom_to_list(App) ++ ".routes.erl"]),
-    M:F(Filepath).
+    file:consult(Filepath).
 
+parse_url(Host, {StatusCode, StaticFile}, MMF, Tree) when is_integer(StatusCode),
+                                                          is_list(StaticFile) ->
+    HostTree = proplists:get_value(Host, Tree, new()),
+    %% We need to signal that we have a static file here somewhere
+    MMF0 = MMF#mmf{method = '_',
+                   module = nova_static,
+                   function = execute,
+                   protocol = http},
+    Compiled = insert(StatusCode, <<>>, MMF0, HostTree, #options{use_strict = false}),
+    [{Host, Compiled}|proplists:delete(Host, Tree)];
+parse_url(_Host, {RemotePath, LocalPath}, _MMF, HostsTree) when is_list(RemotePath),
+                                                                is_list(LocalPath) ->
+    %% Static assets
+    HostsTree;
 parse_url(Host, {Path, {Mod, Func}, Options}, MMF, HostsTree) ->
     RealPath = case Path of
                    _ when is_list(Path) -> erlang:list_to_binary(Path);
@@ -193,7 +229,8 @@ parse_url(Host, {Path, {Mod, Func}, Options}, MMF, HostsTree) ->
           end, HostTree, Methods),
     [{Host, CompiledPaths}|proplists:delete(Host, HostsTree)].
 
-find_endpoint(Host, Path, Method, HostTree) when is_binary(Path) ->
+find_endpoint(Host, Path, Method, HostTree) when is_binary(Path);
+                                                 is_integer(Path) ->
     case proplists:lookup(Host, HostTree) of
         none ->
             case proplists:lookup('_', HostTree) of
@@ -204,11 +241,10 @@ find_endpoint(Host, Path, Method, HostTree) when is_binary(Path) ->
             end;
         Tree ->
             lookup(Path, Method, Tree)
-    end;
-find_endpoint(Host, Path, Method, Tree) ->
-    find_endpoint(Host, Path, Method, Tree).
+    end.
 
-lookup(Path, Method, Tree) when is_binary(Method) ->
+lookup(Path, Method, Tree) when is_binary(Method);
+                                Method =:= '_' ->
     lookup(Path, Method, <<>>, Tree, #{bindings => #{}});
 lookup(Path, Method, Tree) ->
     lookup(Path, method_to_binary(Method), Tree).
@@ -222,13 +258,21 @@ lookup(Path, Method, Tree) ->
 new() ->
     #node{key = '__ROOT__'}.
 
+lookup(StatusCode, Method, _Acc, #node{children = Children}, _State) ->
+    case find_node(StatusCode, Method, Children, []) of
+        {ok, path, {_Node, MMF}} ->
+            {ok, MMF, #{}};
+        {error, Reason} -> {error, Reason};
+        {error, Type, Reason} -> {error, {Type, Reason}}
+    end;
 lookup(<<>>, Method, Acc, #node{children = Children}, #{bindings := Bindings} = State) ->
     case find_node(Acc, Method, Children, []) of
         {ok, path, {_Node, MMF}} ->
             {ok, MMF, Bindings};
         {ok, binding, {#node{key = Key}, MMF}} ->
             {ok, MMF, State#{bindings => Bindings#{Key => Acc}}};
-        {error, Reason} -> {error, Reason}
+        {error, Reason} -> {error, Reason};
+        {error, Type, Reason} -> {error, {Type, Reason}}
     end;
 lookup(<<$/, Rest/binary>>, Method, <<>>, Tree, Options) ->
     %% Ignore since double /
@@ -246,8 +290,8 @@ lookup(<<X, Rest/binary>>, Method, Acc, Tree, State) ->
     lookup(Rest, Method, <<Acc/binary, X>>, Tree, State).
 
 
-insert(HTTPCode, Acc, MMF, #node{children = Children} = T, _Options) when is_integer(HTTPCode) ->
-    case lists:keyfind(Acc, #node.key, Children) of
+insert(HTTPCode, _Acc, MMF, #node{children = Children} = T, _Options) when is_integer(HTTPCode) ->
+    case lists:keyfind(HTTPCode, #node.key, Children) of
         false ->
             #node{key = HTTPCode,
                   mmf = [MMF]};
@@ -312,8 +356,36 @@ insert(<<$:, Rest/binary>>, _Acc, MMF, #node{children = Children}, Options) ->
                     Element#node{key = Binding, is_binding = true, children = [Child|without_child(Child, Element#node.children)]}
             end
     end;
+insert(<<$[, $., $., $., $]>>, _Acc, _MMF, _PrevNode, _Options) ->
+    %% This is a catch-all-route - needs to be the last thing in a route
+    %% TODO! Implement!
+    ok;
 insert(<<X, Rest/bits>>, Acc, MMF, PrevNode, Options) ->
     insert(Rest, <<Acc/binary, X>>, MMF, PrevNode, Options).
+
+
+
+render_status_page(StatusCode, Req, Env = #{dispatch := Dispatch}) ->
+    Env0 =
+        case find_endpoint(StatusCode, <<>>, '_', Dispatch) of
+            {error, _} ->
+                %% Render nova page if exists - We need to determine where to find this path?
+                Env#{app => nova,
+                     module => nova_controller,
+                     function => status_code,
+                     secure => false,
+                     controller_data => #{status => StatusCode}};
+            {ok, #mmf{app = App, module = Module, function = Function, secure = Secure, extra_state = ExtraState}, Bindings} ->
+                Env#{app => App,
+                     module => Module,
+                     function => Function,
+                     secure => Secure,
+                     controller_data => #{},
+                     bindings => Bindings,
+                     extra_state => ExtraState}
+
+        end,
+    {ok, Req, Env0}.
 
 
 parse_binding(<<>>, Acc) ->
@@ -358,7 +430,7 @@ find_node(_, _, _, _) ->
 find_method(#mmf{method = Method}, Nodes) ->
     find_method(Method, Nodes);
 find_method(_Method, []) -> {error, not_found};
-find_method(Method, [#mmf{method = Method}=MMF|Tl]) ->
+find_method(Method, [#mmf{method = Method}=MMF|_Tl]) ->
     {undefined, MMF};
 find_method(Method, [_|Tl]) ->
     find_method(Method, Tl).

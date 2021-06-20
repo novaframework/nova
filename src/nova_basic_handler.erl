@@ -135,10 +135,11 @@ handle_status({status, Status, ExtraHeaders, Body}, _ModFun, State) when is_bina
 handle_status({status, Status, ExtraHeaders}, _ModFun, State = #{req := _Req}) ->
     State0 = nova_http:set_headers(ExtraHeaders, State),
     State1 = nova_http:set_status(Status, State0),
-    case nova_router:status_page(Status, State1) of
+
+    case nova_router:lookup_url(<<"*">>, Status, '_') of
         {ok, State2} ->
             {ok, State2};
-        {error, not_found} ->
+        {error, _Reason} ->
             {ok, State1}
     end;
 handle_status({status, Status}, ModFun, State) ->
@@ -184,7 +185,7 @@ handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _
 %%-----------------------------------------------------------------
 -spec handle_websocket({websocket, ControllerData :: any()}, ModFun :: mod_fun(), State :: nova:state()) ->
                               {ok, State :: nova:state()}.
-handle_websocket({websocket, ControllerData}, {Module, Fun_}, State = #{req := Req}) ->
+handle_websocket({websocket, ControllerData}, {Module, _Fun}, State = #{req := Req}) ->
     case Module:init(ControllerData) of
         {ok, NewControllerData} ->
             {cowboy_websocket, Req, State#{controller_data => NewControllerData}};

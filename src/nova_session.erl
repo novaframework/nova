@@ -102,7 +102,7 @@ get_session_module() ->
             Module;
         _ ->
             %% Default to nova_session_ets
-            nova_session_ets
+            nova_session_cache
     end.
 
 get_session_id(Req) ->
