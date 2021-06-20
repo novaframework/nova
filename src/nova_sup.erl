@@ -55,9 +55,14 @@ init([]) ->
                  intensity => 1,
                  period => 5},
 
-    Configuration = application:get_env(nova, cowboy_configuration, #{}),
+    case application:get_env(nova, dev_mode, false) of
+        false ->
+            ?NOTICE("Starting nova in production mode...");
+        true ->
+            ?NOTICE("Starting nova in developer mode...")
+    end,
 
-    setup_cowboy(Configuration),
+    Configuration = application:get_env(nova, cowboy_configuration, #{}),
 
     SessionManager = application:get_env(nova, session_manager, nova_session_ets),
 
@@ -69,12 +74,8 @@ init([]) ->
                 child(nova_watcher, nova_watcher)
                ],
 
-    case application:get_env(nova, dev_mode, false) of
-        false ->
-            ?INFO("Starting nova in production mode...");
-        true ->
-            ?INFO("Starting nova in developer mode...")
-    end,
+    setup_cowboy(Configuration),
+
 
     {ok, {SupFlags, Children}}.
 
@@ -100,14 +101,14 @@ child(Id, Mod) ->
 
 setup_cowboy(Configuration) ->
     case start_cowboy(Configuration) of
-        {ok, _} ->
-            ok;
-        {error, Error} ->
+        {ok, App, Host, Port} ->
+            Host0 = inet:ntoa(Host),
+            ?NOTICE("Running ~s with cowboy ~s at http://~s:~B", [App, get_version(cowboy), Host0, Port]);
+        {error, App, Error} ->
             ?ERROR("Cowboy could not start reason: ~p", [Error])
     end.
 
 start_cowboy(Configuration) ->
-    ?INFO("Nova is starting cowboy..."),
     Middlewares = maps:get(middlewares, Configuration, [nova_router, nova_handler]),
     StreamHandlers = maps:get(stream_handlers, Configuration, [nova_stream_h, cowboy_compress_h, cowboy_stream_h]),
     Options = maps:get(options, Configuration, #{compress => true}),
@@ -116,9 +117,10 @@ start_cowboy(Configuration) ->
     CowboyOptions1 = Options#{middlewares => Middlewares,
                               stream_handlers => StreamHandlers},
 
+    BootstrapApp = application:get_env(nova, bootstrap_application, undefined),
     %% Compile the routes
     Dispatch =
-        case application:get_env(nova, bootstrap_application, undefined) of
+        case BootstrapApp of
             undefined ->
                 ?ERROR("You do not have a main nova application defined. Add the following in your sys.config-file:~n{nova, [~n  {bootstrap_application, your_application}~n..."),
                 throw({error, no_nova_app_defined});
@@ -128,22 +130,46 @@ start_cowboy(Configuration) ->
 
     CowboyOptions2 = CowboyOptions1#{env => #{dispatch => Dispatch}},
 
+    Host = maps:get(ip, Configuration, {0,0,0,0}),
+
     case maps:get(use_ssl, Configuration, false) of
         false ->
-            cowboy:start_clear(
-              ?NOVA_LISTENER,
-              [{port, maps:get(port, Configuration, ?NOVA_STD_PORT)}],
-              CowboyOptions2);
+            Port = maps:get(port, Configuration, ?NOVA_STD_PORT),
+            case cowboy:start_clear(
+                   ?NOVA_LISTENER,
+                   [{port, Port},
+                    {ip, Host}],
+                   CowboyOptions2) of
+                {ok, _Pid} ->
+                    {ok, BootstrapApp, Host, Port};
+                Error ->
+                    Error
+            end;
         _ ->
             CACert = maps:get(ca_cert, Configuration),
             Cert = maps:get(cert, Configuration),
             Port = maps:get(ssl_port, Configuration, ?NOVA_STD_SSL_PORT),
-            ?INFO("Nova is starting SSL on port ~p", [Port]),
-            cowboy:start_tls(
+            ?NOTICE("Nova is starting SSL on port ~p", [Port]),
+            case cowboy:start_tls(
               ?NOVA_LISTENER, [
                                {port, Port},
+                               {ip, Host},
                                {certfile, Cert},
                                {cacertfile, CACert}
                               ],
-              CowboyOptions2)
+              CowboyOptions2) of
+                {ok, _Pid} ->
+                    {ok, BootstrapApp, Host, Port};
+                Error ->
+                    Error
+            end
+    end.
+
+
+get_version(Application) ->
+    case lists:keyfind(Application, 1, application:loaded_applications()) of
+        {_, _, Version} ->
+            Version;
+        false ->
+            not_found
     end.

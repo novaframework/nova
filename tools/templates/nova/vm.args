@@ -1,6 +1,0 @@
--sname '{{name}}'
-
--setcookie '{{name}}_cookie'
-
-+K true
-+A30
