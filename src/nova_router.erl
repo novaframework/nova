@@ -18,22 +18,14 @@
         ]).
 
 -include_lib("nova/include/nova.hrl").
+-include("nova_router.hrl").
 
 -record(options, {
                   use_strict = true :: binary(),
                   bindings = #{} :: map()
                  }).
 
-%% Method, Module, Function-record
--record(mmf, {
-              method = '_' :: binary() | '_',
-              app :: atom(),
-              module :: atom(),
-              function :: atom(),
-              secure = false :: false | {Mod :: atom(), Fun :: atom()},
-              extra_state :: any(),
-              protocol = http :: http | static | ws
-             }).
+
 
 -record(node, {
                key = <<>> :: binary() | '__ROOT__',
@@ -74,6 +66,7 @@
 compile(Apps) ->
     Dispatch = compile(Apps, [], #{}),
     persistent_term:put(nova_dispatch, Dispatch),
+    ?DEBUG("Got dispatchtable:~n~p", [Dispatch]),
     Dispatch.
 
 -spec compile([route_info()]) -> dispatch_rules().
@@ -100,13 +93,12 @@ compile([App|Tl], Dispatch, Options) ->
     {ok, Dispatch1, _Options5} = compile_paths(Routes, Dispatch, Options4),
     compile(Tl, Dispatch1, Options).
 
--spec execute(Req, Env)
-             -> {ok, Req, Env} | {stop, Req}
-                    when Req::cowboy_req:req(), Env::cowboy_middleware:env().
-
+-spec lookup_url(Path :: integer() | binary()) -> {error, Reason :: atom(), Type :: atom()} |
+                                                  {error, Reason :: atom()} |
+                                                  {ok, MMF :: #mmf{}, State :: map()}.
 lookup_url(Path) when is_binary(Path);
                       is_integer(Path) ->
-    lookup_url(Path, <<"*">>, '_').
+    lookup_url(Path, '_', '_').
 
 lookup_url(Path, Host) when is_binary(Path);
                             is_integer(Path) ->
@@ -116,6 +108,9 @@ lookup_url(Path, Host, Method) when is_binary(Path);
     HostTree = persistent_term:get(nova_dispatch),
     find_endpoint(Host, Path, Method, HostTree).
 
+-spec execute(Req, Env)
+             -> {ok, Req, Env} | {stop, Req}
+                    when Req::cowboy_req:req(), Env::cowboy_middleware:env().
 execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch := Dispatch}) ->
     case find_endpoint(Host, Path, Method, Dispatch) of
         %% TODO! Fix so we can route on HTTP-codes
@@ -214,7 +209,7 @@ parse_url(Host, {Path, {Mod, Func}, Options}, MMF, HostsTree) ->
                    _ -> throw({unknown_path, Path})
               end,
     Methods = maps:get(methods, Options, ['_']),
-    HostTree = proplists:get_value(Host, HostsTree, new()),
+    HostTree0 = proplists:get_value(Host, HostsTree, new()),
 
     CompiledPaths =
         lists:foldl(
@@ -226,7 +221,7 @@ parse_url(Host, {Path, {Mod, Func}, Options}, MMF, HostsTree) ->
                                  protocol = maps:get(protocol, Options, http)
                                 },
                   insert(RealPath, <<>>, MMF0, Tree, #options{use_strict = false})
-          end, HostTree, Methods),
+          end, HostTree0, Methods),
     [{Host, CompiledPaths}|proplists:delete(Host, HostsTree)].
 
 find_endpoint(Host, Path, Method, HostTree) when is_binary(Path);
@@ -239,7 +234,7 @@ find_endpoint(Host, Path, Method, HostTree) when is_binary(Path);
                 {_, Tree} ->
                     lookup(Path, Method, Tree)
             end;
-        Tree ->
+        {_, Tree} ->
             lookup(Path, Method, Tree)
     end.
 
@@ -258,7 +253,7 @@ lookup(Path, Method, Tree) ->
 new() ->
     #node{key = '__ROOT__'}.
 
-lookup(StatusCode, Method, _Acc, #node{children = Children}, _State) ->
+lookup(StatusCode, Method, _Acc, #node{children = Children}, _State) when is_integer(StatusCode) ->
     case find_node(StatusCode, Method, Children, []) of
         {ok, path, {_Node, MMF}} ->
             {ok, MMF, #{}};
@@ -306,7 +301,7 @@ insert(<<>>, Acc, MMF, #node{children = Children}, _Options) ->
                   mmf = [MMF]};
         Result ->
             %% We need to check all the methods of the results with all the methods given my this path
-            case find_method(MMF, [Result]) of
+            case find_method(MMF#mmf.method, [Result]) of
                 {error, not_found} ->
                     Result#node{mmf = [MMF|Result#node.mmf]};
                 _Node ->
@@ -413,24 +408,26 @@ find_node(_, _, [], Binding) -> {ok, binding, Binding};
 find_node(Key, false, [#node{is_binding = true}=N|Children], _Binding) ->
     find_node(Key, false, Children, {N, undefined});
 find_node(Key, Method, [#node{is_binding = true, mmf=MMFs}|Children], Binding) ->
-    case find_method(#mmf{method = Method}, MMFs) of
+    case find_method(Method, MMFs) of
         {error, not_found} -> find_node(Key, Method, Children, Binding);
         {Node, MMF} -> find_node(Key, Method, Children, {Node, MMF})
     end;
 find_node(Key, false, [#node{key = Key}=N|_Children], _Binding) ->
     {ok, path, {N, undefined}};
 find_node(Key, Method, [#node{key = Key, mmf = MMFs}|_Children], _Binding) ->
-    case find_method(#mmf{method = Method}, MMFs) of
+    case find_method(Method, MMFs) of
         {error, not_found} -> {error, not_found, method};
         {Node, MMF}-> {ok, path, {Node, MMF}}
     end;
 find_node(_, _, _, _) ->
     {error, not_found}.
 
-find_method(#mmf{method = Method}, Nodes) ->
-    find_method(Method, Nodes);
 find_method(_Method, []) -> {error, not_found};
-find_method(Method, [#mmf{method = Method}=MMF|_Tl]) ->
+find_method('_', [Elem|_Tl]) ->
+    {undefined, Elem};
+find_method(Method, [#mmf{method = Method} = MMF|_Tl]) ->
+    {undefined, MMF};
+find_method(_, [#mmf{method = '_'} = MMF|_Tl]) ->
     {undefined, MMF};
 find_method(Method, [_|Tl]) ->
     find_method(Method, Tl).

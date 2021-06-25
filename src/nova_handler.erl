@@ -8,6 +8,7 @@
         ]).
 
 -include_lib("nova/include/nova.hrl").
+-include("nova_router.hrl").
 
 -callback init(Req, any()) -> {ok | module(), Req, any()}
                                   | {module(), Req, any(), any()}
@@ -24,10 +25,8 @@ execute(Req, Env = #{app := _App, module := Module, function := Function, contro
         RetObj ->
             case nova_handlers:get_handler(element(1, RetObj)) of
                 {ok, Callback} ->
-                    {ok, #{req := Req1} = State1} = Callback(RetObj, {Module, Function}, State),
-                    StatusCode = maps:get(resp_status, State1, 200),
-                    cowboy_req:reply(StatusCode, Req1),
-                    {ok, Req1, State1};
+                    {ok, State0} = Callback(RetObj, {Module, Function}, State),
+                    render_response(State0);
                 {Module, State} ->
                     Module:upgrade(Env, State);
                 {Module, State, Options} -> %% Should we keep this one?
@@ -36,8 +35,20 @@ execute(Req, Env = #{app := _App, module := Module, function := Function, contro
                     ?ERROR("Unknown return object ~p returned from module: ~p function: ~p", [RetObj, Module, Function])
             end
     catch Class:Reason:Stacktrace ->
-            terminate({crash, Class, Reason}, Req, Module),
-            erlang:raise(Class, Reason, Stacktrace)
+            PrettyST = pretty_st(Stacktrace),
+            FormattedST = [ bstring:join(X, <<"">>) || X <- PrettyST ],
+            FormattedMsg = io_lib:format("~s: ~p", [Class, Reason]),
+            terminate(Reason, Req, Module),
+            case nova_router:lookup_url(500) of
+                {error, _} ->
+                    %% Render the internal view of nova
+                    {ok, State0} = nova_basic_handler:handle_ok({ok, #{status => "Error 500", message => FormattedMsg, stacktrace => FormattedST}, #{view => nova_error}}, {dummy, dummy}, State),
+                    render_response(State0);
+                {ok, #mmf{module = EMod, function = EFunc}, _PathState} ->
+                    %% Show this view - how?
+                    {ok, State0} = nova_basic_handler:handle_ok({ok, #{status => "Error 500", message => FormattedMsg, stacktrace => FormattedST}}, {EMod, EFunc}, State),
+                    render_response(State0)
+            end
     end.
 
 -spec terminate(any(), Req | undefined, module()) -> ok when Req::cowboy_req:req().
@@ -48,3 +59,77 @@ terminate(Reason, Req, Module) ->
         false ->
             ok
     end.
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%
+%% INTERNAL FUNCTIONS %%
+%%%%%%%%%%%%%%%%%%%%%%%%
+
+-spec render_response(State :: nova_http:http_state()) -> {ok, Req :: cowboy_req:req(), State :: nova_http:state()}.
+render_response(#{req := Req} = State) ->
+    StatusCode = maps:get(resp_status, State, 200),
+    cowboy_req:reply(StatusCode, Req),
+    {ok, Req, State}.
+
+
+pretty_st([]) -> [];
+pretty_st([{Mod, Func, Arity, ExtraArgs}|Stacktrace]) when is_integer(Arity) ->
+    Output = [
+              atom_to_binary(Mod),
+              <<":">>,
+              atom_to_binary(Func),
+              <<"/">>,
+              integer_to_binary(Arity)
+             ],
+    Output0 =
+        case proplists:get_value(file, ExtraArgs) of
+            undefined ->
+                Output;
+            File ->
+                %% Then line is also present
+                Line = proplists:get_value(line, ExtraArgs),
+
+                Output ++ [
+                           <<" (">>,
+                           list_to_binary(File),
+                           <<":">>,
+                           integer_to_binary(Line),
+                           <<")">>
+                          ]
+        end,
+    [Output0|pretty_st(Stacktrace)];
+pretty_st([{Mod, Func, Args, ExtraArgs}|Stacktrace]) when is_list(Args) ->
+    ArgsStrList = [ to_binary(X) || X <- Args ],
+    ArgsStr = bstring:join(ArgsStrList, <<", ">>),
+    Output = [
+              atom_to_binary(Mod),
+              <<":">>,
+              atom_to_binary(Func),
+              <<"(">>,
+              ArgsStr,
+              <<" )">>
+             ],
+    Output0 =
+        case proplists:get_value(file, ExtraArgs) of
+            undefined ->
+                Output;
+            File ->
+                %% Then line is also present
+                Line = proplists:get_value(line, ExtraArgs),
+
+                Output ++ [
+                           <<" (">>,
+                           list_to_binary(File),
+                           <<":">>,
+                           integer_to_binary(Line),
+                           <<")">>
+                          ]
+        end,
+    [Output0|pretty_st(Stacktrace)].
+
+
+to_binary(Int) when is_integer(Int)   -> integer_to_binary(Int);
+to_binary(Float) when is_float(Float) -> float_to_binary(Float);
+to_binary(Str) when is_list(Str)      -> list_to_binary(Str);
+to_binary(Bin) when is_binary(Bin)    -> Bin;
+to_binary(T)                          -> list_to_binary(io_lib:format("~tp", [T])).
