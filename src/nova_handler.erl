@@ -75,9 +75,9 @@ render_response(#{req := Req} = State) ->
 pretty_st([]) -> [];
 pretty_st([{Mod, Func, Arity, ExtraArgs}|Stacktrace]) when is_integer(Arity) ->
     Output = [
-              atom_to_binary(Mod),
+              atom_to_binary(Mod, utf8),
               <<":">>,
-              atom_to_binary(Func),
+              atom_to_binary(Func, utf8),
               <<"/">>,
               integer_to_binary(Arity)
              ],
@@ -102,9 +102,9 @@ pretty_st([{Mod, Func, Args, ExtraArgs}|Stacktrace]) when is_list(Args) ->
     ArgsStrList = [ to_binary(X) || X <- Args ],
     ArgsStr = bstring:join(ArgsStrList, <<", ">>),
     Output = [
-              atom_to_binary(Mod),
+              atom_to_binary(Mod, utf8),
               <<":">>,
-              atom_to_binary(Func),
+              atom_to_binary(Func, utf8),
               <<"(">>,
               ArgsStr,
               <<" )">>
