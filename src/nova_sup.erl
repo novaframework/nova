@@ -125,7 +125,8 @@ start_cowboy(Configuration) ->
                 ?ERROR("You do not have a main nova application defined. Add the following in your sys.config-file:~n{nova, [~n  {bootstrap_application, your_application}~n..."),
                 throw({error, no_nova_app_defined});
             App ->
-                nova_router:compile([App])
+                ExtraApps = application:get_env(App, nova_apps, []),
+                nova_router:compile([App|ExtraApps])
         end,
 
     CowboyOptions2 = CowboyOptions1#{env => #{dispatch => Dispatch}},
