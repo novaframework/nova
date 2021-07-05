@@ -14,7 +14,10 @@
 
          lookup_url/1,
          lookup_url/2,
-         lookup_url/3
+         lookup_url/3,
+
+         print/0,
+         print/1
         ]).
 
 -include_lib("nova/include/nova.hrl").
@@ -63,14 +66,15 @@
 -type bindings() :: #{binary() := binary()}.
 -export_type([bindings/0]).
 
+-spec compile(Apps :: [atom()]) -> dispatch_rules().
 compile(Apps) ->
     Dispatch = compile(Apps, [], #{}),
     persistent_term:put(nova_dispatch, Dispatch),
     ?DEBUG("Got dispatchtable:~n~p", [Dispatch]),
     Dispatch.
 
--spec compile([route_info()]) -> dispatch_rules().
-compile([], Dispatch, _Options) -> Dispatch;
+-spec compile(Apps :: [atom()], Dispatch :: dispatch_rules(), Options :: map()) -> dispatch_rules().
+compile([], Dispatch, Options) -> Dispatch;
 compile([App|Tl], Dispatch, Options) ->
     {M, F} = application:get_env(nova, route_reader, {?MODULE, route_reader}),
     {ok, Routes} = M:F(App),
@@ -90,8 +94,8 @@ compile([App|Tl], Dispatch, Options) ->
 
     Options4 = Options3#{app => App},
 
-    {ok, Dispatch1, _Options5} = compile_paths(Routes, Dispatch, Options4),
-    compile(Tl, Dispatch1, Options).
+    {ok, Dispatch1, Options5} = compile_paths(Routes, Dispatch, Options4),
+    compile(Tl, Dispatch1, Options5).
 
 -spec lookup_url(Path :: integer() | binary()) -> {error, Reason :: atom(), Type :: atom()} |
                                                   {error, Reason :: atom()} |
@@ -148,7 +152,9 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
                app = maps:get(app, Options),
                extra_state = maps:get(extra_state, RouteInfo, #{})},
     Host = maps:get(host, Options, maps:get(host, RouteInfo, '_')),
-    Prefix = maps:get(prefix, Options, maps:get(prefix, RouteInfo, "")),
+    MainPrefix = maps:get(prefix, Options, ""),
+    RoutePrefix = maps:get(prefix, RouteInfo, ""),
+    Prefix = MainPrefix ++ RoutePrefix,
     SubApps = maps:get(apps, RouteInfo, []),
     Dispatch1 = lists:foldl(fun({Path, {M,F}=MF}, Tree) when is_list(Path),
                                                              is_atom(M),
@@ -180,7 +186,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
                                     ?ERROR("~p~n", [Path]),
                                     Tree
                             end, Dispatch, maps:get(routes, RouteInfo, [])),
-    Dispatch2 = compile(SubApps, Dispatch1, Options),
+    Dispatch2 = compile(SubApps, Dispatch1, Options#{prefix => Prefix}),
     compile_paths(Tl, Dispatch2, Options).
 
 
@@ -316,7 +322,7 @@ insert(<<$/, Rest/binary>>, <<>>, MMF, #node{key = '__ROOT__'} = N, Options) ->
 insert(<<$/, Rest/binary>>, <<>>, MMF, PrevNode, Options) ->
     %% Ignore since this was either the root or a double /
     insert(Rest, <<>>, MMF, PrevNode, Options);
-insert(<<$/, Rest/binary>>, Acc, MMF, #node{children = Children}, Options) when size(Rest) > 0 ->
+insert(<<$/, Rest/binary>>, Acc, MMF, #node{children = Children}, Options) ->
     warn_if_bindings(Children),
     case lists:keyfind(Acc, #node.key, Children) of
         false ->
@@ -452,6 +458,25 @@ method_to_binary(path) -> <<"PATCH">>;
 method_to_binary(_) -> '_'.
 
 
+print() ->
+    [{_, Dispatch}|_] = persistent_term:get(nova_dispatch),
+    print([Dispatch]).
+
+print(Dispatch) ->
+    print(Dispatch, 0).
+
+print([], _Level) -> ok;
+print([#node{key = Key, mmf = MMF, children = Children}|Tl], Level) ->
+    Indent = [ $ || _X <- lists:seq(0, Level*4) ],
+    io:format("~s", [Indent]),
+    io:format("(~s)~n", [Key]),
+    print(MMF, Level+1),
+    print(Children, Level+1),
+    print(Tl, Level);
+print([#mmf{method = Method, module = Module, function = Function}|Tl], Level) ->
+    Indent = [ $  || _X <- lists:seq(0, (Level*4)) ],
+    io:format("~s|-- <~s>(~s:~s)~n", [Indent, Method, Module, Function]),
+    print(Tl, Level).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
