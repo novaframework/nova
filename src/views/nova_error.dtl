@@ -116,7 +116,7 @@
         {{ message }}
         <pre>
           {% for error in stacktrace %}
-          {{ error }}
+          {% if error.file %}&#8594;{% endif %} {{ error }}
           {% endfor %}
         </pre>
       </span>

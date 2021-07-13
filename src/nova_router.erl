@@ -16,6 +16,8 @@
          lookup_url/2,
          lookup_url/3,
 
+         read_routefile/1,
+
          print/0,
          print/1
         ]).
@@ -74,7 +76,7 @@ compile(Apps) ->
     Dispatch.
 
 -spec compile(Apps :: [atom()], Dispatch :: dispatch_rules(), Options :: map()) -> dispatch_rules().
-compile([], Dispatch, Options) -> Dispatch;
+compile([], Dispatch, _Options) -> Dispatch;
 compile([App|Tl], Dispatch, Options) ->
     {M, F} = application:get_env(nova, route_reader, {?MODULE, route_reader}),
     {ok, Routes} = M:F(App),
@@ -190,6 +192,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     compile_paths(Tl, Dispatch2, Options).
 
 
+-spec read_routefile(App :: atom()) -> [route_info()].
 read_routefile(App) ->
     Filepath = filename:join([code:priv_dir(App), erlang:atom_to_list(App) ++ ".routes.erl"]),
     file:consult(Filepath).
@@ -204,10 +207,42 @@ parse_url(Host, {StatusCode, StaticFile}, MMF, Tree) when is_integer(StatusCode)
                    protocol = http},
     Compiled = insert(StatusCode, <<>>, MMF0, HostTree, #options{use_strict = false}),
     [{Host, Compiled}|proplists:delete(Host, Tree)];
-parse_url(_Host, {RemotePath, LocalPath}, _MMF, HostsTree) when is_list(RemotePath),
-                                                                is_list(LocalPath) ->
-    %% Static assets
-    HostsTree;
+parse_url(Host, {RemotePath, LocalPath}, MMF = #mmf{app = App}, HostsTree) when is_list(RemotePath),
+                                                                                 is_list(LocalPath) ->
+    %% Static assets - check that the path exists
+    PrivPath = filename:join(code:lib_dir(App, priv), LocalPath),
+
+    Payload =
+        case {filelib:is_dir(LocalPath), filelib:is_dir(PrivPath)} of
+            {false, false} ->
+                %% No directory - check if it's a file
+                case {filelib:is_file(LocalPath), filelib:is_file(PrivPath)} of
+                    {false, false} ->
+                        %% No dir nor file
+                        ?WARNING("Could not find local path \"~p\" given for path \"~p\"", [LocalPath, RemotePath]),
+                        not_found;
+                    {true, false} ->
+                        {file, LocalPath};
+                    {_, true} ->
+                        {priv_file, App, LocalPath}
+                end;
+            {true, false} ->
+                {dir, LocalPath};
+            {_, true} ->
+                {priv_dir, App, LocalPath}
+        end,
+
+    HostTree0 = proplists:get_value(Host, HostsTree, new()),
+    Method = '_',
+
+    MMF0 = MMF#mmf{method = '_',
+                   app = cowboy,
+                   module = cowboy_static,
+                   function = init,
+                   extra_state = Payload},
+
+    CompiledPaths = insert(erlang:list_to_binary(RemotePath), <<>>, MMF0, HostTree0, #options{use_strict = false}),
+    [{Host, CompiledPaths}|proplists:delete(Host, HostsTree)];
 parse_url(Host, {Path, {Mod, Func}, Options}, MMF, HostsTree) ->
     RealPath = case Path of
                    _ when is_list(Path) -> erlang:list_to_binary(Path);
@@ -460,22 +495,21 @@ method_to_binary(_) -> '_'.
 
 print() ->
     [{_, Dispatch}|_] = persistent_term:get(nova_dispatch),
-    print([Dispatch]).
+    print(Dispatch).
 
-print(Dispatch) ->
-    print(Dispatch, 0).
+print(#node{key = '__ROOT__', children = Children}) ->
+    print(Children, 0).
 
 print([], _Level) -> ok;
 print([#node{key = Key, mmf = MMF, children = Children}|Tl], Level) ->
     Indent = [ $ || _X <- lists:seq(0, Level*4) ],
     io:format("~s", [Indent]),
-    io:format("(~s)~n", [Key]),
-    print(MMF, Level+1),
+    io:format("/~s~n", [Key]),
+    lists:foreach(fun(#mmf{method = Method, module = Module, function = Function}) ->
+                          io:format("~s    ", [Indent]),
+                          io:format("<~s>(~s:~s)~n", [Method, Module, Function])
+                  end, MMF),
     print(Children, Level+1),
-    print(Tl, Level);
-print([#mmf{method = Method, module = Module, function = Function}|Tl], Level) ->
-    Indent = [ $  || _X <- lists:seq(0, (Level*4)) ],
-    io:format("~s|-- <~s>(~s:~s)~n", [Indent, Method, Module, Function]),
     print(Tl, Level).
 
 -ifdef(TEST).
