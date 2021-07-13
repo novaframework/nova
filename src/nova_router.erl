@@ -317,6 +317,8 @@ lookup(<<$/, Rest/binary>>, Method, Acc, #node{children = Children}, #{bindings 
     case find_node(Acc, false, Children, []) of
         {error, _Class, _Type} = Err ->
             Err;
+        {error, _Class} = Err ->
+            Err;
         {ok, path, {Node, _MMF}} ->
             lookup(Rest, Method, <<>>, Node, State);
         {ok, binding, {#node{key = Key}=Node, undefined}} ->
@@ -460,8 +462,8 @@ find_node(Key, Method, [#node{key = Key, mmf = MMFs}|_Children], _Binding) ->
         {error, not_found} -> {error, not_found, method};
         {Node, MMF}-> {ok, path, {Node, MMF}}
     end;
-find_node(_, _, _, _) ->
-    {error, not_found}.
+find_node(Key, Method, [_Hd|Tl], Bindings) ->
+    find_node(Key, Method, Tl, Bindings).
 
 find_method(_Method, []) -> {error, not_found};
 find_method('_', [Elem|_Tl]) ->
