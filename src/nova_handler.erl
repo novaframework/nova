@@ -19,6 +19,37 @@
 
 -spec execute(Req, Env) -> {ok, Req, Env}
                                when Req::cowboy_req:req(), Env::cowboy_middleware:env().
+execute(Req, Env = #{app := cowboy, module := Module, extra_state := ExtraState}) ->
+    try Module:init(Req, ExtraState) of
+        {ok, Req2, _State} ->
+            Result = terminate(normal, Req2, Module),
+            {ok, Req2, Env#{result => Result}};
+        {Mod, Req2, State} ->
+            Mod:upgrade(Req2, Env, Module, State);
+        {Mod, Req2, State, Opts} ->
+            Mod:upgrade(Req2, Env, Module, State, Opts)
+    catch Class:Reason:Stacktrace ->
+            PrettyST = pretty_st(Stacktrace),
+            FormattedST = [ bstring:join(X, <<"">>) || X <- PrettyST ],
+            FormattedMsg = io_lib:format("~s: ~p", [Class, Reason]),
+            terminate({crash, Class, Reason}, Req, Module),
+            case nova_router:lookup_url(500) of
+                {error, _} ->
+                    %% Render the internal view of nova
+                    {ok, State0} = nova_basic_handler:handle_ok({ok, #{status => "Error 500",
+                                                                       message => FormattedMsg,
+                                                                       stacktrace => FormattedST},
+                                                                 #{view => nova_error}}, {dummy, dummy}, ExtraState),
+                    render_response(State0);
+                {ok, #mmf{module = EMod, function = EFunc}, _PathState} ->
+                    %% Show this view - how?
+                    {ok, State0} = nova_basic_handler:handle_ok({ok, #{status => "Error 500",
+                                                                       message => FormattedMsg,
+                                                                       stacktrace => FormattedST}}, {EMod, EFunc}, ExtraState),
+                    render_response(State0)
+            end,
+            erlang:raise(Class, Reason, Stacktrace)
+    end;
 execute(Req, Env = #{app := _App, module := Module, function := Function, controller_data := CtrlData}) ->
     State = CtrlData#{req => Req},
     try Module:Function(State) of
@@ -42,11 +73,16 @@ execute(Req, Env = #{app := _App, module := Module, function := Function, contro
             case nova_router:lookup_url(500) of
                 {error, _} ->
                     %% Render the internal view of nova
-                    {ok, State0} = nova_basic_handler:handle_ok({ok, #{status => "Error 500", message => FormattedMsg, stacktrace => FormattedST}, #{view => nova_error}}, {dummy, dummy}, State),
+                    {ok, State0} = nova_basic_handler:handle_ok({ok, #{status => "Error 500",
+                                                                       message => FormattedMsg,
+                                                                       stacktrace => FormattedST},
+                                                                 #{view => nova_error}}, {dummy, dummy}, State),
                     render_response(State0);
                 {ok, #mmf{module = EMod, function = EFunc}, _PathState} ->
                     %% Show this view - how?
-                    {ok, State0} = nova_basic_handler:handle_ok({ok, #{status => "Error 500", message => FormattedMsg, stacktrace => FormattedST}}, {EMod, EFunc}, State),
+                    {ok, State0} = nova_basic_handler:handle_ok({ok, #{status => "Error 500",
+                                                                       message => FormattedMsg,
+                                                                       stacktrace => FormattedST}}, {EMod, EFunc}, State),
                     render_response(State0)
             end
     end.
