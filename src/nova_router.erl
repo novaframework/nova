@@ -166,19 +166,18 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
                                                              is_tuple(MF),
                                                              is_map(Opts) ->
                                     parse_url(Host, {Prefix ++ Path, MF, Opts}, MMF, Tree);
-                               ({Path, DirOrFile}, Tree) when is_list(Path),
-                                                              is_list(DirOrFile) ->
-                                    parse_url(Host, {Prefix ++ Path, DirOrFile}, MMF, Tree);
                                ({Path, DirOrFile, Opts}, Tree) when is_list(Path),
                                                                     is_list(DirOrFile),
                                                                     is_map(Opts) ->
+                                    %% Static directory or file with opts
                                     parse_url(Host, {Prefix ++ Path, DirOrFile}, MMF, Tree);
                                ({Path, LocalPath}, Tree) when is_list(Path),
                                                               is_list(LocalPath) ->
-                                    %% Static
+                                    %% Static file
                                     parse_url(Host, {Prefix ++ Path, LocalPath}, MMF, Tree);
                                ({StatusCode, StaticFile}, Tree) when is_integer(StatusCode),
                                                                      is_list(StaticFile) ->
+                                    %% Status code
                                     parse_url(Host, {StatusCode, StaticFile}, MMF, Tree);
                                ({StatusCode, MF, Opts}, Tree) when is_integer(StatusCode),
                                                                    is_tuple(MF),
