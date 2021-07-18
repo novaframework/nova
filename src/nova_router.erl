@@ -17,6 +17,8 @@
          lookup_url/3,
 
          read_routefile/1,
+         render_status_page/2,
+         render_status_page/3,
 
          print/0,
          print/1
@@ -150,17 +152,20 @@ route_reader(App) ->
 
 compile_paths([], Dispatch, Options) -> {ok, Dispatch, Options};
 compile_paths([RouteInfo|Tl], Dispatch, Options) ->
+    App = maps:get(app, Options),
     MMF = #mmf{secure = maps:get(secure, Options, maps:get(secure, RouteInfo, false)),
-               app = maps:get(app, Options),
-               extra_state = maps:get(extra_state, RouteInfo, #{})},
+               app = App, extra_state = maps:get(extra_state, RouteInfo, #{})},
     Host = maps:get(host, Options, maps:get(host, RouteInfo, '_')),
     MainPrefix = maps:get(prefix, Options, ""),
     RoutePrefix = maps:get(prefix, RouteInfo, ""),
     Prefix = MainPrefix ++ RoutePrefix,
     SubApps = maps:get(apps, RouteInfo, []),
-    Dispatch1 = lists:foldl(fun({Path, {M,F}=MF}, Tree) when is_list(Path),
-                                                             is_atom(M),
-                                                             is_atom(F) ->
+    %% We need to add this app info to nova-env
+    NovaEnv = nova:get_env(apps, []),
+    NovaEnv0 = [{App, #{prefix => MainPrefix ++ RoutePrefix}}|NovaEnv],
+    nova:set_env(apps, NovaEnv0),
+    Dispatch1 = lists:foldl(fun({Path, MF}, Tree) when is_list(Path),
+                                                       is_tuple(MF) ->
                                     parse_url(Host, {Prefix ++ Path, MF, #{}}, MMF, Tree);
                                ({Path, MF, Opts}, Tree) when is_list(Path),
                                                              is_tuple(MF),
@@ -173,7 +178,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
                                     parse_url(Host, {Prefix ++ Path, DirOrFile}, MMF, Tree);
                                ({Path, LocalPath}, Tree) when is_list(Path),
                                                               is_list(LocalPath) ->
-                                    %% Static file
+                                    %% Static file or directory
                                     parse_url(Host, {Prefix ++ Path, LocalPath}, MMF, Tree);
                                ({StatusCode, StaticFile}, Tree) when is_integer(StatusCode),
                                                                      is_list(StaticFile) ->
@@ -207,7 +212,7 @@ parse_url(Host, {StatusCode, StaticFile}, MMF, Tree) when is_integer(StatusCode)
     Compiled = insert(StatusCode, <<>>, MMF0, HostTree, #options{use_strict = false}),
     [{Host, Compiled}|proplists:delete(Host, Tree)];
 parse_url(Host, {RemotePath, LocalPath}, MMF = #mmf{app = App}, HostsTree) when is_list(RemotePath),
-                                                                                 is_list(LocalPath) ->
+                                                                                is_list(LocalPath) ->
     %% Static assets - check that the path exists
     PrivPath = filename:join(code:lib_dir(App, priv), LocalPath),
 
@@ -254,12 +259,25 @@ parse_url(Host, {Path, {Mod, Func}, Options}, MMF, HostsTree) ->
     CompiledPaths =
         lists:foldl(
           fun(Method, Tree) ->
-                  BinMethod = method_to_binary(Method),
-                  MMF0 = MMF#mmf{method = BinMethod,
-                                 module = Mod,
-                                 function = Func,
-                                 protocol = maps:get(protocol, Options, http)
-                                },
+                  MMF0 =
+                      case maps:get(protocol, Options, http) of
+                          http ->
+                              BinMethod = method_to_binary(Method),
+                              MMF#mmf{method = BinMethod,
+                                      module = Mod,
+                                      function = Func,
+                                      protocol = http
+                                     };
+                          ws ->
+                              BinMethod = method_to_binary(Method),
+                              MMF#mmf{method = BinMethod,
+                                      app = cowboy,
+                                      module = nova__ws_handler,
+                                      function = init,
+                                      protocol = ws,
+                                      extra_state = [] %% Env, NovaState]
+                                     }
+                      end,
                   insert(RealPath, <<>>, MMF0, Tree, #options{use_strict = false})
           end, HostTree0, Methods),
     [{Host, CompiledPaths}|proplists:delete(Host, HostsTree)].
@@ -402,6 +420,10 @@ insert(<<X, Rest/bits>>, Acc, MMF, PrevNode, Options) ->
 
 
 
+render_status_page(StatusCode, Req) ->
+    Dispatch = persistent_term:get(nova_dispatch),
+    render_status_page(StatusCode, Req, #{dispatch => Dispatch}).
+
 render_status_page(StatusCode, Req, Env = #{dispatch := Dispatch}) ->
     Env0 =
         case find_endpoint(StatusCode, <<>>, '_', Dispatch) of
@@ -412,7 +434,8 @@ render_status_page(StatusCode, Req, Env = #{dispatch := Dispatch}) ->
                      function => status_code,
                      secure => false,
                      controller_data => #{status => StatusCode}};
-            {ok, #mmf{app = App, module = Module, function = Function, secure = Secure, extra_state = ExtraState}, Bindings} ->
+            {ok, #mmf{app = App, module = Module, function = Function, secure = Secure, extra_state = ExtraState},
+             Bindings} ->
                 Env#{app => App,
                      module => Module,
                      function => Function,
@@ -514,6 +537,7 @@ print([#node{key = Key, mmf = MMF, children = Children}|Tl], Level) ->
     print(Tl, Level).
 
 -ifdef(TEST).
+-compile(export_all). %% Export all functions for testing purpose
 -include_lib("eunit/include/eunit.hrl").
 
 basic_insert_test() ->

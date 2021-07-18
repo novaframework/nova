@@ -24,14 +24,15 @@ execute(Req, Env = #{app := App, module := Module, function := Function, control
     State = CtrlData#{req => Req},
 
     %% Lazy load evaluation of the case expression
-    ControllerInvokation = fun() ->
-                                   case App of
-                                       cowboy ->
-                                           {cowboy, Module:init(Req, ExtraState)};
-                                       _ ->
-                                           Module:Function(State)
-                                   end
-                           end,
+    ControllerInvokation =
+        fun() ->
+                case App of
+                    cowboy ->
+                        {cowboy, erlang:apply(Module, Function, [Req|ExtraState])};
+                    _ ->
+                        Module:Function(State)
+                end
+        end,
 
     try ControllerInvokation() of
         {cowboy, {ok, Req0, _State0}} ->
