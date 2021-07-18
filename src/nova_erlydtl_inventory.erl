@@ -15,11 +15,12 @@ inventory(tags) -> [url].
 
 url([Url|Variables], _Options) ->
     App = proplists:get_value(application, Variables),
-    case nova_router:get_app_info(binary_to_atom(App, utf8)) of
-        {error, _} ->
+    NovaEnv = nova:get_env(apps, []),
+    case proplists:get_value(binary_to_atom(App, utf8), NovaEnv) of
+        undefined ->
             ?WARNING("Could not find application: ~p. Called from erlydtl-tag 'url'.", [App]),
             <<"#">>;
-        {ok, #{prefix := Prefix}} ->
+        #{prefix := Prefix} ->
             PrefixBin = list_to_binary(Prefix),
             << PrefixBin/binary, Url/binary >>
     end.
