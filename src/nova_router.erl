@@ -153,8 +153,17 @@ route_reader(App) ->
 compile_paths([], Dispatch, Options) -> {ok, Dispatch, Options};
 compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     App = maps:get(app, Options),
-    MMF = #mmf{secure = maps:get(secure, Options, maps:get(secure, RouteInfo, false)),
-               app = App, extra_state = maps:get(extra_state, RouteInfo, #{})},
+    RouteInfoSecure = maps:get(secure, RouteInfo, false),
+    Secure = maps:get(secure, Options, RouteInfoSecure),
+    ExtraState2 = case maps:get(extra_state, RouteInfo, []) of
+                     ExtraState when is_list(ExtraState) ->
+                        ExtraState;
+                     ExtraState ->
+                        [ExtraState]
+                 end,
+    MMF = #mmf{secure = Secure,
+               app = App,
+               extra_state = ExtraState2},
     Host = maps:get(host, Options, maps:get(host, RouteInfo, '_')),
     MainPrefix = maps:get(prefix, Options, ""),
     RoutePrefix = maps:get(prefix, RouteInfo, ""),
@@ -525,6 +534,7 @@ print(#node{key = '__ROOT__', children = Children}) ->
     print(Children, 0).
 
 print([], _Level) -> ok;
+print([ok], _Level) -> ok;
 print([#node{key = Key, mmf = MMF, children = Children}|Tl], Level) ->
     Indent = [ $ || _X <- lists:seq(0, Level*4) ],
     io:format("~s", [Indent]),
