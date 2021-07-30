@@ -28,7 +28,7 @@
 -include("nova_router.hrl").
 
 -record(options, {
-                  use_strict = true :: binary(),
+                  use_strict = true :: true | false,
                   bindings = #{} :: map()
                  }).
 
@@ -101,7 +101,7 @@ compile([App|Tl], Dispatch, Options) ->
     {ok, Dispatch1, Options5} = compile_paths(Routes, Dispatch, Options4),
     compile(Tl, Dispatch1, Options5).
 
--spec lookup_url(Path :: integer() | binary()) -> {error, Reason :: atom(), Type :: atom()} |
+-spec lookup_url(Path :: integer() | binary()) -> {error, {Reason :: atom(), Type :: atom()}} |
                                                   {error, Reason :: atom()} |
                                                   {ok, MMF :: #mmf{}, State :: map()}.
 lookup_url(Path) when is_binary(Path);
@@ -116,14 +116,13 @@ lookup_url(Path, Host, Method) when is_binary(Path);
     HostTree = persistent_term:get(nova_dispatch),
     find_endpoint(Host, Path, Method, HostTree).
 
--spec execute(Req, Env)
-             -> {ok, Req, Env} | {stop, Req}
-                    when Req::cowboy_req:req(), Env::cowboy_middleware:env().
+-spec execute(Req, Env) -> {ok, Req, Env} | {stop, Req}
+                               when Req::cowboy_req:req(), Env::cowboy_middleware:env().
 execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch := Dispatch}) ->
     case find_endpoint(Host, Path, Method, Dispatch) of
         %% TODO! Fix so we can route on HTTP-codes
-        {error, not_found, path} -> render_status_page(404, Req, Env);
-        {error, not_found, host} -> render_status_page(400, Req, Env);
+        {error, {not_found, path}} -> render_status_page(404, Req, Env);
+        {error, {not_found, host}} -> render_status_page(400, Req, Env);
         {ok, #mmf{app = App, module = Module, function = Function,
                   secure = Secure, extra_state = ExtraState}, Bindings} ->
             {ok,
@@ -196,7 +195,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     compile_paths(Tl, Dispatch2, Options).
 
 
--spec read_routefile(App :: atom()) -> [route_info()].
+-spec read_routefile(App :: atom()) -> {ok, Terms :: [term()]} | {error, Reason :: atom() | {non_neg_integer(), atom(), atom()}}.
 read_routefile(App) ->
     Filepath = filename:join([code:priv_dir(App), erlang:atom_to_list(App) ++ ".routes.erl"]),
     file:consult(Filepath).
@@ -282,13 +281,14 @@ parse_url(Host, {Path, {Mod, Func}, Options}, MMF, HostsTree) ->
           end, HostTree0, Methods),
     [{Host, CompiledPaths}|proplists:delete(Host, HostsTree)].
 
+
 find_endpoint(Host, Path, Method, HostTree) when is_binary(Path);
                                                  is_integer(Path) ->
     case proplists:lookup(Host, HostTree) of
         none ->
             case proplists:lookup('_', HostTree) of
                 none ->
-                    {error, not_found, host};
+                    {error, {not_found, host}};
                 {_, Tree} ->
                     lookup(Path, Method, Tree)
             end;
@@ -315,8 +315,10 @@ lookup(StatusCode, Method, _Acc, #node{children = Children}, _State) when is_int
     case find_node(StatusCode, Method, Children, []) of
         {ok, path, {_Node, MMF}} ->
             {ok, MMF, #{}};
-        {error, Reason} -> {error, Reason};
-        {error, Type, Reason} -> {error, {Type, Reason}}
+        {ok, binding, Bindings} ->
+            %% TODO: Fix this
+            {ok, undefined, #{}};
+        {error, _Reason} = E -> E
     end;
 lookup(<<>>, Method, Acc, #node{children = Children}, #{bindings := Bindings} = State) ->
     case find_node(Acc, Method, Children, []) of
@@ -324,17 +326,14 @@ lookup(<<>>, Method, Acc, #node{children = Children}, #{bindings := Bindings} = 
             {ok, MMF, Bindings};
         {ok, binding, {#node{key = Key}, MMF}} ->
             {ok, MMF, State#{bindings => Bindings#{Key => Acc}}};
-        {error, Reason} -> {error, Reason};
-        {error, Type, Reason} -> {error, {Type, Reason}}
+        {error, _Reason} = E -> E
     end;
 lookup(<<$/, Rest/binary>>, Method, <<>>, Tree, Options) ->
     %% Ignore since double /
     lookup(Rest, Method, <<>>, Tree, Options);
 lookup(<<$/, Rest/binary>>, Method, Acc, #node{children = Children}, #{bindings := Bindings} = State) ->
     case find_node(Acc, false, Children, []) of
-        {error, _Class, _Type} = Err ->
-            Err;
-        {error, _Class} = Err ->
+        {error, _ClassOrTuple} = Err ->
             Err;
         {ok, path, {Node, _MMF}} ->
             lookup(Rest, Method, <<>>, Node, State);
@@ -411,15 +410,17 @@ insert(<<$:, Rest/binary>>, _Acc, MMF, #node{children = Children}, Options) ->
                     Element#node{key = Binding, is_binding = true, children = [Child|without_child(Child, Element#node.children)]}
             end
     end;
-insert(<<$[, $., $., $., $]>>, _Acc, _MMF, _PrevNode, _Options) ->
+insert(<<$[, $., $., $., $]>>, _Acc, MMF, PrevNode, Options) ->
     %% This is a catch-all-route - needs to be the last thing in a route
     %% TODO! Implement!
-    ok;
+    #node{key = <<"*">>, is_binding = true, mmf = [MMF]};
 insert(<<X, Rest/bits>>, Acc, MMF, PrevNode, Options) ->
     insert(Rest, <<Acc/binary, X>>, MMF, PrevNode, Options).
 
 
 
+-spec render_status_page(StatusCode :: integer(), Req :: cowboy_req:req()) ->
+                                {ok, Req0 :: cowboy_req:req(), Env :: map()}.
 render_status_page(StatusCode, Req) ->
     Dispatch = persistent_term:get(nova_dispatch),
     render_status_page(StatusCode, Req, #{dispatch => Dispatch}).
@@ -468,7 +469,7 @@ has_bindings([]) -> false;
 has_bindings([#node{is_binding = true}|_Tl]) -> true;
 has_bindings([_|Tl]) -> has_bindings(Tl).
 
-find_node(_, _, [], []) -> {error, not_found, path};
+find_node(_, _, [], []) -> {error, {not_found, path}};
 find_node(_, _, [], Binding) -> {ok, binding, Binding};
 find_node(Key, false, [#node{is_binding = true}=N|Children], _Binding) ->
     find_node(Key, false, Children, {N, undefined});
@@ -481,8 +482,8 @@ find_node(Key, false, [#node{key = Key}=N|_Children], _Binding) ->
     {ok, path, {N, undefined}};
 find_node(Key, Method, [#node{key = Key, mmf = MMFs}|_Children], _Binding) ->
     case find_method(Method, MMFs) of
-        {error, not_found} -> {error, not_found, method};
-        {Node, MMF}-> {ok, path, {Node, MMF}}
+        {error, not_found} -> {error, {not_found, method}};
+        {Node, MMF} -> {ok, path, {Node, MMF}}
     end;
 find_node(Key, Method, [_Hd|Tl], Bindings) ->
     find_node(Key, Method, Tl, Bindings).
@@ -526,14 +527,16 @@ print(#node{key = '__ROOT__', children = Children}) ->
 
 print([], _Level) -> ok;
 print([#node{key = Key, mmf = MMF, children = Children}|Tl], Level) ->
-    Indent = [ $ || _X <- lists:seq(0, Level*4) ],
+    Indent = [ $  || _X <- lists:seq(0, Level) ],
     io:format("~s", [Indent]),
     io:format("/~s~n", [Key]),
+    ExtraLength = length(erlang:binary_to_list(Key)),
+    ExtraIndent = [ $  || _X <- lists:seq(0, ExtraLength) ],
     lists:foreach(fun(#mmf{method = Method, module = Module, function = Function}) ->
-                          io:format("~s    ", [Indent]),
+                          io:format("~s~s", [Indent,ExtraIndent]),
                           io:format("<~s>(~s:~s)~n", [Method, Module, Function])
                   end, MMF),
-    print(Children, Level+1),
+    print(Children, Level+ExtraLength),
     print(Tl, Level).
 
 -ifdef(TEST).

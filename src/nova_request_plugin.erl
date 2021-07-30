@@ -14,9 +14,9 @@
 %% Pre-request callback
 %% @end
 %%--------------------------------------------------------------------
--spec pre_http_request(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
-                              {ok, State0 :: nova_http_handler:nova_http_state()} |
-                              {stop, State0 :: nova_http_handler:nova_http_state()} |
+-spec pre_http_request(State :: nova:state(), Options :: map()) ->
+                              {ok, State0 :: nova:state()} |
+                              {stop, State0 :: nova:state()} |
                               {error, Reason :: term()}.
 pre_http_request(State, Options) ->
     Options0 = [ K || {K, V} <- maps:to_list(Options),
@@ -30,9 +30,9 @@ pre_http_request(State, Options) ->
 %% Post-request callback
 %% @end
 %%--------------------------------------------------------------------
--spec post_http_request(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
-                               {ok, State0 :: nova_http_handler:nova_http_state()} |
-                               {stop, State0 :: nova_http_handler:nova_http_state()} |
+-spec post_http_request(State :: nova:state(), Options :: map()) ->
+                               {ok, State0 :: nova:state()} |
+                               {stop, State0 :: nova:state()} |
                                {error, Reason :: term()}.
 post_http_request(State, _Options) ->
     {ok, State}.

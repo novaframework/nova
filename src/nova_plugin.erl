@@ -75,17 +75,17 @@
         Type == post_ws_request).
 
 %% Define the callback functions for HTTP-plugins
--callback pre_http_request(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
-    {ok, State0 :: nova_http_handler:nova_http_state()} |
-    {break, State0 :: nova_http_handler:nova_http_state()} |
-    {stop, State0 :: nova_http_handler:nova_http_state()} |
+-callback pre_http_request(State :: nova:state(), Options :: map()) ->
+    {ok, State0 :: nova:state()} |
+    {break, State0 :: nova:state()} |
+    {stop, State0 :: nova:state()} |
     {error, Reason :: term()}.
 -optional_callbacks([pre_http_request/2]).
 
--callback post_http_request(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
-    {ok, State0 :: nova_http_handler:nova_http_state()} |
-    {break, State0 :: nova_http_handler:nova_http_state()} |
-    {stop, State0 :: nova_http_handler:nova_http_state()} |
+-callback post_http_request(State :: nova:state(), Options :: map()) ->
+    {ok, State0 :: nova:state()} |
+    {break, State0 :: nova:state()} |
+    {stop, State0 :: nova:state()} |
     {error, Reason :: term()}.
 -optional_callbacks([post_http_request/2]).
 

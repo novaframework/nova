@@ -43,7 +43,7 @@
 %%%===================================================================
 %%% Public functions
 %%%===================================================================
--spec get(NovaHttpState :: nova_http_handler:nova_http_state(), Key :: binary()) ->
+-spec get(NovaHttpState :: nova:state(), Key :: binary()) ->
                  {ok, Value :: binary()} | {error, Reason :: atom()} | no_return().
 get(#{req := Req}, Key) ->
     case get_session_id(Req) of
@@ -54,7 +54,7 @@ get(#{req := Req}, Key) ->
             {error, not_found}
     end.
 
--spec set(NovaHttpState :: nova_http_handler:nova_http_state(), Key :: binary(), Value :: binary()) ->
+-spec set(NovaHttpState :: nova:state(), Key :: binary(), Value :: binary()) ->
                  ok | {error, Reason :: atom()} | no_return().
 set(#{req := Req}, Key, Value) ->
     case get_session_id(Req) of
@@ -64,7 +64,7 @@ set(#{req := Req}, Key, Value) ->
         _ ->
             {error, session_id_not_set}
     end.
--spec delete(NovaHttpState :: nova_http_handler:nova_http_state()) -> {ok, Req :: cowboy_req:req()} |
+-spec delete(NovaHttpState :: nova:state()) -> {ok, Req :: cowboy_req:req()} |
                                                                       {error, Reason :: atom()}.
 delete(#{req := Req}) ->
     case get_session_id(Req) of
@@ -80,7 +80,7 @@ delete(#{req := Req}) ->
     end.
 
 -spec delete(NovaHttpState, Key :: binary()) -> {ok, NovaHttpState} | {error, Reason :: atom()} | no_return() when
-      NovaHttpState :: nova_http_handler:nova_http_state().
+      NovaHttpState :: nova:state().
 delete(Req, Key) ->
     case get_session_id(Req) of
         {ok, SessionId} ->

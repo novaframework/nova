@@ -17,9 +17,9 @@
 %% Pre-request callback
 %% @end
 %%--------------------------------------------------------------------
--spec pre_http_request(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
-                              {ok, State0 :: nova_http_handler:nova_http_state()} |
-                              {stop, State0 :: nova_http_handler:nova_http_state()} |
+-spec pre_http_request(State :: nova:state(), Options :: map()) ->
+                              {ok, State0 :: nova:state()} |
+                              {stop, State0 :: nova:state()} |
                               {error, Reason :: term()}.
 pre_http_request(State = #{req := Req, secure := {Module, Function}}, _Options) ->
     try Module:Function(Req) of
@@ -54,9 +54,9 @@ pre_http_request(State, _Options) ->
 %% is allowed to continue.
 %% @end
 %%--------------------------------------------------------------------
--spec pre_ws_upgrade(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
-                            {ok, State0 :: nova_http_handler:nova_http_state()} |
-                            {stop, State0 :: nova_http_handler:nova_http_state()} |
+-spec pre_ws_upgrade(State :: nova:state(), Options :: map()) ->
+                            {ok, State0 :: nova:state()} |
+                            {stop, State0 :: nova:state()} |
                             {error, Reason :: term()}.
 pre_ws_upgrade(State = #{req := Req, secure := {Module, Function}}, _Options) ->
     try Module:Function(Req) of
@@ -87,9 +87,9 @@ pre_ws_upgrade(State, _Options) ->
 %% Post-request callback
 %% @end
 %%--------------------------------------------------------------------
--spec post_http_request(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
-                               {ok, State0 :: nova_http_handler:nova_http_state()} |
-                               {stop, State0 :: nova_http_handler:nova_http_state()} |
+-spec post_http_request(State :: nova:state(), Options :: map()) ->
+                               {ok, State0 :: nova:state()} |
+                               {stop, State0 :: nova:state()} |
                                {error, Reason :: term()}.
 post_http_request(State, _Options) ->
     {ok, State}.

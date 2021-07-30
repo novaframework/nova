@@ -16,7 +16,8 @@
                    req := cowboy_req:req(),
                    controller_data := any(),
                    method := binary(),
-                   bindings := [{binary(), binary()}]
+                   bindings := [{binary(), binary()}],
+                   resp_status := integer()
                   }.
 -export_type([state/0]).
 

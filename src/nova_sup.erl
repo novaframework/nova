@@ -104,7 +104,7 @@ setup_cowboy(Configuration) ->
         {ok, App, Host, Port} ->
             Host0 = inet:ntoa(Host),
             ?NOTICE("Running ~s with cowboy ~s at http://~s:~B", [App, get_version(cowboy), Host0, Port]);
-        {error, App, Error} ->
+        {error, Error} ->
             ?ERROR("Cowboy could not start reason: ~p", [Error])
     end.
 

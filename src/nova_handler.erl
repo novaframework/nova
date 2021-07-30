@@ -47,11 +47,7 @@ execute(Req, Env = #{app := App, module := Module, function := Function, control
                 {ok, Callback} ->
                     {ok, State0} = Callback(RetObj, {Module, Function}, State),
                     render_response(State0);
-                {Module, State} ->
-                    Module:upgrade(Env, State);
-                {Module, State, Options} -> %% Should we keep this one?
-                    Module:upgrade(Env, State, Options);
-                _ ->
+                {error, not_found} ->
                     ?ERROR("Unknown return object ~p returned from module: ~p function: ~p", [RetObj, Module, Function])
             end
     catch Class:Reason:Stacktrace ->
@@ -88,7 +84,7 @@ terminate(Reason, Req, Module) ->
 %% INTERNAL FUNCTIONS %%
 %%%%%%%%%%%%%%%%%%%%%%%%
 
--spec render_response(State :: nova_http:http_state()) -> {ok, Req :: cowboy_req:req(), State :: nova_http:state()}.
+-spec render_response(State :: map()) -> {ok, Req :: cowboy_req:req(), State0 :: map()}.
 render_response(#{req := Req} = State) ->
     StatusCode = maps:get(resp_status, State, 200),
     cowboy_req:reply(StatusCode, Req),
