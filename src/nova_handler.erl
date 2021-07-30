@@ -28,7 +28,7 @@ execute(Req, Env = #{app := App, module := Module, function := Function, control
         fun() ->
                 case App of
                     cowboy ->
-                        {cowboy, erlang:apply(Module, Function, [Req|ExtraState])};
+                        {cowboy, erlang:apply(Module, Function, [Req, ExtraState])};
                     _ ->
                         Module:Function(State)
                 end
