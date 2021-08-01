@@ -136,7 +136,7 @@ handle_status({status, Status, ExtraHeaders}, _ModFun, State = #{req := Req}) ->
     State0 = nova_http:set_headers(ExtraHeaders, State),
     State1 = nova_http:set_status(Status, State0),
 
-    {ok, State2, _Env} =  nova_router:render_status_page(Status, Req),
+    {ok, State2, _Env} =  nova_router:render_status_page(Status, #{}, Req),
     {ok, State2};
 handle_status({status, Status}, ModFun, State) ->
     handle_status({status, Status, #{}}, ModFun, State).

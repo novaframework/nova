@@ -19,6 +19,7 @@
          read_routefile/1,
          render_status_page/2,
          render_status_page/3,
+         render_status_page/4,
 
          print/0,
          print/1
@@ -42,29 +43,6 @@
               }).
 
 %% Route information
--type status_route()      :: {StatusCode :: integer(), {Mod :: atom(), Fun :: atom()}} |
-                             {StatusCode :: integer(), StaticFile :: string()}.
--type status_route_opt()  :: {StatusCode :: integer(), {Mod :: atom(), Fun :: atom()}, Options :: map()}.
--type regular_route()     :: {Path :: string(), {Mod :: atom(), Fun :: atom()}}.
--type regular_route_opt() :: {Path :: string(), {Mod :: atom(), Fun :: atom()}, Options :: map()}.
--type static_route()      :: {Path :: string(), DirOrFile :: string()}.
--type static_route_opt()  :: {Path :: string(), DirOrFile :: string(), Options :: map()}.
-
--type route() :: status_route() |
-                 status_route_opt() |
-                 regular_route() |
-                 regular_route_opt() |
-                 static_route() |
-                 static_route_opt().
-
-
--type route_info() :: #{
-                        prefix => string(),
-                        security => false | {Mod :: atom(), Fun :: atom()},
-                        extra_state => any(),
-                        routes => [route()]
-                       }.
-
 -type dispatch_rules() :: [{Host :: '_' | binary(), #node{}}].
 
 -type bindings() :: #{binary() := binary()}.
@@ -120,9 +98,8 @@ lookup_url(Path, Host, Method) when is_binary(Path);
                                when Req::cowboy_req:req(), Env::cowboy_middleware:env().
 execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch := Dispatch}) ->
     case find_endpoint(Host, Path, Method, Dispatch) of
-        %% TODO! Fix so we can route on HTTP-codes
-        {error, {not_found, path}} -> render_status_page(404, Req, Env);
-        {error, {not_found, host}} -> render_status_page(400, Req, Env);
+        {error, {not_found, path}} -> render_status_page(404, #{error => "Not found in path"}, Req, Env);
+        {error, {not_found, host}} -> render_status_page(400, #{error => "Not found in host"}, Req, Env);
         {ok, #mmf{app = App, module = Module, function = Function,
                   secure = Secure, extra_state = ExtraState}, Bindings} ->
             {ok,
@@ -135,9 +112,8 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch 
                   bindings => Bindings,
                   extra_state => ExtraState}
             };
-        _Error ->
-            %% TODO! Fix rendering of an error-page
-            render_status_page(404, Req, Env)
+        Error ->
+            render_status_page(404, #{error => Error}, Req, Env)
     end.
 
 route_reader(App) ->
@@ -236,13 +212,12 @@ parse_url(Host, {RemotePath, LocalPath}, MMF = #mmf{app = App}, HostsTree) when 
         end,
 
     HostTree0 = proplists:get_value(Host, HostsTree, new()),
-    Method = '_',
 
     MMF0 = MMF#mmf{method = '_',
                    app = cowboy,
                    module = cowboy_static,
                    function = init,
-                   extra_state = Payload},
+                   extra_state = [Payload]},
 
     CompiledPaths = insert(erlang:list_to_binary(RemotePath), <<>>, MMF0, HostTree0, #options{use_strict = false}),
     [{Host, CompiledPaths}|proplists:delete(Host, HostsTree)];
@@ -315,7 +290,7 @@ lookup(StatusCode, Method, _Acc, #node{children = Children}, _State) when is_int
     case find_node(StatusCode, Method, Children, []) of
         {ok, path, {_Node, MMF}} ->
             {ok, MMF, #{}};
-        {ok, binding, Bindings} ->
+        {ok, binding, _Bindings} ->
             %% TODO: Fix this
             {ok, undefined, #{}};
         {error, _Reason} = E -> E
@@ -410,10 +385,9 @@ insert(<<$:, Rest/binary>>, _Acc, MMF, #node{children = Children}, Options) ->
                     Element#node{key = Binding, is_binding = true, children = [Child|without_child(Child, Element#node.children)]}
             end
     end;
-insert(<<$[, $., $., $., $]>>, _Acc, MMF, PrevNode, Options) ->
-    %% This is a catch-all-route - needs to be the last thing in a route
-    %% TODO! Implement!
-    #node{key = <<"*">>, is_binding = true, mmf = [MMF]};
+insert(<<$[, $., $., $., $]>>, _Acc, MMF, _PrevNode, _Options) ->
+    %% This is a catch-all-route - snould be the last thing in a route
+    #node{key = '_', is_binding = true, mmf = [MMF]};
 insert(<<X, Rest/bits>>, Acc, MMF, PrevNode, Options) ->
     insert(Rest, <<Acc/binary, X>>, MMF, PrevNode, Options).
 
@@ -422,10 +396,17 @@ insert(<<X, Rest/bits>>, Acc, MMF, PrevNode, Options) ->
 -spec render_status_page(StatusCode :: integer(), Req :: cowboy_req:req()) ->
                                 {ok, Req0 :: cowboy_req:req(), Env :: map()}.
 render_status_page(StatusCode, Req) ->
-    Dispatch = persistent_term:get(nova_dispatch),
-    render_status_page(StatusCode, Req, #{dispatch => Dispatch}).
+    render_status_page(StatusCode, #{}, Req).
 
-render_status_page(StatusCode, Req, Env = #{dispatch := Dispatch}) ->
+-spec render_status_page(StatusCode :: integer(), Data :: map(), Req :: cowboy_req:req()) ->
+                                {ok, Req0 :: cowboy_req:req(), Env :: map()}.
+render_status_page(StatusCode, Data, Req) ->
+    Dispatch = persistent_term:get(nova_dispatch),
+    render_status_page(StatusCode, Data, Req, #{dispatch => Dispatch}).
+
+-spec render_status_page(StatusCode :: integer(), Data :: map(), Req :: cowboy_req:req(), Env :: map()) ->
+                                {ok, Req0 :: cowboy_req:req(), Env :: map()}.
+render_status_page(StatusCode, Data, Req, Env = #{dispatch := Dispatch}) ->
     Env0 =
         case find_endpoint(StatusCode, <<>>, '_', Dispatch) of
             {error, _} ->
@@ -434,14 +415,14 @@ render_status_page(StatusCode, Req, Env = #{dispatch := Dispatch}) ->
                      module => nova_controller,
                      function => status_code,
                      secure => false,
-                     controller_data => #{status => StatusCode}};
+                     controller_data => #{status => StatusCode, data => Data}};
             {ok, #mmf{app = App, module = Module, function = Function, secure = Secure, extra_state = ExtraState},
              Bindings} ->
                 Env#{app => App,
                      module => Module,
                      function => Function,
                      secure => Secure,
-                     controller_data => #{},
+                     controller_data => #{status => StatusCode, data => Data},
                      bindings => Bindings,
                      extra_state => ExtraState}
 

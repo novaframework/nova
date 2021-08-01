@@ -5,6 +5,6 @@
               module :: atom(),
               function :: atom(),
               secure = false :: false | {Mod :: atom(), Fun :: atom()},
-              extra_state :: any(),
+              extra_state :: list(),
               protocol = http :: http | static | ws
              }).
