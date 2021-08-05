@@ -57,7 +57,8 @@ plugin_info() ->
       {parse_bindings, <<"Used to parse bindings and put them in state under `bindings` key">>},
       {read_body, <<"Reads the body and put it under the `body`">>},
       {decode_json_body, <<"Decodes the body as JSON and puts it under `json`">>},
-      {parse_qs, <<"Used to parse qs and put hem in state under `qs` key">>}
+      {parse_qs, <<"Used to parse qs and put hem in state under `qs` key">>},
+      {read_urlencoded_body, <<"Reads the urlencoded body and puts the state under `params` key">>}
      ]}.
 
 
@@ -69,7 +70,7 @@ modulate_state(State, []) -> {ok, State};
 modulate_state(State = #{req := Req, controller_data := ControllerData}, [parse_bindings|Tl]) ->
     Bindings = cowboy_req:bindings(Req),
     modulate_state(State#{controller_data => ControllerData#{bindings => Bindings}}, Tl);
-modulate_state(State = #{req :=  Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}},
+modulate_state(State = #{req := Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}},
                          controller_data := ControllerData},
                [decode_json_body|Tl]) ->
     case cowboy_req:has_body(Req) of
@@ -81,6 +82,19 @@ modulate_state(State = #{req :=  Req = #{headers := #{<<"content-type">> := <<"a
             modulate_state(State#{req => Req0, controller_data => ControllerData#{json => JSON}}, Tl);
         false ->
             modulate_state(State#{controller_data => ControllerData#{json => #{}}}, Tl)
+    end;
+modulate_state(State = #{req := Req =
+                             #{headers := #{<<"content-type">> := <<"application/x-www-form-urlencoded", _/binary>>}},
+                         controller_data := ControllerData},
+               [read_urlencoded_body|Tl]) ->
+    case cowboy_req:has_body(Req) of
+        true ->
+            %% First read in the body
+            {ok, Data, Req0} = cowboy_req:read_urlencoded_body(Req),
+            Params = maps:from_list(Data),
+            modulate_state(State#{req => Req0, controller_data => ControllerData#{params => Params}}, Tl);
+        false ->
+            modulate_state(State#{controller_data => ControllerData#{params => #{}}}, Tl)
     end;
 modulate_state(State = #{req := Req,
                          controller_data := ControllerData}, [read_body|Tl]) ->
