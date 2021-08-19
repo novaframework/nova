@@ -21,11 +21,10 @@
                               {ok, State0 :: nova_http_handler:nova_http_state()} |
                               {stop, State0 :: nova_http_handler:nova_http_state()} |
                               {error, Reason :: term()}.
-pre_http_request(State = #{req := Req, secure := {Module, Function}}, _Options) ->
-    try Module:Function(Req) of
+pre_http_request(State = #{req := Req, secure := {Module, Function}, controller_data := ControllerData}, _Options) ->
+    try Module:Function(ControllerData#{req => Req}) of
         {true, AuthData} ->
-            {ok, State#{controller_data =>
-                            #{auth_data => AuthData}}};
+            {ok, State#{controller_data => ControllerData#{auth_data => AuthData}}};
         true ->
             {ok, State};
         false ->
