@@ -150,10 +150,12 @@ handle_status({status, Status}, ModFun, State) ->
 %% 302 with <icode>location</icode> set to <icode>"/login"</icode>
 %% @end
 %%-----------------------------------------------------------------
--spec handle_redirect({redirect, Route :: list()}, ModFun :: mod_fun(),
+-spec handle_redirect({redirect, Route :: list() | binary()}, ModFun :: mod_fun(),
                       State) -> {ok, State} when State :: nova_http_handler:nova_http_state().
-handle_redirect({redirect, Route}, _ModFun, State) ->
-    Headers = #{<<"Location">> => list_to_binary(Route)},
+handle_redirect({redirect, Route}, ModFun, State) when is_list(Route) ->
+    handle_redirect({redirect, list_to_binary(Route)}, ModFun, State);
+handle_redirect({redirect, Route}, _ModFun, State) when is_binary(Route) ->
+    Headers = #{<<"Location">> => Route},
     State0 = nova_http:set_headers(Headers, State),
     State1 = nova_http:set_status(302, State0),
     {ok, State1}.
