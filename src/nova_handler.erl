@@ -19,8 +19,7 @@
 
 -spec execute(Req, Env) -> {ok, Req, Env}
                                when Req::cowboy_req:req(), Env::cowboy_middleware:env().
-execute(Req, Env = #{app := App, module := Module, function := Function, controller_data := CtrlData,
-                     extra_state := ExtraState}) ->
+execute(Req, Env = #{app := App, module := Module, function := Function, controller_data := CtrlData}) ->
     State = CtrlData#{req => Req},
 
     %% Lazy load evaluation of the case expression
@@ -28,7 +27,7 @@ execute(Req, Env = #{app := App, module := Module, function := Function, control
         fun() ->
                 case App of
                     cowboy ->
-                        {cowboy, erlang:apply(Module, Function, [Req|ExtraState])};
+                        {cowboy, erlang:apply(Module, Function, [Req])};
                     _ ->
                         Module:Function(State)
                 end
@@ -64,7 +63,7 @@ execute(Req, Env = #{app := App, module := Module, function := Function, control
                     {ok, State0} = nova_basic_handler:handle_ok({ok, Payload, #{view => nova_error}},
                                                                 {dummy, dummy}, State),
                     render_response(State0);
-                {ok, #mmf{module = EMod, function = EFunc}, _PathState} ->
+                {ok, _Bindings, #nova_router_value{module = EMod, function = EFunc}} ->
                     %% Show this view - how?
                     execute(Req, Env#{app => nova, module => EMod, function => EFunc, controller_data => Payload})
             end

@@ -14,6 +14,7 @@
                  erlydtl,
                  jhn_stdlib,
                  uuid,
+                 routing_tree,
                  erldb
                 ]},
   {env,[]},

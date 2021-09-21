@@ -34,7 +34,9 @@ init(StreamID, Req, Opts) ->
             false ->
                 Req
         end,
-    {Commands, Next} = cowboy_stream:init(StreamID, Req0, Opts),
+    %% Set the correct server-header information
+    Req1 = cowboy_req:set_resp_cookie(<<"server">>, <<"Cowboy/Nova">>, Req0),
+    {Commands, Next} = cowboy_stream:init(StreamID, Req1, Opts),
     {Commands, #state{req = Req0, next = Next}}.
 
 -spec data(cowboy_stream:streamid(), cowboy_stream:fin(), cowboy_req:resp_body(), State)

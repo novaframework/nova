@@ -1,6 +1,5 @@
-%% Method, Module, Function-record
--record(mmf, {
-              method = '_' :: binary() | '_',
+%% Nova Routing value
+-record(nova_router_value, {
               app :: atom(),
               module :: atom(),
               function :: atom(),
