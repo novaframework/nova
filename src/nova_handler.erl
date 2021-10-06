@@ -19,28 +19,35 @@
 
 -spec execute(Req, Env) -> {ok, Req, Env}
                                when Req::cowboy_req:req(), Env::cowboy_middleware:env().
+execute(Req, Env = #{app := App, cowboy_handler := Handler, arguments := Arguments}) ->
+    try Handler:init(Req, Arguments) of
+        {ok, Req2, State} = R ->
+            Result = terminate(normal, Req2, Handler),
+            {ok, Req2, Env#{result => Result}};
+        {Mod, Req2, State} = R ->
+            Mod:upgrade(Req2, Env, Handler, State);
+        {Mod, Req2, State, Opts} = R ->
+            Mod:upgrade(Req2, Env, Handler, State, Opts)
+    catch Class:Reason:Stacktrace ->
+            Payload = #{status_code => 500,
+                        stacktrace => Stacktrace,
+                        class => Class,
+                        reason => Reason},
+            case nova_router:lookup_url(500) of
+                {error, _} ->
+                    %% Render the internal view of nova
+                    {ok, State0} = nova_basic_handler:handle_ok({ok, Payload, #{view => nova_error}},
+                                                                {dummy, dummy}, #{req => Req}),
+                    render_response(State0);
+                {ok, _Bindings, #nova_handler_value{module = EMod, function = EFunc}} ->
+                    %% Show this view - how?
+                    execute(Req, Env#{app => nova, module => EMod, function => EFunc, controller_data => Payload})
+            end
+    end;
 execute(Req, Env = #{app := App, module := Module, function := Function, controller_data := CtrlData}) ->
     State = CtrlData#{req => Req},
 
-    %% Lazy load evaluation of the case expression
-    ControllerInvokation =
-        fun() ->
-                case App of
-                    cowboy ->
-                        {cowboy, erlang:apply(Module, Function, [Req])};
-                    _ ->
-                        Module:Function(State)
-                end
-        end,
-
-    try ControllerInvokation() of
-        {cowboy, {ok, Req0, _State0}} ->
-            Result = terminate(normal, Req0, Module),
-            {ok, Req0, Env#{result => Result}};
-        {cowboy, {Mod, Req0, CowboyState}} ->
-            Mod:upgrade(Req0, Env, Module, CowboyState);
-        {cowboy, {Mod, Req0, CowboyState, Opts}} ->
-            Mod:upgrade(Req0, Env, Module, CowboyState, Opts);
+    try Module:Function(State) of
         RetObj ->
             case nova_handlers:get_handler(element(1, RetObj)) of
                 {ok, Callback} ->
@@ -53,9 +60,9 @@ execute(Req, Env = #{app := App, module := Module, function := Function, control
             terminate(Reason, Req, Module),
             %% Build the payload object
             Payload = #{status_code => 500,
-                         stacktrace => Stacktrace,
-                         class => Class,
-                         reason => Reason},
+                        stacktrace => Stacktrace,
+                        class => Class,
+                        reason => Reason},
 
             case nova_router:lookup_url(500) of
                 {error, _} ->
@@ -63,7 +70,7 @@ execute(Req, Env = #{app := App, module := Module, function := Function, control
                     {ok, State0} = nova_basic_handler:handle_ok({ok, Payload, #{view => nova_error}},
                                                                 {dummy, dummy}, State),
                     render_response(State0);
-                {ok, _Bindings, #nova_router_value{module = EMod, function = EFunc}} ->
+                {ok, _Bindings, #nova_handler_value{module = EMod, function = EFunc}} ->
                     %% Show this view - how?
                     execute(Req, Env#{app => nova, module => EMod, function => EFunc, controller_data => Payload})
             end
