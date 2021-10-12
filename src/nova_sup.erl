@@ -109,7 +109,7 @@ setup_cowboy(Configuration) ->
     end.
 
 start_cowboy(Configuration) ->
-    Middlewares = maps:get(middlewares, Configuration, [nova_router, nova_handler]),
+    Middlewares = maps:get(middlewares, Configuration, [nova_router, nova_security_handler, nova_handler]),
     StreamHandlers = maps:get(stream_handlers, Configuration, [nova_stream_h, cowboy_compress_h, cowboy_stream_h]),
     Options = maps:get(options, Configuration, #{compress => true}),
 
