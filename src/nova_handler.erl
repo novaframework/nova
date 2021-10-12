@@ -21,12 +21,12 @@
                                when Req::cowboy_req:req(), Env::cowboy_middleware:env().
 execute(Req, Env = #{app := App, cowboy_handler := Handler, arguments := Arguments}) ->
     try Handler:init(Req, Arguments) of
-        {ok, Req2, State} = R ->
+        {ok, Req2, _State} ->
             Result = terminate(normal, Req2, Handler),
             {ok, Req2, Env#{result => Result}};
-        {Mod, Req2, State} = R ->
+        {Mod, Req2, State} ->
             Mod:upgrade(Req2, Env, Handler, State);
-        {Mod, Req2, State, Opts} = R ->
+        {Mod, Req2, State, Opts} ->
             Mod:upgrade(Req2, Env, Handler, State, Opts)
     catch Class:Reason:Stacktrace ->
             Payload = #{status_code => 500,
@@ -54,7 +54,7 @@ execute(Req, Env = #{app := App, module := Module, function := Function, control
                     {ok, State0} = Callback(RetObj, {Module, Function}, State),
                     render_response(State0);
                 {error, not_found} ->
-                    ?ERROR("Unknown return object ~p returned from module: ~p function: ~p", [RetObj, Module, Function])
+                    ?ERROR("Unknown return object1 ~p returned from module: ~p function: ~p", [RetObj, Module, Function])
             end
     catch Class:Reason:Stacktrace ->
             terminate(Reason, Req, Module),
