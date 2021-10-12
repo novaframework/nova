@@ -30,26 +30,16 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Public functions      %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
-init(Req = #{method := Method}, State = #{entries := Routes}) ->
-    %% Normalize the state. This is a temporary thing and should not be kept, but for now it's a
-    %% quick fix to prove that the new way of routing works :-)
-    case get_route(Method, Routes) of
-        undefined ->
-            Req1 = cowboy_req:reply(405, Req),
-            {ok, Req1, State#{resp_status => 405, req => Req1}};
-        Route ->
-            NormalizedState = maps:remove(entries, State),
-            NormalizedState0 = maps:merge(NormalizedState, Route),
-
-            %% Call the http-handler in order to correctly handle potential plugins for the http-request
-            {ok, PrePlugins} = nova_plugin:get_plugins(pre_ws_upgrade),
-            case run_plugins(PrePlugins, pre_ws_upgrade, NormalizedState0#{req => Req}) of
-                {ok, State0 = #{controller_data := ControllerData, mod := Mod}} ->
-                    ControllerData0 = ControllerData#{req => Req},
-                    upgrade_ws(Mod, Req, State0, ControllerData0);
-                Stop ->
-                    Stop
-            end
+init(Req = #{method := Method}, State = #{module := Module}) ->
+    %% Call the http-handler in order to correctly handle potential plugins for the http-request
+    State0 = build_state(State),
+    {ok, PrePlugins} = nova_plugin:get_plugins(pre_ws_upgrade),
+    case run_plugins(PrePlugins, pre_ws_upgrade, State0#{req => Req}) of
+        {ok, State0 = #{controller_data := ControllerData, mod := Module}} ->
+            ControllerData0 = ControllerData#{req => Req},
+            upgrade_ws(Module, Req, State0, ControllerData0);
+        Stop ->
+            Stop
     end.
 
 upgrade_ws(Module, Req, State, ControllerData) ->
@@ -156,6 +146,12 @@ get_route(Route, Routes = #{'_' := V}) ->
 get_route(Route, Routes) ->
     maps:get(Route, Routes, undefined).
 
+
+build_state(State) ->
+    State#{controller_data => maps:get(controller_data, State, #{}),
+           mod => maps:get(mod, State, undefined),
+           subprotocols => maps:get(subprotocols, State, []),
+           nova_handler => maps:get(nova_handler, State, nova_ws_handler)}.
 
 -ifdef(TEST).
 
