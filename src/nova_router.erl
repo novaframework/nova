@@ -7,12 +7,18 @@
 -module(nova_router).
 -behaviour(cowboy_middleware).
 
+%% Cowboy middleware-callbacks
+-export([
+         execute/2
+        ]).
+
+%% API
 -export([
          compile/1,
-         execute/2,
          route_reader/1,
          lookup_url/1,
-         print_routes/0,
+         lookup_url/2,
+         lookup_url/3,
 
          read_routefile/1,
 
@@ -35,7 +41,6 @@
 compile(Apps) ->
     Dispatch = compile(Apps, routing_tree:new(#{use_strict => true, convert_to_binary => true}), #{}),
     persistent_term:put(nova_dispatch, Dispatch),
-    format_tree(Dispatch),
     Dispatch.
 
 -spec execute(Req, Env) -> {ok, Req, Env} | {stop, Req}
@@ -73,8 +78,14 @@ route_reader(App) ->
     file:consult(RoutePath).
 
 lookup_url(Path) ->
+    lookup_url('_', Path).
+
+lookup_url(Host, Path) ->
+    lookup_url(Host, Path, '_').
+
+lookup_url(Host, Path, Method) ->
     Dispatch = persistent_term:get(nova_dispatch),
-    routing_tree:lookup('_', Path, '_', Dispatch).
+    routing_tree:lookup(Host, Path, Method, Dispatch).
 
 %%%%%%%%%%%%%%%%%%%%%%%%
 %% INTERNAL FUNCTIONS %%
@@ -130,8 +141,8 @@ parse_url(Host, [{StatusCode, StaticFile}|Tl], Prefix, Value, Tree) when is_inte
 
     %% TODO! Fix status-code so it's being threated specially
     Tree0 = insert(Host, StatusCode, '_', Value0, Tree),
-    parse_url(Host, Tl, Prefix, Value, Tree0);
-parse_url(Host, [{StatusCode, {Module, Function}, Options}|Tl], Prefix, Value = #nova_handler_value{app = App}, Tree) when is_integer(StatusCode) ->
+    parse_url(Host, Tl, Prefix, Value0, Tree0);
+parse_url(Host, [{StatusCode, {Module, Function}, Options}|Tl], Prefix, Value, Tree) when is_integer(StatusCode) ->
     Value0 = Value#nova_handler_value{
                module = Module,
                function = Function,
@@ -207,7 +218,7 @@ parse_url(Host, [{RemotePath, LocalPath}|Tl], Prefix, Value = #nova_handler_valu
     Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, Tree0);
 
-parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix, Value, Tree) ->
+parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix, Value = #nova_handler_value{app = App}, Tree) ->
     RealPath = case Path of
                    _ when is_list(Path) -> string:concat(Prefix, Path);
                    _ when is_integer(Path) -> Path;
@@ -228,13 +239,10 @@ parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix, Value, Tree) ->
                                 protocol = http
                                };
                           ws ->
-                              Value#nova_handler_value{
-                                app = cowboy,
-                                module = nova__ws_handler,
-                                function = init,
-                                extra_state = [], %% Env, NovaState]
-                                protocol = ws
-                               }
+                              #cowboy_handler_value{
+                                 app = App,
+                                 handler = nova_ws_handler,
+                                 arguments = #{module => Mod}}
                       end,
                   ?DEBUG("Adding route: ~s value: ~p to tree: ~p", [RealPath, Value0, Tree0]),
                   insert(Host, RealPath, BinMethod, Value0, Tree0)
@@ -270,7 +278,8 @@ render_status_page(Host, StatusCode, Data, Req, Env = #{dispatch := Dispatch}) -
                                      module = Module,
                                      function = Function,
                                      secure = Secure,
-                                     extra_state = ExtraState},
+                                     extra_state = ExtraState,
+                                     protocol = Protocol},
              Bindings} ->
                 Env#{app => App,
                      module => Module,
@@ -278,6 +287,7 @@ render_status_page(Host, StatusCode, Data, Req, Env = #{dispatch := Dispatch}) -
                      secure => Secure,
                      controller_data => #{status => StatusCode, data => Data},
                      bindings => Bindings,
+                     protocol => Protocol,
                      extra_state => ExtraState}
 
         end,
@@ -297,69 +307,7 @@ insert(Host, Path, Combinator, Value, Tree) ->
             throw(Exception)
     end.
 
-print_routes() ->
-    Dispatch = persistent_term:get(nova_dispatch),
-    format_tree(Dispatch).
 
-
-%% TODO! Rewrite this section to be a bit nicer
-format_tree([]) -> ok;
-format_tree(#host_tree{hosts = Hosts}) ->
-    format_tree(Hosts);
-format_tree([{Host, #routing_tree{tree = Tree}}|Tl]) ->
-    io:format("Host: ~p~n", [Host]),
-    format_tree(Tree, 1) ++ format_tree(Tl).
-
-format_tree([], _Depth) -> [];
-format_tree([#node{segment = Segment, value = [], children = Children}|Tl], Depth) ->
-    %% Just a plain node
-    Segment0 =
-        case false of
-            _ when is_list(Segment) orelse
-                   is_binary(Segment) ->
-                Segment;
-            _ when is_integer(Segment) ->
-                erlang:integer_to_list(Segment);
-            E ->
-                "[...]"
-        end,
-    Prefix = [ $  || _X <- lists:seq(0, Depth*4) ],
-    case Tl of
-        [] ->
-            io:format("~ts~ts /~ts~n", [Prefix, <<226,148,148,226,148,128,32>>, Segment0]);
-        _ ->
-            io:format("~ts~ts /~ts~n", [Prefix, <<226,148,156,226,148,128,32>>, Segment0])
-    end,
-    format_tree(Children, Depth+1),
-    format_tree(Tl, Depth);
-
-format_tree([#node{segment = Segment, value = Value, children = Children}|Tl], Depth) ->
-    Segment0 =
-        case false of
-            _ when is_list(Segment) orelse
-                   is_binary(Segment) ->
-                Segment;
-            _ when is_integer(Segment) ->
-                erlang:integer_to_list(Segment);
-            E ->
-                "[...]"
-        end,
-    Prefix = [ $  || _X <- lists:seq(0, Depth*4) ],
-
-    lists:foreach(fun(#node_comp{comparator = Method, value = Value}) ->
-                          {App, Mod, Func} = case Value of
-                                                 #nova_handler_value{app = App0, module = Mod0, function = Func0} -> {App0, Mod0, Func0};
-                                                 #cowboy_handler_value{app = App0, handler = Handler} -> {App0, Handler, init}
-                                             end,
-                          case Tl of
-                              [] ->
-                                  io:format("~ts~ts ~ts /~ts (~ts, ~ts:~ts/1)~n", [Prefix, <<226,148,148,226,148,128,32>>, Method, Segment0, App, Mod, Func]);
-                              _ ->
-                                  io:format("~ts~ts ~ts /~ts (~ts, ~ts:~ts/1)~n", [Prefix, <<226,148,156,226,148,128,32>>, Method, Segment0, App, Mod, Func])
-                              end
-                  end, Value),
-    format_tree(Children, Depth+1),
-    format_tree(Tl, Depth).
 
 method_to_binary(get) -> <<"GET">>;
 method_to_binary(post) -> <<"POST">>;
@@ -371,11 +319,6 @@ method_to_binary(connect) -> <<"CONNECT">>;
 method_to_binary(trace) -> <<"TRACE">>;
 method_to_binary(path) -> <<"PATCH">>;
 method_to_binary(_) -> '_'.
-
-ensure_binary(Term) when is_list(Term) ->
-    erlang:list_to_binary(Term);
-ensure_binary(Term) ->
-    Term.
 
 -ifdef(TEST).
 -compile(export_all). %% Export all functions for testing purpose
