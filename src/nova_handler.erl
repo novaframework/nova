@@ -33,6 +33,7 @@ execute(Req, Env = #{app := App, cowboy_handler := Handler, arguments := Argumen
                         stacktrace => Stacktrace,
                         class => Class,
                         reason => Reason},
+            ?ERROR("Controller crashed (~p, ~p)~nStacktrace: ~p", [Class, Reason, Stacktrace]),
             case nova_router:lookup_url(500) of
                 {error, _} ->
                     %% Render the internal view of nova
@@ -57,6 +58,7 @@ execute(Req, Env = #{app := App, module := Module, function := Function, control
                     ?ERROR("Unknown return object1 ~p returned from module: ~p function: ~p", [RetObj, Module, Function])
             end
     catch Class:Reason:Stacktrace ->
+            ?ERROR("Controller crashed (~p, ~p)~nStacktrace: ~p", [Class, Reason, Stacktrace]),
             terminate(Reason, Req, Module),
             %% Build the payload object
             Payload = #{status_code => 500,
