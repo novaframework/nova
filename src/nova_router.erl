@@ -61,12 +61,13 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch 
                   bindings => Bindings,
                   extra_state => ExtraState}
             };
-        {ok, _Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args}, PathInfo} ->
+        {ok, _Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args, secure = Secure}, PathInfo} ->
             {ok,
              Req#{path_info => PathInfo},
              Env#{app => App,
                   cowboy_handler => Handler,
-                  arguments => Args}
+                  arguments => Args,
+                  secure => secure}
             };
         Error ->
             ?ERROR("Got error: ~p", [Error]),
@@ -151,8 +152,8 @@ parse_url(Host, [{StatusCode, {Module, Function}, Options}|Tl], Prefix, Value, T
                               insert(Host, StatusCode, Method, Value0, Tree0)
                       end, Tree, maps:get(methods, Options, ['_'])),
     parse_url(Host, Tl, Prefix, Value, Res);
-parse_url(Host, [{RemotePath, LocalPath}|Tl], Prefix, Value = #nova_handler_value{app = App}, Tree) when is_list(RemotePath),
-                                                                                                        is_list(LocalPath) ->
+parse_url(Host, [{RemotePath, LocalPath}|Tl], Prefix, Value = #nova_handler_value{app = App, secure = Secure}, Tree) when is_list(RemotePath),
+                                                                                                                          is_list(LocalPath) ->
     %% Static assets - check that the path exists
     PrivPath = filename:join(code:lib_dir(App, priv), LocalPath),
 
@@ -179,13 +180,14 @@ parse_url(Host, [{RemotePath, LocalPath}|Tl], Prefix, Value = #nova_handler_valu
     Value0 = #cowboy_handler_value{
                 app = App,
                 handler = cowboy_static,
-                arguments = Payload
+                arguments = Payload,
+                secure = Secure
                },
     Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, Tree0);
 
-parse_url(Host, [{RemotePath, LocalPath}|Tl], Prefix, Value = #nova_handler_value{app = App}, Tree) when is_list(RemotePath),
-                                                                                                         is_list(LocalPath) ->
+parse_url(Host, [{RemotePath, LocalPath}|Tl], Prefix, Value = #nova_handler_value{app = App, secure = Secure}, Tree) when is_list(RemotePath),
+                                                                                                                          is_list(LocalPath) ->
     %% Static assets - check that the path exists
     PrivPath = filename:join(code:lib_dir(App, priv), LocalPath),
 
@@ -211,14 +213,15 @@ parse_url(Host, [{RemotePath, LocalPath}|Tl], Prefix, Value = #nova_handler_valu
     Value0 = #cowboy_handler_value{
                 app = App,
                 handler = cowboy_static,
-                arguments = Payload
+                arguments = Payload,
+                secure = Secure
                },
 
     ?DEBUG("Adding route: ~s value: ~p to tree: ~p", [string:concat(Prefix, RemotePath), Value0, Tree]),
     Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, Tree0);
 
-parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix, Value = #nova_handler_value{app = App}, Tree) ->
+parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix, Value = #nova_handler_value{app = App, secure = Secure}, Tree) ->
     RealPath = case Path of
                    _ when is_list(Path) -> string:concat(Prefix, Path);
                    _ when is_integer(Path) -> Path;
@@ -242,7 +245,8 @@ parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix, Value = #nova_handler
                               #cowboy_handler_value{
                                  app = App,
                                  handler = nova_ws_handler,
-                                 arguments = #{module => Mod}}
+                                 arguments = #{module => Mod},
+                                 secure = Secure}
                       end,
                   ?DEBUG("Adding route: ~s value: ~p to tree: ~p", [RealPath, Value0, Tree0]),
                   insert(Host, RealPath, BinMethod, Value0, Tree0)
