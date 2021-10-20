@@ -11,5 +11,6 @@
 -record(cowboy_handler_value, {
                                app :: atom(),
                                handler :: atom(),
-                               arguments :: [any()]
+                               arguments :: [any()],
+                               secure :: tuple()
                               }).

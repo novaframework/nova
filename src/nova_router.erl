@@ -67,7 +67,7 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch 
              Env#{app => App,
                   cowboy_handler => Handler,
                   arguments => Args,
-                  secure => secure}
+                  secure => Secure}
             };
         Error ->
             ?ERROR("Got error: ~p", [Error]),
