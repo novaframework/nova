@@ -19,7 +19,7 @@
 
 -spec execute(Req, Env) -> {ok, Req, Env}
                                when Req::cowboy_req:req(), Env::cowboy_middleware:env().
-execute(Req, Env = #{app := App, cowboy_handler := Handler, arguments := Arguments}) ->
+execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
     try Handler:init(Req, Arguments) of
         {ok, Req2, _State} ->
             Result = terminate(normal, Req2, Handler),
@@ -42,17 +42,15 @@ execute(Req, Env = #{app := App, cowboy_handler := Handler, arguments := Argumen
                     render_response(State0);
                 {ok, _Bindings, #nova_handler_value{module = EMod, function = EFunc}} ->
                     %% Show this view - how?
-                    execute(Req, Env#{app => nova, module => EMod, function => EFunc, controller_data => Payload})
+                    execute(Req#{controller_data => Payload}, Env#{app => nova, module => EMod, function => EFunc})
             end
     end;
-execute(Req, Env = #{app := App, module := Module, function := Function, controller_data := CtrlData}) ->
-    State = CtrlData#{req => Req},
-
-    try Module:Function(State) of
+execute(Req, Env = #{module := Module, function := Function}) ->
+    try Module:Function(Req) of
         RetObj ->
             case nova_handlers:get_handler(element(1, RetObj)) of
                 {ok, Callback} ->
-                    {ok, State0} = Callback(RetObj, {Module, Function}, State),
+                    {ok, State0} = Callback(RetObj, {Module, Function}, Req),
                     render_response(State0);
                 {error, not_found} ->
                     ?ERROR("Unknown return object1 ~p returned from module: ~p function: ~p", [RetObj, Module, Function])
@@ -70,11 +68,11 @@ execute(Req, Env = #{app := App, module := Module, function := Function, control
                 {error, _} ->
                     %% Render the internal view of nova
                     {ok, State0} = nova_basic_handler:handle_ok({ok, Payload, #{view => nova_error}},
-                                                                {dummy, dummy}, State),
+                                                                {dummy, dummy}, Req),
                     render_response(State0);
                 {ok, _Bindings, #nova_handler_value{module = EMod, function = EFunc}} ->
                     %% Show this view - how?
-                    execute(Req, Env#{app => nova, module => EMod, function => EFunc, controller_data => Payload})
+                    execute(Req#{controller_data => Payload}, Env#{app => nova, module => EMod, function => EFunc})
             end
     end.
 

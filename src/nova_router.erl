@@ -50,7 +50,7 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch 
         {error, not_found} -> render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
         {error, _Type, _Reason} -> render_status_page('_', 500, #{error => "Server error"}, Req, Env);
         {ok, Bindings, #nova_handler_value{app = App, module = Module, function = Function,
-                                           secure = Secure, extra_state = ExtraState}} ->
+                                           secure = Secure, plugins = Plugins, extra_state = ExtraState}} ->
             {ok,
              Req,
              Env#{app => App,
@@ -59,15 +59,17 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch 
                   secure => Secure,
                   controller_data => #{},
                   bindings => Bindings,
+                  plugins => Plugins,
                   extra_state => ExtraState}
             };
-        {ok, _Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args, secure = Secure}, PathInfo} ->
+        {ok, _Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args, plugins = Plugins, secure = Secure}, PathInfo} ->
             {ok,
              Req#{path_info => PathInfo},
              Env#{app => App,
                   cowboy_handler => Handler,
                   arguments => Args,
-                  secure => secure}
+                  plugins => Plugins,
+                  secure => Secure}
             };
         Error ->
             ?ERROR("Got error: ~p", [Error]),
@@ -106,9 +108,12 @@ compile([App|Tl], Dispatch, Options) ->
 compile_paths([], Dispatch, Options) -> {ok, Dispatch, Options};
 compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     App = maps:get(app, Options),
+    %% Fetch the global plugins
+    GlobalPlugins = application:get_env(nova, plugins, []),
+    Plugins = maps:get(plugins, RouteInfo, GlobalPlugins),
 
     Value = #nova_handler_value{secure = maps:get(secure, Options, maps:get(secure, RouteInfo, false)),
-                                app = App,
+                                app = App, plugins = normalize_plugins(Plugins, []),
                                 extra_state = maps:get(extra_state, RouteInfo, #{})},
 
     Prefix = maps:get(prefix, Options, "") ++ maps:get(prefix, RouteInfo, ""),
@@ -137,8 +142,7 @@ parse_url(Host, [{StatusCode, StaticFile}|Tl], Prefix, Value, Tree) when is_inte
     %% We need to signal that we have a static file here somewhere
     Value0 = Value#nova_handler_value{
                module = nova_static,
-               function = execute,
-               protocol = http},
+               function = execute},
 
     %% TODO! Fix status-code so it's being threated specially
     Tree0 = insert(Host, StatusCode, '_', Value0, Tree),
@@ -146,8 +150,7 @@ parse_url(Host, [{StatusCode, StaticFile}|Tl], Prefix, Value, Tree) when is_inte
 parse_url(Host, [{StatusCode, {Module, Function}, Options}|Tl], Prefix, Value, Tree) when is_integer(StatusCode) ->
     Value0 = Value#nova_handler_value{
                module = Module,
-               function = Function,
-               protocol = http},
+               function = Function},
     Res = lists:foldl(fun(Method, Tree0) ->
                               insert(Host, StatusCode, Method, Value0, Tree0)
                       end, Tree, maps:get(methods, Options, ['_'])),
@@ -181,6 +184,7 @@ parse_url(Host, [{RemotePath, LocalPath}|Tl], Prefix, Value = #nova_handler_valu
                 app = App,
                 handler = cowboy_static,
                 arguments = Payload,
+                plugins = Value#nova_handler_value.plugins,
                 secure = Secure
                },
     Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree),
@@ -214,6 +218,7 @@ parse_url(Host, [{RemotePath, LocalPath}|Tl], Prefix, Value = #nova_handler_valu
                 app = App,
                 handler = cowboy_static,
                 arguments = Payload,
+                plugins = Value#nova_handler_value.plugins,
                 secure = Secure
                },
 
@@ -238,14 +243,14 @@ parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix, Value = #nova_handler
                           http ->
                               Value#nova_handler_value{
                                 module = Mod,
-                                function = Func,
-                                protocol = http
+                                function = Func
                                };
                           ws ->
                               #cowboy_handler_value{
                                  app = App,
                                  handler = nova_ws_handler,
                                  arguments = #{module => Mod},
+                                 plugins = Value#nova_handler_value.plugins,
                                  secure = Secure}
                       end,
                   ?DEBUG("Adding route: ~s value: ~p to tree: ~p", [RealPath, Value0, Tree0]),
@@ -282,8 +287,7 @@ render_status_page(Host, StatusCode, Data, Req, Env = #{dispatch := Dispatch}) -
                                      module = Module,
                                      function = Function,
                                      secure = Secure,
-                                     extra_state = ExtraState,
-                                     protocol = Protocol},
+                                     extra_state = ExtraState},
              Bindings} ->
                 Env#{app => App,
                      module => Module,
@@ -291,7 +295,6 @@ render_status_page(Host, StatusCode, Data, Req, Env = #{dispatch := Dispatch}) -
                      secure => Secure,
                      controller_data => #{status => StatusCode, data => Data},
                      bindings => Bindings,
-                     protocol => Protocol,
                      extra_state => ExtraState}
 
         end,
@@ -310,6 +313,11 @@ insert(Host, Path, Combinator, Value, Tree) ->
             ?ERROR("Error type ~p with exception ~p", [Type, Exception]),
             throw(Exception)
     end.
+
+normalize_plugins([], Ack) -> Ack;
+normalize_plugins([{Type, PluginName, Options}|Tl], Ack) ->
+    ExistingPlugins = proplists:get_value(Type, Ack, []),
+    normalize_plugins(Tl, [{Type, [{PluginName, Options}|ExistingPlugins]}|proplists:delete(Type, Ack)]).
 
 
 
