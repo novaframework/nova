@@ -65,7 +65,7 @@ upgrade_ws(Module, Req, State, ControllerData) ->
 websocket_init(State = #{mod := Mod}) ->
     case erlang:function_exported(Mod, websocket_init, 1) of
         true ->
-            handle_ws(Mod, websocket_init, [], State);
+            handle_ws(Mod, websocket_init, [], State#{controller_data => #{ws_handler_process => self()}});
         _ ->
             {ok, State}
     end.
