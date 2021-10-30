@@ -149,7 +149,7 @@ parse_url(Host, [{StatusCode, StaticFile}|Tl], Prefix, Value, Tree) when is_inte
     %% TODO! Fix status-code so it's being threated specially
     Tree0 = insert(Host, StatusCode, '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value0, Tree0);
-parse_url(Host, [{StatusCode, {Module, Function}, Options}=Row|Tl], Prefix, Value, Tree) when is_integer(StatusCode) ->
+parse_url(Host, [{StatusCode, {Module, Function}, Options}|Tl], Prefix, Value, Tree) when is_integer(StatusCode) ->
     Value0 = Value#nova_handler_value{
                module = Module,
                function = Function},
