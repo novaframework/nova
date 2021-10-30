@@ -60,7 +60,8 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch 
                   controller_data => #{},
                   bindings => Bindings,
                   plugins => Plugins,
-                  extra_state => ExtraState}
+                  extra_state => ExtraState
+                 }
             };
         {ok, _Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args, plugins = Plugins, secure = Secure}, PathInfo} ->
             {ok,
@@ -69,7 +70,8 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch 
                   cowboy_handler => Handler,
                   arguments => Args,
                   plugins => Plugins,
-                  secure => Secure}
+                  secure => Secure
+                 }
             };
         Error ->
             ?ERROR("Got error: ~p", [Error]),
@@ -147,7 +149,7 @@ parse_url(Host, [{StatusCode, StaticFile}|Tl], Prefix, Value, Tree) when is_inte
     %% TODO! Fix status-code so it's being threated specially
     Tree0 = insert(Host, StatusCode, '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value0, Tree0);
-parse_url(Host, [{StatusCode, {Module, Function}, Options}|Tl], Prefix, Value, Tree) when is_integer(StatusCode) ->
+parse_url(Host, [{StatusCode, {Module, Function}, Options}=Row|Tl], Prefix, Value, Tree) when is_integer(StatusCode) ->
     Value0 = Value#nova_handler_value{
                module = Module,
                function = Function},
@@ -222,7 +224,7 @@ parse_url(Host, [{RemotePath, LocalPath}|Tl], Prefix, Value = #nova_handler_valu
                 secure = Secure
                },
 
-    ?DEBUG("Adding route: ~s value: ~p to tree: ~p", [string:concat(Prefix, RemotePath), Value0, Tree]),
+    ?DEBUG("Adding route: ~s for app: ~p", [string:concat(Prefix, RemotePath), App]),
     Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, Tree0);
 
@@ -253,7 +255,7 @@ parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix, Value = #nova_handler
                                  plugins = Value#nova_handler_value.plugins,
                                  secure = Secure}
                       end,
-                  ?DEBUG("Adding route: ~s value: ~p to tree: ~p", [RealPath, Value0, Tree0]),
+                  ?DEBUG("Adding route: ~s for app: ~p", [RealPath, App]),
                   insert(Host, RealPath, BinMethod, Value0, Tree0)
           end, Tree, Methods),
     parse_url(Host, Tl, Prefix, Value, CompiledPaths);
@@ -283,12 +285,11 @@ render_status_page(Host, StatusCode, Data, Req, Env = #{dispatch := Dispatch}) -
                      function => status_code,
                      secure => false,
                      controller_data => #{status => StatusCode, data => Data}};
-            {ok, #nova_handler_value{app = App,
-                                     module = Module,
-                                     function = Function,
-                                     secure = Secure,
-                                     extra_state = ExtraState},
-             Bindings} ->
+            {ok, Bindings, #nova_handler_value{app = App,
+                                               module = Module,
+                                               function = Function,
+                                               secure = Secure,
+                                               extra_state = ExtraState}} ->
                 Env#{app => App,
                      module => Module,
                      function => Function,

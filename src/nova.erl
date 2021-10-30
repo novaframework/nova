@@ -12,13 +12,7 @@
          set_env/2
         ]).
 
--type state() :: #{
-                   req := cowboy_req:req(),
-                   controller_data := any(),
-                   method := binary(),
-                   bindings := [{binary(), binary()}],
-                   resp_status := integer()
-                  }.
+-type state() :: any().
 -export_type([state/0]).
 
 %%--------------------------------------------------------------------

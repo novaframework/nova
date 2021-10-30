@@ -34,24 +34,16 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
                         class => Class,
                         reason => Reason},
             ?ERROR("Controller crashed (~p, ~p)~nStacktrace: ~p", [Class, Reason, Stacktrace]),
-            case nova_router:lookup_url(500) of
-                {error, _} ->
-                    %% Render the internal view of nova
-                    {ok, State0} = nova_basic_handler:handle_ok({ok, Payload, #{view => nova_error}},
-                                                                {dummy, dummy}, #{req => Req}),
-                    render_response(State0);
-                {ok, _Bindings, #nova_handler_value{module = EMod, function = EFunc}} ->
-                    %% Show this view - how?
-                    execute(Req#{controller_data => Payload}, Env#{app => nova, module => EMod, function => EFunc})
-            end
+            render_response(Req#{crash_info => Payload}, Env, 500)
     end;
 execute(Req, Env = #{module := Module, function := Function}) ->
     try Module:Function(Req) of
         RetObj ->
             case nova_handlers:get_handler(element(1, RetObj)) of
                 {ok, Callback} ->
-                    {ok, State0} = Callback(RetObj, {Module, Function}, Req),
-                    render_response(State0);
+                    ?INFO("Called handler: ~p", [RetObj]),
+                    {ok, Req0} = Callback(RetObj, {Module, Function}, Req),
+                    render_response(Req0, Env);
                 {error, not_found} ->
                     ?ERROR("Unknown return object1 ~p returned from module: ~p function: ~p", [RetObj, Module, Function])
             end
@@ -63,17 +55,7 @@ execute(Req, Env = #{module := Module, function := Function}) ->
                         stacktrace => Stacktrace,
                         class => Class,
                         reason => Reason},
-
-            case nova_router:lookup_url(500) of
-                {error, _} ->
-                    %% Render the internal view of nova
-                    {ok, State0} = nova_basic_handler:handle_ok({ok, Payload, #{view => nova_error}},
-                                                                {dummy, dummy}, Req),
-                    render_response(State0);
-                {ok, _Bindings, #nova_handler_value{module = EMod, function = EFunc}} ->
-                    %% Show this view - how?
-                    execute(Req#{controller_data => Payload}, Env#{app => nova, module => EMod, function => EFunc})
-            end
+            render_response(Req#{crash_info => Payload}, Env, 500)
     end.
 
 -spec terminate(any(), Req | undefined, module()) -> ok when Req::cowboy_req:req().
@@ -90,8 +72,21 @@ terminate(Reason, Req, Module) ->
 %% INTERNAL FUNCTIONS %%
 %%%%%%%%%%%%%%%%%%%%%%%%
 
--spec render_response(State :: map()) -> {ok, Req :: cowboy_req:req(), State0 :: map()}.
-render_response(#{req := Req} = State) ->
-    StatusCode = maps:get(resp_status, State, 200),
+-spec render_response(Req :: cowboy_req:req(), Env :: map()) -> {ok, Req :: cowboy_req:req(), State :: map()}.
+render_response(Req, Env) ->
+    StatusCode = maps:get(resp_status_code, Req, 200),
     cowboy_req:reply(StatusCode, Req),
-    {ok, Req, State}.
+    {ok, Req, Env}.
+
+
+render_response(Req, Env, StatusCode) ->
+    case nova_router:lookup_url(StatusCode) of
+        {error, _} ->
+            %% Render the internal view of nova
+            {ok, Req0} = nova_basic_handler:handle_ok({status, StatusCode}, {dummy, dummy}, Req),
+            render_response(Req0, Env);
+        {ok, _Bindings, A=#nova_handler_value{module = EMod, function = EFunc}} ->
+            %% Show this view - how?
+            ?INFO("Calling crashview: ~p", [A]),
+            execute(Req, Env#{app => nova, module => EMod, function => EFunc})
+    end.

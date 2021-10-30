@@ -60,8 +60,6 @@
       }
 
       #title {
-          position: absolute;
-          top: 50%;
           left: 0;
           right: 0;
           color: #FFF;
@@ -70,8 +68,7 @@
           font-weight: 300;
           font-size: 20px;
           letter-spacing: 10px;
-          margin-top: -60px;
-          padding-left: 10px;
+          margin-top: 60px;
       }
 
       #logo {
@@ -90,20 +87,28 @@
       }
 
       pre {
-          background-color: #DDD;
+          background-color: #f0f0f0;
           color: #000;
           letter-spacing: 0px;
-          padding: 10px;
+          padding: 0;
           font-size: 12px;
           white-space: pre-wrap;
           white-space: -moz-pre-wrap;
           white-space: -o-pre-wrap;
           word-wrap: break-word;
+          opacity: 0.8;
+          max-width: 960px;
+          border-radius: 10px;
+          margin: 0 auto;
+          margin-top: 25px;
+          text-align: left;
       }
     </style>
   </head>
   <body>
     <link href='https://fonts.googleapis.com/css?family=Lato:300,400,700' rel='stylesheet' type='text/css'>
+    <link rel="stylesheet" href="//cdnjs.cloudflare.com/ajax/libs/highlight.js/11.3.1/styles/default.min.css">
+    <script src="//cdnjs.cloudflare.com/ajax/libs/highlight.js/11.3.1/highlight.min.js"></script>
     <div id='stars'></div>
     <div id='stars2'></div>
     <div id='stars3'></div>
@@ -112,14 +117,22 @@
     {% endif %}
     <div id='title'>
       <span>
-        <h1>{{ status }}</h1>
+        <h1>{{ title }}</h1>
         {{ message }}
+        {% if stacktrace %}
         <pre>
-          {% for error in stacktrace %}
-          {% if error.file %}&#8594;{% endif %} {{ error }}
-          {% endfor %}
+          {% if extra_msg %}
+          {{ extra_msg }}
+          {% endif %}
+          <code class="erlang">
+            {% for error in stacktrace %}
+            {{ error }}
+            {% endfor %}
+          </code>
         </pre>
+        {% endif %}
       </span>
     </div>
+    <script>hljs.highlightAll();</script>
   </body>
 </html>

@@ -68,7 +68,6 @@ init([]) ->
 
     Children = [
                 child(nova_handlers, nova_handlers),
-                child(nova_plugin, nova_plugin),
                 child(SessionManager, SessionManager),
                 child(nova_cache_sup, supervisor, nova_cache_sup),
                 child(nova_watcher, nova_watcher)
@@ -132,7 +131,7 @@ start_cowboy(Configuration) ->
                 throw({error, no_nova_app_defined});
             App ->
                 ExtraApps = application:get_env(App, nova_apps, []),
-                nova_router:compile([App|ExtraApps])
+                nova_router:compile([nova|[App|ExtraApps]])
         end,
 
     CowboyOptions2 = CowboyOptions1#{env => #{dispatch => Dispatch}},
