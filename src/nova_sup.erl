@@ -102,7 +102,9 @@ setup_cowboy(Configuration) ->
     case start_cowboy(Configuration) of
         {ok, App, Host, Port} ->
             Host0 = inet:ntoa(Host),
-            ?NOTICE("Running ~s with cowboy ~s at http://~s:~B", [App, get_version(cowboy), Host0, Port]);
+            CowboyVersion = get_version(cowboy),
+            NovaVersion = get_version(nova),
+            ?NOTICE("Running ~s with nova ~s and cowboy ~s at http://~s:~B", [App, NovaVersion, CowboyVersion, Host0, Port]);
         {error, Error} ->
             ?ERROR("Cowboy could not start reason: ~p", [Error])
     end.

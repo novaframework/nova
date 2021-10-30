@@ -22,9 +22,8 @@
 
          read_routefile/1,
 
-         render_status_page/2,
          render_status_page/3,
-         render_status_page/5
+         render_status_page/4
         ]).
 
 -include_lib("nova/include/nova.hrl").
@@ -43,12 +42,12 @@ compile(Apps) ->
     persistent_term:put(nova_dispatch, Dispatch),
     Dispatch.
 
--spec execute(Req, Env) -> {ok, Req, Env} | {stop, Req}
+-spec execute(Req, Env) -> {ok, Req, Env}
                                when Req::cowboy_req:req(), Env::cowboy_middleware:env().
 execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch := Dispatch}) ->
     case routing_tree:lookup(Host, Path, Method, Dispatch) of
-        {error, not_found} -> render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
-        {error, _Type, _Reason} -> render_status_page('_', 500, #{error => "Server error"}, Req, Env);
+        {error, not_found} -> render_status_page('_', 404, Req#{error => "Not found in path"}, Env);
+        {error, _Type, _Reason} -> render_status_page('_', 500, Req#{error => "Server error"}, Env);
         {ok, Bindings, #nova_handler_value{app = App, module = Module, function = Function,
                                            secure = Secure, plugins = Plugins, extra_state = ExtraState}} ->
             {ok,
@@ -75,7 +74,7 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch 
             };
         Error ->
             ?ERROR("Got error: ~p", [Error]),
-            render_status_page(Host, 404, #{error => Error}, Req, Env)
+            render_status_page(Host, 404, Req#{error => Error}, Env)
     end.
 
 route_reader(App) ->
@@ -262,20 +261,14 @@ parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix, Value = #nova_handler
 parse_url(Host, [{Path, {Mod, Func}}|Tl], Prefix, Value, Tree) ->
     parse_url(Host, [{Path, {Mod, Func}, #{}}|Tl], Prefix, Value, Tree).
 
--spec render_status_page(StatusCode :: integer(), Req :: cowboy_req:req()) ->
+-spec render_status_page(StatusCode :: integer(), Req :: cowboy_req:req(), Env :: map()) ->
                                 {ok, Req0 :: cowboy_req:req(), Env :: map()}.
-render_status_page(StatusCode, Req) ->
-    render_status_page(StatusCode, #{}, Req).
+render_status_page(StatusCode, Req, Env) ->
+    render_status_page('_', StatusCode, Req, Env).
 
--spec render_status_page(StatusCode :: integer(), Data :: map(), Req :: cowboy_req:req()) ->
+-spec render_status_page(Host :: binary() | '_', StatusCode :: integer(), Req :: cowboy_req:req(), Env :: map()) ->
                                 {ok, Req0 :: cowboy_req:req(), Env :: map()}.
-render_status_page(StatusCode, Data, Req) ->
-    Dispatch = persistent_term:get(nova_dispatch),
-    render_status_page('_', StatusCode, Data, Req, #{dispatch => Dispatch}).
-
--spec render_status_page(Host :: binary(), StatusCode :: integer(), Data :: map(), Req :: cowboy_req:req(), Env :: map()) ->
-                                {ok, Req0 :: cowboy_req:req(), Env :: map()}.
-render_status_page(Host, StatusCode, Data, Req, Env = #{dispatch := Dispatch}) ->
+render_status_page(Host, StatusCode, Req, Env = #{dispatch := Dispatch}) ->
     Env0 =
         case routing_tree:lookup(Host, StatusCode, '_', Dispatch) of
             {error, _} ->
@@ -283,8 +276,7 @@ render_status_page(Host, StatusCode, Data, Req, Env = #{dispatch := Dispatch}) -
                 Env#{app => nova,
                      module => nova_controller,
                      function => status_code,
-                     secure => false,
-                     controller_data => #{status => StatusCode, data => Data}};
+                     secure => false};
             {ok, Bindings, #nova_handler_value{app = App,
                                                module = Module,
                                                function = Function,
@@ -294,7 +286,6 @@ render_status_page(Host, StatusCode, Data, Req, Env = #{dispatch := Dispatch}) -
                      module => Module,
                      function => Function,
                      secure => Secure,
-                     controller_data => #{status => StatusCode, data => Data},
                      bindings => Bindings,
                      extra_state => ExtraState}
 
