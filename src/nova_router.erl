@@ -37,10 +37,10 @@
 -type bindings() :: #{binary() := binary()}.
 -export_type([bindings/0]).
 
--spec compile(Apps :: [atom()]) -> dispatch_rules().
+-spec compile(Apps :: [atom()]) -> #host_tree{}.
 compile(Apps) ->
     Dispatch = compile(Apps, routing_tree:new(#{use_strict => true, convert_to_binary => true}), #{}),
-    persistent_term:put(nova_dispatch, Dispatch),
+    ok = persistent_term:put(nova_dispatch, Dispatch),
     Dispatch.
 
 -spec execute(Req, Env) -> {ok, Req, Env} when Req::cowboy_req:req(), Env::cowboy_middleware:env().
@@ -84,7 +84,7 @@ lookup_url(Host, Path, Method) ->
 %% INTERNAL FUNCTIONS %%
 %%%%%%%%%%%%%%%%%%%%%%%%
 
--spec compile(Apps :: [atom()], Dispatch :: dispatch_rules(), Options :: map()) -> dispatch_rules().
+-spec compile(Apps :: [atom()], Dispatch :: #host_tree{}, Options :: map()) -> #host_tree{}.
 compile([], Dispatch, _Options) -> Dispatch;
 compile([App|Tl], Dispatch, Options) ->
     {M, F} = application:get_env(nova, route_reader, {?MODULE, route_reader}),
