@@ -141,12 +141,6 @@ run_plugins([{_Prio, #{id := Id, module := Module, options := Options}}|Tl], Cal
     end.
 
 
-get_route(Route, Routes = #{'_' := V}) ->
-    maps:get(Route, Routes, V);
-get_route(Route, Routes) ->
-    maps:get(Route, Routes, undefined).
-
-
 build_state(State) ->
     State#{controller_data => maps:get(controller_data, State, #{}),
            mod => maps:get(mod, State, undefined),
