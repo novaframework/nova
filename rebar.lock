@@ -18,7 +18,7 @@
  {<<"ranch">>,{pkg,<<"ranch">>,<<"1.8.0">>},1},
  {<<"routing_tree">>,
   {git,"https://github.com/novaframework/routing_tree.git",
-       {ref,"1f44c9bbdb3ee33015ad29168d705509c1039d21"}},
+       {ref,"524860295767afd4ea36b836d1b6d6f2598af5df"}},
   0},
  {<<"uuid">>,{pkg,<<"uuid_erl">>,<<"2.0.0">>},0}]}.
 [
