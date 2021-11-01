@@ -135,7 +135,7 @@ handle_status({status, Status, ExtraHeaders}, _ModFun, Req) ->
     Req1 = Req0#{resp_status_code => Status},
     {ok, Req2, _Env} =  nova_router:render_status_page(Status, #{}, Req1),
     {ok, Req2};
-handle_status({status, Status}, ModFun, State) ->
+handle_status({status, Status}, ModFun, State) when is_integer(Status) ->
     handle_status({status, Status, #{}}, ModFun, State).
 
 
