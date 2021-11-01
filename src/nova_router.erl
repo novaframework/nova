@@ -43,10 +43,14 @@ compile(Apps) ->
     ok = persistent_term:put(nova_dispatch, Dispatch),
     Dispatch.
 
--spec execute(Req, Env) -> {ok, Req, Env} when Req::cowboy_req:req(), Env::cowboy_middleware:env().
+-spec execute(Req, Env :: cowboy_middleware:env()) -> {ok, Req, Env0} | {stop, Req}
+                                                          when Req::cowboy_req:req(),
+                                                               Env0::cowboy_middleware:env().
 execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch := Dispatch}) ->
     case routing_tree:lookup(Host, Path, Method, Dispatch) of
-        {error, not_found} -> render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
+        {error, not_found} ->
+            {ok, Req0, _Env0} = render_status_page('_', 404, #{error => "Not found in path"}, Req, Env),
+            {stop, Req0};
         {ok, Bindings, #nova_handler_value{app = App, module = Module, function = Function,
                                            secure = Secure, plugins = Plugins, extra_state = ExtraState}} ->
             {ok,
@@ -63,7 +67,8 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch 
             };
         Error ->
             ?ERROR("Got error: ~p", [Error]),
-            render_status_page(Host, 404, #{error => Error}, Req, Env)
+            {ok, Req0, _Env0} = render_status_page(Host, 404, #{error => Error}, Req, Env),
+            {stop, Req0}
     end.
 
 route_reader(App) ->
@@ -238,7 +243,7 @@ parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix, Value = #nova_handler
                           ws ->
                               #cowboy_handler_value{
                                  app = App,
-                                 handler = nova_ws_handler,
+                                 handler = cowboy_websocket,
                                  arguments = [#{module => Mod}],
                                  plugins = Value#nova_handler_value.plugins,
                                  secure = Secure}

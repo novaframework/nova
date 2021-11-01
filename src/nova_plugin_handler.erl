@@ -36,5 +36,5 @@ run_plugins([{Module, Options}|Tl], Callback, Req, Env) ->
             Req0 = Req#{crash_info => #{class => Class,
                                         reason => Reason,
                                         stacktrace => Stacktrace}},
-            nova_router:render_status_page('_', 500, Req0, Env)
+            nova_router:render_status_page('_', 500, #{}, Req0, Env)
     end.

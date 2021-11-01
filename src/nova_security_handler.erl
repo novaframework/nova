@@ -24,7 +24,7 @@ execute(Req = #{host := Host}, Env = #{secure := {Module, Function}}) ->
         true ->
             {ok, Req, Env};
         {false, Headers} ->
-            {ok, Req0, _Env0} = nova_router:render_status_page(Host, 401, Req, Env),
+            {ok, Req0, _Env0} = nova_router:render_status_page(Host, 401, #{}, Req, Env),
             ExistingHeaders = cowboy_req:headers(Req),
             FinalHeaders = maps:merge(ExistingHeaders, Headers),
             Req1 = cowboy_req:set_resp_headers(FinalHeaders, Req0),
@@ -33,8 +33,8 @@ execute(Req = #{host := Host}, Env = #{secure := {Module, Function}}) ->
             Req0 = cowboy_req:set_resp_headers(#{<<"Location">> => list_to_binary(Route)}, Req),
             {stop, Req0};
         _ ->
-            {ok, Req0, _Env0} = nova_router:render_status_page(Host, 401, Req, Env),
+            {ok, Req0, _Env0} = nova_router:render_status_page(Host, 401, #{}, Req, Env),
             {stop, Req0}
     catch _Class:_Reason ->
-            nova_router:render_status_page(Host, 500, Req, Env)
+            nova_router:render_status_page(Host, 500, #{}, Req, Env)
     end.
