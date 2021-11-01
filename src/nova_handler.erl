@@ -83,7 +83,7 @@ render_response(Req, Env, StatusCode) ->
     case nova_router:lookup_url(StatusCode) of
         {error, _} ->
             %% Render the internal view of nova
-            {ok, Req0} = nova_basic_handler:handle_ok({status, StatusCode}, {dummy, dummy}, Req),
+            {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, {dummy, dummy}, Req),
             render_response(Req0, Env);
         {ok, _Bindings, A=#nova_handler_value{module = EMod, function = EFunc}} ->
             %% Show this view - how?
