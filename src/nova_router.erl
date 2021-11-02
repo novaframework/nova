@@ -42,9 +42,7 @@ compile(Apps) ->
                                                                Env0::cowboy_middleware:env().
 execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch := Dispatch}) ->
     case routing_tree:lookup(Host, Path, Method, Dispatch) of
-        {error, not_found} ->
-            {ok, Req0, _Env0} = render_status_page('_', 404, #{error => "Not found in path"}, Req, Env),
-            {stop, Req0};
+        {error, not_found} -> render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
         {ok, Bindings, #nova_handler_value{app = App, module = Module, function = Function,
                                            secure = Secure, plugins = Plugins, extra_state = ExtraState}} ->
             {ok,
@@ -60,6 +58,17 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch 
                  }
             };
         {ok, _Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
+                                              plugins = Plugins, secure = Secure}} ->
+            {ok,
+             Req,
+             Env#{app => App,
+                  cowboy_handler => Handler,
+                  arguments => Args,
+                  plugins => Plugins,
+                  secure => Secure
+                 }
+            };
+        {ok, _Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
                                               plugins = Plugins, secure = Secure}, PathInfo} ->
             {ok,
              Req#{path_info => PathInfo},
@@ -72,8 +81,7 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch 
             };
         Error ->
             ?ERROR("Got error: ~p", [Error]),
-            {ok, Req0, _Env0} = render_status_page(Host, 404, #{error => Error}, Req, Env),
-            {stop, Req0}
+            render_status_page(Host, 404, #{error => Error}, Req, Env)
     end.
 
 -spec route_reader(App :: atom()) -> {ok, Terms :: [term()]} |
@@ -183,7 +191,7 @@ parse_url(Host,
     Value0 = #cowboy_handler_value{
                 app = App,
                 handler = cowboy_static,
-                arguments = [Payload],
+                arguments = Payload,
                 plugins = Value#nova_handler_value.plugins,
                 secure = Secure
                },
@@ -219,7 +227,7 @@ parse_url(Host,
     Value0 = #cowboy_handler_value{
                 app = App,
                 handler = cowboy_static,
-                arguments = [Payload],
+                arguments = Payload,
                 plugins = Value#nova_handler_value.plugins,
                 secure = Secure
                },
@@ -255,7 +263,7 @@ parse_url(Host,
                               #cowboy_handler_value{
                                  app = App,
                                  handler = cowboy_websocket,
-                                 arguments = [#{module => Mod}],
+                                 arguments = #{module => Mod},
                                  plugins = Value#nova_handler_value.plugins,
                                  secure = Secure}
                       end,
