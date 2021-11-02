@@ -28,7 +28,7 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Public functions      %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
-init(Req = #{method := Method, plugins := Plugins}, State = #{module := Module}) ->
+init(Req = #{method := _Method, plugins := Plugins}, State = #{module := Module}) ->
     %% Call the http-handler in order to correctly handle potential plugins for the http-request
     ControllerData = maps:get(controller_data, State, #{}),
     State0 = State#{controller_data => ControllerData,

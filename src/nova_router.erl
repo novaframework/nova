@@ -31,9 +31,6 @@
 -include_lib("routing_tree/include/routing_tree.hrl").
 -include("nova_router.hrl").
 
-%% Route information
--type dispatch_rules() :: [{Host :: '_' | binary(), #host_tree{}}].
-
 -type bindings() :: #{binary() := binary()}.
 -export_type([bindings/0]).
 
