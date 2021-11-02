@@ -1,6 +1,6 @@
 {application,nova,
  [{description,"Nova is a web application framework"},
-  {vsn,"0.7.2"},
+  {vsn,"0.8.0"},
   {registered,[]},
   {mod,{nova_app,[]}},
   {included_applications,[]},
@@ -13,7 +13,9 @@
                  compiler,
                  erlydtl,
                  jhn_stdlib,
-                 uuid
+                 uuid,
+                 routing_tree,
+                 erldb
                 ]},
   {env,[]},
   {modules,[nova]},

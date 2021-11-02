@@ -12,6 +12,8 @@
          set_env/2
         ]).
 
+-type state() :: any().
+-export_type([state/0]).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -52,7 +54,7 @@ get_env(Parameter, Default) ->
         {ok, App} ->
             application:get_env(App, Parameter, Default);
         _ ->
-            undefined
+            Default
     end.
 
 

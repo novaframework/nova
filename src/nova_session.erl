@@ -43,9 +43,9 @@
 %%%===================================================================
 %%% Public functions
 %%%===================================================================
--spec get(NovaHttpState :: nova_http_handler:nova_http_state(), Key :: binary()) ->
+-spec get(Req :: cowboy_req:req(), Key :: binary()) ->
                  {ok, Value :: binary()} | {error, Reason :: atom()} | no_return().
-get(#{req := Req}, Key) ->
+get(Req, Key) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
             Mod = get_session_module(),
@@ -54,9 +54,9 @@ get(#{req := Req}, Key) ->
             {error, not_found}
     end.
 
--spec set(NovaHttpState :: nova_http_handler:nova_http_state(), Key :: binary(), Value :: binary()) ->
+-spec set(Req :: cowboy_req:req(), Key :: binary(), Value :: binary()) ->
                  ok | {error, Reason :: atom()} | no_return().
-set(#{req := Req}, Key, Value) ->
+set(Req, Key, Value) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
             Mod = get_session_module(),
@@ -64,9 +64,10 @@ set(#{req := Req}, Key, Value) ->
         _ ->
             {error, session_id_not_set}
     end.
--spec delete(NovaHttpState :: nova_http_handler:nova_http_state()) -> {ok, Req :: cowboy_req:req()} |
+
+-spec delete(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} |
                                                                       {error, Reason :: atom()}.
-delete(#{req := Req}) ->
+delete(Req) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
             Mod = get_session_module(),
@@ -79,8 +80,8 @@ delete(#{req := Req}) ->
             {ok, Req}
     end.
 
--spec delete(NovaHttpState, Key :: binary()) -> {ok, NovaHttpState} | {error, Reason :: atom()} | no_return() when
-      NovaHttpState :: nova_http_handler:nova_http_state().
+-spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} |
+                                                          {error, Reason :: atom()} | no_return().
 delete(Req, Key) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
@@ -102,7 +103,7 @@ get_session_module() ->
             Module;
         _ ->
             %% Default to nova_session_ets
-            nova_session_ets
+            nova_session_cache
     end.
 
 get_session_id(Req) ->

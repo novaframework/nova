@@ -10,11 +10,7 @@
 
 ## Getting started
 
-Nova provides a neat set of templates and plugins for *rebar3*. You can install it either via a one-liner script or manually by editing *rebar.config*
-
-#### From commandline
-
-Just execute the following command in your terminal:
+Start by adding the `rebar3` template for Nova. This can be done by running the installation script;
 
 ```bash
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/novaframework/rebar3_nova/master/install.sh)"
@@ -26,7 +22,6 @@ Add rebar3_nova to ~/.config/rebar3/rebar.config
 ```erlang
 {project_plugins, [rebar3_nova]}
 ```
-
 
 After this is done use `rebar3` to generate a new project with Nova.
 

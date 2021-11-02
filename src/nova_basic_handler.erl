@@ -4,13 +4,15 @@
          handle_ok/3,
          handle_status/3,
          handle_redirect/3,
-         handle_sendfile/3
+         handle_sendfile/3,
+         handle_websocket/3
         ]).
 
 -include_lib("nova/include/nova.hrl").
 
 -type mod_fun() :: {Module :: atom(), Function :: atom()} | undefined.
 -type erlydtl_vars() :: map() | [{Key :: atom() | binary() | string(), Value :: any()}].
+
 
 
 %%--------------------------------------------------------------------
@@ -29,27 +31,27 @@
 %% @end
 %%--------------------------------------------------------------------
 -spec handle_json({json, JSON :: map()} | {json, StatusCode :: integer(), Headers :: map(), JSON :: map()},
-                  ModFun :: mod_fun(), State) -> {ok, State} when
-      State :: nova_http_handler:nova_http_state().
-handle_json({json, StatusCode, Headers, JSON}, _ModFun, State) ->
+                  ModFun :: mod_fun(), Req :: cowboy_req:req()) -> {ok, State :: cowboy_req:req()} |
+                                                                   {Module :: atom(), Req :: cowboy_req:req()}.
+handle_json({json, StatusCode, Headers, JSON}, _ModFun, Req) ->
     try json:encode(JSON, [binary, maps]) of
         EncodedJSON ->
             Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, Headers),
-            State0 = nova_http:set_headers(Headers0, State),
-            State1 = nova_http:set_body(EncodedJSON, State0),
-            State2 = nova_http:set_status(StatusCode, State1),
-            {ok, State2}
+            Req0 = cowboy_req:set_resp_headers(Headers0, Req),
+            Req1 = cowboy_req:set_resp_body(EncodedJSON, Req0),
+            Req2 = Req1#{resp_status_code => StatusCode},
+            {ok, Req2}
     catch
         Type:Reason:Stacktrace ->
             ?ERROR("Error while processing JSON. Type: ~p Reason: ~p Stacktrace: ~p", [Type, Reason, Stacktrace]),
-            handle_status({status, 500}, undefined, State)
+            handle_status({status, 500}, undefined, Req)
     end;
-handle_json({json, JSON}, ModFun, State = #{req := #{method := Method}}) ->
+handle_json({json, JSON}, ModFun, Req = #{method := Method}) ->
     case Method of
         <<"POST">> ->
-            handle_json({json, 201, #{}, JSON}, ModFun, State);
+            handle_json({json, 201, #{}, JSON}, ModFun, Req);
         _ ->
-            handle_json({json, 200, #{}, JSON}, ModFun, State)
+            handle_json({json, 200, #{}, JSON}, ModFun, Req)
     end.
 
 
@@ -77,13 +79,12 @@ handle_json({json, JSON}, ModFun, State = #{req := #{method := Method}}) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec handle_ok({ok, Variables :: erlydtl_vars()} | {ok, Variables :: erlydtl_vars(), Options :: map()},
-                ModFun :: mod_fun(), State) -> {ok, State} when
-      State :: nova_http_handler:nova_http_state().
-handle_ok({ok, Variables}, {Mod, _Func}, State) ->
+                ModFun :: mod_fun(), Req :: cowboy_req:req()) -> {ok, cowboy_req:req()}.
+handle_ok({ok, Variables}, {Mod, _Func}, Req) ->
     %% Derive the view from module
     ViewNameAtom = get_view_name(Mod),
-    handle_view(ViewNameAtom, Variables, #{}, State);
-handle_ok({ok, Variables, Options}, {Mod, _Func}, State) ->
+    handle_view(ViewNameAtom, Variables, #{}, Req);
+handle_ok({ok, Variables, Options}, {Mod, _Func}, Req) ->
     View =
         case maps:get(view, Options, undefined) of
             undefined ->
@@ -95,7 +96,7 @@ handle_ok({ok, Variables, Options}, {Mod, _Func}, State) ->
             CustomView ->
                 list_to_atom(CustomView ++ "_dtl")
         end,
-    handle_view(View, Variables, Options, State).
+    handle_view(View, Variables, Options, Req).
 
 
 %%--------------------------------------------------------------------
@@ -115,31 +116,26 @@ handle_ok({ok, Variables, Options}, {Mod, _Func}, State) ->
 -spec handle_status({status, StatusCode :: integer()} |
                     {status, StatusCode :: integer(), ExtraHeaders :: map()} |
                     {status, StatusCode :: integer(), ExtraHeaders :: map(), Body :: binary() | map()},
-                    ModFun :: mod_fun(), State) -> {ok, State} when
-      State :: nova_http_handler:nova_http_state().
-handle_status({status, Status, ExtraHeaders, JSON}, _ModFun, State) when is_map(JSON) ->
+                    ModFun :: mod_fun(), Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()}.
+handle_status({status, Status, ExtraHeaders, JSON}, _ModFun, Req) when is_map(JSON) ->
     %% We do not need to render a status page since we just return a JSON structure
     Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, ExtraHeaders),
-    State0 = nova_http:set_headers(Headers0, State),
-    State1 = nova_http:set_status(Status, State0),
-    State2 = nova_http:set_body(json:encode(JSON, [binary]), State1),
-    {ok, State2};
-handle_status({status, Status, ExtraHeaders, Body}, _ModFun, State) when is_binary(Body) ->
+    Req0 = cowboy_req:set_resp_headers(Headers0, Req),
+    Req1 = Req0#{resp_status_code => Status},
+    Req2 = cowboy_req:set_resp_body(json:encode(JSON, [binary]), Req1),
+    {ok, Req2};
+handle_status({status, Status, ExtraHeaders, Body}, _ModFun, Req) when is_binary(Body) ->
     %% Body is a binary - just send it out
-    State0 = nova_http:set_headers(ExtraHeaders, State),
-    State1 = nova_http:set_status(Status, State0),
-    State2 = nova_http:set_body(Body, State1),
-    {ok, State2};
-handle_status({status, Status, ExtraHeaders}, _ModFun, State = #{req := _Req}) ->
-    State0 = nova_http:set_headers(ExtraHeaders, State),
-    State1 = nova_http:set_status(Status, State0),
-    case nova_router:status_page(Status, State1) of
-        {ok, State2} ->
-            {ok, State2};
-        {error, not_found} ->
-            {ok, State1}
-    end;
-handle_status({status, Status}, ModFun, State) ->
+    Req0 = cowboy_req:set_resp_headers(ExtraHeaders, Req),
+    Req1 = Req0#{resp_status_code => Status},
+    Req2 = cowboy_req:set_resp_body(Body, Req1),
+    {ok, Req2};
+handle_status({status, Status, ExtraHeaders}, _ModFun, Req) ->
+    Req0 = cowboy_req:set_resp_headers(ExtraHeaders, Req),
+    Req1 = Req0#{resp_status_code => Status},
+    {ok, Req2, _Env} =  nova_router:render_status_page(Status, #{}, Req1),
+    {ok, Req2};
+handle_status({status, Status}, ModFun, State) when is_integer(Status) ->
     handle_status({status, Status, #{}}, ModFun, State).
 
 
@@ -150,15 +146,13 @@ handle_status({status, Status}, ModFun, State) ->
 %% 302 with <icode>location</icode> set to <icode>"/login"</icode>
 %% @end
 %%-----------------------------------------------------------------
--spec handle_redirect({redirect, Route :: list() | binary()}, ModFun :: mod_fun(),
-                      State) -> {ok, State} when State :: nova_http_handler:nova_http_state().
-handle_redirect({redirect, Route}, ModFun, State) when is_list(Route) ->
-    handle_redirect({redirect, list_to_binary(Route)}, ModFun, State);
-handle_redirect({redirect, Route}, _ModFun, State) when is_binary(Route) ->
-    Headers = #{<<"Location">> => Route},
-    State0 = nova_http:set_headers(Headers, State),
-    State1 = nova_http:set_status(302, State0),
-    {ok, State1}.
+-spec handle_redirect({redirect, Route :: list()}, ModFun :: mod_fun(),
+                      Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()}.
+handle_redirect({redirect, Route}, _ModFun, Req) ->
+    Headers = #{<<"Location">> => list_to_binary(Route)},
+    Req0 = cowboy_req:set_resp_headers(Headers, Req),
+    Req1 = Req0#{resp_status_code => 302},
+    {ok, Req1}.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -168,20 +162,38 @@ handle_redirect({redirect, Route}, _ModFun, State) when is_binary(Route) ->
 -spec handle_sendfile({sendfile, StatusCode :: integer(), Headers :: map(), {Offset :: integer(),
                                                                              Length :: integer(),
                                                                              Path :: list()}, Mime :: binary()},
-                  ModFun :: mod_fun(), State) -> {ok, State} when State :: nova_http_handler:nova_http_state().
-handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _ModFun, State) ->
+                  ModFun :: mod_fun(), Req) -> {ok, Req} when Req :: cowboy_req:req().
+handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _ModFun, Req) ->
     Headers0 = maps:merge(#{<<"content-type">> => Mime}, Headers),
-    State0 = nova_http:set_headers(Headers0, State),
-    State1 = nova_http:set_body({sendfile, Offset, Length, Path}, State0),
-    State2 = nova_http:set_status(StatusCode, State1),
-    {ok, State2}.
+    Req0 = cowboy_req:set_resp_headers(Headers0, Req),
+    Req1 = cowboy_req:set_resp_body({sendfile, Offset, Length, Path}, Req0),
+    Req2 = Req1#{resp_status_code => StatusCode},
+    {ok, Req2}.
+
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Handles upgrading to websocket
+%% @end
+%%-----------------------------------------------------------------
+-spec handle_websocket({websocket, ControllerData :: any()}, ModFun :: mod_fun(), Req :: cowboy_req:req()) ->
+                              {ok, Req :: cowboy_req:req()}.
+handle_websocket({websocket, ControllerData}, {Module, _Fun}, Req) ->
+    case Module:init(ControllerData) of
+        {ok, NewControllerData} ->
+            {cowboy_websocket, Req#{controller_data => NewControllerData}, #{}};
+        Error ->
+            ?ERROR("Websocket handler ~p returned unkown result ~p", [Module, Error]),
+            %% Render 500
+            {ok, Req}
+    end.
 
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
 
-handle_view(View, Variables, Options, State) ->
+handle_view(View, Variables, Options, Req) ->
     {ok, HTML} = render_dtl(View, Variables, []),
     Headers =
         case maps:get(headers, Options, undefined) of
@@ -191,10 +203,10 @@ handle_view(View, Variables, Options, State) ->
                 UserHeaders
         end,
     StatusCode = maps:get(status_code, Options, 200),
-    State0 = nova_http:set_headers(Headers, State),
-    State1 = nova_http:set_body(HTML, State0),
-    State2 = nova_http:set_status(StatusCode, State1),
-    {ok, State2}.
+    Req0 = cowboy_req:set_resp_headers(Headers, Req),
+    Req1 = cowboy_req:set_resp_body(HTML, Req0),
+    Req2 = Req1#{resp_status_code => StatusCode},
+    {ok, Req2}.
 
 render_dtl(View, Variables, Options) ->
     case code:is_loaded(View) of

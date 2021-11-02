@@ -1,51 +1,30 @@
 %%%-------------------------------------------------------------------
 %%% @author Niclas Axelsson <niclas@burbas.se>
-%%% @copyright (C) 2020, Niclas Axelsson
+%%% @copyright (C) 2021, Niclas Axelsson
 %%% @doc
-%%% This module is responsible for all the different return types a controller have. <i>Nova</i> is constructed
-%%% in such way that it's really easy to extend it by using <i>handlers</i>. A handler is basically a module consisting
-%%% of a function of arity 4. We will show an example of this.
+%%% <i>nova_cache</i> is a basic in-memory cache that uses ETS as backend.
+%%% When a cache is initialized a process is spawned and associated for that
+%%% particular cache. This process is kept alive through out the whole life
+%%% time of the cache and is the owner of the ETS table that is used for storage.
 %%%
-%%% If you implement the following module:
-%%% <code title="src/my_handler.erl">
-%%% -module(my_handler).
-%%% -export([init/0,
-%%%          handle_console]).
-%%%
-%%% init() ->
-%%%    nova_handlers:register_handler(console, {my_handler, handle_console}).
-%%%
-%%% handle_console({console, Format, Args}, {Module, Function}, State) ->
-%%%    io:format("~n=====================~n", []).
-%%%    io:format("~p:~p was called.~n", []),
-%%%    io:format("State: ~p~n", [State]),
-%%%    io:format(Format, Args),
-%%%    io:format("~n=====================~n", []),
-%%%    {ok, 200, #{}, <binary></binary>}.
-%%% </code>
-%%%
-%%% The <icode>init/0</icode> should be invoked from your applications <i>supervisor</i> and will register the module
-%%% <icode>my_handler</icode> as handler of the return type <icode>{console, Format, Args}</icode>. This means that you
-%%% can return this tuple in a controller which invokes <icode>my_handler:handle_console/4</icode>.
-%%%
-%%% <b>A handler can return two different types</b>
-%%%
-%%% <icode>{ok, StatusCode, Headers, Body}</icode> - This will return a proper reply to the requester.
-%%%
-%%% <icode>{error, Reason}</icode> - This will render a 500 page to the user.
+%%% The TTLs is implemented using erlang:send_after/4.
 %%% @end
-%%% Created : 12 Feb 2020 by Niclas Axelsson <niclas@burbas.se>
+%%% Created : 22 May 2021 by Niclas Axelsson <niclas@burbas.se>
 %%%-------------------------------------------------------------------
--module(nova_handlers).
+-module(nova_cache).
 
 -behaviour(gen_server).
 
 %% API
 -export([
-         start_link/0,
-         register_handler/2,
-         unregister_handler/1,
-         get_handler/1
+         start_link/1,
+         init_cache/1,
+         remove_cache/1,
+         get/2,
+         set/4,
+         set/3,
+         delete/2,
+         flush/1
         ]).
 
 %% gen_server callbacks
@@ -59,24 +38,11 @@
          format_status/2
         ]).
 
--include_lib("nova/include/nova.hrl").
-
--define(SERVER, ?MODULE).
-
--define(HANDLERS_TABLE, nova_handlers_table).
-
--type handler_return() :: {ok, State2 :: nova:state()} |
-                          {Module :: atom(), State :: nova:state()} |
-                          {error, Reason :: any()}.
-
--export_type([handler_return/0]).
-
--type handler_callback() :: {Module :: atom(), Function :: atom()} |
-                            fun((...) -> handler_return()).
-
 -record(state, {
-
+                table
                }).
+
+-define(DEFAULT_TTL, 3600000).
 
 %%%===================================================================
 %%% API
@@ -85,52 +51,92 @@
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
-%% @hidden
 %% @end
 %%--------------------------------------------------------------------
--spec start_link() -> {ok, Pid :: pid()} |
-                      {error, Error :: {already_started, pid()}} |
-                      {error, Error :: term()} |
-                      ignore.
-start_link() ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
-
+-spec start_link(Cache :: atom()) -> {ok, Pid :: pid()} |
+                                     {error, Error :: {already_started, pid()}} |
+                                     {error, Error :: term()} |
+                                     ignore.
+start_link(Cache) ->
+    gen_server:start_link(?MODULE, Cache, []).
 
 %%--------------------------------------------------------------------
 %% @doc
-%% Registers a new handler. This can then be used in a nova controller
-%% by returning a tuple where the first element is the name of the handler.
+%% Removes the cache and frees up the memory.
 %% @end
 %%--------------------------------------------------------------------
--spec register_handler(Handle :: atom(), Callback :: handler_callback()) ->
-                              ok | {error, Reason :: atom()}.
-register_handler(Handle, Callback) ->
-    gen_server:cast(?SERVER, {register_handler, Handle, Callback}).
+-spec remove_cache(Cachename :: atom()) -> ok.
+remove_cache(Cachename) ->
+    nova_cache_sup:remove_cache(Cachename).
 
 %%--------------------------------------------------------------------
 %% @doc
-%% Unregisters a handler and makes it unavailable for all controllers.
+%% Initializes a cache.
 %% @end
 %%--------------------------------------------------------------------
--spec unregister_handler(Handle :: atom()) -> ok.
-unregister_handler(Handle) ->
-    gen_server:call(?SERVER, {unregister_handler, Handle}).
+-spec init_cache(Cachename :: atom()) -> {ok, Child} |
+                                         {ok, Child, Info :: term()} |
+                                         {error, {already_started, pid()} | {shutdown, term()} | term()}
+                                             when Child :: undefined | pid().
+init_cache(Cachename) ->
+    nova_cache_sup:init_cache(Cachename).
 
 %%--------------------------------------------------------------------
 %% @doc
-%% Fetches the handler identified with 'Handle' and returns the callback
-%% function for it.
+%% Gets an entriy from the cache.
 %% @end
 %%--------------------------------------------------------------------
--spec get_handler(Handle :: atom()) -> {ok, Callback :: handler_callback()} |
-                                       {error, not_found}.
-get_handler(Handle) ->
-    case ets:lookup(?HANDLERS_TABLE, Handle) of
+-spec get(Cache :: atom(), Key :: term()) -> {ok, Value :: any()} | {error, not_found}.
+get(Cache, Key) ->
+    %% Since the values is in a protected ETS table we are allowed to read but not write
+    case ets:lookup(Cache, Key) of
         [] ->
             {error, not_found};
-        [{Handle, Callback}] ->
-            {ok, Callback}
+        [{_Key, Value, _TimerRef}] ->
+            {ok, Value}
     end.
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Sets a cache value with a TTL. To refresh an entry one need to use
+%% the set-function again.
+%% @end
+%%--------------------------------------------------------------------
+-spec set(Cache :: atom(), Key :: term(), Value :: any(), TTL :: non_neg_integer()) -> ok.
+set(Cache, Key, Value, TTL) ->
+    {ok, Id} = nova_cache_sup:get_cache(Cache),
+    gen_server:call(Id, {set, Key, Value, TTL}).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Same as set/4 but uses the default time for TTL which is defined
+%% as 3600000 (3600 seconds)
+%% @end
+%%--------------------------------------------------------------------
+-spec set(Cache :: atom(), Key :: term(), Value :: any()) -> ok.
+set(Cache, Key, Value) ->
+    set(Cache, Key, Value, ?DEFAULT_TTL).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Deletes an entry in the cache.
+%% @end
+%%--------------------------------------------------------------------
+-spec delete(Cache :: atom(), Key :: term()) -> ok.
+delete(Cache, Key) ->
+    {ok, Id} = nova_cache_sup:get_cache(Cache),
+    gen_server:call(Id, {delete, Key}).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Removes all entries for a cache.
+%% @end
+%%--------------------------------------------------------------------
+-spec flush(Cache :: atom()) -> ok.
+flush(Cache) ->
+    {ok, Id} = nova_cache_sup:get_cache(Cache),
+    gen_server:call(Id, flush).
+
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -147,15 +153,14 @@ get_handler(Handle) ->
                               {ok, State :: term(), hibernate} |
                               {stop, Reason :: term()} |
                               ignore.
-init([]) ->
+init(Cache) ->
     process_flag(trap_exit, true),
-    ets:new(?HANDLERS_TABLE, [named_table, set, protected]),
-    register_handler(json, fun nova_basic_handler:handle_json/3),
-    register_handler(ok, fun nova_basic_handler:handle_ok/3),
-    register_handler(status, fun nova_basic_handler:handle_status/3),
-    register_handler(redirect, fun nova_basic_handler:handle_redirect/3),
-    register_handler(sendfile, fun nova_basic_handler:handle_sendfile/3),
-    {ok, #state{}}.
+    Tid = ets:new(Cache, [protected,
+                          {read_concurrency, true},
+                          {write_concurrency, false},
+                          named_table,
+                          set]),
+    {ok, #state{table = Tid}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -172,11 +177,24 @@ init([]) ->
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
                          {stop, Reason :: term(), NewState :: term()}.
-handle_call({unregister_handler, Handle}, _From, State) ->
-    ets:delete(?HANDLERS_TABLE, Handle),
-    ?DEBUG("Removed handler ~p", [Handle]),
+handle_call({set, Key, Value, TTL}, _From, State = #state{table = Table}) ->
+    case ets:lookup(Table, Key) of
+        [] ->
+            %% Start timer to invalidate the cache
+            TimerRef = erlang:send_after(TTL, self(), {invalidate, Key}),
+            %% Insert
+            ets:insert(Table, {Key, Value, TimerRef});
+        [{Key, _OtherValue, OldTimerRef}] ->
+            %% Cancel old timer
+            erlang:cancel_timer(OldTimerRef),
+            TimerRef = erlang:send_after(TTL, self(), {invalidate, Key}),
+            %% Insert
+            ets:insert(Table, {Key, Value, TimerRef})
+    end,
     {reply, ok, State};
-
+handle_call(flush, _From, State = #state{table = Table}) ->
+    [ erlang:cancel_timer(TimerRef) || {_, _, TimerRef} <- ets:tab2list(Table) ],
+    {reply, ok, State};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -192,21 +210,6 @@ handle_call(_Request, _From, State) ->
                          {noreply, NewState :: term(), Timeout :: timeout()} |
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), NewState :: term()}.
-handle_cast({register_handler, Handle, Callback}, State) ->
-    Callback0 =
-        case Callback of
-            Callback when is_function(Callback) -> Callback;
-            {Module, Function} -> fun Module:Function/4
-        end,
-    case ets:lookup(?HANDLERS_TABLE, Handle) of
-        [] ->
-            ?DEBUG("Registered handler '~p'", [Handle]),
-            ets:insert(?HANDLERS_TABLE, {Handle, Callback0}),
-            {noreply, State};
-        _ ->
-            ?ERROR("Could not register handler ~p since there's already another one registered on that name", [Handle]),
-            {noreply, State}
-    end;
 handle_cast(_Request, State) ->
     {noreply, State}.
 
@@ -221,6 +224,10 @@ handle_cast(_Request, State) ->
                          {noreply, NewState :: term(), Timeout :: timeout()} |
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: normal | term(), NewState :: term()}.
+handle_info({invalidate, Key}, State = #state{table = Table}) ->
+    %% This is an event that should only be used by erlang:send_after/3 so no need to cancel the timer
+    ets:delete(Table, Key),
+    {noreply, State};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -235,7 +242,11 @@ handle_info(_Info, State) ->
 %%--------------------------------------------------------------------
 -spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
                 State :: term()) -> any().
-terminate(_Reason, _State) ->
+terminate(_Reason, #state{table = Table}) ->
+    %% Cancel all the timers
+    [ erlang:cancel_timer(TimerRef) || {_, _, TimerRef} <- ets:tab2list(Table) ],
+    %% Delete the table
+    ets:delete(Table),
     ok.
 
 %%--------------------------------------------------------------------

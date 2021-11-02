@@ -4,8 +4,8 @@
 -include_lib("nova/include/nova.hrl").
 
 -export([
-         pre_http_request/2,
-         post_http_request/2,
+         pre_request/2,
+         post_request/2,
          plugin_info/0
         ]).
 
@@ -14,28 +14,22 @@
 %% Pre-request callback
 %% @end
 %%--------------------------------------------------------------------
--spec pre_http_request(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
-                              {ok, State0 :: nova_http_handler:nova_http_state()} |
-                              {stop, State0 :: nova_http_handler:nova_http_state()} |
-                              {error, Reason :: term()}.
-pre_http_request(State, Options) ->
+-spec pre_request(Req :: cowboy_req:req(), Options :: map()) ->
+                         {ok, Req0 :: cowboy_req:req()}.
+pre_request(Req, Options) ->
     Options0 = [ K || {K, V} <- maps:to_list(Options),
                       V == true ],
-    {ok, State0} = modulate_state(State, Options0),
-    {ok, State0}.
-
+    {ok, _Req0} = modulate_state(Req, Options0).
 
 %%--------------------------------------------------------------------
 %% @doc
 %% Post-request callback
 %% @end
 %%--------------------------------------------------------------------
--spec post_http_request(State :: nova_http_handler:nova_http_state(), Options :: map()) ->
-                               {ok, State0 :: nova_http_handler:nova_http_state()} |
-                               {stop, State0 :: nova_http_handler:nova_http_state()} |
-                               {error, Reason :: term()}.
-post_http_request(State, _Options) ->
-    {ok, State}.
+-spec post_request(Req :: cowboy_req:req(), Options :: map()) ->
+                               {ok, Req0 :: cowboy_req:req()}.
+post_request(Req, _Options) ->
+    {ok, Req}.
 
 
 %%--------------------------------------------------------------------
@@ -57,8 +51,7 @@ plugin_info() ->
       {parse_bindings, <<"Used to parse bindings and put them in state under `bindings` key">>},
       {read_body, <<"Reads the body and put it under the `body`">>},
       {decode_json_body, <<"Decodes the body as JSON and puts it under `json`">>},
-      {parse_qs, <<"Used to parse qs and put hem in state under `qs` key">>},
-      {read_urlencoded_body, <<"Reads the urlencoded body and puts the state under `params` key">>}
+      {parse_qs, <<"Used to parse qs and put hem in state under `qs` key">>}
      ]}.
 
 
@@ -66,43 +59,33 @@ plugin_info() ->
 %% Private functions
 %%%%%%%%%%%%%%%%%%%%%%
 
-modulate_state(State, []) -> {ok, State};
-modulate_state(State = #{req := Req, controller_data := ControllerData}, [parse_bindings|Tl]) ->
+modulate_state(Req, []) ->
+    {ok, Req};
+
+modulate_state(Req, [parse_bindings|Tl]) ->
     Bindings = cowboy_req:bindings(Req),
-    modulate_state(State#{controller_data => ControllerData#{bindings => Bindings}}, Tl);
-modulate_state(State = #{req := Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}},
-                         controller_data := ControllerData},
-               [decode_json_body|Tl]) ->
+    modulate_state(Req#{bindings_params => Bindings}, Tl);
+
+modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}}, [decode_json_body|Tl]) ->
     case cowboy_req:has_body(Req) of
         true ->
             %% First read in the body
             {ok, Data, Req0} = cowboy_req:read_body(Req),
             %% Decode the data
             JSON = json:decode(Data, [maps, binary]),
-            modulate_state(State#{req => Req0, controller_data => ControllerData#{json => JSON}}, Tl);
+            modulate_state(Req0#{json => JSON}, Tl);
         false ->
-            modulate_state(State#{controller_data => ControllerData#{json => #{}}}, Tl)
+            modulate_state(Req#{json => #{}}, Tl)
     end;
-modulate_state(State = #{req := Req =
-                             #{headers := #{<<"content-type">> := <<"application/x-www-form-urlencoded", _/binary>>}},
-                         controller_data := ControllerData},
-               [read_urlencoded_body|Tl]) ->
-    case cowboy_req:has_body(Req) of
-        true ->
-            %% First read in the body
-            {ok, Data, Req0} = cowboy_req:read_urlencoded_body(Req),
-            Params = maps:from_list(Data),
-            modulate_state(State#{req => Req0, controller_data => ControllerData#{params => Params}}, Tl);
-        false ->
-            modulate_state(State#{controller_data => ControllerData#{params => #{}}}, Tl)
-    end;
-modulate_state(State = #{req := Req,
-                         controller_data := ControllerData}, [read_body|Tl]) ->
+
+modulate_state(Req, [read_body|Tl]) ->
     %% Fetch the body
     {ok, Data, Req0} = cowboy_req:read_body(Req),
-    modulate_state(State#{req => Req0, controller_data => ControllerData#{body => Data}}, Tl);
-modulate_state(State = #{req := Req, controller_data := ControllerData}, [parse_qs|T1]) ->
-    Qs = cowboy_req:parse_qs(Req),
-    modulate_state(State#{controller_data => ControllerData#{qs => Qs}}, T1);
+    modulate_state(Req0#{body => Data}, Tl);
+
+modulate_state(Req, [parse_qs|Tl]) ->
+    ParsedQs = cowboy_req:parse_qs(Req),
+    modulate_state(Req#{qs_params => ParsedQs}, Tl);
+
 modulate_state(State, [_|Tl]) ->
     modulate_state(State, Tl).

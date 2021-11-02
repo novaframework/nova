@@ -21,8 +21,6 @@
 
 -type nova_ws_state() :: #{controller_data := map(),
                            mod := atom(),
-                           subprotocols := [any()],
-                           nova_handler := nova_ws_handler,
                            _ := _}.
 
 -export_type([nova_ws_state/0]).
@@ -30,27 +28,14 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Public functions      %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
-init(Req = #{method := Method}, State = #{entries := Routes}) ->
-    %% Normalize the state. This is a temporary thing and should not be kept, but for now it's a
-    %% quick fix to prove that the new way of routing works :-)
-    case get_route(Method, Routes) of
-        undefined ->
-            Req1 = cowboy_req:reply(405, Req),
-            {ok, Req1, State#{resp_status => 405, req => Req1}};
-        Route ->
-            NormalizedState = maps:remove(entries, State),
-            NormalizedState0 = maps:merge(NormalizedState, Route),
+init(Req = #{method := _Method, plugins := Plugins}, State = #{module := Module}) ->
+    %% Call the http-handler in order to correctly handle potential plugins for the http-request
+    ControllerData = maps:get(controller_data, State, #{}),
+    State0 = State#{controller_data => ControllerData,
+                    mod => maps:get(mod, State, undefined),
+                    plugins => Plugins},
+    upgrade_ws(Module, Req, State0, ControllerData).
 
-            %% Call the http-handler in order to correctly handle potential plugins for the http-request
-            {ok, PrePlugins} = nova_plugin:get_plugins(pre_ws_upgrade),
-            case run_plugins(PrePlugins, pre_ws_upgrade, NormalizedState0#{req => Req}) of
-                {ok, State0 = #{controller_data := ControllerData, mod := Mod}} ->
-                    ControllerData0 = ControllerData#{req => Req},
-                    upgrade_ws(Mod, Req, State0, ControllerData0);
-                {stop, State0} ->
-                    {ok, Req, State0}
-            end
-    end.
 
 upgrade_ws(Module, Req, State, ControllerData) ->
     case Module:init(ControllerData) of
@@ -58,8 +43,7 @@ upgrade_ws(Module, Req, State, ControllerData) ->
             {cowboy_websocket, Req, State#{controller_data => NewControllerData}};
         Error ->
             ?ERROR("Websocket handler ~p returned unkown result ~p", [Module, Error]),
-            Req1 = cowboy_req:reply(500, Req),
-            {ok, Req1, State}
+            nova_router:render_status_page(500, Req)
     end.
 
 websocket_init(State = #{mod := Mod}) ->
@@ -84,8 +68,8 @@ terminate(Reason, PartialReq, State = #{mod := Mod}) ->
             ok
     end.
 
-handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData}) ->
-    {ok, PrePlugins} = nova_plugin:get_plugins(pre_ws_request),
+handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData, plugins := Plugins}) ->
+    PrePlugins = proplists:get_value(pre_ws_request, Plugins, []),
     case run_plugins(PrePlugins, pre_ws_request, State) of
         {ok, State0} ->
             invoke_controller(Mod, Func, Args, State0);
@@ -95,7 +79,7 @@ handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData}) ->
 handle_ws(Mod, Func, Args, State) ->
     handle_ws(Mod, Func, Args, State#{controller_data => #{}}).
 
-invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData}) ->
+invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData, plugins := Plugins}) ->
     try
         ControllerResult =
             case erlang:apply(Mod, Func, Args ++ [ControllerData]) of
@@ -116,7 +100,7 @@ invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData})
             {stop, _} = Stop ->
                 Stop;
             {_, State0} ->
-                {ok, PostPlugins} = nova_plugin:get_plugins(post_ws_request),
+                PostPlugins = proplists:get_value(post_ws_request, Plugins, []),
                 run_plugins(PostPlugins, post_ws_request, State0);
             _ ->
                 ControllerResult
@@ -130,7 +114,7 @@ invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData})
 
 run_plugins([], _Callback, State) ->
     {ok, State};
-run_plugins([{_Prio, #{id := Id, module := Module, options := Options}}|Tl], Callback, State) ->
+run_plugins([{Module, Options}|Tl], Callback, State) ->
     try Module:Callback(State, Options) of
         {ok, State0} ->
             run_plugins(Tl, Callback, State0);
@@ -141,20 +125,15 @@ run_plugins([{_Prio, #{id := Id, module := Module, options := Options}}|Tl], Cal
         {break, State0} ->
             {ok, State0};
         {error, Reason} ->
-            ?ERROR("Plugin (~p:~p/2) with id: ~p returned error with reason ~p", [Module, Callback, Id, Reason]),
+            ?ERROR("Plugin (~p:~p/2) returned error with reason ~p", [Module, Callback, Reason]),
             {stop, State}
     catch
         Type:Reason:Stacktrace ->
-            ?ERROR("Plugin with id: ~p failed in execution. Type: ~p Reason: ~p~nStacktrace:~n~p",
-                   [Id, Type, Reason, Stacktrace]),
+            ?ERROR("Plugin failed in execution. Type: ~p Reason: ~p~nStacktrace:~n~p",
+                   [Type, Reason, Stacktrace]),
             {stop, State}
     end.
 
-
-get_route(Route, Routes = #{'_' := V}) ->
-    maps:get(Route, Routes, V);
-get_route(Route, Routes) ->
-    maps:get(Route, Routes, undefined).
 
 
 -ifdef(TEST).

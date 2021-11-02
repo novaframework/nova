@@ -34,7 +34,9 @@ init(StreamID, Req, Opts) ->
             false ->
                 Req
         end,
-    {Commands, Next} = cowboy_stream:init(StreamID, Req0, Opts),
+    %% Set the correct server-header information
+    Req1 = cowboy_req:set_resp_cookie(<<"server">>, <<"Cowboy/Nova">>, Req0),
+    {Commands, Next} = cowboy_stream:init(StreamID, Req1, Opts),
     {Commands, #state{req = Req0, next = Next}}.
 
 -spec data(cowboy_stream:streamid(), cowboy_stream:fin(), cowboy_req:resp_body(), State)
@@ -45,18 +47,10 @@ data(StreamID, IsFin, Data, State = #state{next = Next}) ->
 
 -spec info(cowboy_stream:streamid(), any(), State)
           -> {cowboy_stream:commands(), State} when State::state().
-info(StreamID, {response, Code, _Headers, _Body} = Info, State = #state{next = Next, req = Req})
+info(StreamID, {response, Code, _Headers, _Body} = Info, State = #state{next = Next})
   when is_integer(Code) ->
-    case nova_router:status_page(Code, Req) of
-        {ok, _NovaHttpState = #{req := Req, resp_status := StatusCode}} ->
-            StatusHeaders = cowboy_req:resp_headers(Req),
-            StatusBody = maps:get(resp_body, Req, <<"">>),
-            {[{error_response, StatusCode, StatusHeaders, StatusBody},
-              stop], State};
-        _ ->
-            {Commands, Next0} = cowboy_stream:info(StreamID, Info, Next),
-            {Commands, State#state{next = Next0}}
-    end;
+    {Commands, Next0} = cowboy_stream:info(StreamID, Info, Next),
+    {Commands, State#state{next = Next0}};
 info(StreamID, Info, State = #state{next = Next}) ->
     {Commands, Next0} = cowboy_stream:info(StreamID, Info, Next),
     {Commands, State#state{next = Next0}}.
@@ -69,12 +63,5 @@ terminate(StreamID, Reason, #state{next = Next}) ->
                   cowboy_stream:partial_req(), Resp, cowboy:opts())
                  -> Resp
                         when Resp::cowboy_stream:resp_command().
-early_error(StreamID, Reason, PartialReq, {_, Status, _Headers, _} = Resp, Opts) ->
-    case nova_router:status_page(Status, PartialReq) of
-        {ok, _NovaHttpState = #{req := Req, resp_status := StatusCode}} ->
-            StatusHeaders = cowboy_req:resp_headers(Req),
-            StatusBody = maps:get(resp_body, Req, <<"">>),
-            {response, StatusCode, StatusHeaders, StatusBody};
-        _ ->
-            cowboy_stream:early_error(StreamID, Reason, PartialReq, Resp, Opts)
-    end.
+early_error(StreamID, Reason, PartialReq, {_, _Status, _Headers, _} = Resp, Opts) ->
+    cowboy_stream:early_error(StreamID, Reason, PartialReq, Resp, Opts).

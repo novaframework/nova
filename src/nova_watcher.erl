@@ -56,7 +56,7 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 async_cast(Application, Cmd, Args, Options) ->
-    gen_server:call(?SERVER, {async, Application, Cmd, Args, Options}).
+    gen_server:cast(?SERVER, {async, Application, Cmd, Args, Options}).
 
 async_cast(Application, Cmd, Options) ->
     async_cast(Application, Cmd, [], Options).
@@ -138,7 +138,7 @@ handle_cast({async, Application, Cmd, Args, Options}, State = #state{process_ref
     file:set_cwd(Workdir),
     ArgList = string:join(Args, " "),
     Port = erlang:open_port({spawn, Cmd ++ " " ++ ArgList}, []),
-    ?INFO("[NOVA_WATCHER] Started command ~s with args ~s", [Cmd, ArgList]),
+    ?NOTICE("Started command ~s with args ~s", [Cmd, ArgList]),
     {noreply, State#state{process_refs = [Port|ProcessRefs]}};
 handle_cast(_Request, State) ->
     {noreply, State}.
