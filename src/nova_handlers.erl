@@ -65,7 +65,10 @@
 
 -define(HANDLERS_TABLE, nova_handlers_table).
 
--type handler_return() :: {ok, State2 :: nova:state()} | {Module :: atom(), State :: nova:state()} | {error, Reason :: any()}.
+-type handler_return() :: {ok, State2 :: nova:state()} |
+                          {Module :: atom(), State :: nova:state()} |
+                          {error, Reason :: any()}.
+
 -export_type([handler_return/0]).
 
 -type handler_callback() :: {Module :: atom(), Function :: atom()} |

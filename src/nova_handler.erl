@@ -45,7 +45,8 @@ execute(Req, Env = #{module := Module, function := Function}) ->
                     {ok, Req0} = Callback(RetObj, {Module, Function}, Req),
                     render_response(Req0, Env);
                 {error, not_found} ->
-                    ?ERROR("Unknown return object1 ~p returned from module: ~p function: ~p", [RetObj, Module, Function])
+                    ?ERROR("Unknown return object1 ~p returned from module: ~p function: ~p",
+                           [RetObj, Module, Function])
             end
     catch Class:Reason:Stacktrace ->
             ?ERROR("Controller crashed (~p, ~p)~nStacktrace: ~p", [Class, Reason, Stacktrace]),

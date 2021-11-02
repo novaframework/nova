@@ -19,9 +19,6 @@
          lookup_url/1,
          lookup_url/2,
          lookup_url/3,
-
-         read_routefile/1,
-
          render_status_page/2,
          render_status_page/3,
          render_status_page/5
@@ -34,7 +31,7 @@
 -type bindings() :: #{binary() := binary()}.
 -export_type([bindings/0]).
 
--spec compile(Apps :: [atom()]) -> #host_tree{}.
+-spec compile(Apps :: [atom()]) -> host_tree().
 compile(Apps) ->
     Dispatch = compile(Apps, routing_tree:new(#{use_strict => true, convert_to_binary => true}), #{}),
     ok = persistent_term:put(nova_dispatch, Dispatch),
@@ -68,6 +65,10 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch 
             {stop, Req0}
     end.
 
+-spec route_reader(App :: atom()) -> {ok, Terms :: [term()]} |
+                                       {error, Reason :: atom() |
+                                       {non_neg_integer(), atom(), atom()}}.
+
 route_reader(App) ->
     RoutePath = filename:join([code:priv_dir(App), erlang:atom_to_list(App) ++ ".routes.erl"]),
     file:consult(RoutePath).
@@ -86,7 +87,7 @@ lookup_url(Host, Path, Method) ->
 %% INTERNAL FUNCTIONS %%
 %%%%%%%%%%%%%%%%%%%%%%%%
 
--spec compile(Apps :: [atom()], Dispatch :: #host_tree{}, Options :: map()) -> #host_tree{}.
+-spec compile(Apps :: [atom()], Dispatch :: host_tree(), Options :: map()) -> host_tree().
 compile([], Dispatch, _Options) -> Dispatch;
 compile([App|Tl], Dispatch, Options) ->
     {M, F} = application:get_env(nova, route_reader, {?MODULE, route_reader}),
@@ -122,12 +123,6 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
 
     compile_paths(Tl, Dispatch2, Options).
 
-
--spec read_routefile(App :: atom()) -> {ok, Terms :: [term()]} | {error, Reason :: atom() | {non_neg_integer(), atom(), atom()}}.
-read_routefile(App) ->
-    Filepath = filename:join([code:priv_dir(App), erlang:atom_to_list(App) ++ ".routes.erl"]),
-    file:consult(Filepath).
-
 parse_url(_Host, [], _Prefix, _Value, Tree) -> {ok, Tree};
 parse_url(Host, [{StatusCode, StaticFile}|Tl], Prefix, Value, Tree) when is_integer(StatusCode),
                                                                          is_list(StaticFile) ->
@@ -147,8 +142,10 @@ parse_url(Host, [{StatusCode, {Module, Function}, Options}|Tl], Prefix, Value, T
                               insert(Host, StatusCode, Method, Value0, Tree0)
                       end, Tree, maps:get(methods, Options, ['_'])),
     parse_url(Host, Tl, Prefix, Value, Res);
-parse_url(Host, [{RemotePath, LocalPath}|Tl], Prefix, Value = #nova_handler_value{app = App, secure = Secure}, Tree) when is_list(RemotePath),
-                                                                                                                          is_list(LocalPath) ->
+parse_url(Host,
+          [{RemotePath, LocalPath}|Tl],
+          Prefix, Value = #nova_handler_value{app = App, secure = Secure},
+          Tree) when is_list(RemotePath), is_list(LocalPath) ->
     %% Static assets - check that the path exists
     PrivPath = filename:join(code:lib_dir(App, priv), LocalPath),
 
@@ -181,9 +178,11 @@ parse_url(Host, [{RemotePath, LocalPath}|Tl], Prefix, Value = #nova_handler_valu
                },
     Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, Tree0);
-
-parse_url(Host, [{RemotePath, LocalPath}|Tl], Prefix, Value = #nova_handler_value{app = App, secure = Secure}, Tree) when is_list(RemotePath),
-                                                                                                                          is_list(LocalPath) ->
+parse_url(Host,
+          [{RemotePath, LocalPath}|Tl],
+          Prefix,
+          Value = #nova_handler_value{app = App, secure = Secure}, Tree)
+          when is_list(RemotePath), is_list(LocalPath) ->
     %% Static assets - check that the path exists
     PrivPath = filename:join(code:lib_dir(App, priv), LocalPath),
 
@@ -218,7 +217,11 @@ parse_url(Host, [{RemotePath, LocalPath}|Tl], Prefix, Value = #nova_handler_valu
     Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, Tree0);
 
-parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix, Value = #nova_handler_value{app = App, secure = Secure}, Tree) ->
+parse_url(Host,
+          [{Path, {Mod, Func}, Options}|Tl],
+          Prefix,
+          Value = #nova_handler_value{app = App, secure = Secure},
+          Tree) ->
     RealPath = case Path of
                    _ when is_list(Path) -> string:concat(Prefix, Path);
                    _ when is_integer(Path) -> Path;
@@ -263,8 +266,11 @@ render_status_page(StatusCode, Data, Req) ->
     Dispatch = persistent_term:get(nova_dispatch),
     render_status_page('_', StatusCode, Data, Req, #{dispatch => Dispatch}).
 
--spec render_status_page(Host :: binary() | atom(), StatusCode :: integer(), Data :: map(), Req :: cowboy_req:req(), Env :: map()) ->
-                                {ok, Req0 :: cowboy_req:req(), Env :: map()}.
+-spec render_status_page(Host :: binary() | atom(),
+                         StatusCode :: integer(),
+                         Data :: map(),
+                         Req :: cowboy_req:req(),
+                         Env :: map()) -> {ok, Req0 :: cowboy_req:req(), Env :: map()}.
 render_status_page(Host, StatusCode, Data, Req, Env = #{dispatch := Dispatch}) ->
     Env0 =
         case routing_tree:lookup(Host, StatusCode, '_', Dispatch) of

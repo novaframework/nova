@@ -104,7 +104,8 @@ setup_cowboy(Configuration) ->
             Host0 = inet:ntoa(Host),
             CowboyVersion = get_version(cowboy),
             NovaVersion = get_version(nova),
-            ?NOTICE("Running ~s with nova ~s and cowboy ~s at http://~s:~B", [App, NovaVersion, CowboyVersion, Host0, Port]);
+            ?NOTICE("Running ~s with nova ~s and cowboy ~s at http://~s:~B",
+                    [App, NovaVersion, CowboyVersion, Host0, Port]);
         {error, Error} ->
             ?ERROR("Cowboy could not start reason: ~p", [Error])
     end.
@@ -129,7 +130,9 @@ start_cowboy(Configuration) ->
     Dispatch =
         case BootstrapApp of
             undefined ->
-                ?ERROR("You do not have a main nova application defined. Add the following in your sys.config-file:~n{nova, [~n  {bootstrap_application, your_application}~n..."),
+                ?ERROR("You do not have a main nova application defined.
+                        Add the following in your sys.config-file:~n{nova,
+                        [~n  {bootstrap_application, your_application}~n..."),
                 throw({error, no_nova_app_defined});
             App ->
                 ExtraApps = application:get_env(App, nova_apps, []),
@@ -138,7 +141,7 @@ start_cowboy(Configuration) ->
 
     CowboyOptions2 = CowboyOptions1#{env => #{dispatch => Dispatch}},
 
-    Host = maps:get(ip, Configuration, {0,0,0,0}),
+    Host = maps:get(ip, Configuration, { 0, 0, 0, 0}),
 
     case maps:get(use_ssl, Configuration, false) of
         false ->
