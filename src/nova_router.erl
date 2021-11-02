@@ -59,6 +59,17 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch 
                   extra_state => ExtraState
                  }
             };
+        {ok, _Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
+                                              plugins = Plugins, secure = Secure}, PathInfo} ->
+            {ok,
+             Req#{path_info => PathInfo},
+             Env#{app => App,
+                  cowboy_handler => Handler,
+                  arguments => Args,
+                  plugins => Plugins,
+                  secure => Secure
+                 }
+            };
         Error ->
             ?ERROR("Got error: ~p", [Error]),
             {ok, Req0, _Env0} = render_status_page(Host, 404, #{error => Error}, Req, Env),
