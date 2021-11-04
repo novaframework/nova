@@ -7,12 +7,12 @@ Start by add the rebar3 template for Nova.
 *Via Curl*
 
 ```bash
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/novaframework/nova/master/tools/install.sh)"
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/novaframework/rebar3_nova/master/install.sh)"
 ```
 
 *Via wget*
 ```bash
-sh -c "$(wget -O- https://raw.githubusercontent.com/novaframework/nova/master/tools/install.sh)"
+sh -c "$(wget -O- https://raw.githubusercontent.com/novaframework/rebar3_nova/master/install.sh)"
 ```
 
 After this is done use rebar3 to generate a new project with Nova.
@@ -38,7 +38,7 @@ This will create a bunch of boiler plate files that helps you getting started. T
 
 ```
 $ cd my_first_app
-$ rebar3 shell
+$ rebar3 nova serve
 ===> Verifying dependencies...
 ===> Compiling my_first_app
 Erlang/OTP 20 [erts-9.3] [source] [64-bit] [smp:8:8] [ds:8:8:10] [async-threads:0] [hipe] [kernel-poll:false]
