@@ -296,7 +296,7 @@ render_status_page(Host, StatusCode, Data, Req, Env = #{dispatch := Dispatch}) -
             {error, _} ->
                 %% Render nova page if exists - We need to determine where to find this path?
                 Env#{app => nova,
-                     module => nova_controller,
+                     module => nova_error_controller,
                      function => status_code,
                      secure => false,
                      controller_data => #{status => StatusCode, data => Data}};
