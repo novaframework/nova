@@ -1,4 +1,4 @@
-# 07 - Plugins
+# Plugins
 
 Plugins is used to handle things before and/or after a request. They are applied on all requests of a specified protocol.
 

@@ -1,4 +1,4 @@
-# 05 - Plugins and handlers
+# Plugins and handlers
 
 ## Handlers
 
@@ -9,5 +9,5 @@ headers, encode the payload and send it out. This is what _handlers_ are for. Th
 
 ## Plugins
 
-Plugins are a bit like the handlers except they are run on request. There's currently two different type of plugins; `pre_http_request` and `post_http_request`.
+Plugins are a bit like the handlers except they are run on request. There's currently two different type of plugins; `pre_request` and `post_request`.
 These can be used to create access-logs, insert CORS-headers or similar.

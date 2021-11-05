@@ -1,4 +1,4 @@
-# 07 Books and links
+# Books and links
 
 ## Online books
 
@@ -10,4 +10,3 @@
 * [Erlang OTP in action](https://www.manning.com/books/erlang-and-otp-in-action)
 
 ## Blogs & Articles
- 
