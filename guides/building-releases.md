@@ -1,4 +1,4 @@
-# 06 Building releases
+# Building releases
 
 
 

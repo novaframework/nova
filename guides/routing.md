@@ -1,4 +1,4 @@
-# 03 - Routing
+# Routing
 
 Each nova application have their own routes file. This file contains information about all the routes existing for this application.
 

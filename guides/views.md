@@ -1,4 +1,4 @@
-# 04a - Views
+# Views
 
 The views in Nova is powered by (erlydtl)[https://github.com/erlydtl/erlydtl]. It uses the Django template language and compiles down to Erlang.
 
