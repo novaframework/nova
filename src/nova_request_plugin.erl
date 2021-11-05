@@ -77,15 +77,24 @@ modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", 
         false ->
             modulate_state(Req#{json => #{}}, Tl)
     end;
-
+modulate_state(#{headers := #{<<"content-type">> := <<"application/x-www-form-urlencoded", _/binary>>}} = Req,
+               [read_urlencoded_body|Tl]) ->
+    case cowboy_req:has_body(Req) of
+        true ->
+            %% First read in the body
+            {ok, Data, Req0} = cowboy_req:read_urlencoded_body(Req),
+            Params = maps:from_list(Data),
+            modulate_state(Req0#{params => Params}, Tl);
+        false ->
+            modulate_state(Req#{params => #{}}, Tl)
+    end;
+modulate_state(Req, [parse_qs|T1]) ->
+    Qs = cowboy_req:parse_qs(Req),
+    MapQs = maps:from_list(Qs),
+    modulate_state(Req#{parsed_qs => MapQs}, T1);
 modulate_state(Req, [read_body|Tl]) ->
     %% Fetch the body
     {ok, Data, Req0} = cowboy_req:read_body(Req),
     modulate_state(Req0#{body => Data}, Tl);
-
-modulate_state(Req, [parse_qs|Tl]) ->
-    ParsedQs = cowboy_req:parse_qs(Req),
-    modulate_state(Req#{qs_params => ParsedQs}, Tl);
-
 modulate_state(State, [_|Tl]) ->
     modulate_state(State, Tl).
