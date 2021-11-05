@@ -62,10 +62,6 @@ plugin_info() ->
 modulate_state(Req, []) ->
     {ok, Req};
 
-modulate_state(Req, [parse_bindings|Tl]) ->
-    Bindings = cowboy_req:bindings(Req),
-    modulate_state(Req#{bindings_params => Bindings}, Tl);
-
 modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}}, [decode_json_body|Tl]) ->
     case cowboy_req:has_body(Req) of
         true ->
