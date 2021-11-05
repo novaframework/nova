@@ -345,7 +345,7 @@ method_to_binary(options) -> <<"OPTIONS">>;
 method_to_binary(head) -> <<"HEAD">>;
 method_to_binary(connect) -> <<"CONNECT">>;
 method_to_binary(trace) -> <<"TRACE">>;
-method_to_binary(path) -> <<"PATCH">>;
+method_to_binary(patch) -> <<"PATCH">>;
 method_to_binary(_) -> '_'.
 
 -ifdef(TEST).
