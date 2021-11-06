@@ -2,24 +2,23 @@
 -behaviour(nova_plugin).
 
 
--export([pre_http_request/2,
-         post_http_request/2,
+-export([pre_request/2,
+         post_request/2,
          plugin_info/0]).
 
-pre_http_request(#{req := Req} = NovaState, _) ->
+pre_request(Req, _) ->
     Req1 = cowboy_req:set_resp_header(<<"Access-Control-Allow-Origin">>, <<"*">>, Req),
     Req2 = cowboy_req:set_resp_header(<<"Access-Control-Allow-Headers">>, <<"*">>, Req1),
     Req3 = cowboy_req:set_resp_header(<<"Access-Control-Allow-Methods">>, <<"*">>, Req2),
-    NewState = maps:put(req, Req3, NovaState),
-    case Req of
+    case Req3 of
         #{method := <<"OPTIONS">>} ->
-            {stop, NewState};
+            {stop, Req3};
         #{method := _} ->
-            {ok, maps:put(req, Req1, NovaState)}
+            {ok, Req3}
     end.
 
-post_http_request(NovaState, _) ->
-    {ok, NovaState}.
+post_request(Req, _) ->
+    {ok, Req}.
 
 plugin_info() ->
     {<<"nova_cors_plugin">>, <<"0.1.0">>, <<"">>, <<"Add CORS headers to request">>, []}.
