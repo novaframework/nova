@@ -46,31 +46,33 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env = #{dispatch 
         {ok, Bindings, #nova_handler_value{app = App, module = Module, function = Function,
                                            secure = Secure, plugins = Plugins, extra_state = ExtraState}} ->
             {ok,
-             Req#{plugins => Plugins},
+             Req#{plugins => Plugins,
+                  bindings => Bindings},
              Env#{app => App,
                   module => Module,
                   function => Function,
                   secure => Secure,
                   controller_data => #{},
-                  bindings => Bindings,
                   extra_state => ExtraState
                  }
             };
-        {ok, _Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
+        {ok, Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
                                               plugins = Plugins, secure = Secure}} ->
             {ok,
-             Req#{plugins => Plugins},
+             Req#{plugins => Plugins,
+                  bindings => Bindings},
              Env#{app => App,
                   cowboy_handler => Handler,
                   arguments => Args,
                   secure => Secure
                  }
             };
-        {ok, _Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
+        {ok, Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
                                               plugins = Plugins, secure = Secure}, PathInfo} ->
             {ok,
              Req#{path_info => PathInfo,
-                  plugins => Plugins},
+                  plugins => Plugins,
+                  bindings => Bindings},
              Env#{app => App,
                   cowboy_handler => Handler,
                   arguments => Args,
