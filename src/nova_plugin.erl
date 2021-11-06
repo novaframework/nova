@@ -9,25 +9,6 @@
 %% <icode>post_request/2</icode> and <icode>plugin_info/0</icode>.
 %%%
 %%%
-%%% <code title="src/example_plugin.erl">
-%%% -module(example_plugin).
-%%% -behaviour(nova_plugin).
-%%% -export([pre_request/2, post_request/2, plugin_info/0]).
-%%%
-%%% pre_request(Req, State) ->
-%%%   Req0 = cowboy_req:set_resp_header(<<"x-nova-started">>, erlang:system_time(milli_seconds), Req),
-%%%   {ok, Req0, State}.
-%%%
-%%% post_request(Req, State) ->
-%%%   Started = cowboy_req:header(<<"x-nova-started">>, Req),
-%%%   Now = erlang:system_time(milli_seconds),
-%%%   ?INFO("Request ran for ~.B milliseconds", [Now-Started]),
-%%%   {ok, Req, State}.
-%%%
-%%% plugin_info() ->
-%%%   {<<"Execution time plugin">>, <<"1.0.0">>, <<"Niclas Axelsson <niclas@burbas.se>">>,
-%%     <<"Example plugin for nova">>}.
-%%% </code>
 %%%
 %%%
 %%% To register the plugin above you have to call
