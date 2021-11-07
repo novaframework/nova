@@ -81,3 +81,11 @@ do_security(Req) ->
 ```
 
 This will cause nova to return a `401` status code for all requests not coming from my_domain.com
+
+
+## Configuration of error-detection in route-tree
+
+Since Nova 0.8.0 we are using `routing_tree` as underlying data structure to handle routes. `routing_tree` utilizes a radix-like tree structure to store the routing information
+and can also determine if a route already exists or creates a non-deterministic behaviour. The detection is turned off as default. This behaviour can be turned on by setting `{use_strict_routing, true}` setting for `nova` in your `sys.config`-file.
+
+*Note!* Be aware that the strict-mode is experimental and might cause false-positives, resulting in an exception when starting your application.
