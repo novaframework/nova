@@ -33,7 +33,8 @@
 
 -spec compile(Apps :: [atom()]) -> host_tree().
 compile(Apps) ->
-    Dispatch = compile(Apps, routing_tree:new(#{use_strict => true, convert_to_binary => true}), #{}),
+    UseStrict = application:get_env(nova, use_strict_routing, false),
+    Dispatch = compile(Apps, routing_tree:new(#{use_strict => UseStrict, convert_to_binary => true}), #{}),
     ok = persistent_term:put(nova_dispatch, Dispatch),
     Dispatch.
 
