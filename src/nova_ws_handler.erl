@@ -50,7 +50,10 @@ websocket_init(State = #{mod := Mod}) ->
     case erlang:function_exported(Mod, websocket_init, 1) of
         true ->
             ControllerData = maps:get(controller_data, State, #{}),
-            handle_ws(Mod, websocket_init, [], State#{controller_data => ControllerData#{ws_handler_process => self()}});
+            handle_ws(Mod,
+                      websocket_init,
+                      [],
+                      State#{controller_data => ControllerData#{ws_handler_process => self()}});
         _ ->
             {ok, State}
     end.
