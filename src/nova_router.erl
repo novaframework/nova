@@ -276,7 +276,7 @@ parse_url(Host,
                end,
     Value0 =  #cowboy_handler_value{
                                     app = App,
-                                    handler = cowboy_websocket,
+                                    handler = nova_ws_handler,
                                     arguments = #{module => Mod},
                                     plugins = Value#nova_handler_value.plugins,
                                     secure = Secure},
