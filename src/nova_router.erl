@@ -125,7 +125,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     GlobalPlugins = application:get_env(nova, plugins, []),
     Plugins = maps:get(plugins, RouteInfo, GlobalPlugins),
 
-    Value = #nova_handler_value{secure = maps:get(secure, Options, maps:get(secure, RouteInfo, false)),
+    Value = #nova_handler_value{secure = maps:get(secure, Options, maps:get(security, RouteInfo, false)),
                                 app = App, plugins = normalize_plugins(Plugins, []),
                                 extra_state = maps:get(extra_state, RouteInfo, #{})},
 
