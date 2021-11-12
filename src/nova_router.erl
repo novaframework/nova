@@ -240,7 +240,7 @@ parse_url(Host,
 parse_url(Host,
           [{Path, {Mod, Func}, Options}|Tl],
           Prefix,
-          Value = #nova_handler_value{app = App, secure = Secure},
+          Value = #nova_handler_value{app = App, secure = _Secure},
           Tree) ->
     RealPath = case Path of
                    _ when is_list(Path) -> string:concat(Prefix, Path);
@@ -269,19 +269,14 @@ parse_url(Host,
           [{Path, Mod, #{protocol := ws}} | Tl],
           Prefix, #nova_handler_value{app = App, secure = Secure} = Value,
           Tree) ->
-    RealPath = case Path of
-                   _ when is_list(Path) -> string:concat(Prefix, Path);
-                   _ when is_integer(Path) -> Path;
-                   _ -> throw({unknown_path, Path})
-               end,
-    Value0 =  #cowboy_handler_value{
+     Value0 =  #cowboy_handler_value{
                                     app = App,
                                     handler = nova_ws_handler,
                                     arguments = #{module => Mod},
                                     plugins = Value#nova_handler_value.plugins,
                                     secure = Secure},
-    ?DEBUG("Adding ws: ~s for app: ~p", [RealPath, App]),
-    CompiledPaths = insert(Host, RealPath, '_', Value0, Tree),
+    ?DEBUG("Adding ws: ~s for app: ~p", [Path, App]),
+    CompiledPaths = insert(Host, Path, '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, CompiledPaths);
 parse_url(Host, [{Path, {Mod, Func}}|Tl], Prefix, Value, Tree) ->
     parse_url(Host, [{Path, {Mod, Func}, #{}}|Tl], Prefix, Value, Tree).
