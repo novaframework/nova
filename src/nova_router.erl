@@ -125,7 +125,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     GlobalPlugins = application:get_env(nova, plugins, []),
     Plugins = maps:get(plugins, RouteInfo, GlobalPlugins),
 
-    Value = #nova_handler_value{secure = maps:get(secure, Options, maps:get(secure, RouteInfo, false)),
+    Value = #nova_handler_value{secure = maps:get(secure, Options, maps:get(security, RouteInfo, false)),
                                 app = App, plugins = normalize_plugins(Plugins, []),
                                 extra_state = maps:get(extra_state, RouteInfo, #{})},
 
@@ -240,7 +240,7 @@ parse_url(Host,
 parse_url(Host,
           [{Path, {Mod, Func}, Options}|Tl],
           Prefix,
-          Value = #nova_handler_value{app = App, secure = Secure},
+          Value = #nova_handler_value{app = App, secure = _Secure},
           Tree) ->
     RealPath = case Path of
                    _ when is_list(Path) -> string:concat(Prefix, Path);
@@ -259,18 +259,24 @@ parse_url(Host,
                               Value#nova_handler_value{
                                 module = Mod,
                                 function = Func
-                               };
-                          ws ->
-                              #cowboy_handler_value{
-                                 app = App,
-                                 handler = cowboy_websocket,
-                                 arguments = #{module => Mod},
-                                 plugins = Value#nova_handler_value.plugins,
-                                 secure = Secure}
+                               }
                       end,
                   ?DEBUG("Adding route: ~s for app: ~p", [RealPath, App]),
                   insert(Host, RealPath, BinMethod, Value0, Tree0)
           end, Tree, Methods),
+    parse_url(Host, Tl, Prefix, Value, CompiledPaths);
+parse_url(Host,
+          [{Path, Mod, #{protocol := ws}} | Tl],
+          Prefix, #nova_handler_value{app = App, secure = Secure} = Value,
+          Tree) ->
+     Value0 =  #cowboy_handler_value{
+                                    app = App,
+                                    handler = nova_ws_handler,
+                                    arguments = #{module => Mod},
+                                    plugins = Value#nova_handler_value.plugins,
+                                    secure = Secure},
+    ?DEBUG("Adding ws: ~s for app: ~p", [Path, App]),
+    CompiledPaths = insert(Host, Path, '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, CompiledPaths);
 parse_url(Host, [{Path, {Mod, Func}}|Tl], Prefix, Value, Tree) ->
     parse_url(Host, [{Path, {Mod, Func}, #{}}|Tl], Prefix, Value, Tree).

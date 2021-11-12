@@ -31,10 +31,10 @@
 init(Req = #{method := _Method, plugins := Plugins}, State = #{module := Module}) ->
     %% Call the http-handler in order to correctly handle potential plugins for the http-request
     ControllerData = maps:get(controller_data, State, #{}),
-    State0 = State#{controller_data => ControllerData,
-                    mod => maps:get(mod, State, undefined),
+    State0 = State#{mod => Module,
                     plugins => Plugins},
-    upgrade_ws(Module, Req, State0, ControllerData).
+    ControllerData2 = ControllerData#{req => Req},
+    upgrade_ws(Module, Req, State0, ControllerData2).
 
 
 upgrade_ws(Module, Req, State, ControllerData) ->
@@ -49,7 +49,11 @@ upgrade_ws(Module, Req, State, ControllerData) ->
 websocket_init(State = #{mod := Mod}) ->
     case erlang:function_exported(Mod, websocket_init, 1) of
         true ->
-            handle_ws(Mod, websocket_init, [], State);
+            ControllerData = maps:get(controller_data, State, #{}),
+            handle_ws(Mod,
+                      websocket_init,
+                      [],
+                      State#{controller_data => ControllerData#{ws_handler_process => self()}});
         _ ->
             {ok, State}
     end.

@@ -14,7 +14,7 @@ execute(Req, Env = #{secure := false}) ->
 execute(Req = #{host := Host}, Env = #{secure := {Module, Function}}) ->
     try Module:Function(Req) of
         {true, AuthData} ->
-            case maps:get(cowboy_handler, Env) of
+            case maps:get(cowboy_handler, Env, undefined) of
                 nova_ws_handler ->
                     Args = maps:get(arguments, Env, #{}),
                     {ok, Req, Env#{arguments => Args#{controller_data => #{auth_data => AuthData}}}};
