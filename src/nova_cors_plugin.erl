@@ -12,7 +12,7 @@ pre_request(Req, _) ->
     Req3 = cowboy_req:set_resp_header(<<"Access-Control-Allow-Methods">>, <<"*">>, Req2),
     case Req3 of
         #{method := <<"OPTIONS">>} ->
-            {stop, Req3};
+            {ok, Req3};
         #{method := _} ->
             {ok, Req3}
     end.
