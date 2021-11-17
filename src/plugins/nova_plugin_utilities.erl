@@ -9,5 +9,4 @@ parse_options([], Parsed) -> Parsed;
 parse_options([{K, V}|T], Parsed) when V == true ->
     parse_options(T, [K|Parsed]);
 parse_options([{K, L}|T], Parsed) when is_list(L) ->
-    Strings = lists:map(fun binary_to_list/1, L),
-    parse_options(T, [{K, Strings}|Parsed]).
+    parse_options(T, [{K, L}|Parsed]).
