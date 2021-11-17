@@ -7,11 +7,17 @@
 
 pre_request(Req, _) ->
     UUID = uuid:uuid_to_string(uuid:get_v4()),
-    Req1 = cowboy_req:set_resp_header(<<"x-correlation-id">>, UUID, Req),
+    Req1 = cowboy_req:set_resp_header(<<"X-Correlation-ID">>, UUID, Req),
     {ok, Req1}.
 
 post_request(Req, _) ->
     {ok, Req}.
 
 plugin_info() ->
-    {<<"nova_cors_plugin">>, <<"0.1.0">>, <<"">>, <<"Add CORS headers to request">>, []}.
+    {
+     <<"nova_correlation_plugin">>, 
+     <<"0.1.0">>, 
+     <<"Nova team <info@novaframework.org">>,
+     <<"Add X-Correlation-ID headers to response">>, 
+     []
+    }.
