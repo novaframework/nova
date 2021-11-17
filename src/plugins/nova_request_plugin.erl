@@ -1,7 +1,7 @@
 -module(nova_request_plugin).
 -behaviour(nova_plugin).
 
--include_lib("nova/include/nova.hrl").
+-include_lib("../nova/include/nova.hrl").
 
 -export([
          pre_request/2,
@@ -17,7 +17,7 @@
 -spec pre_request(Req :: cowboy_req:req(), Options :: map()) ->
                          {ok, Req0 :: cowboy_req:req()}.
 pre_request(Req, Options) ->
-    Options0 = nova_plugin_utilites:get_options(Options),
+    Options0 = nova_plugin_utilites:parse_options(Options),
     {ok, _Req0} = modulate_state(Req, Options0).
 
 %%--------------------------------------------------------------------
