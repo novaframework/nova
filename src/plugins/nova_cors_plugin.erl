@@ -18,7 +18,8 @@
                          {ok, Req0 :: cowboy_req:req()}.
 pre_request(Req, Options) ->
     ParsedOptions = nova_plugin_utilities:parse_options(Options),
-    set_options(Req, ParsedOptions).
+    ReqWithOptions = set_headers(Req, ParsedOptions),
+    continue(ReqWithOptions).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -57,16 +58,18 @@ plugin_info() ->
 %% Private functions
 %%%%%%%%%%%%%%%%%%%%%%
 
-set_options(#{method := <<"OPTIONS">>} = Req1, []) ->
-    Req2 = cowboy_req:reply(200, Req1),
-    {stop, Req2};
-set_options(Req, []) ->
-    {ok, Req};
-set_options(Req, [{allow_origins, Origins}|T]) ->
+continue(#{method := <<"OPTIONS">>} = Req) ->
+    Reply = cowboy_req:reply(200, Req),
+    {stop, Reply};
+continue(Req) ->
+    {ok, Req}.
+
+set_headers(Req, []) -> Req;
+set_headers(Req, [{allow_origins, Origins}|T]) ->
     CorsReq = add_cors_headers(Req, Origins),
-    set_options(CorsReq, T);
-set_options(Req, [_H|T]) ->
-    set_options(Req, T).
+    set_headers(CorsReq, T);
+set_headers(Req, [_H|T]) ->
+    set_headers(Req, T).
 
 add_cors_headers(Req, Origins) ->
     OriginsReq = cowboy_req:set_resp_header(
