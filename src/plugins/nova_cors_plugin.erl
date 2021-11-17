@@ -64,7 +64,9 @@ set_options(Req, []) ->
     {ok, Req};
 set_options(Req, [{allow_origins, Origins}|T]) ->
     CorsReq = add_cors_headers(Req, Origins),
-    set_options(CorsReq, T).
+    set_options(CorsReq, T);
+set_options(Req, [_H|T]) ->
+    set_options(Req, T).
 
 add_cors_headers(Req, Origins) ->
     OriginsReq = cowboy_req:set_resp_header(
