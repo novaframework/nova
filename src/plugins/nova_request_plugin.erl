@@ -17,8 +17,7 @@
 -spec pre_request(Req :: cowboy_req:req(), Options :: map()) ->
                          {ok, Req0 :: cowboy_req:req()}.
 pre_request(Req, Options) ->
-    Options0 = [ K || {K, V} <- maps:to_list(Options),
-                      V == true ],
+    Options0 = nova_plugin_utilites:get_options(Options),
     {ok, _Req0} = modulate_state(Req, Options0).
 
 %%--------------------------------------------------------------------
