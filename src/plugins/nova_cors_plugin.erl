@@ -1,7 +1,7 @@
 -module(nova_cors_plugin).
 -behaviour(nova_plugin).
 
--include_lib("../nova/include/nova.hrl").
+-include_lib("nova/include/nova.hrl").
 
 -export([
          pre_request/2,
