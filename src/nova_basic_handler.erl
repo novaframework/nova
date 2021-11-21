@@ -19,15 +19,13 @@
 %% @doc
 %% Handler for JSON. It takes two different return objects:
 %%
-%% <options>
-%%   <option for="{json, JSON :: map()}"> returns the JSON encoded to the user.
+%%   {json, JSON :: map()} returns the JSON encoded to the user.
 %%     If the operation was a POST the HTTP-status code will be 201, otherwise
-%%     200.</option>
+%%     200.
 %%
-%%   <option for="{json, StatusCode :: integer(), Headers :: map(), JSON :: map()}"> Same
+%%   {json, StatusCode :: integer(), Headers :: map(), JSON :: map()} Same
 %%     operation as the above except you can set custom status code and custom
-%%     headers.</option>
-%% </options>
+%%     headers.
 %% @end
 %%--------------------------------------------------------------------
 -spec handle_json({json, JSON :: map()} | {json, StatusCode :: integer(), Headers :: map(), JSON :: map()},
@@ -62,20 +60,20 @@ handle_json({json, JSON}, ModFun, Req = #{method := Method}) ->
 %% If not another view is specified in options a view that corresponds to the controller will be
 %% rendered.
 %%
-%% <code title="Example of controller named 'app_main_controller.erl'">
+%%
 %% -module(my_first_controller).
 %% -compile(export_all).
 %%
 %% my_function(_Req) ->
 %%    {ok, []}.
-%% </code>
-%% The example above will then render the view named <icode>'app_main.dtl'</icode>
+%%
+%% The example above will then render the view named 'app_main.dtl'
 %%
 %% Options can be specified as follows:
 %%
-%% - <icode>view</icode> - Specifies if another view should be rendered instead of default one
+%% - view - Specifies if another view should be rendered instead of default one
 %%
-%% - <icode>headers</icode> - Custom headers
+%% - headers - Custom headers
 %% @end
 %%--------------------------------------------------------------------
 -spec handle_ok({ok, Variables :: erlydtl_vars()} | {ok, Variables :: erlydtl_vars(), Options :: map()},
@@ -102,7 +100,7 @@ handle_ok({ok, Variables, Options}, {Mod, _Func}, Req) ->
 %%--------------------------------------------------------------------
 %% @doc
 %% Handler for returning http status codes. There's three different ways one can
-%% return status code. The most basic case is <icode>{status, Status}</icode> where Status is
+%% return status code. The most basic case is {status, Status} where Status is
 %% the code that should be returned.
 %%
 %% If there's a need for additional headers to be sent along with the http code one can specify
@@ -142,8 +140,8 @@ handle_status({status, Status}, ModFun, State) when is_integer(Status) ->
 %%--------------------------------------------------------------------
 %% @doc
 %% Handles redirects. This will return a 302-status code with a location given
-%% by the user. Something like <icode>{redirect, "/login"}</icode> will send a
-%% 302 with <icode>location</icode> set to <icode>"/login"</icode>
+%% by the user. Something like {redirect, "/login"} will send a
+%% 302 with location set to "/login"
 %% @end
 %%-----------------------------------------------------------------
 -spec handle_redirect({redirect, Route :: list()}, ModFun :: mod_fun(),

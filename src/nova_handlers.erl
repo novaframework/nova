@@ -7,7 +7,7 @@
 %%% of a function of arity 4. We will show an example of this.
 %%%
 %%% If you implement the following module:
-%%% <code title="src/my_handler.erl">
+%%%
 %%% -module(my_handler).
 %%% -export([init/0,
 %%%          handle_console]).
@@ -21,18 +21,17 @@
 %%%    io:format("State: ~p~n", [State]),
 %%%    io:format(Format, Args),
 %%%    io:format("~n=====================~n", []),
-%%%    {ok, 200, #{}, <binary></binary>}.
-%%% </code>
+%%%    {ok, 200, #{}, EmptyBinary}.
 %%%
-%%% The <icode>init/0</icode> should be invoked from your applications <i>supervisor</i> and will register the module
-%%% <icode>my_handler</icode> as handler of the return type <icode>{console, Format, Args}</icode>. This means that you
-%%% can return this tuple in a controller which invokes <icode>my_handler:handle_console/4</icode>.
+%%% The init/0 should be invoked from your applications <i>supervisor</i> and will register the module
+%%% my_handler as handler of the return type {console, Format, Args}. This means that you
+%%% can return this tuple in a controller which invokes my_handler:handle_console/4.
 %%%
 %%% <b>A handler can return two different types</b>
 %%%
-%%% <icode>{ok, StatusCode, Headers, Body}</icode> - This will return a proper reply to the requester.
+%%% {ok, StatusCode, Headers, Body} - This will return a proper reply to the requester.
 %%%
-%%% <icode>{error, Reason}</icode> - This will render a 500 page to the user.
+%%% {error, Reason} - This will render a 500 page to the user.
 %%% @end
 %%% Created : 12 Feb 2020 by Niclas Axelsson <niclas@burbas.se>
 %%%-------------------------------------------------------------------
