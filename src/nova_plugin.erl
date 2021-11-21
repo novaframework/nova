@@ -3,18 +3,25 @@
 %%% @copyright (C) 2020, Niclas Axelsson
 %%% @doc
 %%% Plugins can be run at two different times; either in the beginning or at
-%% the end of a request. They can modify both the actual request or the nova-state.
-%% A plugin is implemented with the <icode>nova_plugin</icode> behaviour
-%%% and needs to implement three different functions: <icode>pre_request/2</icode>,
-%% <icode>post_request/2</icode> and <icode>plugin_info/0</icode>.
+%%% the end of a request. They can modify both the actual request or the nova-state.
+%%% A plugin is implemented with the nova_plugin behaviour
+%%% and needs to implement three different functions: pre_request/2,
+%%% post_request/2 and plugin_info/0.
 %%%
+%%% A plugin can return either {ok, NewState}, {break, NewState},
+%%% {stop, NewState}, {error, Reason}.
 %%%
+%%% {ok, NewState} will continue the normal execution with the NewState.
 %%%
+%%% {break, NewState} breaks the execution of the current plugin-chain. This means that
+%%% if a pre_request-plugin returns the break-statement the rest of the plugins in that chain will be skipped.
 %%%
-%%% To register the plugin above you have to call
-%%  <icode>nova_plugin:register_plugin(RequestType, http, example_plugin).</icode> in order
-%%% to run it. <icode>RequestType</icode> can either be <icode>pre_request</icode> or
-%%  <icode>post_request</icode>.
+%%% {stop, NewState} stops the execution. The plugin is responsible in this case for returning
+%%% a proper response to the client.
+%%%
+%%% {error, Reason} will stop the execution and call the nova_error plugin, resulting in a 500 response back
+%%% to the user. If debug mode is enabled the reason will be returned in the 500-response.
+%%%
 %%% @end
 %%% Created : 12 Feb 2020 by Niclas Axelsson <niclas@burbas.se>
 %%%-------------------------------------------------------------------
