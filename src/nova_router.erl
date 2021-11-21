@@ -126,7 +126,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     Plugins = maps:get(plugins, RouteInfo, GlobalPlugins),
 
     Value = #nova_handler_value{secure = maps:get(secure, Options, maps:get(security, RouteInfo, false)),
-                                app = App, plugins = normalize_plugins(Plugins, []),
+                                app = App, plugins = normalize_plugins(Plugins),
                                 extra_state = maps:get(extra_state, RouteInfo, #{})},
 
     Prefix = maps:get(prefix, Options, "") ++ maps:get(prefix, RouteInfo, ""),
@@ -336,6 +336,10 @@ insert(Host, Path, Combinator, Value, Tree) ->
             ?ERROR("Error type ~p with exception ~p", [Type, Exception]),
             throw(Exception)
     end.
+
+
+normalize_plugins(Plugins) ->
+    lists:reverse(normalize_plugins(Plugins, [])).
 
 normalize_plugins([], Ack) -> Ack;
 normalize_plugins([{Type, PluginName, Options}|Tl], Ack) ->
