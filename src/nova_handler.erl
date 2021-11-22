@@ -41,7 +41,7 @@ execute(Req, Env = #{module := Module, function := Function}) ->
         RetObj ->
             case nova_handlers:get_handler(element(1, RetObj)) of
                 {ok, Callback} ->
-                    ?INFO("Called handler: ~p", [RetObj]),
+                    ?INFO("~p:~p/1 called handler: ~p", [Module, Function, RetObj]),
                     {ok, Req0} = Callback(RetObj, {Module, Function}, Req),
                     render_response(Req0, Env);
                 {error, not_found} ->
