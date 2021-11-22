@@ -136,7 +136,13 @@ start_cowboy(Configuration) ->
                 nova_router:compile([nova|[App|ExtraApps]])
         end,
 
-    CowboyOptions2 = CowboyOptions1#{env => #{dispatch => Dispatch}},
+    CowboyOptions2 =
+        case application:get_env(nova, use_persistent_term, true) of
+            true ->
+                CowboyOptions1;
+            _ ->
+                CowboyOptions1#{env => #{dispatch => Dispatch}}
+        end,
 
     Host = maps:get(ip, Configuration, { 0, 0, 0, 0}),
 
