@@ -280,7 +280,8 @@ parse_url(Host,
                                     plugins = Value#nova_handler_value.plugins,
                                     secure = Secure},
     ?DEBUG("Adding ws: ~s for app: ~p", [Path, App]),
-    CompiledPaths = insert(Host, Path, '_', Value0, Tree),
+    RealPath = string:concat(Prefix, Path),
+    CompiledPaths = insert(Host, RealPath, '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, CompiledPaths);
 parse_url(Host, [{Path, {Mod, Func}}|Tl], Prefix, Value, Tree) ->
     parse_url(Host, [{Path, {Mod, Func}, #{}}|Tl], Prefix, Value, Tree).
