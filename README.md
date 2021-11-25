@@ -40,7 +40,7 @@ Nova is supported with OTP 22 and above.
 
 Hex docs: https://hexdocs.pm/nova/
 
-More on how things work can be read in the docs [Introduction](docs/).
+More on how things work can be read in the docs [Getting Started](https://hexdocs.pm/nova/quick-start.html#content).
 
 ## Contributing
 
