@@ -104,8 +104,8 @@ get(Cache, Key) ->
 %%--------------------------------------------------------------------
 -spec set(Cache :: atom(), Key :: term(), Value :: any(), TTL :: non_neg_integer()) -> ok.
 set(Cache, Key, Value, TTL) ->
-    {ok, Id} = nova_cache_sup:get_cache(Cache),
-    gen_server:call(Id, {set, Key, Value, TTL}).
+    {ok, Id} = nova_cache_sup:get_cache(Key),
+    gen_server:call(Id, {set, Cache, Value, TTL}).
 
 %%--------------------------------------------------------------------
 %% @doc
