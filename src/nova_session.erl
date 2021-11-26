@@ -49,7 +49,7 @@ get(Req, Key) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
             Mod = get_session_module(),
-            Mod:get(SessionId, Key);
+            Mod:get(Key, SessionId);
         _ ->
             {error, not_found}
     end.
