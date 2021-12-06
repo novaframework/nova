@@ -327,7 +327,7 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
                      extra_state => ExtraState}
 
         end,
-    {ok, Req, Env0}.
+    {ok, Req#{resp_status_code => StatusCode}, Env0}.
 
 
 insert(Host, Path, Combinator, Value, Tree) ->
