@@ -377,7 +377,7 @@ persistent_put(Key, Value) ->
 persistent_get(Key) ->
     case application:get_env(nova, use_persistent_term, true) of
         true ->
-            persistent_term:get(nova_dispatch);
+            persistent_term:get(Key);
         _ ->
             ?WARNING("Called persistent_get/1 without option use_persistent_term is set to true"),
             throw({unsupported_operation, persistent_get})
@@ -386,9 +386,9 @@ persistent_get(Key) ->
 persistent_get(Key, Env) ->
     case application:get_env(nova, use_persistent_term, true) of
         true ->
-            persistent_term:get(nova_dispatch);
+            persistent_term:get(Key);
         _ ->
-            maps:get(dispatch, Env)
+            maps:get(Key, Env)
     end.
 
 -ifdef(TEST).
