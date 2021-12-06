@@ -6,6 +6,7 @@
          delete/2,
          generate_session_id/0
         ]).
+
 -include_lib("nova/include/nova.hrl").
 
 %%%===================================================================
@@ -98,13 +99,7 @@ delete(Req, Key) ->
 %%% Private functions
 %%%===================================================================
 get_session_module() ->
-    case application:get_env(session_manager) of
-        {ok, Module} ->
-            Module;
-        _ ->
-            %% Default to nova_session_ets
-            nova_session_cache
-    end.
+    application:get_env(session_manager, nova_session_ets).
 
 get_session_id(Req) ->
     case nova:get_env(use_sessions, true) of
