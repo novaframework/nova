@@ -88,7 +88,7 @@ render_response(Req, Env, StatusCode) ->
                     %% Render the internal view of nova
                     {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, {dummy, dummy}, Req),
                     render_response(Req0, Env);
-                {ok, _Bindings, A=#nova_handler_value{module = EMod, function = EFunc}} ->
+                {ok, _Bindings, #nova_handler_value{module = EMod, function = EFunc}} ->
                     %% Recurse to the execute function to render error page
                     execute(Req, Env#{app => nova, module => EMod, function => EFunc})
             end;

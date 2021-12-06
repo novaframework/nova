@@ -1,3 +1,9 @@
+%%% @author Niclas Axelsson <niclas@burbas.se>
+%%% @doc
+%%% All kind of operations on sessions is handled by the `nova_session`-module. The module also
+%%% presents a behaviour that can be used to create customized backends for the session-data.
+%%%
+%%% @end
 -module(nova_session).
 -export([
          get/2,
@@ -8,6 +14,8 @@
         ]).
 
 -include_lib("nova/include/nova.hrl").
+
+
 
 %%%===================================================================
 %%% Callbacks
