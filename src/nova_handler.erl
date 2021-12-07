@@ -73,11 +73,11 @@ terminate(Reason, Req, Module) ->
 %%%%%%%%%%%%%%%%%%%%%%%%
 -spec render_response(Req :: cowboy_req:req(), Env :: map()) -> {ok, Req :: cowboy_req:req(), State :: map()}.
 render_response(Req = #{resp_status_code := StatusCode}, Env) ->
-    cowboy_req:reply(StatusCode, Req),
-    {ok, Req, Env};
+    Req0 = cowboy_req:reply(StatusCode, Req),
+    {ok, Req0, Env};
 render_response(Req, Env) ->
-    cowboy_req:reply(200, Req),
-    {ok, Req, Env}.
+    Req0 = cowboy_req:reply(200, Req),
+    {ok, Req0, Env}.
 
 
 render_response(Req, Env, StatusCode) ->
