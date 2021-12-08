@@ -1,3 +1,9 @@
+%%% @author Niclas Axelsson <niclas@burbas.se>
+%%% @doc
+%%% All kind of operations on sessions is handled by the `nova_session`-module. The module also
+%%% presents a behaviour that can be used to create customized backends for the session-data.
+%%%
+%%% @end
 -module(nova_session).
 -export([
          get/2,
@@ -6,7 +12,10 @@
          delete/2,
          generate_session_id/0
         ]).
+
 -include_lib("nova/include/nova.hrl").
+
+
 
 %%%===================================================================
 %%% Callbacks
@@ -98,13 +107,7 @@ delete(Req, Key) ->
 %%% Private functions
 %%%===================================================================
 get_session_module() ->
-    case application:get_env(session_manager) of
-        {ok, Module} ->
-            Module;
-        _ ->
-            %% Default to nova_session_ets
-            nova_session_cache
-    end.
+    application:get_env(nova, session_manager, nova_session_ets).
 
 get_session_id(Req) ->
     case nova:get_env(use_sessions, true) of

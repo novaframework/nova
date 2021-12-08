@@ -41,7 +41,6 @@ execute(Req, Env = #{module := Module, function := Function}) ->
         RetObj ->
             case nova_handlers:get_handler(element(1, RetObj)) of
                 {ok, Callback} ->
-                    ?INFO("~p:~p/1 called handler: ~p", [Module, Function, RetObj]),
                     {ok, Req0} = Callback(RetObj, {Module, Function}, Req),
                     render_response(Req0, Env);
                 {error, not_found} ->
@@ -72,24 +71,28 @@ terminate(Reason, Req, Module) ->
 %%%%%%%%%%%%%%%%%%%%%%%%
 %% INTERNAL FUNCTIONS %%
 %%%%%%%%%%%%%%%%%%%%%%%%
-
 -spec render_response(Req :: cowboy_req:req(), Env :: map()) -> {ok, Req :: cowboy_req:req(), State :: map()}.
 render_response(Req = #{resp_status_code := StatusCode}, Env) ->
-    cowboy_req:reply(StatusCode, Req),
-    {ok, Req, Env};
+    Req0 = cowboy_req:reply(StatusCode, Req),
+    {ok, Req0, Env};
 render_response(Req, Env) ->
-    cowboy_req:reply(200, Req),
-    {ok, Req, Env}.
+    Req0 = cowboy_req:reply(200, Req),
+    {ok, Req0, Env}.
 
 
 render_response(Req, Env, StatusCode) ->
-    case nova_router:lookup_url(StatusCode) of
-        {error, _} ->
-            %% Render the internal view of nova
+    case application:get_env(nova, render_error_pages, true) of
+        true ->
+            case nova_router:lookup_url(StatusCode) of
+                {error, _} ->
+                    %% Render the internal view of nova
+                    {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, {dummy, dummy}, Req),
+                    render_response(Req0, Env);
+                {ok, _Bindings, #nova_handler_value{module = EMod, function = EFunc}} ->
+                    %% Recurse to the execute function to render error page
+                    execute(Req, Env#{app => nova, module => EMod, function => EFunc})
+            end;
+        false ->
             {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, {dummy, dummy}, Req),
-            render_response(Req0, Env);
-        {ok, _Bindings, A=#nova_handler_value{module = EMod, function = EFunc}} ->
-            %% Show this view - how?
-            ?INFO("Calling crashview: ~p", [A]),
-            execute(Req, Env#{app => nova, module => EMod, function => EFunc})
+            render_response(Req0, Env)
     end.

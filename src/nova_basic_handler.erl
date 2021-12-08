@@ -122,7 +122,7 @@ handle_status({status, Status, ExtraHeaders, JSON}, _ModFun, Req) when is_map(JS
     Req1 = Req0#{resp_status_code => Status},
     Req2 = cowboy_req:set_resp_body(json:encode(JSON, [binary]), Req1),
     {ok, Req2};
-handle_status({status, Status, ExtraHeaders, Body}, _ModFun, Req) when is_binary(Body) ->
+handle_status({status, Status, ExtraHeaders, Body}, _ModFun, Req) ->
     %% Body is a binary - just send it out
     Req0 = cowboy_req:set_resp_headers(ExtraHeaders, Req),
     Req1 = Req0#{resp_status_code => Status},
