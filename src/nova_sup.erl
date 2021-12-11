@@ -52,10 +52,12 @@ init([]) ->
                  intensity => 1,
                  period => 5},
 
-    case application:get_env(nova, dev_mode, false) of
-        false ->
+    Environment = nova:get_environment(),
+
+    case Environment of
+        production ->
             ?NOTICE("Starting nova in production mode...");
-        true ->
+        dev ->
             ?NOTICE("Starting nova in developer mode...")
     end,
 

@@ -31,6 +31,10 @@
 -type bindings() :: #{binary() := binary()}.
 -export_type([bindings/0]).
 
+%% This module is also exposing callbacks for routers
+-callback routes(Env :: atom()) -> {ok, Routes :: any()}.
+
+
 -spec compile(Apps :: [atom()]) -> host_tree().
 compile(Apps) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
@@ -86,14 +90,6 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
             render_status_page(Host, 404, #{error => Error}, Req, Env)
     end.
 
--spec route_reader(App :: atom()) -> {ok, Terms :: [term()]} |
-                                       {error, Reason :: atom() |
-                                       {non_neg_integer(), atom(), atom()}}.
-
-route_reader(App) ->
-    RoutePath = filename:join([code:priv_dir(App), erlang:atom_to_list(App) ++ ".routes.erl"]),
-    file:consult(RoutePath).
-
 lookup_url(Path) ->
     lookup_url('_', Path).
 
@@ -114,8 +110,10 @@ lookup_url(Host, Path, Method, Dispatch) ->
 -spec compile(Apps :: [atom()], Dispatch :: host_tree(), Options :: map()) -> host_tree().
 compile([], Dispatch, _Options) -> Dispatch;
 compile([App|Tl], Dispatch, Options) ->
-    {M, F} = application:get_env(nova, route_reader, {?MODULE, route_reader}),
-    {ok, Routes} = M:F(App),
+    %% Fetch the router-module for this application
+    Router = erlang:list_to_atom(erlang:atom_to_list(App) ++ "_router"),
+    Env = nova:get_environment(),
+    {ok, Routes} = Router:routes(Env),
     Options1 = Options#{app => App},
 
     {ok, Dispatch1, Options2} = compile_paths(Routes, Dispatch, Options1),

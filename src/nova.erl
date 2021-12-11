@@ -8,6 +8,7 @@
 -export([
          get_main_app/0,
          application_loaded/1,
+         get_environment/0,
          get_env/2,
          set_env/2
         ]).
@@ -39,6 +40,8 @@ application_loaded(Application) ->
     lists:any(fun({CompApp, _, _}) -> CompApp == Application end,
               application:get_env(MainApp, nova_applications, [])).
 
+get_environment() ->
+    application:get_env(nova, environment, dev).
 
 %%--------------------------------------------------------------------
 %% @doc
