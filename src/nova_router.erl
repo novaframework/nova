@@ -15,7 +15,6 @@
 %% API
 -export([
          compile/1,
-         route_reader/1,
          lookup_url/1,
          lookup_url/2,
          lookup_url/3,
