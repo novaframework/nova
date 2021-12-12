@@ -20,7 +20,8 @@
          lookup_url/3,
          render_status_page/2,
          render_status_page/3,
-         render_status_page/5
+         render_status_page/5,
+         routes/1
         ]).
 
 -include_lib("nova/include/nova.hrl").
@@ -387,6 +388,14 @@ persistent_get(Key, Env) ->
         _ ->
             maps:get(Key, Env)
     end.
+
+routes(_) -> 
+ [#{
+    routes => [
+               {404, { nova_error_controller, not_found }, #{}},
+               {500, { nova_error_controller, server_error }, #{}}
+              ]
+   }].
 
 -ifdef(TEST).
 -compile(export_all). %% Export all functions for testing purpose
