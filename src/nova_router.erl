@@ -113,7 +113,7 @@ compile([App|Tl], Dispatch, Options) ->
     %% Fetch the router-module for this application
     Router = erlang:list_to_atom(erlang:atom_to_list(App) ++ "_router"),
     Env = nova:get_environment(),
-    {ok, Routes} = Router:routes(Env),
+    Routes = Router:routes(Env),
     Options1 = Options#{app => App},
 
     {ok, Dispatch1, Options2} = compile_paths(Routes, Dispatch, Options1),
