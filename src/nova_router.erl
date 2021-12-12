@@ -389,7 +389,7 @@ persistent_get(Key, Env) ->
             maps:get(Key, Env)
     end.
 
-routes(_) -> 
+routes(_) ->
  [#{
     routes => [
                {404, { nova_error_controller, not_found }, #{}},
