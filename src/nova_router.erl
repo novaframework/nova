@@ -21,6 +21,8 @@
          render_status_page/2,
          render_status_page/3,
          render_status_page/5,
+
+         %% Expose the router-callback
          routes/1
         ]).
 
@@ -86,7 +88,7 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
                  }
             };
         Error ->
-            ?ERROR("Got error: ~p", [Error]),
+            logger:error(#{"reason" => "Unexpected return from routing_tree:lookup/4", "return_object" => Error}),
             render_status_page(Host, 404, #{error => Error}, Req, Env)
     end.
 
@@ -113,12 +115,17 @@ compile([App|Tl], Dispatch, Options) ->
     %% Fetch the router-module for this application
     Router = erlang:list_to_atom(erlang:atom_to_list(App) ++ "_router"),
     Env = nova:get_environment(),
-    Routes = Router:routes(Env),
-    Options1 = Options#{app => App},
+    case erlang:function_exported(Router, routes, 1) of
+        true ->
+            Routes = Router:routes(Env),
+            Options1 = Options#{app => App},
 
-    {ok, Dispatch1, Options2} = compile_paths(Routes, Dispatch, Options1),
-    compile(Tl, Dispatch1, Options2).
-
+            {ok, Dispatch1, Options2} = compile_paths(Routes, Dispatch, Options1),
+            compile(Tl, Dispatch1, Options2);
+        _ ->
+            logger:warning(#{"app" => App, "msg" => "routes-module not found or not exposing the routes/1 function"}),
+            compile(Tl, Dispatch, Options)
+    end.
 
 compile_paths([], Dispatch, Options) -> {ok, Dispatch, Options};
 compile_paths([RouteInfo|Tl], Dispatch, Options) ->
@@ -178,7 +185,8 @@ parse_url(Host,
                 case {filelib:is_file(LocalPath), filelib:is_file(PrivPath)} of
                     {false, false} ->
                         %% No dir nor file
-                        ?WARNING("Could not find local path \"~p\" given for path \"~p\"", [LocalPath, RemotePath]),
+                        logger:warning(#{"reason" => "Could not find local path for the given resource",
+                                         "local_path" => LocalPath, "remote_path" => RemotePath}),
                         not_found;
                     {true, false} ->
                         {file, LocalPath};
@@ -215,7 +223,8 @@ parse_url(Host,
                 case {filelib:is_file(LocalPath), filelib:is_file(PrivPath)} of
                     {false, false} ->
                         %% No dir nor file
-                        ?WARNING("Could not find local path \"~p\" given for path \"~p\"", [LocalPath, RemotePath]),
+                        logger:warning(#{"reason" => "Could not find local path for the given resource",
+                                         "local_path" => LocalPath, "remote_path" => RemotePath}),
                         not_found;
                     {true, false} ->
                         {file, LocalPath};
@@ -235,7 +244,7 @@ parse_url(Host,
                 secure = Secure
                },
 
-    ?DEBUG("Adding route: ~s for app: ~p", [string:concat(Prefix, RemotePath), App]),
+    logger:debug(#{"action" => "Adding route", "route" => string:concat(Prefix, RemotePath), "app" => App}),
     Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, Tree0);
 
@@ -263,7 +272,7 @@ parse_url(Host,
                                 function = Func
                                }
                       end,
-                  ?DEBUG("Adding route: ~s for app: ~p", [RealPath, App]),
+                  logger:debug(#{"action" => "Adding route", "route" => RealPath, "app" => App}),
                   insert(Host, RealPath, BinMethod, Value0, Tree0)
           end, Tree, Methods),
     parse_url(Host, Tl, Prefix, Value, CompiledPaths);
@@ -277,7 +286,7 @@ parse_url(Host,
                                     arguments = #{module => Mod},
                                     plugins = Value#nova_handler_value.plugins,
                                     secure = Secure},
-    ?DEBUG("Adding ws: ~s for app: ~p", [Path, App]),
+    logger:debug(#{"action" => "Adding route", "protocol" => "ws", "route" => Path, "app" => App}),
     RealPath = string:concat(Prefix, Path),
     CompiledPaths = insert(Host, RealPath, '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, CompiledPaths);
@@ -333,11 +342,10 @@ insert(Host, Path, Combinator, Value, Tree) ->
         Tree0 -> Tree0
     catch
         throw:Exception ->
-            ?ERROR("Error when inserting route ~s : ~s", [Combinator, Path]),
-            ?DEBUG("Was called as: routing_tree:insert(~p, ~p, ~p, ~p, ~p)", [Host, Path, Combinator, Value, Tree]),
+            logger:error(#{"reason" => "Error when inserting route", "route" => Path, "combinator" => Combinator}),
             throw(Exception);
         Type:Exception ->
-            ?ERROR("Error type ~p with exception ~p", [Type, Exception]),
+            logger:error(#{"reason" => "Unexpected exit", "type" => Type, "exception" => Exception}),
             throw(Exception)
     end.
 
@@ -377,7 +385,7 @@ persistent_get(Key) ->
         true ->
             persistent_term:get(Key);
         _ ->
-            ?WARNING("Called persistent_get/1 without option use_persistent_term is set to true"),
+            logger:warning(#{"reason" => "Called persistent_get/1 without option use_persistent_term set to true"}),
             throw({unsupported_operation, persistent_get})
     end.
 
