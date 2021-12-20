@@ -21,6 +21,8 @@
          render_status_page/2,
          render_status_page/3,
          render_status_page/5,
+
+         %% Expose the router-callback
          routes/1
         ]).
 
@@ -183,7 +185,8 @@ parse_url(Host,
                 case {filelib:is_file(LocalPath), filelib:is_file(PrivPath)} of
                     {false, false} ->
                         %% No dir nor file
-                        logger:warning(#{"reason" => "Could not find local path for the given resource", "local_path" => LocalPath, "remote_path" => RemotePath}),
+                        logger:warning(#{"reason" => "Could not find local path for the given resource",
+                                         "local_path" => LocalPath, "remote_path" => RemotePath}),
                         not_found;
                     {true, false} ->
                         {file, LocalPath};
@@ -220,7 +223,8 @@ parse_url(Host,
                 case {filelib:is_file(LocalPath), filelib:is_file(PrivPath)} of
                     {false, false} ->
                         %% No dir nor file
-                        logger:warning(#{"reason" => "Could not find local path for the given resource", "local_path" => LocalPath, "remote_path" => RemotePath}),
+                        logger:warning(#{"reason" => "Could not find local path for the given resource",
+                                         "local_path" => LocalPath, "remote_path" => RemotePath}),
                         not_found;
                     {true, false} ->
                         {file, LocalPath};
