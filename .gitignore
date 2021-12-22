@@ -1,3 +1,4 @@
 _build/
 ebin/
 rebar3.crashdump
+doc/
