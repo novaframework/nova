@@ -97,7 +97,8 @@ setup_cowboy(Configuration) ->
             Host0 = inet:ntoa(Host),
             CowboyVersion = get_version(cowboy),
             NovaVersion = get_version(nova),
-            logger:notice(#{msg => "Nova is running", url => unicode:characters_to_list(io_lib:format("http://~s:~B", [Host0, Port])),
+            logger:notice(#{msg => "Nova is running",
+                            url => unicode:characters_to_list(io_lib:format("http://~s:~B", [Host0, Port])),
                             cowboy_version => CowboyVersion, nova_version => NovaVersion, app => App});
         {error, Error} ->
             logger:error(#{msg => "Cowboy could not start", reason => Error})
@@ -123,7 +124,7 @@ start_cowboy(Configuration) ->
     Dispatch =
         case BootstrapApp of
             undefined ->
-                logger:error(#{msg => "You need to define an application to boostrap. See Nova documentation about bootstrap_application"}),
+                logger:error(#{msg => "You need to define bootstrap_application option in configuration"}),
                 throw({error, no_nova_app_defined});
             App ->
                 ExtraApps = application:get_env(App, nova_apps, []),

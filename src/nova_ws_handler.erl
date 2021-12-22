@@ -111,7 +111,8 @@ invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData, 
         end
     catch
         Class:Reason:Stacktrace ->
-            logger:error(#{msg => "Websocket handler crashed", class => Class, reason => Reason, stacktrace => Stacktrace}),
+            logger:error(#{msg => "Websocket handler crashed", class => Class,
+                           reason => Reason, stacktrace => Stacktrace}),
             {stop, State}
     end.
 

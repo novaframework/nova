@@ -41,7 +41,8 @@ handle_json({json, StatusCode, Headers, JSON}, _ModFun, Req) ->
             {ok, Req2}
     catch
         Class:Reason:Stacktrace ->
-            logger:error(#{msg => "Error while processing JSON", class => Class, reason => Reason, stacktrace => Stacktrace}),
+            logger:error(#{msg => "Error while processing JSON", class => Class,
+                           reason => Reason, stacktrace => Stacktrace}),
             handle_status({status, 500}, undefined, Req)
     end;
 handle_json({json, JSON}, ModFun, Req = #{method := Method}) ->

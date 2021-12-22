@@ -203,7 +203,7 @@ handle_cast({register_handler, Handle, Callback}, State) ->
             ets:insert(?HANDLERS_TABLE, {Handle, Callback0}),
             {noreply, State};
         _ ->
-            logger:error(#{msg => "Could not register handler since there's already another one registered on that name", handler => Handle}),
+            logger:error(#{msg => "Another handler is already registered on that name", handler => Handle}),
             {noreply, State}
     end;
 handle_cast(_Request, State) ->

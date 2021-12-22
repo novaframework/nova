@@ -44,7 +44,8 @@ execute(Req, Env = #{module := Module, function := Function}) ->
                     {ok, Req0} = Callback(RetObj, {Module, Function}, Req),
                     render_response(Req0, Env);
                 {error, not_found} ->
-                    logger:error(#{msg => "Controller returned unsupported result", controller => Module, function => Function, return => RetObj})
+                    logger:error(#{msg => "Controller returned unsupported result", controller => Module,
+                                   function => Function, return => RetObj})
             end
     catch Class:Reason:Stacktrace ->
             logger:error(#{msg => "Controller crashed", class => Class, reason => Reason, stacktrace => Stacktrace}),
