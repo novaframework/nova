@@ -9,7 +9,7 @@
          early_error/5
         ]).
 
--include_lib("nova/include/nova.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 -record(state, {
                 next :: any(),

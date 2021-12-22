@@ -1,6 +1,7 @@
 -module(nova_erlydtl_inventory).
 -behaviour(erlydtl_library).
--include_lib("nova/include/nova.hrl").
+
+-include_lib("kernel/include/logger.hrl").
 
 -export([
          version/0,
@@ -18,7 +19,7 @@ url([Url|Variables], _Options) ->
     NovaEnv = nova:get_env(apps, []),
     case proplists:get_value(binary_to_atom(App, utf8), NovaEnv) of
         undefined ->
-            ?WARNING("Could not find application: ~p. Called from erlydtl-tag 'url'.", [App]),
+            logger:warning(#{msg => "Template could not find application", application => App}),
             <<"#">>;
         #{prefix := Prefix} ->
             PrefixBin = list_to_binary(Prefix),

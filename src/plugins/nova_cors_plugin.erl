@@ -1,7 +1,7 @@
 -module(nova_cors_plugin).
 -behaviour(nova_plugin).
 
--include_lib("nova/include/nova.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 -export([
          pre_request/2,
@@ -43,13 +43,13 @@ post_request(Req, _) ->
                         Options :: [{Key :: atom(), OptionDescription :: binary()}]}.
 plugin_info() ->
     {
-     <<"nova_cors_plugin">>, 
-     <<"0.2.0">>, 
-     <<"Nova team <info@novaframework.org">>, 
-     <<"Add CORS headers to request">>, 
+     <<"nova_cors_plugin">>,
+     <<"0.2.0">>,
+     <<"Nova team <info@novaframework.org">>,
+     <<"Add CORS headers to request">>,
      [
       {
-       allow_origins, 
+       allow_origins,
        <<"Specifies which origins to insert into Access-Control-Allow-Origin">>
       }
     ]}.
