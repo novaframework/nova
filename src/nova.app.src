@@ -1,6 +1,6 @@
 {application,nova,
  [{description,"Nova is a web application framework"},
-  {vsn,"0.9.0"},
+  {vsn,"0.9.1"},
   {registered,[]},
   {mod,{nova_app,[]}},
   {included_applications,[]},
