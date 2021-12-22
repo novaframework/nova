@@ -26,7 +26,7 @@
          routes/1
         ]).
 
--include_lib("nova/include/nova.hrl").
+-include_lib("kernel/include/logger.hrl").
 -include_lib("routing_tree/include/routing_tree.hrl").
 -include("nova_router.hrl").
 

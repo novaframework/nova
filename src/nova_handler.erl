@@ -7,7 +7,7 @@
          terminate/3
         ]).
 
--include_lib("nova/include/nova.hrl").
+-include_lib("kernel/include/logger.hrl").
 -include("nova_router.hrl").
 
 -callback init(Req, any()) -> {ok | module(), Req, any()}
@@ -33,7 +33,7 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
                         stacktrace => Stacktrace,
                         class => Class,
                         reason => Reason},
-            ?ERROR("Controller crashed (~p, ~p)~nStacktrace: ~p", [Class, Reason, Stacktrace]),
+            logger:error(#{msg => "Controller crashed", class => Class, reason => Reason, stacktrace => Stacktrace}),
             render_response(Req#{crash_info => Payload}, Env, 500)
     end;
 execute(Req, Env = #{module := Module, function := Function}) ->
@@ -44,11 +44,10 @@ execute(Req, Env = #{module := Module, function := Function}) ->
                     {ok, Req0} = Callback(RetObj, {Module, Function}, Req),
                     render_response(Req0, Env);
                 {error, not_found} ->
-                    ?ERROR("Unknown return object1 ~p returned from module: ~p function: ~p",
-                           [RetObj, Module, Function])
+                    logger:error(#{msg => "Controller returned unsupported result", controller => Module, function => Function, return => RetObj})
             end
     catch Class:Reason:Stacktrace ->
-            ?ERROR("Controller crashed (~p, ~p)~nStacktrace: ~p", [Class, Reason, Stacktrace]),
+            logger:error(#{msg => "Controller crashed", class => Class, reason => Reason, stacktrace => Stacktrace}),
             terminate(Reason, Req, Module),
             %% Build the payload object
             Payload = #{status_code => 500,

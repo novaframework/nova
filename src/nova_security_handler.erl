@@ -1,7 +1,7 @@
 -module(nova_security_handler).
 -behaviour(cowboy_middleware).
 
--include_lib("nova/include/nova.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 -export([
          execute/2

@@ -13,7 +13,7 @@
          websocket_info/2
         ]).
 
--include_lib("nova/include/nova.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -42,7 +42,7 @@ upgrade_ws(Module, Req, State, ControllerData) ->
         {ok, NewControllerData} ->
             {cowboy_websocket, Req, State#{controller_data => NewControllerData}};
         Error ->
-            ?ERROR("Websocket handler ~p returned unkown result ~p", [Module, Error]),
+            logger:error(#{msg => "Websocket handler returned unkown result", handler => Module, returned => Error}),
             nova_router:render_status_page(500, Req)
     end.
 
@@ -110,8 +110,8 @@ invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData, 
                 ControllerResult
         end
     catch
-        Type:Reasons:Stacktrace ->
-            ?ERROR("Websocket failed with ~p:~p.~nStacktrace:~n~p", [Type, Reasons, Stacktrace]),
+        Class:Reason:Stacktrace ->
+            logger:error(#{msg => "Websocket handler crashed", class => Class, reason => Reason, stacktrace => Stacktrace}),
             {stop, State}
     end.
 
@@ -129,12 +129,11 @@ run_plugins([{Module, Options}|Tl], Callback, State) ->
         {break, State0} ->
             {ok, State0};
         {error, Reason} ->
-            ?ERROR("Plugin (~p:~p/2) returned error with reason ~p", [Module, Callback, Reason]),
+            logger:error(#{msg => "Plugin returned error", plugin => Module, function => Callback, reason => Reason}),
             {stop, State}
     catch
-        Type:Reason:Stacktrace ->
-            ?ERROR("Plugin failed in execution. Type: ~p Reason: ~p~nStacktrace:~n~p",
-                   [Type, Reason, Stacktrace]),
+        Class:Reason:Stacktrace ->
+            logger:error(#{msg => "Plugin crashed", class => Class, reason => Reason, stacktrace => Stacktrace}),
             {stop, State}
     end.
 

@@ -8,7 +8,7 @@
          handle_websocket/3
         ]).
 
--include_lib("nova/include/nova.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 -type mod_fun() :: {Module :: atom(), Function :: atom()} | undefined.
 -type erlydtl_vars() :: map() | [{Key :: atom() | binary() | string(), Value :: any()}].
@@ -40,8 +40,8 @@ handle_json({json, StatusCode, Headers, JSON}, _ModFun, Req) ->
             Req2 = Req1#{resp_status_code => StatusCode},
             {ok, Req2}
     catch
-        Type:Reason:Stacktrace ->
-            ?ERROR("Error while processing JSON. Type: ~p Reason: ~p Stacktrace: ~p", [Type, Reason, Stacktrace]),
+        Class:Reason:Stacktrace ->
+            logger:error(#{msg => "Error while processing JSON", class => Class, reason => Reason, stacktrace => Stacktrace}),
             handle_status({status, 500}, undefined, Req)
     end;
 handle_json({json, JSON}, ModFun, Req = #{method := Method}) ->
@@ -181,7 +181,7 @@ handle_websocket({websocket, ControllerData}, {Module, _Fun}, Req) ->
         {ok, NewControllerData} ->
             {cowboy_websocket, Req#{controller_data => NewControllerData}, #{}};
         Error ->
-            ?ERROR("Websocket handler ~p returned unkown result ~p", [Module, Error]),
+            logger:error(#{msg => "Handler returned unsupported result", handler => Module, return_obj => Error}),
             %% Render 500
             {ok, Req}
     end.
@@ -212,7 +212,7 @@ render_dtl(View, Variables, Options) ->
             case code:load_file(View) of
                 {error, Reason} ->
                     %% Cast a warning since the module could not be found
-                    ?ERROR("Could not render ~p. Reason given: ~p", [View, Reason]),
+                    logger:error(#{msg => "Nova could not render template", template => View, reason => Reason}),
                     throw({error, template_not_found});
                 _ ->
                     View:render(Variables, Options)
