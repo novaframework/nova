@@ -116,16 +116,12 @@ compile([App|Tl], Dispatch, Options) ->
     Router = erlang:list_to_atom(erlang:atom_to_list(App) ++ "_router"),
     Env = nova:get_environment(),
 
-    case erlang:function_exported(Router, routes, 1) of
-        true ->
-            Routes = Router:routes(Env),
-            Options1 = Options#{app => App},
-            {ok, Dispatch1, Options2} = compile_paths(Routes, Dispatch, Options1),
-            compile(Tl, Dispatch1, Options2);
-        _ ->
-            logger:warning(#{"app" => App, "msg" => "routes-module not found or not exposing the routes/1 function"}),
-            compile(Tl, Dispatch, Options)
-    end.
+    %% Ensure that the module is loaded
+    Routes = erlang:apply(Router, routes, [Env]),
+    Options1 = Options#{app => App},
+
+    {ok, Dispatch1, Options2} = compile_paths(Routes, Dispatch, Options1),
+    compile(Tl, Dispatch1, Options2).
 
 compile_paths([], Dispatch, Options) -> {ok, Dispatch, Options};
 compile_paths([RouteInfo|Tl], Dispatch, Options) ->
