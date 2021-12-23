@@ -55,10 +55,11 @@
 -spec get(Req :: cowboy_req:req(), Key :: binary()) ->
                  {ok, Value :: binary()} | {error, Reason :: atom()} | no_return().
 get(Req, Key) ->
+    logger:notice(#{action => "Session:get/2 called", req => Req, key => Key}),
     case get_session_id(Req) of
         {ok, SessionId} ->
             Mod = get_session_module(),
-            Mod:get_value(SessionId, Key);
+            erlang:apply(Mod, get_value, [SessionId, Key]);
         _ ->
             {error, not_found}
     end.
@@ -66,10 +67,11 @@ get(Req, Key) ->
 -spec set(Req :: cowboy_req:req(), Key :: binary(), Value :: binary()) ->
                  ok | {error, Reason :: atom()} | no_return().
 set(Req, Key, Value) ->
+    logger:notice(#{acion => "Session:set/3 called", req => Req, key => Key}),
     case get_session_id(Req) of
         {ok, SessionId} ->
             Mod = get_session_module(),
-            Mod:set_value(SessionId, Key, Value);
+            erlang:apply(Mod, set_value, [SessionId, Key, Value]);
         _ ->
             {error, session_id_not_set}
     end.
@@ -80,7 +82,7 @@ delete(Req) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
             Mod = get_session_module(),
-            Mod:delete_value(SessionId),
+            erlang:apply(Mod, delete_value, [SessionId]),
             Req1 = cowboy_req:set_resp_cookie(<<"session_id">>, SessionId, Req,
                                               #{max_age => 0}),
             {ok, Req1};
@@ -95,7 +97,7 @@ delete(Req, Key) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
             Mod = get_session_module(),
-            Mod:delete_value(SessionId, Key),
+            erlang:apply(Mod, delete_value, [SessionId, Key]),
             {ok, Req};
         _ ->
             %% Session not found
