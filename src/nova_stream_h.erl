@@ -25,17 +25,18 @@ init(StreamID, Req, Opts) ->
         case nova:get_env(use_sessions, true) of
             true ->
                 Cookies = cowboy_req:parse_cookies(Req),
+                logger:notice(#{action => "Got cookies", cookies => Cookies}),
                 case lists:keyfind(<<"session_id">>, 1, Cookies) of
                     {_, _} -> Req;
                     _ ->
                         {ok, SessionId} = nova_session:generate_session_id(),
                         cowboy_req:set_resp_cookie(<<"session_id">>, SessionId, Req)
                 end;
-            false ->
+            _ ->
                 Req
         end,
     %% Set the correct server-header information
-    Req1 = cowboy_req:set_resp_cookie(<<"server">>, <<"Cowboy/Nova">>, Req0),
+    Req1 = cowboy_req:set_resp_header(<<"server">>, <<"Cowboy/Nova">>, Req0),
     {Commands, Next} = cowboy_stream:init(StreamID, Req1, Opts),
     {Commands, #state{req = Req0, next = Next}}.
 
