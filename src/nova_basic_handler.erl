@@ -145,10 +145,12 @@ handle_status({status, Status}, ModFun, State) when is_integer(Status) ->
 %% 302 with location set to "/login"
 %% @end
 %%-----------------------------------------------------------------
--spec handle_redirect({redirect, Route :: list()}, ModFun :: mod_fun(),
+-spec handle_redirect({redirect, Route :: list()|binary()}, ModFun :: mod_fun(),
                       Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()}.
+handle_redirect({redirect, Route}, ModFun, Req) when is_list(Route) ->
+    handle_redirect({redirect, list_to_binary(Route)}, ModFun, Req);
 handle_redirect({redirect, Route}, _ModFun, Req) ->
-    Headers = #{<<"Location">> => list_to_binary(Route)},
+    Headers = #{<<"Location">> => Route},
     Req0 = cowboy_req:set_resp_headers(Headers, Req),
     Req1 = Req0#{resp_status_code => 302},
     {ok, Req1}.
