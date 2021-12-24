@@ -154,6 +154,7 @@ init([]) ->
     register_handler(status, fun nova_basic_handler:handle_status/3),
     register_handler(redirect, fun nova_basic_handler:handle_redirect/3),
     register_handler(sendfile, fun nova_basic_handler:handle_sendfile/3),
+    register_handler(ws, fun nova_basic_handler:handle_ws/2),
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------

@@ -20,14 +20,14 @@
 -spec execute(Req, Env) -> {ok, Req, Env}
                                when Req::cowboy_req:req(), Env::cowboy_middleware:env().
 execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
-    try Handler:init(Req, Arguments) of
+    try erlang:apply(Handler, init, [Req, Arguments]) of
         {ok, Req2, _State} ->
             Result = terminate(normal, Req2, Handler),
             {ok, Req2, Env#{result => Result}};
         {Mod, Req2, State} ->
-            Mod:upgrade(Req2, Env, Handler, State);
+            erlang:apply(Mod, upgrade, [Req2, Env, Handler, State]);
         {Mod, Req2, State, Opts} ->
-            Mod:upgrade(Req2, Env, Handler, State, Opts)
+            erlang:apply(Mod, upgrade, [Req2, Env, Handler, State, Opts])
     catch Class:Reason:Stacktrace ->
             Payload = #{status_code => 500,
                         stacktrace => Stacktrace,
@@ -37,7 +37,7 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
             render_response(Req#{crash_info => Payload}, Env, 500)
     end;
 execute(Req, Env = #{module := Module, function := Function}) ->
-    try Module:Function(Req) of
+    try erlang:apply(Module, Function, [Req]) of
         RetObj ->
             case nova_handlers:get_handler(element(1, RetObj)) of
                 {ok, Callback} ->
@@ -62,7 +62,7 @@ execute(Req, Env = #{module := Module, function := Function}) ->
 terminate(Reason, Req, Module) ->
     case erlang:function_exported(Module, terminate, 3) of
         true ->
-            Module:terminate(Reason, Req);
+            erlang:apply(Module, terminate, [Reason, Req]);
         false ->
             ok
     end.

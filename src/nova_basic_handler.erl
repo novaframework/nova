@@ -5,7 +5,8 @@
          handle_status/3,
          handle_redirect/3,
          handle_sendfile/3,
-         handle_websocket/3
+         handle_websocket/3,
+         handle_ws/2
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -186,6 +187,29 @@ handle_websocket({websocket, ControllerData}, {Module, _Fun}, Req) ->
             %% Render 500
             {ok, Req}
     end.
+
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Handles basic websocket operations. This is a special handler in regards to
+%% arguments. Handlers for websocket only takes two arguments; What the controller
+%% returned and the state. And the handler should return what cowboy expects.
+%%
+%% Example of a valid return value is `{reply, Frame, State}`
+%% @end
+%%-----------------------------------------------------------------
+handle_ws({reply, Frame, NewControllerData}, State) ->
+    {reply, Frame, State#{controller_data => NewControllerData}};
+handle_ws({reply, Frame, NewControllerData, hibernate}, State) ->
+    {reply, Frame, State#{controller_data => NewControllerData}, hibernate};
+handle_ws({ok, NewControllerData}, State) ->
+    {ok, State#{controller_data => NewControllerData}};
+handle_ws({ok, NewControllerData, hibernate}, State) ->
+    {ok, State#{controller_data => NewControllerData}, hibernate};
+handle_ws({stop, NewControllerData}, State) ->
+    {stop, State#{controller_data => NewControllerData}};
+handle_ws(ok, State) ->
+    {ok, State}.
 
 
 %%%===================================================================

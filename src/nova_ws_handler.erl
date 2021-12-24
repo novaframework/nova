@@ -74,55 +74,58 @@ terminate(Reason, PartialReq, State = #{mod := Mod}) ->
 
 handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData, plugins := Plugins}) ->
     PrePlugins = proplists:get_value(pre_ws_request, Plugins, []),
-    case run_plugins(PrePlugins, pre_ws_request, State) of
+    ControllerState = #{module => Mod,
+                        function => Func,
+                        arguments => Args},
+    %% First run the pre-plugins and if everything goes alright we continue
+    case run_plugins(PrePlugins, pre_ws_request, ControllerState, State) of
         {ok, State0} ->
-            invoke_controller(Mod, Func, Args, State0);
-        Stop ->
+            case invoke_controller(Mod, Func, Args, State0) of
+                {stop, _StopReason} = S ->
+                    S;
+                Result ->
+                    %% Run the post-plugins
+                    PostPlugins = proplists:get_value(post_ws_request, Plugins, []),
+                    run_plugins(PostPlugins, post_ws_request, ControllerState, Result)
+            end;
+        {stop, _} = Stop ->
             Stop
     end;
 handle_ws(Mod, Func, Args, State) ->
     handle_ws(Mod, Func, Args, State#{controller_data => #{}}).
 
-invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData, plugins := Plugins}) ->
-    try
-        ControllerResult =
-            case erlang:apply(Mod, Func, Args ++ [ControllerData]) of
-                {reply, Frame, NewControllerData} ->
-                    {reply, Frame, State#{controller_data => NewControllerData}};
-                {reply, Frame, NewControllerData, hibernate} ->
-                    {reply, Frame, State#{controller_data => NewControllerData}, hibernate};
-                {ok, NewControllerData} ->
-                    {ok, State#{controller_data => NewControllerData}};
-                {ok, NewControllerData, hibernate} ->
-                    {ok, State#{controller_data => NewControllerData}, hibernate};
-                {stop, NewControllerData} ->
-                    {stop, State#{controller_data => NewControllerData}};
-                ok ->
-                    {ok, State}
-            end,
-        case ControllerResult of
-            {stop, _} = Stop ->
-                Stop;
-            {_, State0} ->
-                PostPlugins = proplists:get_value(post_ws_request, Plugins, []),
-                run_plugins(PostPlugins, post_ws_request, State0);
-            _ ->
-                ControllerResult
-        end
-    catch
-        Class:Reason:Stacktrace ->
-            logger:error(#{msg => "Websocket handler crashed", class => Class,
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Private functions      %%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData}) ->
+    try erlang:apply(Mod, Func, Args ++ [ControllerData]) of
+        RetObj ->
+            case nova_handlers:get_handler(ws) of
+                {ok, Callback} ->
+                    Callback(RetObj, State);
+                {error, not_found} ->
+                    logger:error(#{msg => "Websocket handler not found. Check that a handler is
+                                           registred on handle 'ws'",
+                                   controller => Mod, function => Func, return => RetObj}),
+                    {stop, State}
+            end
+    catch Class:Reason:Stacktrace ->
+            logger:error(#{msg => "Controller crashed", class => Class,
                            reason => Reason, stacktrace => Stacktrace}),
             {stop, State}
     end.
 
 
-run_plugins([], _Callback, State) ->
+run_plugins([], _Callback, #{controller_result := {stop, _} = Signal}, _State) ->
+    Signal;
+run_plugins([], _Callback, _ControllerState, State) ->
     {ok, State};
-run_plugins([{Module, Options}|Tl], Callback, State) ->
-    try Module:Callback(State, Options) of
-        {ok, State0} ->
-            run_plugins(Tl, Callback, State0);
+run_plugins([{Module, Options}|Tl], Callback, ControllerState, State) ->
+    try erlang:apply(Module, Callback, [ControllerState, State, Options]) of
+        {ok, ControllerState0, State0} ->
+            run_plugins(Tl, Callback, ControllerState0, State0);
         %% Stop indicates that we want the entire pipe of plugins/controller to be stopped.
         {stop, State0} ->
             {stop, State0};
