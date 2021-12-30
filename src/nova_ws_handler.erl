@@ -47,15 +47,15 @@ upgrade_ws(Module, Req, State, ControllerData) ->
     end.
 
 websocket_init(State = #{mod := Mod}) ->
+    %% Inject the websocket process into the state
+    ControllerData = maps:get(controller_data, State, #{}),
+    NewState = State#{controller_data => ControllerData#{ws_handler_process => self()}},
+
     case erlang:function_exported(Mod, websocket_init, 1) of
         true ->
-            ControllerData = maps:get(controller_data, State, #{}),
-            handle_ws(Mod,
-                      websocket_init,
-                      [],
-                      State#{controller_data => ControllerData#{ws_handler_process => self()}});
+            handle_ws(Mod, websocket_init, [], NewState);
         _ ->
-            {ok, State}
+            {ok, NewState}
     end.
 
 websocket_handle(Frame, State = #{mod := Mod}) ->
