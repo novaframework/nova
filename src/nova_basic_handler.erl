@@ -32,19 +32,13 @@
                   ModFun :: mod_fun(), Req :: cowboy_req:req()) -> {ok, State :: cowboy_req:req()} |
                                                                    {Module :: atom(), Req :: cowboy_req:req()}.
 handle_json({json, StatusCode, Headers, JSON}, _ModFun, Req) ->
-    try json:encode(JSON, [binary, maps]) of
-        EncodedJSON ->
-            Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, Headers),
-            Req0 = cowboy_req:set_resp_headers(Headers0, Req),
-            Req1 = cowboy_req:set_resp_body(EncodedJSON, Req0),
-            Req2 = Req1#{resp_status_code => StatusCode},
-            {ok, Req2}
-    catch
-        Class:Reason:Stacktrace ->
-            logger:error(#{msg => "Error while processing JSON", class => Class,
-                           reason => Reason, stacktrace => Stacktrace}),
-            handle_status({status, 500}, undefined, Req)
-    end;
+    JsonLib = nova:get_env(json_lib, thoas),
+    EncodedJSON = erlang:apply(JsonLib, encode, [JSON]),
+    Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, Headers),
+    Req0 = cowboy_req:set_resp_headers(Headers0, Req),
+    Req1 = cowboy_req:set_resp_body(EncodedJSON, Req0),
+    Req2 = Req1#{resp_status_code => StatusCode},
+    {ok, Req2};
 handle_json({json, JSON}, ModFun, Req = #{method := Method}) ->
     case Method of
         <<"POST">> ->
@@ -118,10 +112,12 @@ handle_ok({ok, Variables, Options}, {Mod, _Func}, Req) ->
                     ModFun :: mod_fun(), Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()}.
 handle_status({status, Status, ExtraHeaders, JSON}, _ModFun, Req) when is_map(JSON) ->
     %% We do not need to render a status page since we just return a JSON structure
+    JsonLib = nova:get_env(json_lib, thoas),
     Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, ExtraHeaders),
     Req0 = cowboy_req:set_resp_headers(Headers0, Req),
     Req1 = Req0#{resp_status_code => Status},
-    Req2 = cowboy_req:set_resp_body(json:encode(JSON, [binary]), Req1),
+    JSONStr = erlang:apply(JsonLib, encode, [JSON]),
+    Req2 = cowboy_req:set_resp_body(JSONStr, Req1),
     {ok, Req2};
 handle_status({status, Status, ExtraHeaders, Body}, _ModFun, Req) ->
     %% Body is a binary - just send it out
