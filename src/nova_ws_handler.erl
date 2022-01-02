@@ -64,13 +64,20 @@ websocket_handle(Frame, State = #{mod := Mod}) ->
 websocket_info(Msg, State = #{mod := Mod}) ->
     handle_ws(Mod, websocket_info, [Msg], State).
 
-terminate(Reason, PartialReq, State = #{mod := Mod}) ->
+terminate(Reason, PartialReq, State = #{controller_data := ControllerData, mod := Mod, plugins := Plugins}) ->
     case erlang:function_exported(Mod, terminate, 3) of
         true ->
-            handle_ws(Mod, terminate, [Reason, PartialReq], State);
+            erlang:apply(Mod, terminate, [Reason, PartialReq, ControllerData]),
+            %% Call post_ws_connection-plugins
+            TerminatePlugins = proplists:get_value(post_ws_connection, Plugins, []),
+            ControllerState = #{module => Mod,
+                                function => terminate,
+                                arguments => [Reason, PartialReq, State]},
+            run_plugins(TerminatePlugins, post_ws_connection, ControllerState, State);
         _ ->
             ok
     end.
+
 
 handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData, plugins := Plugins}) ->
     PrePlugins = proplists:get_value(pre_ws_request, Plugins, []),
