@@ -97,7 +97,8 @@ handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData, plugins
                 State2 ->
                     %% Run the post-plugins
                     PostPlugins = proplists:get_value(post_ws_request, Plugins, []),
-                    {ok, State3 = #{commands := Cmds}} = run_plugins(PostPlugins, post_ws_request, ControllerState, State2),
+                    {ok, State3 = #{commands := Cmds}} = run_plugins(PostPlugins, post_ws_request,
+                                                                     ControllerState, State2),
                     %% Remove the commands from the map
                     State4 = maps:remove(commands, State3),
 
