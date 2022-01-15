@@ -99,7 +99,7 @@ handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData, plugins
                     PostPlugins = proplists:get_value(post_ws_request, Plugins, []),
                     {ok, State3 = #{commands := Cmds}} = run_plugins(PostPlugins, post_ws_request, ControllerState, State2),
                     %% Remove the commands from the map
-                    State4 = maps:remove(commands, State2),
+                    State4 = maps:remove(commands, State3),
 
                     %% Check if we are hibernating
                     case maps:get(hibernate, State4, false) of
