@@ -76,7 +76,10 @@ terminate(Reason, PartialReq, State = #{controller_data := ControllerData, mod :
             run_plugins(TerminatePlugins, post_ws_connection, ControllerState, State);
         _ ->
             ok
-    end.
+    end;
+terminate(Reason, PartialReq, State) ->
+    logger:error(#{msg => "Terminate called", reason => Reason, partial_req => PartialReq, state => State}),
+    ok.
 
 
 handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData, plugins := Plugins}) ->
@@ -85,17 +88,29 @@ handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData, plugins
                         function => Func,
                         arguments => Args},
     %% First run the pre-plugins and if everything goes alright we continue
-    case run_plugins(PrePlugins, pre_ws_request, ControllerState, State) of
-        {ok, State0} ->
-            case invoke_controller(Mod, Func, Args, State0) of
+    State0 = State#{commands => []},
+    case run_plugins(PrePlugins, pre_ws_request, ControllerState, State0) of
+        {ok, State1} ->
+            case invoke_controller(Mod, Func, Args, State1) of
                 {stop, _StopReason} = S ->
                     S;
-                Result ->
+                State2 ->
                     %% Run the post-plugins
                     PostPlugins = proplists:get_value(post_ws_request, Plugins, []),
-                    run_plugins(PostPlugins, post_ws_request, ControllerState, Result)
+                    {ok, State3 = #{commands := Cmds}} = run_plugins(PostPlugins, post_ws_request, ControllerState, State2),
+                    %% Remove the commands from the map
+                    State4 = maps:remove(commands, State2),
+
+                    %% Check if we are hibernating
+                    case maps:get(hibernate, State4, false) of
+                        false ->
+                            {Cmds, State4};
+                        _ ->
+                            {Cmds, maps:remove(hibernate, State4), hibernate}
+                    end
             end;
         {stop, _} = Stop ->
+            logger:warning(#{msg => "Got stop signal", signal => Stop}),
             Stop
     end;
 handle_ws(Mod, Func, Args, State) ->

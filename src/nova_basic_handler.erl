@@ -198,18 +198,22 @@ handle_websocket({websocket, ControllerData}, {Module, _Fun}, Req) ->
 %% Example of a valid return value is `{reply, Frame, State}`
 %% @end
 %%-----------------------------------------------------------------
-handle_ws({reply, Frame, NewControllerData}, State) ->
-    {reply, Frame, State#{controller_data => NewControllerData}};
-handle_ws({reply, Frame, NewControllerData, hibernate}, State) ->
-    {reply, Frame, State#{controller_data => NewControllerData}, hibernate};
+handle_ws({reply, Frame, NewControllerData}, State = #{commands := Commands}) ->
+    State#{controller_data => NewControllerData,
+           commands => [Frame|Commands]};
+handle_ws({reply, Frame, NewControllerData, hibernate}, State = #{commands := Commands}) ->
+    State#{controller_data => NewControllerData,
+           commands => [Frame|Commands],
+           hibernate => true};
 handle_ws({ok, NewControllerData}, State) ->
-    {ok, State#{controller_data => NewControllerData}};
+    State#{controller_data => NewControllerData};
 handle_ws({ok, NewControllerData, hibernate}, State) ->
-    {ok, State#{controller_data => NewControllerData}, hibernate};
+    State#{controller_data => NewControllerData,
+          hibernate => true};
 handle_ws({stop, NewControllerData}, State) ->
     {stop, State#{controller_data => NewControllerData}};
 handle_ws(ok, State) ->
-    {ok, State}.
+    State.
 
 
 %%%===================================================================
