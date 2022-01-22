@@ -6,11 +6,14 @@
 
 not_found(Req) ->
     %% Check the accept-headers
+
+
     case cowboy_req:header(<<"accept">>, Req) of
         <<"application/json">> ->
             %% Render a json response
-            Json = #{message => "Resource not found"},
-            {status, 404, #{<<"content-type">> => <<"application/json">>}, json:encode(Json, [maps, binary])};
+            {ok, JsonLib} = nova:get_env(json_lib, thoas),
+            Json = erlang:apply(JsonLib, encode, [#{message => "Resource not found"}]),
+            {status, 404, #{<<"content-type">> => <<"application/json">>}, Json};
         _ ->
             %% Just assume HTML
             Variables = #{status => "Could not find the page you were looking for",
@@ -32,7 +35,9 @@ server_error(#{crash_info := #{stacktrace := Stacktrace, class := Class, reason 
             %% We do show a proper error response
             case cowboy_req:header(<<"accept">>, Req) of
                 <<"application/json">> ->
-                    {status, 500, #{<<"content-type">> => <<"application/json">>}, json:encode(Variables)};
+                    {ok, JsonLib} = nova:get_env(json_lib, thoas),
+                    Json = erlang:apply(JsonLib, encode, [Variables]),
+                    {status, 500, #{<<"content-type">> => <<"application/json">>}, Json};
                 _ ->
                     {ok, Body} = nova_error_dtl:render(Variables),
                     {status, 500, #{<<"content-type">> => <<"text/html">>}, Body}
