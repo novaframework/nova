@@ -18,7 +18,7 @@ These parameters can be specificed in your *main* application (Eg the one you've
 
 | Key | Description | Value |
 |-----|-------------|-------|
-| `json_lib` | JSON lib to use. Read more in the subsection *Configure json lib* | atom() |
+| `json_lib` | JSON lib to use. Read more in the subsection *Configure json lib* | `atom()` |
 | `watchers` | Watchers are external programs that will run togheter with Nova. Watchers are defined as list of tuples where the tuples is in format `{Command, ArgumentList}` (Like `[{"ls", ["-a", "-l"]}]`) | `[{string(), string()}]` |
 
 
