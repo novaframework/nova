@@ -15,7 +15,8 @@
                  jhn_stdlib,
                  uuid,
                  routing_tree,
-                 erldb
+                 erldb,
+                 thoas
                 ]},
   {env,[]},
   {modules,[nova]},
