@@ -23,14 +23,15 @@ rebar3 new nova my_first_nova
 
 ```
 $ rebar3 new nova my_first_app
-===> Writing my_first_app/config/sys.config
-===> Writing my_first_app/start.sh
-===> Writing my_first_app/priv/my_first_app.routes.erl
+===> Writing my_first_app/config/dev_sys.config.src
+===> Writing my_first_app/config/prod_sys.config.src
 ===> Writing my_first_app/src/my_first_app.app.src
 ===> Writing my_first_app/src/my_first_app_app.erl
 ===> Writing my_first_app/src/my_first_app_sup.erl
+===> Writing my_first_app/src/my_first_app_router.erl
 ===> Writing my_first_app/src/controllers/my_first_app_main_controller.erl
 ===> Writing my_first_app/rebar.config
+===> Writing my_first_app/config/vm.args.src
 ===> Writing my_first_app/src/views/my_first_app_main.dtl
 ```
 

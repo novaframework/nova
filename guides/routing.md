@@ -7,12 +7,17 @@ Each nova application have their own routes file. This file contains information
 A simple route file could look something like this:
 
 ```erlang
-#{prefix => "/admin",
-  security => false,
-  routes => [
-    {"/", {my_controller, main}, #{methods => [get]}}
-  ]
-}
+-module(my_app_router).
+
+-export([routes/1]).
+
+routes(_Environment) ->
+  [#{prefix => "/admin",
+    security => false,
+    routes => [
+      {"/", {my_controller, main}, #{methods => [get]}}
+    ]
+  }].
 ```
 
 This will create a path for `/admin` which, when a user enters will call `my_controller:main/1`.
