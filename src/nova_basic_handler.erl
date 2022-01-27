@@ -193,7 +193,7 @@ handle_websocket({websocket, ControllerData}, {Module, _Fun}, Req) ->
 %% arguments. Handlers for websocket only takes two arguments; What the controller
 %% returned and the state. And the handler should return what cowboy expects.
 %%
-%% Example of a valid return value is `{reply, Frame, State}`
+%% Example of a valid return value is {reply, Frame, State}
 %% @end
 %%-----------------------------------------------------------------
 handle_ws({reply, Frame, NewControllerData}, State = #{commands := Commands}) ->
