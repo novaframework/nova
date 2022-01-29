@@ -27,5 +27,3 @@ jobs:
       run: rebar3 xref
     - name: Run elvis
       run: rebar3 as lint lint
-    - name: Run ex_doc
-      run: rebar3 ex_doc
