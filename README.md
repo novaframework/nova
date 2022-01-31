@@ -63,3 +63,16 @@ rebar3 nova serve
 This will fetch all dependencies and compile. After the compilation it will start a shell that says which port it is running on and a few debug lines.
 
 When the shell is started, open a browser and go to localhost:8080 which will point to the `my_first_nova` server running Nova.
+
+## Important links
+
+* [erlang-lang Slack channel][1]
+* [Issue tracker][2]
+* [Nova Forum (questions)][3]
+* Visit Nova's sponsors for expert Nova consulting:
+    * [Burbas Consulting](http://burbasconsulting.com)
+    * [Widgrens IT](https://widgrensit.com)
+
+[1]: https://github.com/novaframework/nova
+[2]: https://github.com/novaframework/nova/issues
+[3]: https://erlangforums.com/c/erlang-frameworks/nova-forum/65
