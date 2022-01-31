@@ -66,13 +66,13 @@ When the shell is started, open a browser and go to localhost:8080 which will po
 
 ## Important links
 
-* [erlang-lang Slack channel][1]
+* [Erlang Slack channel][1]
 * [Issue tracker][2]
 * [Nova Forum (questions)][3]
 * Visit Nova's sponsors for expert Nova consulting:
     * [Burbas Consulting](http://burbasconsulting.com)
     * [Widgrens IT](https://widgrensit.com)
 
-[1]: https://github.com/novaframework/nova
+[1]: https://erlef.org/slack-invite/erlanger
 [2]: https://github.com/novaframework/nova/issues
 [3]: https://erlangforums.com/c/erlang-frameworks/nova-forum/65
