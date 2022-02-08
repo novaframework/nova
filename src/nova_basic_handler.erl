@@ -103,7 +103,7 @@ handle_ok({ok, Variables, Options}, {Mod, _Func}, Req) ->
 %% a third argument that is a map with header-fields.
 %%
 %% One can also send in a body as a fourth argument in the tuple. It can either be a binary or
-%% a map. If it's a map it will be concidered a JSON-structure and encoded.
+%% a map. If it's a map it will be considered a JSON-structure and encoded.
 %%
 %% @end
 %%--------------------------------------------------------------------

@@ -22,7 +22,7 @@ A controller can return a set of different values;
 
 `{json, Map}` will return a JSON-object to the user
 
-`{json, StatusCode, HeadersMap, Map}` Same as the above but will now also signal a different HTTP-code aswell as custom headers
+`{json, StatusCode, HeadersMap, Map}` Same as the above but will now also signal a different HTTP-code as well as custom headers
 
 `{ok, Variables}` Will render the template with `Variables`
 
@@ -32,7 +32,7 @@ A controller can return a set of different values;
 
 `{status, StatusCode, ExtraHeaders}` Same as the above but with additional headers
 
-`{redirect, Route}` Returns a 302 togheter with a route to the user
+`{redirect, Route}` Returns a 302 together with a route to the user
 
 *Note; A controller does not need to have a corresponding view.*
 
