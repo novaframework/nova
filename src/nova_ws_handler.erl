@@ -42,7 +42,7 @@ upgrade_ws(Module, Req, State, ControllerData) ->
         {ok, NewControllerData} ->
             {cowboy_websocket, Req, State#{controller_data => NewControllerData}};
         Error ->
-            logger:error(#{msg => "Websocket handler returned unkown result", handler => Module, returned => Error}),
+            logger:error(#{msg => "Websocket handler returned unknown result", handler => Module, returned => Error}),
             nova_router:render_status_page(500, Req)
     end.
 
@@ -130,7 +130,7 @@ invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData})
                     Callback(RetObj, State);
                 {error, not_found} ->
                     logger:error(#{msg => "Websocket handler not found. Check that a handler is
-                                           registred on handle 'ws'",
+                                           registered on handle 'ws'",
                                    controller => Mod, function => Func, return => RetObj}),
                     {stop, State}
             end
