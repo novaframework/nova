@@ -2,6 +2,7 @@
 -export([
          handle_json/3,
          handle_ok/3,
+         handle_view/3,
          handle_status/3,
          handle_redirect/3,
          handle_sendfile/3,
@@ -54,7 +55,8 @@ handle_json({json, JSON}, ModFun, Req = #{method := Method}) ->
 %% @doc
 %% Handler for regular views. This will render a template with given variables.
 %% If not another view is specified in options a view that corresponds to the controller will be
-%% rendered.
+%% rendered. The first element of the returned tuple could be either ok or view - they are
+%% identical in their functionality.
 %%
 %%
 %% -module(my_first_controller).
@@ -92,6 +94,18 @@ handle_ok({ok, Variables, Options}, {Mod, _Func}, Req) ->
         end,
     handle_view(View, Variables, Options, Req).
 
+
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Handler for regular views and uses the ok-handler. For more info see
+%% handle_ok/3.
+%% @end
+%%--------------------------------------------------------------------
+handle_view({view, Variables}, {Mod, Func}, Req) ->
+    handle_ok({ok, Variables}, {Mod, Func}, Req);
+handle_view({view, Variables, Options}, {Mod, Func}, Req) ->
+    handle_ok({ok, Variables, Options}, {Mod, Func}, Req).
 
 %%--------------------------------------------------------------------
 %% @doc
