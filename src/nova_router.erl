@@ -113,7 +113,7 @@ lookup_url(Host, Path, Method, Dispatch) ->
 compile([], Dispatch, _Options) -> Dispatch;
 compile([App|Tl], Dispatch, Options) ->
     %% Fetch the router-module for this application
-    Router = erlang:list_to_atom(erlang:atom_to_list(App) ++ "_router"),
+    Router = erlang:list_to_atom(io_lib:format("~s_router", [App])),
     Env = nova:get_environment(),
 
     %% Ensure that the module is loaded
