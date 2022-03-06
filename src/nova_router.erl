@@ -34,7 +34,7 @@
 -export_type([bindings/0]).
 
 %% This module is also exposing callbacks for routers
--callback routes(Env :: atom()) -> {ok, Routes :: any()}.
+-callback routes(Env :: atom()) -> Routes :: [map()].
 
 
 -spec compile(Apps :: [atom()]) -> host_tree().
@@ -113,7 +113,7 @@ lookup_url(Host, Path, Method, Dispatch) ->
 compile([], Dispatch, _Options) -> Dispatch;
 compile([App|Tl], Dispatch, Options) ->
     %% Fetch the router-module for this application
-    Router = erlang:list_to_atom(erlang:atom_to_list(App) ++ "_router"),
+    Router = erlang:list_to_atom(io_lib:format("~s_router", [App])),
     Env = nova:get_environment(),
 
     %% Ensure that the module is loaded
@@ -244,11 +244,9 @@ parse_url(Host,
     Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, Tree0);
 
-parse_url(Host,
-          [{Path, {Mod, Func}, Options}|Tl],
-          Prefix,
-          Value = #nova_handler_value{app = App, secure = _Secure},
-          Tree) ->
+parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix,
+          Value = #nova_handler_value{app = App, secure = _Secure}, Tree) ->
+
     RealPath = case Path of
                    _ when is_list(Path) -> string:concat(Prefix, Path);
                    _ when is_integer(Path) -> Path;
@@ -277,11 +275,12 @@ parse_url(Host,
           Prefix, #nova_handler_value{app = App, secure = Secure} = Value,
           Tree) ->
      Value0 =  #cowboy_handler_value{
-                                    app = App,
-                                    handler = nova_ws_handler,
-                                    arguments = #{module => Mod},
-                                    plugins = Value#nova_handler_value.plugins,
-                                    secure = Secure},
+                  app = App,
+                  handler = nova_ws_handler,
+                  arguments = #{module => Mod},
+                  plugins = Value#nova_handler_value.plugins,
+                  secure = Secure},
+
     logger:debug(#{"action" => "Adding route", "protocol" => "ws", "route" => Path, "app" => App}),
     RealPath = string:concat(Prefix, Path),
     CompiledPaths = insert(Host, RealPath, '_', Value0, Tree),
@@ -393,6 +392,7 @@ persistent_get(Key, Env) ->
             maps:get(Key, Env)
     end.
 
+-spec routes(Env :: atom()) -> [map()].
 routes(_) ->
  [#{
     routes => [

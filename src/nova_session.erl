@@ -55,7 +55,6 @@
 -spec get(Req :: cowboy_req:req(), Key :: binary()) ->
                  {ok, Value :: binary()} | {error, Reason :: atom()} | no_return().
 get(Req, Key) ->
-    logger:notice(#{action => "Session:get/2 called", req => Req, key => Key}),
     case get_session_id(Req) of
         {ok, SessionId} ->
             Mod = get_session_module(),
@@ -67,7 +66,6 @@ get(Req, Key) ->
 -spec set(Req :: cowboy_req:req(), Key :: binary(), Value :: binary()) ->
                  ok | {error, Reason :: atom()} | no_return().
 set(Req, Key, Value) ->
-    logger:notice(#{acion => "Session:set/3 called", req => Req, key => Key}),
     case get_session_id(Req) of
         {ok, SessionId} ->
             Mod = get_session_module(),

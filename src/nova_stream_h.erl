@@ -25,7 +25,6 @@ init(StreamID, Req, Opts) ->
         case nova:get_env(use_sessions, true) of
             true ->
                 Cookies = cowboy_req:parse_cookies(Req),
-                logger:notice(#{action => "Got cookies", cookies => Cookies}),
                 case lists:keyfind(<<"session_id">>, 1, Cookies) of
                     {_, _} -> Req;
                     _ ->
