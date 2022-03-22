@@ -16,12 +16,12 @@ inventory(tags) -> [url].
 
 url([Url|Variables], _Options) ->
     App = proplists:get_value(application, Variables),
-    NovaEnv = nova:get_env(apps, []),
-    case proplists:get_value(binary_to_atom(App, utf8), NovaEnv) of
+    Apps = nova:get_apps(),
+    case proplists:get_value(binary_to_atom(App, utf8), Apps) of
         undefined ->
             logger:warning(#{msg => "Template could not find application", application => App}),
             <<"#">>;
-        #{prefix := Prefix} ->
+        Prefix ->
             PrefixBin = list_to_binary(Prefix),
             << PrefixBin/binary, Url/binary >>
     end.
