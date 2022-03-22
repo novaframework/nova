@@ -29,6 +29,7 @@
 
 -include_lib("kernel/include/logger.hrl").
 -include_lib("routing_tree/include/routing_tree.hrl").
+
 -include("nova_router.hrl").
 
 -type bindings() :: #{binary() := binary()}.
@@ -42,20 +43,20 @@
 
 -spec compiled_apps() -> [{App :: atom(), Prefix :: list()}].
 compiled_apps() ->
-    persistent_get(?NOVA_APPS, []).
+    persistent_term:get(?NOVA_APPS, []).
 
 -spec compile(Apps :: [atom()]) -> host_tree().
 compile(Apps) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
     Dispatch = compile(Apps, routing_tree:new(#{use_strict => UseStrict, convert_to_binary => true}), #{}),
-    persistent_put(nova_dispatch, Dispatch),
+    persistent_term:put(nova_dispatch, Dispatch),
     Dispatch.
 
 -spec execute(Req, Env :: cowboy_middleware:env()) -> {ok, Req, Env0} | {stop, Req}
                                                           when Req::cowboy_req:req(),
                                                                Env0::cowboy_middleware:env().
 execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
-    Dispatch = persistent_get(nova_dispatch, Env),
+    Dispatch = persistent_term:get(nova_dispatch),
     case routing_tree:lookup(Host, Path, Method, Dispatch) of
         {error, not_found} -> render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
         {ok, Bindings, #nova_handler_value{app = App, module = Module, function = Function,
@@ -106,7 +107,7 @@ lookup_url(Host, Path) ->
     lookup_url(Host, Path, '_').
 
 lookup_url(Host, Path, Method) ->
-    Dispatch = persistent_get(nova_dispatch),
+    Dispatch = persistent_term:get(nova_dispatch),
     lookup_url(Host, Path, Method, Dispatch).
 
 lookup_url(Host, Path, Method, Dispatch) ->
@@ -129,9 +130,10 @@ compile([App|Tl], Dispatch, Options) ->
     {ok, Dispatch1, Options2} = compile_paths(Routes, Dispatch, Options1),
 
     %% Take out the prefix for the app and store it in the persistent store
-    CompiledApps = persistent_get(?NOVA_APPS, []),
+    CompiledApps = persistent_term:get(?NOVA_APPS, []),
     CompiledApps0 = [{App, maps:get_env(prefix, Options, "/")}|CompiledApps],
-    persistent_put(?NOVA_APPS, CompiledApps0),
+
+    persistent_term:put(?NOVA_APPS, CompiledApps0),
 
     compile(Tl, Dispatch1, Options2).
 
@@ -308,7 +310,7 @@ render_status_page(StatusCode, Req) ->
 -spec render_status_page(StatusCode :: integer(), Data :: map(), Req :: cowboy_req:req()) ->
                                 {ok, Req0 :: cowboy_req:req(), Env :: map()}.
 render_status_page(StatusCode, Data, Req) ->
-    Dispatch = persistent_get(nova_dispatch),
+    Dispatch = persistent_term:get(nova_dispatch),
     render_status_page('_', StatusCode, Data, Req, #{dispatch => Dispatch}).
 
 -spec render_status_page(Host :: binary() | atom(),
@@ -317,7 +319,7 @@ render_status_page(StatusCode, Data, Req) ->
                          Req :: cowboy_req:req(),
                          Env :: map()) -> {ok, Req0 :: cowboy_req:req(), Env :: map()}.
 render_status_page(Host, StatusCode, Data, Req, Env) ->
-    Dispatch = persistent_get(nova_dispatch, Env),
+    Dispatch = persistent_term:get(nova_dispatch),
     Env0 =
         case routing_tree:lookup(Host, StatusCode, '_', Dispatch) of
             {error, _} ->
@@ -378,34 +380,6 @@ method_to_binary(trace) -> <<"TRACE">>;
 method_to_binary(patch) -> <<"PATCH">>;
 method_to_binary(_) -> '_'.
 
-
-persistent_put(Key, Value) ->
-    case application:get_env(nova, use_persistent_term, true) of
-        true ->
-            persistent_term:put(Key, Value);
-        _ ->
-            ok
-    end.
-
-persistent_get(Key) ->
-    persistent_get(Key, undefined).
-
-persistent_get(Key, Default) ->
-    case application:get_env(nova, use_persistent_term, true) of
-        true ->
-            persistent_term:get(Key);
-        _ ->
-            logger:warning(#{"reason" => "Called persistent_get/1 without option use_persistent_term set to true"}),
-            throw({unsupported_operation, persistent_get})
-    end.
-
-persistent_get(Key, Env) ->
-    case application:get_env(nova, use_persistent_term, true) of
-        true ->
-            persistent_term:get(Key);
-        _ ->
-            maps:get(Key, Env)
-    end.
 
 -spec routes(Env :: atom()) -> [map()].
 routes(_) ->
