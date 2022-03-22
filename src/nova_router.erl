@@ -14,6 +14,7 @@
 
 %% API
 -export([
+         compiled_apps/0,
          compile/1,
          lookup_url/1,
          lookup_url/2,
@@ -36,6 +37,12 @@
 %% This module is also exposing callbacks for routers
 -callback routes(Env :: atom()) -> Routes :: [map()].
 
+
+-define(NOVA_APPS, nova_apps).
+
+-spec compiled_apps() -> [{App :: atom(), Prefix :: list()}].
+compiled_apps() ->
+    persistent_get(?NOVA_APPS, []).
 
 -spec compile(Apps :: [atom()]) -> host_tree().
 compile(Apps) ->
@@ -115,12 +122,17 @@ compile([App|Tl], Dispatch, Options) ->
     %% Fetch the router-module for this application
     Router = erlang:list_to_atom(io_lib:format("~s_router", [App])),
     Env = nova:get_environment(),
-
     %% Ensure that the module is loaded
     Routes = erlang:apply(Router, routes, [Env]),
     Options1 = Options#{app => App},
 
     {ok, Dispatch1, Options2} = compile_paths(Routes, Dispatch, Options1),
+
+    %% Take out the prefix for the app and store it in the persistent store
+    CompiledApps = persistent_get(?NOVA_APPS, []),
+    CompiledApps0 = [{App, maps:get_env(prefix, Options, "/")}|CompiledApps],
+    persistent_put(?NOVA_APPS, CompiledApps0),
+
     compile(Tl, Dispatch1, Options2).
 
 compile_paths([], Dispatch, Options) -> {ok, Dispatch, Options};
@@ -376,6 +388,9 @@ persistent_put(Key, Value) ->
     end.
 
 persistent_get(Key) ->
+    persistent_get(Key, undefined).
+
+persistent_get(Key, Default) ->
     case application:get_env(nova, use_persistent_term, true) of
         true ->
             persistent_term:get(Key);
