@@ -15,7 +15,6 @@
                  jhn_stdlib,
                  uuid,
                  routing_tree,
-                 erldb,
                  thoas
                 ]},
   {env,[]},
