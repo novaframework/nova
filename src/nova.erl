@@ -7,7 +7,7 @@
 
 -export([
          get_main_app/0,
-         application_loaded/1,
+         get_apps/0,
          get_environment/0,
          get_env/2,
          set_env/2
@@ -27,19 +27,27 @@
 get_main_app() ->
     application:get_env(nova, bootstrap_application).
 
+
 %%--------------------------------------------------------------------
 %% @doc
-%% Checks if a nova application is loaded
+%% Returns a proplist with all nova applications and their prefix. This
+%% function is useful when calulating dynamic routes.
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec application_loaded(Application::atom()) -> boolean().
-application_loaded(Application) ->
-    %% First we need to check which application that is the main one
-    {ok, MainApp} = get_main_app(),
-    lists:any(fun({CompApp, _, _}) -> CompApp == Application end,
-              application:get_env(MainApp, nova_applications, [])).
+-spec get_apps() -> [{App :: atom(), Prefix :: list()}].
+get_apps() ->
+    nova_router:compiled_apps().
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Returns which environment nova is started in. This fetches the
+%% environment-variable in sys.config for Nova and returns the value found.
+%% Defaults to: dev
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec get_environment() -> any().
 get_environment() ->
     application:get_env(nova, environment, dev).
 
