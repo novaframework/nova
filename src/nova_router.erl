@@ -131,7 +131,7 @@ compile([App|Tl], Dispatch, Options) ->
 
     %% Take out the prefix for the app and store it in the persistent store
     CompiledApps = persistent_term:get(?NOVA_APPS, []),
-    CompiledApps0 = [{App, maps:get_env(prefix, Options, "/")}|CompiledApps],
+    CompiledApps0 = [{App, maps:get(prefix, Options, "/")}|CompiledApps],
 
     persistent_term:put(?NOVA_APPS, CompiledApps0),
 
