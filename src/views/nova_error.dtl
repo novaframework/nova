@@ -119,16 +119,16 @@
       <span>
         <h1>{{ title }}</h1>
         {{ message }}
-        {% if stacktrace %}
+        {% if extra_msg %}
         <pre>
-          {% if extra_msg %}
-          {{ extra_msg }}
-          {% endif %}
+          {{ extra_msg|safe }}
+          {% if stacktrace %}
           <code class="erlang">
             {% for error in stacktrace %}
             {{ error }}
             {% endfor %}
           </code>
+          {% endif %}
         </pre>
         {% endif %}
       </span>
