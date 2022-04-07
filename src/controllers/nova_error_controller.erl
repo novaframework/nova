@@ -6,8 +6,6 @@
 
 not_found(Req) ->
     %% Check the accept-headers
-
-
     case cowboy_req:header(<<"accept">>, Req) of
         <<"application/json">> ->
             %% Render a json response
@@ -20,7 +18,7 @@ not_found(Req) ->
                           title => "404 Not found",
                           message => "We could not find the page you were looking for"},
             {ok, Body} = nova_error_dtl:render(Variables),
-            {status, 404, #{<<"content-type">> => <<"application/json">>}, Body}
+            {status, 404, #{<<"content-type">> => <<"text/html">>}, Body}
     end.
 
 server_error(#{crash_info := #{stacktrace := Stacktrace, class := Class, reason := Reason}} = Req) ->
