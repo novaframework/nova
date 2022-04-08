@@ -47,7 +47,7 @@ leave(Channel, Pid) ->
     pg:leave(?SCOPE, Channel, Pid).
 
 %% Broadcast to members
--spec broadcast(Channel :: atom(), Topic :: atom() | binary(), Message :: any()) -> ok.
+-spec broadcast(Channel :: atom(), Topic :: list() | binary(), Message :: any()) -> ok.
 broadcast(Channel, Topic, Message) ->
     Members = get_members(Channel),
     Envelope = create_envelope(Channel, self(), Topic, Message),
@@ -55,7 +55,7 @@ broadcast(Channel, Topic, Message) ->
     ok.
 
 %% Broadcast to processes located on the same node
--spec local_broadcast(Channel :: atom(), Topic :: atom() | binary(), Message :: any()) -> ok.
+-spec local_broadcast(Channel :: atom(), Topic :: list() | binary(), Message :: any()) -> ok.
 local_broadcast(Channel, Topic, Message) ->
     Members = get_local_members(Channel),
     Envelope = create_envelope(Channel, self(), Topic, Message),
