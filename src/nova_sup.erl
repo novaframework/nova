@@ -54,6 +54,8 @@ init([]) ->
 
     Environment = nova:get_environment(),
 
+    nova_channel:start(),
+
     logger:notice(#{msg => "Starting nova", environment => Environment}),
 
     Configuration = application:get_env(nova, cowboy_configuration, #{}),
