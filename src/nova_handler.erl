@@ -50,7 +50,10 @@ execute(Req, Env = #{module := Module, function := Function}) ->
                                            function => Function, return => RetObj})
                     end
             catch Class:Reason:Stacktrace ->
-                    logger:error(#{msg => "Controller crashed", class => Class, reason => Reason, stacktrace => Stacktrace}),
+                    logger:error(#{msg => "Controller crashed",
+                                   class => Class,
+                                   reason => Reason,
+                                   stacktrace => Stacktrace}),
                     terminate(Reason, Req, Module),
                     %% Build the payload object
                     Payload = #{status_code => 500,
@@ -60,13 +63,16 @@ execute(Req, Env = #{module := Module, function := Function}) ->
                     render_response(Req#{crash_info => Payload}, Env, 500)
             end;
         _ ->
-            logger:error(#{msg => "Could not find controller", controller => Module, function => io_lib:format("~s/1", [Function])}),
+            logger:error(#{msg => "Could not find controller",
+                           controller => Module,
+                           function => io_lib:format("~s/1", [Function])}),
             Payload = #{status_code => 500,
                         status => "Problems with application",
                         stacktrace => [{Module, Function, 1}],
                         title => "Woops. It seems like you have a problem with your application!",
-                        extra_msg => "Nova could not find your controller:function. Pleae check your spelling and/or that the module" ++
-                            " have been properly loaded. "
+                        extra_msg => "Nova could not find your controller:function.
+                                      Pleae check your spelling and/or that the module" ++
+                                     " have been properly loaded. "
                        },
             render_response(Req#{crash_info => Payload}, Env, 500)
     end.
