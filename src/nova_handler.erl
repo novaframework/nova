@@ -37,24 +37,43 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
             render_response(Req#{crash_info => Payload}, Env, 500)
     end;
 execute(Req, Env = #{module := Module, function := Function}) ->
-    try erlang:apply(Module, Function, [Req]) of
-        RetObj ->
-            case nova_handlers:get_handler(element(1, RetObj)) of
-                {ok, Callback} ->
-                    {ok, Req0} = Callback(RetObj, {Module, Function}, Req),
-                    render_response(Req0, Env);
-                {error, not_found} ->
-                    logger:error(#{msg => "Controller returned unsupported result", controller => Module,
-                                   function => Function, return => RetObj})
-            end
-    catch Class:Reason:Stacktrace ->
-            logger:error(#{msg => "Controller crashed", class => Class, reason => Reason, stacktrace => Stacktrace}),
-            terminate(Reason, Req, Module),
-            %% Build the payload object
+    case erlang:function_exported(Module, Function, 1) of
+        true ->
+            try erlang:apply(Module, Function, [Req]) of
+                RetObj ->
+                    case nova_handlers:get_handler(element(1, RetObj)) of
+                        {ok, Callback} ->
+                            {ok, Req0} = Callback(RetObj, {Module, Function}, Req),
+                            render_response(Req0, Env);
+                        {error, not_found} ->
+                            logger:error(#{msg => "Controller returned unsupported result", controller => Module,
+                                           function => Function, return => RetObj})
+                    end
+            catch Class:Reason:Stacktrace ->
+                    logger:error(#{msg => "Controller crashed",
+                                   class => Class,
+                                   reason => Reason,
+                                   stacktrace => Stacktrace}),
+                    terminate(Reason, Req, Module),
+                    %% Build the payload object
+                    Payload = #{status_code => 500,
+                                stacktrace => Stacktrace,
+                                class => Class,
+                                reason => Reason},
+                    render_response(Req#{crash_info => Payload}, Env, 500)
+            end;
+        _ ->
+            logger:error(#{msg => "Could not find controller",
+                           controller => Module,
+                           function => io_lib:format("~s/1", [Function])}),
             Payload = #{status_code => 500,
-                        stacktrace => Stacktrace,
-                        class => Class,
-                        reason => Reason},
+                        status => "Problems with application",
+                        stacktrace => [{Module, Function, 1}],
+                        title => "Woops. It seems like you have a problem with your application!",
+                        extra_msg => "Nova could not find your controller:function.
+                                      Pleae check your spelling and/or that the module" ++
+                                     " have been properly loaded. "
+                       },
             render_response(Req#{crash_info => Payload}, Env, 500)
     end.
 
