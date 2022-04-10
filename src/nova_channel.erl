@@ -97,7 +97,7 @@ get_members(Channel) ->
     pg:get_members(?SCOPE, Channel).
 -else.
 get_members(Channel) ->
-    case pg:get_members(?SCOPE, Channel) of
+    case pg2:get_members(?SCOPE, Channel) of
         {error, _} ->
             [];
         Pidlist ->
