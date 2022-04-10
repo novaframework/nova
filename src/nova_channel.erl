@@ -24,7 +24,7 @@
 
 %% Set the correct module to use based on OTP version
 -ifndef(OTP_RELEASE).
--error("Nova only supports Erlang 20 and above").
+ ?error("Nova only supports Erlang 20 and above").
 -endif.
 
 
