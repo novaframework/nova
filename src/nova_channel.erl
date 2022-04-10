@@ -22,29 +22,58 @@
 
 -include("../include/nova_channel.hrl").
 
+%% Set the correct module to use based on OTP version
+-ifndef(OTP_RELEASE).
+-error("Nova only supports Erlang 20 and above").
+-endif.
+
+
 
 %% Start scope
+
+-if(?OTP_RELEASE >= 23).
 -spec start() -> ok.
 start() ->
     pg:start(?SCOPE),
     ok.
+-else.
+start() ->
+    pg2:start(),
+    ok.
+-endif.
 
 %% Joining a channel
 -spec join(Channel :: atom()) -> ok.
 join(Channel) ->
     join(Channel, self()).
 
--spec join(Channel :: atom(), Pid :: pid()) -> ok.
-join(Channel, Pid) when is_pid(Pid) ->
-    pg:join(?SCOPE, Channel, Pid).
-
 -spec leave(Channel :: atom()) -> ok | not_joined.
 leave(Channel) ->
     leave(Channel, self()).
 
+-spec join(Channel :: atom(), Pid :: pid()) -> ok.
+-if(?OTP_RELEASE >= 23).
+join(Channel, Pid) when is_pid(Pid) ->
+    pg:join(?SCOPE, Channel, Pid).
+-else.
+join(Channel, Pid) when is_pid(Pid) ->
+    pg2:create({?SCOPE, Channel}), %% Create this to ensure it exists
+    pg2:join({?SCOPE, Channel}, Pid).
+-endif.
+
 -spec leave(Channel :: atom(), Pid :: pid()) -> ok | not_joined.
+-if(?OTP_RELEASE >= 23).
 leave(Channel, Pid) ->
     pg:leave(?SCOPE, Channel, Pid).
+-else.
+leave(Channel, Pid) ->
+    case pg2:leave({?SCOPE, Channel}, Pid) of
+        {error, _} ->
+            not_joined;
+        _ ->
+            ok
+    end.
+-endif.
 
 %% Broadcast to members
 -spec broadcast(Channel :: atom(), Topic :: list() | binary(), Message :: any()) -> ok.
@@ -63,13 +92,32 @@ local_broadcast(Channel, Topic, Message) ->
     ok.
 
 -spec get_members(Channel :: atom()) -> [pid()].
+-if(?OTP_RELEASE >= 23).
 get_members(Channel) ->
     pg:get_members(?SCOPE, Channel).
+-else.
+get_members(Channel) ->
+    case pg:get_members(?SCOPE, Channel) of
+        {error, _} ->
+            [];
+        Pidlist ->
+            Pidlist
+    end.
+-endif.
 
 -spec get_local_members(Channel :: atom()) -> [pid()].
+-if(?OTP_RELEASE >= 23).
 get_local_members(Channel) ->
     pg:get_local_members(?SCOPE, Channel).
-
+-else.
+get_local_members(Channel) ->
+    case pg2:get_local_members({?SCOPE, Channel}) of
+        {error, _} ->
+            [];
+        Pidlist ->
+            Pidlist
+    end.
+-endif.
 
 create_envelope(Channel, Sender, Topic, Payload) ->
     #nova_channel{channel = Channel,
