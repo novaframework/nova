@@ -5,10 +5,12 @@
          post_request/2,
          plugin_info/0]).
 
+-include_lib("../../include/nova_logger.hrl").
+
 pre_request(Req, _) ->
     UUID = uuid:uuid_to_string(uuid:get_v4()),
     %% Update the loggers metadata with correlation-id
-    logger:update_process_metadata(#{<<"correlation-id">> => UUID}),
+    ?RUN_IF_LOGGER_SUPP(fun() -> logger:update_process_metadata(#{<<"correlation-id">> => UUID}) end),
     Req1 = cowboy_req:set_resp_header(<<"X-Correlation-ID">>, UUID, Req),
     {ok, Req1}.
 

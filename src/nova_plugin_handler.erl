@@ -4,7 +4,8 @@
 -export([
          execute/2
         ]).
--include_lib("kernel/include/logger.hrl").
+
+-include("../include/nova_logger.hrl").
 
 execute(Req = #{plugins := Plugins}, Env = #{plugin_state := pre_request}) ->
     %% This is a post plugin
@@ -31,7 +32,7 @@ run_plugins([{Module, Options}|Tl], Callback, Req, Env) ->
             {stop, Req0}
     catch
         Class:Reason:Stacktrace ->
-            logger:error(#{msg => "Plugin crashed", class => Class, reason => Reason, stacktrace => Stacktrace}),
+            ?LOG_ERROR(#{msg => "Plugin crashed", class => Class, reason => Reason, stacktrace => Stacktrace}),
             Req0 = Req#{crash_info => #{class => Class,
                                         reason => Reason,
                                         stacktrace => Stacktrace}},

@@ -22,15 +22,7 @@
 
 -include("../include/nova_channel.hrl").
 
-%% Set the correct module to use based on OTP version
--ifndef(OTP_RELEASE).
--error("Nova only supports Erlang 20 and above").
--endif.
-
-
-
 %% Start scope
-
 -if(?OTP_RELEASE >= 23).
 -spec start() -> ok.
 start() ->

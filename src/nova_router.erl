@@ -27,7 +27,7 @@
          routes/1
         ]).
 
--include_lib("kernel/include/logger.hrl").
+-include("../include/nova_logger.hrl").
 -include_lib("routing_tree/include/routing_tree.hrl").
 
 -include("nova_router.hrl").
@@ -96,7 +96,7 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
                  }
             };
         Error ->
-            logger:error(#{"reason" => "Unexpected return from routing_tree:lookup/4", "return_object" => Error}),
+            ?LOG_ERROR(#{"reason" => "Unexpected return from routing_tree:lookup/4", "return_object" => Error}),
             render_status_page(Host, 404, #{error => Error}, Req, Env)
     end.
 
@@ -195,7 +195,7 @@ parse_url(Host,
                 case {filelib:is_file(LocalPath), filelib:is_file(PrivPath)} of
                     {false, false} ->
                         %% No dir nor file
-                        logger:warning(#{"reason" => "Could not find local path for the given resource",
+                        ?LOG_WARNING(#{"reason" => "Could not find local path for the given resource",
                                          "local_path" => LocalPath, "remote_path" => RemotePath}),
                         not_found;
                     {true, false} ->
@@ -233,7 +233,7 @@ parse_url(Host,
                 case {filelib:is_file(LocalPath), filelib:is_file(PrivPath)} of
                     {false, false} ->
                         %% No dir nor file
-                        logger:warning(#{"reason" => "Could not find local path for the given resource",
+                        ?LOG_WARNING(#{"reason" => "Could not find local path for the given resource",
                                          "local_path" => LocalPath, "remote_path" => RemotePath}),
                         not_found;
                     {true, false} ->
@@ -254,7 +254,7 @@ parse_url(Host,
                 secure = Secure
                },
 
-    logger:debug(#{"action" => "Adding route", "route" => string:concat(Prefix, RemotePath), "app" => App}),
+    ?LOG_DEBUG(#{"action" => "Adding route", "route" => string:concat(Prefix, RemotePath), "app" => App}),
     Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, Tree0);
 
@@ -280,7 +280,7 @@ parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix,
                                 function = Func
                                }
                       end,
-                  logger:debug(#{"action" => "Adding route", "route" => RealPath, "app" => App}),
+                  ?LOG_DEBUG(#{"action" => "Adding route", "route" => RealPath, "app" => App}),
                   insert(Host, RealPath, BinMethod, Value0, Tree0)
           end, Tree, Methods),
     parse_url(Host, Tl, Prefix, Value, CompiledPaths);
@@ -295,7 +295,7 @@ parse_url(Host,
                   plugins = Value#nova_handler_value.plugins,
                   secure = Secure},
 
-    logger:debug(#{"action" => "Adding route", "protocol" => "ws", "route" => Path, "app" => App}),
+    ?LOG_DEBUG(#{"action" => "Adding route", "protocol" => "ws", "route" => Path, "app" => App}),
     RealPath = string:concat(Prefix, Path),
     CompiledPaths = insert(Host, RealPath, '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, CompiledPaths);
@@ -351,10 +351,10 @@ insert(Host, Path, Combinator, Value, Tree) ->
         Tree0 -> Tree0
     catch
         throw:Exception ->
-            logger:error(#{"reason" => "Error when inserting route", "route" => Path, "combinator" => Combinator}),
+            ?LOG_ERROR(#{"reason" => "Error when inserting route", "route" => Path, "combinator" => Combinator}),
             throw(Exception);
         Type:Exception ->
-            logger:error(#{"reason" => "Unexpected exit", "type" => Type, "exception" => Exception}),
+            ?LOG_ERROR(#{"reason" => "Unexpected exit", "type" => Type, "exception" => Exception}),
             throw(Exception)
     end.
 

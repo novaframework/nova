@@ -1,8 +1,6 @@
 -module(nova_request_plugin).
 -behaviour(nova_plugin).
 
--include_lib("kernel/include/logger.hrl").
-
 -export([
          pre_request/2,
          post_request/2,

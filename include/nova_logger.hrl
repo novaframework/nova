@@ -1,0 +1,23 @@
+-if(?OTP_RELEASE < 23).
+%% Define all the macros
+-define(LOG_EMERGENCY(Metadata), error_logger:error_report(Metadata)).
+-define(LOG_EMERGENCY(Format, Metadata), error_logger:error_report(Format, Metadata)).
+-define(LOG_ALERT(Metadata), error_logger:error_report(Metadata)).
+-define(LOG_ALERT(Format, Metadata), error_logger:error_report(Format, Metadata)).
+-define(LOG_CRITICAL(Metadata), error_logger:error_report(Metadata)).
+-define(LOG_CRITICAL(Format, Metadata), error_logger:error_report(Format, Metadata)).
+-define(LOG_ERROR(Metadata), error_logger:error_report(Metadata)).
+-define(LOG_ERROR(Format, Metadata), error_logger:error_report(Format, Metadata)).
+-define(LOG_WARNING(Metadata), error_logger:warning_report(Metadata)).
+-define(LOG_WARNING(Format, Metadata), error_logger:warning_report(Format, Metadata)).
+-define(LOG_NOTICE(Metadata), error_logger:info_report(Metadata)).
+-define(LOG_NOTICE(Format, Metadata), error_logger:info_report(Format, Metadata)).
+-define(LOG_INFO(Metadata), error_logger:info_report(Metadata)).
+-define(LOG_INFO(Format, Metadata), error_logger:info_report(Format, Metadata)).
+-define(LOG_DEBUG(Metadata), error_logger:info_report(Metadata)).
+-define(LOG_DEBUG(Format, Metadata), error_logger:info_report(Format, Metadata)).
+-define(RUN_IF_LOGGER_SUPP(_Fun), ok).
+-else.
+-include_lib("kernel/include/logger.hrl").
+-define(RUN_IF_LOGGER_SUPP(Fun), Fun()).
+-endif.

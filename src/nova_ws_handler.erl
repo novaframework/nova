@@ -13,11 +13,7 @@
          websocket_info/2
         ]).
 
--include_lib("kernel/include/logger.hrl").
-
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
--endif.
+-include("../include/nova_logger.hrl").
 
 -type nova_ws_state() :: #{controller_data := map(),
                            mod := atom(),
@@ -42,7 +38,7 @@ upgrade_ws(Module, Req, State, ControllerData) ->
         {ok, NewControllerData} ->
             {cowboy_websocket, Req, State#{controller_data => NewControllerData}};
         Error ->
-            logger:error(#{msg => "Websocket handler returned unknown result", handler => Module, returned => Error}),
+            ?LOG_ERROR(#{msg => "Websocket handler returned unknown result", handler => Module, returned => Error}),
             nova_router:render_status_page(500, Req)
     end.
 
@@ -78,7 +74,7 @@ terminate(Reason, PartialReq, State = #{controller_data := ControllerData, mod :
             ok
     end;
 terminate(Reason, PartialReq, State) ->
-    logger:error(#{msg => "Terminate called", reason => Reason, partial_req => PartialReq, state => State}),
+    ?LOG_ERROR(#{msg => "Terminate called", reason => Reason, partial_req => PartialReq, state => State}),
     ok.
 
 
@@ -111,7 +107,7 @@ handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData, plugins
                     end
             end;
         {stop, _} = Stop ->
-            logger:warning(#{msg => "Got stop signal", signal => Stop}),
+            ?LOG_WARNING(#{msg => "Got stop signal", signal => Stop}),
             Stop
     end;
 handle_ws(Mod, Func, Args, State) ->
@@ -129,13 +125,13 @@ invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData})
                 {ok, Callback} ->
                     Callback(RetObj, State);
                 {error, not_found} ->
-                    logger:error(#{msg => "Websocket handler not found. Check that a handler is
+                    ?LOG_ERROR(#{msg => "Websocket handler not found. Check that a handler is
                                            registered on handle 'ws'",
                                    controller => Mod, function => Func, return => RetObj}),
                     {stop, State}
             end
     catch Class:Reason:Stacktrace ->
-            logger:error(#{msg => "Controller crashed", class => Class,
+            ?LOG_ERROR(#{msg => "Controller crashed", class => Class,
                            reason => Reason, stacktrace => Stacktrace}),
             {stop, State}
     end.
@@ -156,16 +152,17 @@ run_plugins([{Module, Options}|Tl], Callback, ControllerState, State) ->
         {break, State0} ->
             {ok, State0};
         {error, Reason} ->
-            logger:error(#{msg => "Plugin returned error", plugin => Module, function => Callback, reason => Reason}),
+            ?LOG_ERROR(#{msg => "Plugin returned error", plugin => Module, function => Callback, reason => Reason}),
             {stop, State}
     catch
         Class:Reason:Stacktrace ->
-            logger:error(#{msg => "Plugin crashed", class => Class, reason => Reason, stacktrace => Stacktrace}),
+            ?LOG_ERROR(#{msg => "Plugin crashed", class => Class, reason => Reason, stacktrace => Stacktrace}),
             {stop, State}
     end.
 
 
 
 -ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
 
 -endif.

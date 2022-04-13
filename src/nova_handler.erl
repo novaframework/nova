@@ -7,7 +7,7 @@
          terminate/3
         ]).
 
--include_lib("kernel/include/logger.hrl").
+-include("../include/nova_logger.hrl").
 -include("nova_router.hrl").
 
 -callback init(Req, any()) -> {ok | module(), Req, any()}
@@ -33,7 +33,7 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
                         stacktrace => Stacktrace,
                         class => Class,
                         reason => Reason},
-            logger:error(#{msg => "Controller crashed", class => Class, reason => Reason, stacktrace => Stacktrace}),
+            ?LOG_ERROR(#{msg => "Controller crashed", class => Class, reason => Reason, stacktrace => Stacktrace}),
             render_response(Req#{crash_info => Payload}, Env, 500)
     end;
 execute(Req, Env = #{module := Module, function := Function}) ->
@@ -46,14 +46,14 @@ execute(Req, Env = #{module := Module, function := Function}) ->
                             {ok, Req0} = Callback(RetObj, {Module, Function}, Req),
                             render_response(Req0, Env);
                         {error, not_found} ->
-                            logger:error(#{msg => "Controller returned unsupported result", controller => Module,
-                                           function => Function, return => RetObj})
+                            ?LOG_ERROR(#{msg => "Controller returned unsupported result", controller => Module,
+                                         function => Function, return => RetObj})
                     end
             catch Class:Reason:Stacktrace ->
-                    logger:error(#{msg => "Controller crashed",
-                                   class => Class,
-                                   reason => Reason,
-                                   stacktrace => Stacktrace}),
+                    ?LOG_ERROR(#{msg => "Controller crashed",
+                                 class => Class,
+                                 reason => Reason,
+                                 stacktrace => Stacktrace}),
                     terminate(Reason, Req, Module),
                     %% Build the payload object
                     Payload = #{status_code => 500,
@@ -63,9 +63,9 @@ execute(Req, Env = #{module := Module, function := Function}) ->
                     render_response(Req#{crash_info => Payload}, Env, 500)
             end;
         _ ->
-            logger:error(#{msg => "Could not find controller",
-                           controller => Module,
-                           function => io_lib:format("~s/1", [Function])}),
+            ?LOG_ERROR(#{msg => "Could not find controller",
+                         controller => Module,
+                         function => io_lib:format("~s/1", [Function])}),
             Payload = #{status_code => 500,
                         status => "Problems with application",
                         stacktrace => [{Module, Function, 1}],

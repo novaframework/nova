@@ -10,7 +10,7 @@
          handle_ws/2
         ]).
 
--include_lib("kernel/include/logger.hrl").
+-include("../include/nova_logger.hrl").
 
 -type mod_fun() :: {Module :: atom(), Function :: atom()} | undefined.
 -type erlydtl_vars() :: map() | [{Key :: atom() | binary() | string(), Value :: any()}].
@@ -195,7 +195,7 @@ handle_websocket({websocket, ControllerData}, {Module, _Fun}, Req) ->
         {ok, NewControllerData} ->
             {cowboy_websocket, Req#{controller_data => NewControllerData}, #{}};
         Error ->
-            logger:error(#{msg => "Handler returned unsupported result", handler => Module, return_obj => Error}),
+            ?LOG_ERROR(#{msg => "Handler returned unsupported result", handler => Module, return_obj => Error}),
             %% Render 500
             {ok, Req}
     end.
@@ -253,7 +253,7 @@ render_dtl(View, Variables, Options) ->
             case code:load_file(View) of
                 {error, Reason} ->
                     %% Cast a warning since the module could not be found
-                    logger:error(#{msg => "Nova could not render template", template => View, reason => Reason}),
+                    ?LOG_ERROR(#{msg => "Nova could not render template", template => View, reason => Reason}),
                     throw({error, template_not_found});
                 _ ->
                     View:render(Variables, Options)
