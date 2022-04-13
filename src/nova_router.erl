@@ -27,9 +27,8 @@
          routes/1
         ]).
 
--include("../include/nova_logger.hrl").
 -include_lib("routing_tree/include/routing_tree.hrl").
-
+-include("../include/nova_logger.hrl").
 -include("nova_router.hrl").
 
 -type bindings() :: #{binary() := binary()}.
