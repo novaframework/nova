@@ -7,6 +7,7 @@
          terminate/3
         ]).
 
+-include("../include/nova_comp.hrl").
 -include("../include/nova_logger.hrl").
 -include("nova_router.hrl").
 
@@ -28,7 +29,8 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
             erlang:apply(Mod, upgrade, [Req2, Env, Handler, State]);
         {Mod, Req2, State, Opts} ->
             erlang:apply(Mod, upgrade, [Req2, Env, Handler, State, Opts])
-    catch Class:Reason:Stacktrace ->
+    catch
+        ?STACKTRACE(Class, Reason, Stacktrace)
             Payload = #{status_code => 500,
                         stacktrace => Stacktrace,
                         class => Class,
@@ -49,7 +51,8 @@ execute(Req, Env = #{module := Module, function := Function}) ->
                             ?LOG_ERROR(#{msg => "Controller returned unsupported result", controller => Module,
                                          function => Function, return => RetObj})
                     end
-            catch Class:Reason:Stacktrace ->
+            catch
+                ?STACKTRACE(Class, Reason, Stacktrace)
                     ?LOG_ERROR(#{msg => "Controller crashed",
                                  class => Class,
                                  reason => Reason,
