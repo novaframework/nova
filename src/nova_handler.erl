@@ -39,8 +39,9 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
             render_response(Req#{crash_info => Payload}, Env, 500)
     end;
 execute(Req, Env = #{module := Module, function := Function}) ->
-    case erlang:function_exported(Module, Function, 1) of
-        true ->
+    %% Ensure that the module exists and have the correct function exported
+    case lists:search(fun({Export, Arity}) -> Export == Function andalso Arity == 1 end, erlang:apply(Module, module_info, [exports])) of
+        {value, _} ->
             try erlang:apply(Module, Function, [Req]) of
                 RetObj ->
                     case nova_handlers:get_handler(element(1, RetObj)) of
