@@ -31,7 +31,7 @@ server_error(#{crash_info := #{status_code := StatusCode} = CrashInfo} = Req) ->
         true ->
             case cowboy_req:header(<<"accept">>, Req) of
                 <<"application/json">> ->
-                    {ok, JsonLib} = nova:get_env(json_lib, thoas),
+                    JsonLib = nova:get_env(json_lib, thoas),
                     Json = erlang:apply(JsonLib, encode, [Variables]),
                     {status, StatusCode, #{<<"content-type">> => <<"application/json">>}, Json};
                 _ ->
