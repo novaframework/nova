@@ -6,5 +6,5 @@
 -if(?OTP_RELEASE >= 21).
 -define(STACKTRACE(Class, Exception, Stacktrace), Class:Exception:Stacktrace ->).
 -else.
--define(STACKTRACE(Class, Exception, Stacktrace), Class:Exception -> Stacktrace = erlang:get_stacktrace()).
+-define(STACKTRACE(Class, Exception, Stacktrace), Class:Exception -> Stacktrace = erlang:get_stacktrace(), ).
 -endif.
