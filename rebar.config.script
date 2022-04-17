@@ -1,3 +1,9 @@
+Config = case file:consult(filename:join([filename:dirname(SCRIPT), "rebar.config"])) of
+             {ok, Terms} ->
+                 Terms;
+             _ ->
+                 []
+         end,
 
 Deps = proplists:get_value(deps, Config),
 
@@ -15,4 +21,4 @@ Deps0 = case Release of
                              end, Deps)
         end,
 
-[Deps0|proplists:delete(deps, Config)].
+lists:keystore(deps, 1, Config, {deps, Deps0}).
