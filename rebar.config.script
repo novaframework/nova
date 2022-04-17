@@ -1,0 +1,18 @@
+
+Deps = proplists:get_value(deps, Config),
+
+Release = erlang:system_info(otp_release),
+
+Deps0 = case Release of
+            _ when Release > "22" ->
+                Deps;
+            _ ->
+                %% Filter out thoas since we already have jhn_stdlib
+                lists:filter(fun({thoas, _}) ->
+                                     true;
+                                (_) ->
+                                     false
+                             end, Deps)
+        end,
+
+[Deps0|proplists:delete(deps, Config)].
