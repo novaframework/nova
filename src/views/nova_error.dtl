@@ -124,8 +124,8 @@
           {{ extra_msg|safe }}
           {% if stacktrace %}
           <code class="erlang">
-            {% for error in stacktrace %}
-            {{ error }}
+            {% for s in stacktrace %}
+            {{ s.module }}:{{ s.function }}/{{ s.arity }} ({{ s.file }}:{{ s.line }})
             {% endfor %}
           </code>
           {% endif %}
