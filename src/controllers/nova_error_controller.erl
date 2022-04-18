@@ -9,7 +9,7 @@ not_found(Req) ->
     case cowboy_req:header(<<"accept">>, Req) of
         <<"application/json">> ->
             %% Render a json response
-            {ok, JsonLib} = nova:get_env(json_lib, thoas),
+            JsonLib = nova:get_env(json_lib, thoas),
             Json = erlang:apply(JsonLib, encode, [#{message => "Resource not found"}]),
             {status, 404, #{<<"content-type">> => <<"application/json">>}, Json};
         _ ->
@@ -53,7 +53,7 @@ server_error(#{crash_info := #{stacktrace := Stacktrace, class := Class, reason 
             %% We do show a proper error response
             case cowboy_req:header(<<"accept">>, Req) of
                 <<"application/json">> ->
-                    {ok, JsonLib} = nova:get_env(json_lib, thoas),
+                    JsonLib = nova:get_env(json_lib, thoas),
                     Json = erlang:apply(JsonLib, encode, [Variables]),
                     {status, 500, #{<<"content-type">> => <<"application/json">>}, Json};
                 _ ->
