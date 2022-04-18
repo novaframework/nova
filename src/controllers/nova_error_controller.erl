@@ -26,7 +26,7 @@ server_error(#{crash_info := #{status_code := StatusCode} = CrashInfo} = Req) ->
                   title => maps:get(title, CrashInfo, undefined),
                   message => maps:get(message, CrashInfo, undefined),
                   extra_msg => maps:get(extra_msg, CrashInfo, undefined),
-                  stacktrace => maps:get(stacktrace, CrashInfo, undefined)},
+                  stacktrace => format_stacktrace(maps:get(stacktrace, CrashInfo, []))},
     case application:get_env(nova, render_error_pages, true) of
         true ->
             case cowboy_req:header(<<"accept">>, Req) of
@@ -46,7 +46,7 @@ server_error(#{crash_info := #{stacktrace := Stacktrace, class := Class, reason 
                   title => "500 Internal Server Error",
                   message => "Something internal crashed. Please take a look!",
                   extra_msg => io_lib:format("Class: ~p<br /> Reason: ~p", [Class, Reason]),
-                  stacktrace => Stacktrace},
+                  stacktrace => format_stacktrace(Stacktrace)},
 
     case nova:get_environment() of
         dev ->
@@ -63,3 +63,15 @@ server_error(#{crash_info := #{stacktrace := Stacktrace, class := Class, reason 
         _ ->
             {status, 500}
     end.
+
+
+format_stacktrace([]) -> [];
+format_stacktrace([{Mod, Func, Arity, [{file, File}, {line, Line}]}|Tl]) ->
+    [#{module => erlang:atom_to_binary(Mod, utf8),
+       function => erlang:atom_to_binary(Func, utf8),
+       arity => Arity,
+       file => erlang:list_to_binary(File),
+       line => Line}|format_stacktrace(Tl)];
+format_stacktrace([Hd|Tl]) ->
+    logger:warning("Could not format stacktrace line: ~p", [Hd]),
+    format_stacktrace(Tl).
