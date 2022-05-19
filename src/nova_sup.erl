@@ -106,6 +106,9 @@ setup_cowboy(Configuration) ->
             ?LOG_ERROR(#{msg => "Cowboy could not start", reason => Error})
     end.
 
+-spec start_cowboy(Configuration :: map()) ->
+          {ok, BootstrapApp :: atom(), Host :: binary(), Port :: integer()} |
+          {error, Reason :: any()}.
 start_cowboy(Configuration) ->
     Middlewares = [
                    nova_router, %% Lookup routes
