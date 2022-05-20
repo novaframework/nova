@@ -9,7 +9,7 @@ Deps = proplists:get_value(deps, Config),
 Plugins = proplists:get_value(plugins, Config),
 
 Release = erlang:system_info(otp_release),
-
+io:format("Release: ~p~n", [Release]),
 {Deps0, Plugins0} =
   case Release of
       _ when Release > "22" ->
@@ -23,6 +23,7 @@ Release = erlang:system_info(otp_release),
                         end, Deps),
            lists:delete(rebar3_ex_doc, Plugins)}
   end,
-
+io:format("deps0: ~p~n", [Deps0]),
 L0 = lists:keystore(deps, 1, Config, {deps, Deps0}),
+io:format("L0: ~p~n", [L0]),
 lists:keystore(plugins, 1, L0, {plugins, Plugins0}).
