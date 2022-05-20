@@ -107,8 +107,8 @@ setup_cowboy(Configuration) ->
     end.
 
 -spec start_cowboy(Configuration :: map()) ->
-          {ok, BootstrapApp :: atom(), Host :: string() | {integer(), integer(), integer(), integer()}, Port :: integer()} |
-          {error, Reason :: any()}.
+          {ok, BootstrapApp :: atom(), Host :: string() | {integer(), integer(), integer(), integer()},
+           Port :: integer()} | {error, Reason :: any()}.
 start_cowboy(Configuration) ->
     Middlewares = [
                    nova_router, %% Lookup routes

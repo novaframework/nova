@@ -40,7 +40,8 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
     end;
 execute(Req, Env = #{module := Module, function := Function}) ->
     %% Ensure that the module exists and have the correct function exported
-    case lists:search(fun({Export, Arity}) -> Export == Function andalso Arity == 1 end, erlang:apply(Module, module_info, [exports])) of
+    case lists:search(fun({Export, Arity}) -> Export == Function andalso Arity == 1 end,
+                      erlang:apply(Module, module_info, [exports])) of
         {value, _} ->
             try erlang:apply(Module, Function, [Req]) of
                 RetObj ->
