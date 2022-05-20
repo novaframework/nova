@@ -1,4 +1,4 @@
-Config = case file:consult(filename:join([filename:dirname(SCRIPT), "rebar.config"])) of
+        Config = case file:consult(filename:join([filename:dirname(SCRIPT), "rebar.config"])) of
              {ok, Terms} ->
                  Terms;
              _ ->
@@ -17,9 +17,9 @@ Release = erlang:system_info(otp_release),
       _ ->
           %% Filter out thoas since we already have jhn_stdlib
           {lists:filter(fun({thoas, _}) ->
-                                true;
+                                false;
                            (_) ->
-                                false
+                                true
                         end, Deps),
            lists:delete(rebar3_ex_doc, Plugins)}
   end,
