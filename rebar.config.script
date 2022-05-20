@@ -9,7 +9,7 @@ Deps = proplists:get_value(deps, Config),
 Plugins = proplists:get_value(plugins, Config),
 
 Release = erlang:system_info(otp_release),
-
+io:format("Release: ~p~n", [Release]),
 {Deps0, Plugins0} =
   case Release of
       _ when Release > "22" ->
