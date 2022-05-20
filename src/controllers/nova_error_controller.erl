@@ -9,7 +9,7 @@ not_found(Req) ->
     case cowboy_req:header(<<"accept">>, Req) of
         <<"application/json">> ->
             %% Render a json response
-            {ok, JsonLib} = nova:get_env(json_lib, thoas),
+            JsonLib = nova:get_env(json_lib, thoas),
             Json = erlang:apply(JsonLib, encode, [#{message => "Resource not found"}]),
             {status, 404, #{<<"content-type">> => <<"application/json">>}, Json};
         _ ->
@@ -26,12 +26,12 @@ server_error(#{crash_info := #{status_code := StatusCode} = CrashInfo} = Req) ->
                   title => maps:get(title, CrashInfo, undefined),
                   message => maps:get(message, CrashInfo, undefined),
                   extra_msg => maps:get(extra_msg, CrashInfo, undefined),
-                  stacktrace => maps:get(stacktrace, CrashInfo, undefined)},
+                  stacktrace => format_stacktrace(maps:get(stacktrace, CrashInfo, []))},
     case application:get_env(nova, render_error_pages, true) of
         true ->
             case cowboy_req:header(<<"accept">>, Req) of
                 <<"application/json">> ->
-                    {ok, JsonLib} = nova:get_env(json_lib, thoas),
+                    JsonLib = nova:get_env(json_lib, thoas),
                     Json = erlang:apply(JsonLib, encode, [Variables]),
                     {status, StatusCode, #{<<"content-type">> => <<"application/json">>}, Json};
                 _ ->
@@ -46,14 +46,14 @@ server_error(#{crash_info := #{stacktrace := Stacktrace, class := Class, reason 
                   title => "500 Internal Server Error",
                   message => "Something internal crashed. Please take a look!",
                   extra_msg => io_lib:format("Class: ~p<br /> Reason: ~p", [Class, Reason]),
-                  stacktrace => Stacktrace},
+                  stacktrace => format_stacktrace(Stacktrace)},
 
     case nova:get_environment() of
         dev ->
             %% We do show a proper error response
             case cowboy_req:header(<<"accept">>, Req) of
                 <<"application/json">> ->
-                    {ok, JsonLib} = nova:get_env(json_lib, thoas),
+                    JsonLib = nova:get_env(json_lib, thoas),
                     Json = erlang:apply(JsonLib, encode, [Variables]),
                     {status, 500, #{<<"content-type">> => <<"application/json">>}, Json};
                 _ ->
@@ -63,3 +63,15 @@ server_error(#{crash_info := #{stacktrace := Stacktrace, class := Class, reason 
         _ ->
             {status, 500}
     end.
+
+
+format_stacktrace([]) -> [];
+format_stacktrace([{Mod, Func, Arity, [{file, File}, {line, Line}]}|Tl]) ->
+    [#{module => erlang:atom_to_binary(Mod, utf8),
+       function => erlang:atom_to_binary(Func, utf8),
+       arity => Arity,
+       file => erlang:list_to_binary(File),
+       line => Line}|format_stacktrace(Tl)];
+format_stacktrace([Hd|Tl]) ->
+    logger:warning("Could not format stacktrace line: ~p", [Hd]),
+    format_stacktrace(Tl).
