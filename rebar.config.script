@@ -23,6 +23,6 @@ io:format("Release: ~p~n", [Release]),
                         end, Deps),
            lists:delete(rebar3_ex_doc, Plugins)}
   end,
-
+io:format("deps0: ~p~n", [Deps0]),
 L0 = lists:keystore(deps, 1, Config, {deps, Deps0}),
 lists:keystore(plugins, 1, L0, {plugins, Plugins0}).
