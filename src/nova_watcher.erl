@@ -1,6 +1,5 @@
 %%%-------------------------------------------------------------------
 %%% @author Niclas Axelsson <niclas@burbas.se>
-%%% @copyright (C) 2021, Niclas Axelsson
 %%% @doc
 %%%
 %%% @end
@@ -31,7 +30,7 @@
          format_status/2
         ]).
 
--include_lib("kernel/include/logger.hrl").
+-include("../include/nova_logger.hrl").
 
 -define(SERVER, ?MODULE).
 
@@ -110,7 +109,7 @@ init([]) ->
 handle_call(stop, _From, State) ->
     {stop, normal, ok, State};
 handle_call(Request, From, State) ->
-    logger:error(#{msg => "Unknown call", request => Request, from => From}),
+    ?LOG_ERROR(#{msg => "Unknown call", request => Request, from => From}),
     {reply, ok, State}.
 
 %%--------------------------------------------------------------------
@@ -137,7 +136,7 @@ handle_cast({async, Application, Cmd, Args, Options}, State = #state{process_ref
     file:set_cwd(Workdir),
     ArgList = string:join(Args, " "),
     Port = erlang:open_port({spawn, Cmd ++ " " ++ ArgList}, []),
-    logger:notice(#{action => "Started async command", command => Cmd, arguments => ArgList}),
+    ?LOG_NOTICE(#{action => "Started async command", command => Cmd, arguments => ArgList}),
     {noreply, State#state{process_refs = [Port|ProcessRefs]}};
 handle_cast(_Request, State) ->
     {noreply, State}.
@@ -154,7 +153,7 @@ handle_cast(_Request, State) ->
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: normal | term(), NewState :: term()}.
 handle_info({ProcessRef, {data, Data}}, State) ->
-    logger:debug(#{action => "Received data from async command", data => Data, cmd_pid => ProcessRef}),
+    ?LOG_DEBUG(#{action => "Received data from async command", data => Data, cmd_pid => ProcessRef}),
     {noreply, State};
 handle_info({'EXIT', Ref, Reason}, State = #state{process_refs = Refs}) ->
     %% Remove the port from our list
@@ -163,7 +162,7 @@ handle_info({'EXIT', Ref, Reason}, State = #state{process_refs = Refs}) ->
         normal ->
             ok;
         _ ->
-            logger:warning(#{action => "Process exited unexpectedly", reason => Reason})
+            ?LOG_WARNING(#{action => "Process exited unexpectedly", reason => Reason})
     end,
     {noreply, State#state{process_refs = Refs2}};
 handle_info(_Info, State) ->

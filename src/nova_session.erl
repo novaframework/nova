@@ -13,9 +13,7 @@
          generate_session_id/0
         ]).
 
--include_lib("kernel/include/logger.hrl").
-
-
+-include("../include/nova_logger.hrl").
 
 %%%===================================================================
 %%% Callbacks
@@ -120,7 +118,7 @@ get_session_id(Req) ->
                     {ok, SessionId}
             end;
         _ ->
-            logger:error(#{msg => "Session called but 'use_session' option is set to false"}),
+            ?LOG_ERROR(#{msg => "Session called but 'use_session' option is set to false"}),
             throw({nova_session, unsupported_session_used})
     end.
 

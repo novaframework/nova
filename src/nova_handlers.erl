@@ -58,7 +58,7 @@
          format_status/2
         ]).
 
--include_lib("kernel/include/logger.hrl").
+-include("../include/nova_logger.hrl").
 
 -define(SERVER, ?MODULE).
 
@@ -174,7 +174,7 @@ init([]) ->
                          {stop, Reason :: term(), NewState :: term()}.
 handle_call({unregister_handler, Handle}, _From, State) ->
     ets:delete(?HANDLERS_TABLE, Handle),
-    logger:debug(#{action => "Removed handler", handler => Handle}),
+    ?LOG_DEBUG(#{action => "Removed handler", handler => Handle}),
     {reply, ok, State};
 
 handle_call(_Request, _From, State) ->
@@ -200,11 +200,11 @@ handle_cast({register_handler, Handle, Callback}, State) ->
         end,
     case ets:lookup(?HANDLERS_TABLE, Handle) of
         [] ->
-            logger:debug(#{action => "Registered handler", handler => Handle}),
+            ?LOG_DEBUG(#{action => "Registered handler", handler => Handle}),
             ets:insert(?HANDLERS_TABLE, {Handle, Callback0}),
             {noreply, State};
         _ ->
-            logger:error(#{msg => "Another handler is already registered on that name", handler => Handle}),
+            ?LOG_ERROR(#{msg => "Another handler is already registered on that name", handler => Handle}),
             {noreply, State}
     end;
 handle_cast(_Request, State) ->

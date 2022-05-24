@@ -8,8 +8,6 @@
 
 -behaviour(application).
 
--include_lib("kernel/include/logger.hrl").
-
 %% Application callbacks
 -export([start/2, stop/1]).
 

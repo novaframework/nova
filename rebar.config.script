@@ -1,0 +1,22 @@
+        Config = case file:consult(filename:join([filename:dirname(SCRIPT), "rebar.config"])) of
+             {ok, Terms} ->
+                 Terms;
+             _ ->
+                 []
+         end,
+
+Deps = proplists:get_value(deps, Config),
+Plugins = proplists:get_value(plugins, Config),
+
+Release = erlang:system_info(otp_release),
+{Deps0, Plugins0} =
+  case Release of
+      _ when Release > "22" ->
+          {Deps, Plugins};
+      _ ->
+          %% Filter out thoas since we already have jhn_stdlib
+          {Deps,
+           lists:delete(rebar3_ex_doc, Plugins)}
+  end,
+L0 = lists:keystore(deps, 1, Config, {deps, Deps0}),
+lists:keystore(plugins, 1, L0, {plugins, Plugins0}).
