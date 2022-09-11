@@ -26,3 +26,46 @@ plugin_info() ->
 ```
 
 This plugin injects a UUID into the headers.
+
+
+Adding a plugin
+
+Example:
+A good example of a very useful plugin is the `decode_json_body` one. When we are developing a HTTP web api using json as the data format, we need the framework to
+decode our message so that we can process it.
+We can add this plugin by editing the  `rebar.config` file like below:
+
+
+**rebar.config**
+
+
+ ```
+     {nova, [
+         {environment, dev},
+         {cowboy_configuration, #{
+                                  port => 8080
+                                 }},
+         {dev_mode, true},
+         {bootstrap_application, chatapp}, 
+         {plugins, [
+                    {pre_request, nova_request_plugin, #{parse_bindings => true}},
+                    {pre_request, nova_request_plugin, #{decode_json_body => true}} -- here
+                   ]}
+        ]}
+ ```
+ We have added our plugin in the `plugins` section. As we can see this is a `pre_request` plugin since it processes and decodes the message to json format 
+ before we can actually use it in our nova application endpoints.
+
+Usage:
+
+**controller**
+
+```
+-module(test_controller).
+-behaviour(nova_router).
+-export([increment/1]).
+
+increment(#{json := #{<<"id">> := Id, <<"value">> := Value}})->
+    {json,200,#{},#{<<"id">> => Id , <<"received">> => Value, <<"increment">> => Value+1}}.
+
+```
