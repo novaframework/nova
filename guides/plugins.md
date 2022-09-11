@@ -26,3 +26,23 @@ plugin_info() ->
 ```
 
 This plugin injects a UUID into the headers.
+
+A good example of a very useful plugin is the decode_json_body.When we are developing a HTTP web api  using json as the data format, we need the framework to
+decode our message so that we can process it.
+We add this plugin by editing the  `rebar.config` file like below:
+
+ ```
+     {nova, [
+         {environment, dev},
+         {cowboy_configuration, #{
+                                  port => 8080
+                                 }},
+         {dev_mode, true},
+         {bootstrap_application, chatapp}, 
+         {plugins, [
+                    {pre_request, nova_request_plugin, #{parse_bindings => true}},
+                    {pre_request, nova_request_plugin, #{decode_json_body => true}} -- here
+                   ]}
+        ]}
+ ```
+ We have added our plugin in the `plugins` section.
