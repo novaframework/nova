@@ -1,7 +1,7 @@
 %%%-------------------------------------------------------------------
 %%% @author Niclas Axelsson <niclas@burbas.se>
 %%% @doc
-%%% Channels is a pubsub system for Nova. It uses the `pg` module.
+%%% Channels is a pubsub system for Nova. It uses the pg module.
 %%% @end
 %%% Created :  8 Apr 2022 by Niclas Axelsson <niclas@burbas.se>
 %%%-------------------------------------------------------------------

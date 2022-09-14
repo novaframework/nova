@@ -46,14 +46,14 @@ We can add this plugin by editing the  `rebar.config` file like below:
                                   port => 8080
                                  }},
          {dev_mode, true},
-         {bootstrap_application, chatapp}, 
+         {bootstrap_application, chatapp},
          {plugins, [
-                    {pre_request, nova_request_plugin, #{parse_bindings => true}},
-                    {pre_request, nova_request_plugin, #{decode_json_body => true}} -- here
+                    {pre_request, nova_request_plugin, #{parse_bindings => true,
+                                                         decode_json_body => true}}
                    ]}
         ]}
  ```
- We have added our plugin in the `plugins` section. As we can see this is a `pre_request` plugin since it processes and decodes the message to json format 
+ We have added our plugin in the `plugins` section. As we can see this is a `pre_request` plugin since it processes and decodes the message to json format
  before we can actually use it in our nova application endpoints.
 
 Usage:
