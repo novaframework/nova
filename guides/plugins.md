@@ -31,12 +31,11 @@ This plugin injects a UUID into the headers.
 Adding a plugin
 
 Example:
-A good example of a very useful plugin is the `decode_json_body` one. When we are developing a HTTP web api using json as the data format, we need the framework to
-decode our message so that we can process it.
-We can add this plugin by editing the  `rebar.config` file like below:
+A good example of a very useful plugin is the `nova_request_plugin` one. When we are developing a HTTP web api using json as the data format, we need the framework to
+decode our message so that we can process it. To do that we need to add `decode_json_body => true` into the options field in our `sys.config`.
 
 
-**rebar.config**
+**sys.config**
 
 
  ```
@@ -62,10 +61,9 @@ Usage:
 
 ```
 -module(test_controller).
--behaviour(nova_router).
 -export([increment/1]).
 
-increment(#{json := #{<<"id">> := Id, <<"value">> := Value}})->
+increment(#{<<"json">> := #{<<"id">> := Id, <<"value">> := Value}})->
     {json,200,#{},#{<<"id">> => Id , <<"received">> => Value, <<"increment">> => Value+1}}.
 
 ```
