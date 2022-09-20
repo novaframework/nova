@@ -27,7 +27,7 @@
 -define(TABLE, nova_session_ets_entries).
 -define(CHANNEL, '__sessions').
 
--include("../include/nova_channel.hrl").
+-include("../include/nova_pubsub.hrl").
 
 -record(state, {}).
 
@@ -54,15 +54,15 @@ get_value(SessionId, Key) ->
 
 -spec set_value(SessionId :: binary(), Key :: binary(), Value :: binary()) -> ok | {error, Reason :: term()}.
 set_value(SessionId, Key, Value) ->
-    nova_channel:broadcast(?CHANNEL, "set_value", {SessionId, Key, Value}).
+    nova_pubsub:broadcast(?CHANNEL, "set_value", {SessionId, Key, Value}).
 
 -spec delete_value(SessionId :: binary()) -> ok | {error, Reason :: term()}.
 delete_value(SessionId) ->
-    nova_channel:broadcast(?CHANNEL, "delete_value", SessionId).
+    nova_pubsub:broadcast(?CHANNEL, "delete_value", SessionId).
 
 -spec delete_value(SessionId :: binary(), Key :: binary()) -> ok | {error, Reason :: term()}.
 delete_value(SessionId, Key) ->
-    nova_channel:broadcast(?CHANNEL, "delete_value", {SessionId, Key}).
+    nova_pubsub:broadcast(?CHANNEL, "delete_value", {SessionId, Key}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -82,7 +82,7 @@ delete_value(SessionId, Key) ->
 init([]) ->
     process_flag(trap_exit, true),
     ets:new(?TABLE, [set, named_table]),
-    nova_channel:join(?CHANNEL),
+    nova_pubsub:join(?CHANNEL),
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------
@@ -141,7 +141,7 @@ handle_cast(_Request, State) ->
                          {noreply, NewState :: term(), Timeout :: timeout()} |
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: normal | term(), NewState :: term()}.
-handle_info(#nova_channel{topic = "set_value", payload = {SessionId, Key, Value}}, State) ->
+handle_info(#nova_pubsub{topic = "set_value", payload = {SessionId, Key, Value}}, State) ->
     case ets:lookup(?TABLE, SessionId) of
         [] ->
             ets:insert(?TABLE, {SessionId, #{Key => Value}});
@@ -149,7 +149,7 @@ handle_info(#nova_channel{topic = "set_value", payload = {SessionId, Key, Value}
             ets:insert(?TABLE, {SessionId, Session#{Key => Value}})
     end,
     {noreply, State};
-handle_info(#nova_channel{topic = "delete_value", payload = {SessionId, Key}}, State) ->
+handle_info(#nova_pubsub{topic = "delete_value", payload = {SessionId, Key}}, State) ->
     case ets:lookup(?TABLE, SessionId) of
         [] ->
             ok;
@@ -157,7 +157,7 @@ handle_info(#nova_channel{topic = "delete_value", payload = {SessionId, Key}}, S
             ets:insert(?TABLE, {SessionId, maps:remove(Key, Session)})
     end,
     {noreply, State};
-handle_info(#nova_channel{topic = "delete_value", payload = SessionId}, State) ->
+handle_info(#nova_pubsub{topic = "delete_value", payload = SessionId}, State) ->
     ets:delete(?TABLE, SessionId),
     {noreply, State};
 handle_info(_Info, State) ->
