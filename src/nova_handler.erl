@@ -51,7 +51,12 @@ execute(Req, Env = #{module := Module, function := Function}) ->
                             render_response(Req0, Env);
                         {error, not_found} ->
                             ?LOG_ERROR(#{msg => "Controller returned unsupported result", controller => Module,
-                                         function => Function, return => RetObj})
+                                         function => Function, return => RetObj}),
+                            Payload = #{stacktrace => [{Module, Function, 1}],
+                                        class => exception,
+                                        reason => handler_not_found,
+                                        msg => "Could not find correct handler for object"},
+                            render_response(Req#{crash_info => Payload}, Env, 500)
                     end
             catch
                 ?STACKTRACE(Class, Reason, Stacktrace)
