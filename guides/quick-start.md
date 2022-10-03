@@ -1,8 +1,11 @@
 # Quick start
 
-## Use rebar3 and nova
+## Start your first project
 
-Start by add the rebar3 template for Nova.
+Nova provides a plugin to make working with the framework a lot easier. One can install it by either using
+an automated installation or include it manually in the global *rebar.config* file.
+
+### Automated installation
 
 *Via Curl*
 
@@ -15,7 +18,21 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/novaframework/rebar3_nova/
 sh -c "$(wget -O- https://raw.githubusercontent.com/novaframework/rebar3_nova/master/install.sh)"
 ```
 
-After this is done use rebar3 to generate a new project with Nova.
+### Manual installation
+
+Open your *rebar.config*-file that should reside in `~/.config/rebar3/rebar.config*`. If the file does not exist you
+can just create it. Locate the *plugins*-section of the file and include the nova-plugin. The result should look something like
+the following:
+
+```
+{plugins,[{rebar3_nova,{git,"https://github.com/novaframework/rebar3_nova.git",
+                            {branch,"master"}}}]}.
+```
+
+
+### Creating the skeleton
+
+After the installation of the Nova-plugin is done use rebar3 to generate a new project.
 
 ```bash
 rebar3 new nova my_first_nova
@@ -23,19 +40,21 @@ rebar3 new nova my_first_nova
 
 ```
 $ rebar3 new nova my_first_app
-===> Writing my_first_app/config/dev_sys.config.src
-===> Writing my_first_app/config/prod_sys.config.src
-===> Writing my_first_app/src/my_first_app.app.src
-===> Writing my_first_app/src/my_first_app_app.erl
-===> Writing my_first_app/src/my_first_app_sup.erl
-===> Writing my_first_app/src/my_first_app_router.erl
-===> Writing my_first_app/src/controllers/my_first_app_main_controller.erl
-===> Writing my_first_app/rebar.config
-===> Writing my_first_app/config/vm.args.src
-===> Writing my_first_app/src/views/my_first_app_main.dtl
+===> Writing my_first_nova/config/dev_sys.config.src
+===> Writing my_first_nova/config/prod_sys.config.src
+===> Writing my_first_nova/src/my_first_nova.app.src
+===> Writing my_first_nova/src/my_first_nova_app.erl
+===> Writing my_first_nova/src/my_first_nova_sup.erl
+===> Writing my_first_nova/src/my_first_nova_router.erl
+===> Writing my_first_nova/src/controllers/my_first_nova_main_controller.erl
+===> Writing my_first_nova/rebar.config
+===> Writing my_first_nova/config/vm.args.src
+===> Writing my_first_nova/src/views/my_first_nova_main.dtl
 ```
 
-This will create a bunch of boiler plate files that helps you getting started. To start your app just type:
+Now the skeleton have been created and you should be able to start it. Go into the newly created directory and run the *serve*-command.
+
+**Note!** For the auto-compile/reload to work you need the prerequisit for [inotify](https://github.com/massemanet/inotify) to be installed.
 
 ```
 $ cd my_first_app
@@ -51,8 +70,3 @@ a lot of progress-reports
 ```
 
 If you take a look at [http://localhost:8080](http://localhost:8080) you should be greeted by a Nova-page.
-
-
-## Nova admin
-
-This is a project we hope to be presenting with the nova release 0.5.
