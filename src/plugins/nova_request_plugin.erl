@@ -66,8 +66,16 @@ modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", 
             {ok, Data, Req0} = cowboy_req:read_body(Req),
             %% Decode the data
             JsonLib = nova:get_env(json_lib, thoas),
-            {ok, JSON} = erlang:apply(JsonLib, decode, [Data]),
-            modulate_state(Req0#{json => JSON}, Tl);
+            case erlang:apply(JsonLib, decode, [Data]) of
+                {ok, JSON} ->
+                    modulate_state(Req0#{json => JSON}, Tl);
+                Error ->
+                    Req400 = cowboy_req:reply(400, Req),
+                    logger:warning(#{status_code => 400,
+                                     msg => "Failed to decode json.",
+                                     error => Error}),
+                    {stop, Req400}
+            end;
         false ->
             modulate_state(Req#{json => #{}}, Tl)
     end;
