@@ -40,19 +40,11 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
     end;
 execute(Req, Env = #{module := Module, function := Function}) ->
     %% Ensure that the module exists and have the correct function exported
-    case lists:search(fun({Export, Arity}) -> Export == Function andalso Arity == 1 end,
-                      erlang:apply(Module, module_info, [exports])) of
-        {value, _} ->
+    case erlang:function_exported(Module, Function, 1) of
+        true ->
             try erlang:apply(Module, Function, [Req]) of
                 RetObj ->
-                    case nova_handlers:get_handler(element(1, RetObj)) of
-                        {ok, Callback} ->
-                            {ok, Req0} = Callback(RetObj, {Module, Function}, Req),
-                            render_response(Req0, Env);
-                        {error, not_found} ->
-                            ?LOG_ERROR(#{msg => "Controller returned unsupported result", controller => Module,
-                                         function => Function, return => RetObj})
-                    end
+                    call_handler(Module, Function, Req, RetObj, Env, false)
             catch
                 ?STACKTRACE(Class, Reason, Stacktrace)
                     ?LOG_ERROR(#{msg => "Controller crashed",
@@ -72,12 +64,13 @@ execute(Req, Env = #{module := Module, function := Function}) ->
                          controller => Module,
                          function => io_lib:format("~s/1", [Function])}),
             Payload = #{status_code => 500,
-                        status => "Problems with application",
+                        status => <<"Problems with application">>,
                         stacktrace => [{Module, Function, 1}],
-                        title => "Woops. It seems like you have a problem with your application!",
-                        extra_msg => "Nova could not find your controller:function.
-                                      Pleae check your spelling and/or that the module" ++
-                                     " have been properly loaded. "
+                        title => <<"Woops. It seems like you have a problem with your application!">>,
+                        extra_msg => list_to_binary(io_lib:format(
+                                                      "Nova could not find <pre>~s:~s/1</pre>.
+                                                       Please check your spelling and/or that the module
+                                                       have been properly loaded. ", [Module, Function]))
                        },
             render_response(Req#{crash_info => Payload}, Env, 500)
     end.
@@ -95,6 +88,46 @@ terminate(Reason, Req, Module) ->
 %%%%%%%%%%%%%%%%%%%%%%%%
 %% INTERNAL FUNCTIONS %%
 %%%%%%%%%%%%%%%%%%%%%%%%
+execute_fallback(Module, Req, Response, Env) ->
+    Attributes = erlang:apply(Module, module_info, [attributes]),
+    case proplists:get_value(fallback_controller, Attributes, undefined) of
+        undefined ->
+            %% No fallback - render a crash-page
+            Payload = #{status_code => 500,
+                        status => <<"Problems with controller">>,
+                        stacktrace => [{nova_handler, execute_fallback, 4}],
+                        title => <<"Controller returned unsupported data">>,
+                        extra_msg => list_to_binary(io_lib:format("Controller returned unsupported data: ~p", [Response]))},
+            render_response(Req#{crash_info => Payload}, Env, 500);
+        [FallbackModule] ->
+            case erlang:function_exported(FallbackModule, resolve, 2) of
+                true ->
+                    RetObj = erlang:apply(FallbackModule, resolve, [Req, Response]),
+                    call_handler(FallbackModule, resolve, Req, RetObj, Env, true);
+                _ ->
+                    Payload = #{status_code => 500,
+                                status => <<"Problems with fallback-controller">>,
+                                title => <<"Fallback controller does not have a valid resolve/2 function">>,
+                                extra_msg => list_to_binary(io_lib:format("Fallback controller ~s does not have a valid resolve/2 function", [FallbackModule]))},
+                    render_response(Req#{crash_info => Payload}, Env, 500)
+            end
+    end.
+
+call_handler(Module, Function, Req, RetObj, Env, IsFallbackController) ->
+    case nova_handlers:get_handler(element(1, RetObj)) of
+        {ok, Callback} ->
+            {ok, Req0} = Callback(RetObj, {Module, Function}, Req),
+            render_response(Req0, Env);
+        {error, not_found} ->
+            case IsFallbackController of
+                true ->
+                    ?LOG_ERROR(#{msg => "Controller returned unsupported result", controller => Module,
+                                 function => Function, return => RetObj});
+                _ ->
+                    execute_fallback(Module, Req, RetObj, Env)
+            end
+    end.
+
 -spec render_response(Req :: cowboy_req:req(), Env :: map()) -> {ok, Req :: cowboy_req:req(), State :: map()}.
 render_response(Req = #{resp_status_code := StatusCode}, Env) ->
     Req0 = cowboy_req:reply(StatusCode, Req),
