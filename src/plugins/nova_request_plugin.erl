@@ -16,7 +16,9 @@
                          {ok, Req0 :: cowboy_req:req()}.
 pre_request(Req, Options) ->
     Options0 = nova_plugin_utilities:parse_options(Options),
-    {ok, _Req0} = modulate_state(Req, Options0).
+    %% Read the body and put it into the Req object
+    Req0 = read_body(Req),
+    {ok, _Req1} = modulate_state(Req0, Options0).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -46,7 +48,6 @@ plugin_info() ->
      <<"This plugin modulates the body of a request.">>,
      [
       {parse_bindings, <<"Used to parse bindings and put them in state under `bindings` key">>},
-      {read_body, <<"Reads the body and put it under the `body`">>},
       {decode_json_body, <<"Decodes the body as JSON and puts it under `json`">>},
       {parse_qs, <<"Used to parse qs and put hem in state under `qs` key">>}
      ]}.
@@ -59,44 +60,38 @@ plugin_info() ->
 modulate_state(Req, []) ->
     {ok, Req};
 
-modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}}, [decode_json_body|Tl]) ->
-    case cowboy_req:has_body(Req) of
-        true ->
-            %% First read in the body
-            {ok, Data, Req0} = cowboy_req:read_body(Req),
-            %% Decode the data
-            JsonLib = nova:get_env(json_lib, thoas),
-            case erlang:apply(JsonLib, decode, [Data]) of
-                {ok, JSON} ->
-                    modulate_state(Req0#{json => JSON}, Tl);
-                Error ->
-                    Req400 = cowboy_req:reply(400, Req),
-                    logger:warning(#{status_code => 400,
-                                     msg => "Failed to decode json.",
-                                     error => Error}),
-                    {stop, Req400}
-            end;
-        false ->
-            modulate_state(Req#{json => #{}}, Tl)
+modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}, body := Body}, [decode_json_body|Tl]) ->
+    %% Decode the data
+    JsonLib = nova:get_env(json_lib, thoas),
+    case erlang:apply(JsonLib, decode, [Body]) of
+        {ok, JSON} ->
+            modulate_state(Req#{json => JSON}, Tl);
+        Error ->
+            Req400 = cowboy_req:reply(400, Req),
+            logger:warning(#{status_code => 400,
+                             msg => "Failed to decode json.",
+                             error => Error}),
+            {stop, Req400}
     end;
-modulate_state(#{headers := #{<<"content-type">> := <<"application/x-www-form-urlencoded", _/binary>>}} = Req,
+modulate_state(#{headers := #{<<"content-type">> := <<"application/x-www-form-urlencoded", _/binary>>}, body := Body} = Req,
                [read_urlencoded_body|Tl]) ->
-    case cowboy_req:has_body(Req) of
-        true ->
-            %% First read in the body
-            {ok, Data, Req0} = cowboy_req:read_urlencoded_body(Req),
-            Params = maps:from_list(Data),
-            modulate_state(Req0#{params => Params}, Tl);
-        false ->
-            modulate_state(Req#{params => #{}}, Tl)
-    end;
+    Data = cow_qs:parse_qs(Body),
+    %% First read in the body
+    Params = maps:from_list(Data),
+    modulate_state(Req#{params => Params}, Tl);
 modulate_state(Req, [parse_qs|T1]) ->
     Qs = cowboy_req:parse_qs(Req),
     MapQs = maps:from_list(Qs),
     modulate_state(Req#{parsed_qs => MapQs}, T1);
-modulate_state(Req, [read_body|Tl]) ->
-    %% Fetch the body
-    {ok, Data, Req0} = cowboy_req:read_body(Req),
-    modulate_state(Req0#{body => Data}, Tl);
 modulate_state(State, [_|Tl]) ->
     modulate_state(State, Tl).
+
+read_body(Req) ->
+    {ok, Data, Req0} =
+        case cowboy_req:has_body(Req) of
+            true ->
+                cowboy_req:read_body(Req);
+            _ ->
+                {ok, <<>>, Req}
+        end,
+    Req0#{body => Data}.
