@@ -5,6 +5,8 @@
 Nova provides a plugin to make working with the framework a lot easier. One can install it by either using
 an automated installation or include it manually in the global *rebar.config* file.
 
+**Note!** If you require help installing Erlang and/or rebar3 please check [https://adoptingerlang.org/docs/development/setup/](https://adoptingerlang.org/docs/development/setup/)
+
 ### Automated installation
 
 *Via Curl*
