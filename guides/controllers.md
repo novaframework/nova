@@ -11,18 +11,23 @@ Handlers is modules that interprets the resulting output from a controller and s
 
 ### JSON structures
 
-**Simple interface**
+#### Simple interface
 
-Keyword: `json`
-Spec: `{json, Structure :: map()}`
-Example: `{json, #{status => "ok"}}.`
+*Keyword*: `json`
+
+*Spec*: `{json, Structure :: map()}`
+
+*Example*: `{json, #{status => "ok"}}.`
 
 Converts the map (Second element in the resulting tuple) and sends it to the requester with *HTTP-status code 200*.
 
-**Advanced interface**
-Keyword: `json`
-Spec: `{json, StatusCode :: integer(), Headers :: map(), JSON :: map()}`
-Example: `{json, 201, #{"x-correlation-id", "EX123"}, #{some_response => true}}`
+#### Advanced interface
+
+*Keyword*: `json`
+
+*Spec*: `{json, StatusCode :: integer(), Headers :: map(), JSON :: map()}`
+
+*Example*: `{json, 201, #{"x-correlation-id", "EX123"}, #{some_response => true}}`
 
 Same as the simple interface but with two additional elements for specifying HTTP-status code and additional headers.
 
@@ -30,61 +35,75 @@ Same as the simple interface but with two additional elements for specifying HTT
 
 *Nova* renders templates using ErlyDTL ([https://github.com/erlydtl/erlydtl](https://github.com/erlydtl/erlydtl) which uses the *django template language* to express logic. To get a better overview for the functionality that comes with dtl check their [documentation page](https://django.readthedocs.io/en/1.6.x/ref/templates/builtins.html)
 
-**Simple interface**
+#### Simple interface
 
-Keyword: `view`
-Spec: `{view, Variables :: map() | [{Key :: atom() | binary() | string(), Value :: any()}]}`
-Example: `{view, #{my_var => "123"}}`
+*Keyword*: `view`
+
+*Spec*: `{view, Variables :: map() | [{Key :: atom() | binary() | string(), Value :: any()}]}`
+
+*Example*: `{view, #{my_var => "123"}}`
 
 Renders the corresponding view with the variables attached. If a controller is named `my_simple_controller.erl` the view is named `my_simple_view.dtl`.
 
-**Advanced interface**
+#### Advanced interface
 
-Keyword: `view`
-Spec: `{view, Variables :: map() | [{Key :: atom() | binary() | string(), Value :: any()}], Options :: map()}`
-Example: `{view, #{my_var => "123"}, #{view => my_view_mod}}`
+*Keyword*: `view`
+
+*Spec*: `{view, Variables :: map() | [{Key :: atom() | binary() | string(), Value :: any()}], Options :: map()}`
+
+*Example*: `{view, #{my_var => "123"}, #{view => my_view_mod}}`
 
 Same as the simple interface but where you can define some options. Currently the only option for this interface is *view* which enables the user to specify a view other than the corresponding one based on controllers name. In the example above the dtl-file `my_view_mod.dtl` would be rendered.
 
 ### HTTP-status codes
 
-**Simple interface**
+#### Simple interface
 
-Keyword: `status`
-Spec: `{status, StatusCode :: integer()}`
-Example: `{status, 200}`
+*Keyword*: `status`
+
+*Spec*: `{status, StatusCode :: integer()}`
+
+*Example*: `{status, 200}`
 
 Returns a HTTP-code to the requester with an empty body.
 
-**Medium interface**
+#### Medium interface
 
-Keyword: `status`
-Spec: `{status, StatusCode :: integer(), ExtraHeaders :: map()}`
-Example: `{status, 200, #{"content-type" => "application/json"}}`
+*Keyword*: `status`
+
+*Spec*: `{status, StatusCode :: integer(), ExtraHeaders :: map()}`
+
+*Example*: `{status, 200, #{"content-type" => "application/json"}}`
 
 Same as the simple interface but with an additional field for specifying additional headers.
 
-**Advanced interface**
+#### Advanced interface
 
-Keyword: `status`
-Spec: `{status, Status :: integer(), ExtraHeaders :: map(), Body :: binary()}`
-Exmaple: `{status, 200, #{"content-type" => "text/plain"}, "A plain text"}`
+*Keyword*: `status`
+
+*Spec*: `{status, Status :: integer(), ExtraHeaders :: map(), Body :: binary()}`
+
+*Example*: `{status, 200, #{"content-type" => "text/plain"}, "A plain text"}`
 
 Same as the medium interface but with an additional field for specifying a body.
 
 ### File transfers (Using cowboys sendfile functionality)
 
-Keyword: `sendfile`
-Spec: `{sendfile, StatusCode :: integer(), Headers :: map(), {Offset :: integer(), Length :: integer(), Path :: list()}, Mime :: binary()}`
-Example: `{sendfile, 200, #{}, {0, 12345, "path/to/logo.png"}, "image/png"}`
+*Keyword*: `sendfile`
+
+*Spec*: `{sendfile, StatusCode :: integer(), Headers :: map(), {Offset :: integer(), Length :: integer(), Path :: list()}, Mime :: binary()}`
+
+*Example*: `{sendfile, 200, #{}, {0, 12345, "path/to/logo.png"}, "image/png"}`
 
 Sends a file using sendfile. This uses cowboys sendfile functionality and more information about it can be found in the [cowboy manual on sendfile](https://ninenines.eu/docs/en/cowboy/2.9/guide/resp/#_sending_files)
 
 ### Redirecting user
 
-Keyword: `redirect`
-Spec: `{redirect, Route :: list() | binary()}`
-Example: `{redirect, "/my/other/path}`
+*Keyword*: `redirect`
+
+*Spec*: `{redirect, Route :: list() | binary()}`
+
+*Example*: `{redirect, "/my/other/path}`
 
 Sends a temporary redirect (HTTP status code 302) for the specified path to requester.
 
