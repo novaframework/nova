@@ -97,7 +97,8 @@ execute_fallback(Module, Req, Response, Env) ->
                         status => <<"Problems with controller">>,
                         stacktrace => [{nova_handler, execute_fallback, 4}],
                         title => <<"Controller returned unsupported data">>,
-                        extra_msg => list_to_binary(io_lib:format("Controller returned unsupported data: ~p", [Response]))},
+                        extra_msg => list_to_binary(io_lib:format("Controller returned unsupported data: ~p",
+                                                                  [Response]))},
             render_response(Req#{crash_info => Payload}, Env, 500);
         [FallbackModule] ->
             case erlang:function_exported(FallbackModule, resolve, 2) of
@@ -108,7 +109,9 @@ execute_fallback(Module, Req, Response, Env) ->
                     Payload = #{status_code => 500,
                                 status => <<"Problems with fallback-controller">>,
                                 title => <<"Fallback controller does not have a valid resolve/2 function">>,
-                                extra_msg => list_to_binary(io_lib:format("Fallback controller ~s does not have a valid resolve/2 function", [FallbackModule]))},
+                                extra_msg => list_to_binary(io_lib:format("Fallback controller ~s does not have "
+                                                                          ++ "a valid resolve/2 function",
+                                                                          [FallbackModule]))},
                     render_response(Req#{crash_info => Payload}, Env, 500)
             end
     end.
