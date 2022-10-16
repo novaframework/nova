@@ -88,6 +88,8 @@ terminate(Reason, Req, Module) ->
 %%%%%%%%%%%%%%%%%%%%%%%%
 %% INTERNAL FUNCTIONS %%
 %%%%%%%%%%%%%%%%%%%%%%%%
+-spec execute_fallback(Module :: atom(), Req :: cowboy_req:req(), Response :: any(), Env :: map()) ->
+          {ok, Req0 :: cowboy_req:req(), Env :: map()}.
 execute_fallback(Module, Req, Response, Env) ->
     Attributes = erlang:apply(Module, module_info, [attributes]),
     case proplists:get_value(fallback_controller, Attributes, undefined) of
@@ -116,6 +118,9 @@ execute_fallback(Module, Req, Response, Env) ->
             end
     end.
 
+-spec call_handler(Module :: atom(), Function :: atom(), Req :: cowboy_req:req(),
+                   RetObj :: any(), Env :: map(), IsFallbackController :: boolean()) ->
+          {ok, Req0 :: cowboy_req:req(), Env :: map()}.
 call_handler(Module, Function, Req, RetObj, Env, IsFallbackController) ->
     case nova_handlers:get_handler(element(1, RetObj)) of
         {ok, Callback} ->
@@ -125,7 +130,14 @@ call_handler(Module, Function, Req, RetObj, Env, IsFallbackController) ->
             case IsFallbackController of
                 true ->
                     ?LOG_ERROR(#{msg => "Controller returned unsupported result", controller => Module,
-                                 function => Function, return => RetObj});
+                                 function => Function, return => RetObj}),
+                    Payload = #{status_code => 500,
+                                status => <<"Controller returned unsupported result">>,
+                                title => <<"Error in controller">>,
+                                extra_msg => list_to_binary(io_lib:format("Controller ~s:~s/1 returned a " ++
+                                                                              "non-valid result ~s",
+                                                                          [Module, Function, RetObj]))},
+                    render_response(Req#{crash_info => Payload}, Env, 500);
                 _ ->
                     execute_fallback(Module, Req, RetObj, Env)
             end
