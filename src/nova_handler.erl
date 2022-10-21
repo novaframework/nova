@@ -40,40 +40,23 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
     end;
 execute(Req, Env = #{module := Module, function := Function}) ->
     %% Ensure that the module exists and have the correct function exported
-    case erlang:function_exported(Module, Function, 1) of
-        true ->
-            try erlang:apply(Module, Function, [Req]) of
-                RetObj ->
-                    call_handler(Module, Function, Req, RetObj, Env, false)
-            catch
-                ?STACKTRACE(Class, Reason, Stacktrace)
-                    ?LOG_ERROR(#{msg => "Controller crashed",
-                                 class => Class,
-                                 reason => Reason,
-                                 stacktrace => Stacktrace}),
-                    terminate(Reason, Req, Module),
-                    %% Build the payload object
-                    Payload = #{status_code => 500,
-                                stacktrace => Stacktrace,
-                                class => Class,
-                                reason => Reason},
-                    render_response(Req#{crash_info => Payload}, Env, 500)
-            end;
-        _ ->
-            ?LOG_ERROR(#{msg => "Could not find controller",
-                         controller => Module,
-                         function => io_lib:format("~s/1", [Function])}),
-            Payload = #{status_code => 500,
-                        status => <<"Problems with application">>,
-                        stacktrace => [{Module, Function, 1}],
-                        title => <<"Woops. It seems like you have a problem with your application!">>,
-                        extra_msg => list_to_binary(io_lib:format(
-                                                      "Nova could not find <pre>~s:~s/1</pre>.
-                                                       Please check your spelling and/or that the module
-                                                       have been properly loaded. ", [Module, Function]))
-                       },
-            render_response(Req#{crash_info => Payload}, Env, 500)
-    end.
+    try erlang:apply(Module, Function, [Req]) of
+        RetObj ->
+            call_handler(Module, Function, Req, RetObj, Env, false)
+    catch
+        ?STACKTRACE(Class, Reason, Stacktrace)
+        ?LOG_ERROR(#{msg => "Controller crashed",
+                     class => Class,
+                     reason => Reason,
+                     stacktrace => Stacktrace}),
+        terminate(Reason, Req, Module),
+        %% Build the payload object
+        Payload = #{status_code => 500,
+                    stacktrace => Stacktrace,
+                    class => Class,
+                    reason => Reason},
+        render_response(Req#{crash_info => Payload}, Env, 500)
+        end.
 
 -spec terminate(any(), Req | undefined, module()) -> ok when Req::cowboy_req:req().
 terminate(Reason, Req, Module) ->
