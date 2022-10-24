@@ -13,7 +13,6 @@
          websocket_info/2
         ]).
 
--include("../include/nova_comp.hrl").
 -include("../include/nova_logger.hrl").
 
 -type nova_ws_state() :: #{controller_data := map(),
@@ -132,7 +131,7 @@ invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData})
                     {stop, State}
             end
     catch
-        ?STACKTRACE(Class, Reason, Stacktrace)
+        Class:Reason:Stacktrace ->
             ?LOG_ERROR(#{msg => "Controller crashed", class => Class,
                            reason => Reason, stacktrace => Stacktrace}),
             {stop, State}
@@ -157,7 +156,7 @@ run_plugins([{Module, Options}|Tl], Callback, ControllerState, State) ->
             ?LOG_ERROR(#{msg => "Plugin returned error", plugin => Module, function => Callback, reason => Reason}),
             {stop, State}
     catch
-        ?STACKTRACE(Class, Reason, Stacktrace)
+        Class:Reason:Stacktrace ->
             ?LOG_ERROR(#{msg => "Plugin crashed", class => Class, reason => Reason, stacktrace => Stacktrace}),
             {stop, State}
     end.
