@@ -5,7 +5,6 @@
          execute/2
         ]).
 
--include("../include/nova_comp.hrl").
 -include("../include/nova_logger.hrl").
 
 execute(Req = #{plugins := Plugins}, Env = #{plugin_state := pre_request}) ->
@@ -32,7 +31,7 @@ run_plugins([{Module, Options}|Tl], Callback, Req, Env) ->
         {stop, Req0} ->
             {stop, Req0}
     catch
-        ?STACKTRACE(Class, Reason, Stacktrace)
+        Class:Reason:Stacktrace ->
             ?LOG_ERROR(#{msg => "Plugin crashed", class => Class, reason => Reason, stacktrace => Stacktrace}),
             Req0 = Req#{crash_info => #{class => Class,
                                         reason => Reason,

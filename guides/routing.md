@@ -40,21 +40,6 @@ As you saw in the initial example in [Basic components](#basic-components)-secti
 {Route :: list(), Controller :: atom(), Options :: map()}
 ```
 
-Websockets is a bit different from how "normal" routing is working since it requires a set of callbacks to be defined in the controller.
-
-#### Callbacks ####
-
-**init(State :: map())**
-
-**websocket_init(State :: any())** *(optional)*
-
-**websocket_handle(Frame)**
-
-**websocket_info(Msg)**
-
-**terminate(Reason, PartialReq, State)*** *(optional)*
-
-
 *Important*
 One needs to define `protocol => ws` in the options-map in order to enable websocket communications.
 
@@ -102,6 +87,9 @@ do_security(Req) ->
 
 This will cause nova to return a `401` status code for all requests not coming from my_domain.com
 
+## Using plugins local to a set of endpoints
+
+TBA
 
 ## Configuration of error-detection in route-tree
 

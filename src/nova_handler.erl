@@ -7,7 +7,6 @@
          terminate/3
         ]).
 
--include("../include/nova_comp.hrl").
 -include("../include/nova_logger.hrl").
 -include("nova_router.hrl").
 
@@ -30,7 +29,7 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
         {Mod, Req2, State, Opts} ->
             erlang:apply(Mod, upgrade, [Req2, Env, Handler, State, Opts])
     catch
-        ?STACKTRACE(Class, Reason, Stacktrace)
+        Class:Reason:Stacktrace ->
             Payload = #{status_code => 500,
                         stacktrace => Stacktrace,
                         class => Class,
@@ -44,19 +43,19 @@ execute(Req, Env = #{module := Module, function := Function}) ->
         RetObj ->
             call_handler(Module, Function, Req, RetObj, Env, false)
     catch
-        ?STACKTRACE(Class, Reason, Stacktrace)
-        ?LOG_ERROR(#{msg => "Controller crashed",
-                     class => Class,
-                     reason => Reason,
-                     stacktrace => Stacktrace}),
-        terminate(Reason, Req, Module),
-        %% Build the payload object
-        Payload = #{status_code => 500,
-                    stacktrace => Stacktrace,
-                    class => Class,
-                    reason => Reason},
-        render_response(Req#{crash_info => Payload}, Env, 500)
-        end.
+        Class:Reason:Stacktrace ->
+            ?LOG_ERROR(#{msg => "Controller crashed",
+                         class => Class,
+                         reason => Reason,
+                         stacktrace => Stacktrace}),
+            terminate(Reason, Req, Module),
+            %% Build the payload object
+            Payload = #{status_code => 500,
+                        stacktrace => Stacktrace,
+                        class => Class,
+                        reason => Reason},
+            render_response(Req#{crash_info => Payload}, Env, 500)
+    end.
 
 -spec terminate(any(), Req | undefined, module()) -> ok when Req::cowboy_req:req().
 terminate(Reason, Req, Module) ->
