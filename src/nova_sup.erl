@@ -54,7 +54,7 @@ init([]) ->
 
     Environment = nova:get_environment(),
 
-    nova_channel:start(),
+    nova_pubsub:start(),
 
     ?LOG_NOTICE(#{msg => "Starting nova", environment => Environment}),
 

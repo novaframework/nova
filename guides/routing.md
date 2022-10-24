@@ -2,7 +2,7 @@
 
 Each nova application have their own routes file. This file contains information about all the routes existing for this application.
 
-## Basic components
+## <a id="basic-components"> </a>Basic components
 
 A simple route file could look something like this:
 
@@ -20,25 +20,40 @@ routes(_Environment) ->
   }].
 ```
 
-This will create a path for `/admin` which, when a user enters will call `my_controller:main/1`.
+This will create a path for `/admin` which, when a user enters will call `my_controller:main/1`. The `_Environment` variable that is consumed by the *routes*-function will have the value that `nova:get_environment/0` returns. The *environment* variable is an important thing cause it enables the devlopers to define different routes for different environments. To change the running environment edit the `sys.config` file to include `{environment, Env}` tuple under the `nova` application where `Env` can be any erlang-term.
 
 ### The routing object
 
 The routing object consist of four or three fields.
 
-**HTTP Routing**
+### HTTP(S) Routing ###
 
 ```
 {Route :: list(), {Controller :: atom(), Function :: atom()}, Options :: map()}
 ```
 
-**Websocket routing**
+As you saw in the initial example in [Basic components](#basic-components)-section we defined a route for the root path `/`.
+
+### Websocket routing ###
 
 ```
 {Route :: list(), Controller :: atom(), Options :: map()}
 ```
 
-The websocket controller needs to implement three functions: `websocket_init/1`, `websocket_handle/2`, `websocket_info/2`. More information about these callbacks can be found in the [Cowboy documentation](https://ninenines.eu/docs/en/cowboy/2.6/guide/ws_handlers/).
+Websockets is a bit different from how "normal" routing is working since it requires a set of callbacks to be defined in the controller.
+
+#### Callbacks ####
+
+**init(State :: map())**
+
+**websocket_init(State :: any())** *(optional)*
+
+**websocket_handle(Frame)**
+
+**websocket_info(Msg)**
+
+**terminate(Reason, PartialReq, State)*** *(optional)*
+
 
 *Important*
 One needs to define `protocol => ws` in the options-map in order to enable websocket communications.
