@@ -107,6 +107,40 @@ Sends a file using sendfile. This uses cowboys sendfile functionality and more i
 
 Sends a temporary redirect (HTTP status code 302) for the specified path to requester.
 
+
+## Fallback controllers
+
+[Phoenix](https://www.phoenixframework.org) have a really useful feature which they call [action_fallback]( https://hexdocs.pm/phoenix/Phoenix.Controller.html#action_fallback/1). We thought it would be a good addition to Nova to include somthing similar and therefore the `fallback_controller` was introduced. If a controller returns an invalid/unhandled result the fallback controller gets invoked and can take action on the payload. It's good for separating error-handling from the controllers. A fallback controller is set by setting the `fallback_controller` attribute with the module name of the fallback controller.
+
+The following example shows how a controller defines a fallback
+
+```
+-module(my_main_controller).
+-export([
+    error_example/1
+]).
+-fallback_controller(my_fallback_controller).
+
+error_example(_Req) ->
+    %% Since {error, ...} is not a valid handler the fallback-controller will be invoked
+    {error, example_error}.
+```
+
+A fallback controller have one function exposed; `resolve/2` which returnes a handler like for regular controllers in order to return the response to client. If we take the previous example and try and build a fallback controller for it:
+
+```
+-module(my_fallback_controller).
+-export([
+    resolve/2
+]).
+
+resolve(Req, {error, example_error}) ->
+  {status, 400}.
+```
+
+
+
+
 ## Plugins
 
 Plugins is part of the Nova core and can be executed both before and after the execution of a controller. They can both terminate a request early (Like the *request plugin* does) or transform data into another structure (*json plugin*). Plugins can be defined in two different places; *Global* plugins is defined in the *sys.config* file and will be executed for every incoming request. If a plugin only should be executed for a limited set of endpoints it can be defined in the router-file for that specific application (These we call *local plugins*).
