@@ -59,7 +59,7 @@ execute(Req, Env = #{module := Module, function := Function}) ->
 
 -spec terminate(any(), Req | undefined, module()) -> ok when Req::cowboy_req:req().
 terminate(Reason, Req, Module) ->
-    case erlang:function_exported(Module, terminate, 3) of
+    case function_exported(Module, terminate, 3) of
         true ->
             erlang:apply(Module, terminate, [Reason, Req]);
         false ->
@@ -85,7 +85,7 @@ execute_fallback(Module, Req, Response, Env) ->
                                                                   [Response]))},
             render_response(Req#{crash_info => Payload}, Env, 500);
         [FallbackModule] ->
-            case erlang:function_exported(FallbackModule, resolve, 2) of
+            case function_exported(FallbackModule, resolve, 2) of
                 true ->
                     RetObj = erlang:apply(FallbackModule, resolve, [Req, Response]),
                     call_handler(FallbackModule, resolve, Req, RetObj, Env, true);
@@ -149,4 +149,14 @@ render_response(Req, Env, StatusCode) ->
         false ->
             {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, {dummy, dummy}, Req),
             render_response(Req0, Env)
+    end.
+
+
+function_exported(Module, Function, Arity) ->
+    Exports = erlang:apply(Module, module_info, [exports]),
+    case proplists:get_value(Function, Exports) of
+        A when A == Arity ->
+            true;
+        _ ->
+            false
     end.
