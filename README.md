@@ -34,7 +34,7 @@ rebar3 new nova my_first_nova
 
 ## Supported Erlang versions
 
-Nova is supported with OTP 22 and above.
+Nova is supported with OTP 23 and above.
 
 ## Documentation
 
