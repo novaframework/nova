@@ -44,7 +44,7 @@
 compiled_apps() ->
     persistent_term:get(?NOVA_APPS, []).
 
--spec compile(Apps :: [atom()]) -> host_tree().
+-spec compile(Apps :: [atom() | {atom(), map()}]) -> host_tree().
 compile(Apps) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
     Dispatch = compile(Apps, routing_tree:new(#{use_strict => UseStrict, convert_to_binary => true}), #{}),
@@ -117,8 +117,10 @@ lookup_url(Host, Path, Method, Dispatch) ->
 %% INTERNAL FUNCTIONS %%
 %%%%%%%%%%%%%%%%%%%%%%%%
 
--spec compile(Apps :: [atom()], Dispatch :: host_tree(), Options :: map()) -> host_tree().
+-spec compile(Apps :: [atom() | {atom(), map()}], Dispatch :: host_tree(), Options :: map()) -> host_tree().
 compile([], Dispatch, _Options) -> Dispatch;
+compile([{App, Options}|Tl], Dispatch, GlobalOptions) ->
+    compile([App|Tl], Dispatch, maps:merge(Options, GlobalOptions));
 compile([App|Tl], Dispatch, Options) ->
     %% Fetch the router-module for this application
     Router = erlang:list_to_atom(io_lib:format("~s_router", [App])),
