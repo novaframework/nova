@@ -66,7 +66,6 @@ async_cast(Cmd, Options) ->
 async_cast(Cmd) ->
     async_cast(Cmd, #{}).
 
-
 stop() ->
     gen_server:call(?SERVER, stop).
 
@@ -88,7 +87,7 @@ stop() ->
 init([]) ->
     process_flag(trap_exit, true),
     CmdList = nova:get_env(watchers, []),
-    [ async_cast(Cmd, Args) || {Cmd, Args} <- CmdList ],
+    [ erlang:apply(?MODULE, async_cast, tuple_to_list(X)) || X <- CmdList ],
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------
