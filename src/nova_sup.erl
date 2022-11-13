@@ -13,7 +13,7 @@
 %% Supervisor callbacks
 -export([init/1]).
 
--include("../include/nova_logger.hrl").
+-include_lib("kernel/include/logger.hrl").
 -include("nova.hrl").
 
 -define(SERVER, ?MODULE).

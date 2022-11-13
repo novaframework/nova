@@ -5,7 +5,7 @@
          execute/2
         ]).
 
--include("../include/nova_logger.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 execute(Req = #{plugins := Plugins}, Env = #{plugin_state := pre_request}) ->
     %% This is a post plugin

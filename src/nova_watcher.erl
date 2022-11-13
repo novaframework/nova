@@ -30,7 +30,7 @@
          format_status/2
         ]).
 
--include("../include/nova_logger.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 -define(SERVER, ?MODULE).
 

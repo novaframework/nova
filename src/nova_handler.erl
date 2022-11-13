@@ -7,7 +7,7 @@
          terminate/3
         ]).
 
--include("../include/nova_logger.hrl").
+-include_lib("kernel/include/logger.hrl").
 -include("nova_router.hrl").
 
 -callback init(Req, any()) -> {ok | module(), Req, any()}
