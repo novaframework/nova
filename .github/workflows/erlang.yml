@@ -4,7 +4,7 @@ on: [push, pull_request]
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     name: Erlang/OTP ${{matrix.otp}} / rebar3 ${{matrix.rebar3}}
     strategy:
       fail-fast: false
