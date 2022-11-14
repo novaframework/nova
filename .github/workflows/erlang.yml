@@ -17,6 +17,7 @@ jobs:
       with:
         otp-version: ${{matrix.otp}}
         rebar3-version: ${{matrix.rebar3}}
+        version-type: strict
     - name: Compile
       run: rebar3 compile
     - name: Run dialyzer
