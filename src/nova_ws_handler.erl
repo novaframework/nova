@@ -13,7 +13,7 @@
          websocket_info/2
         ]).
 
--include("../include/nova_logger.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 -type nova_ws_state() :: #{controller_data := map(),
                            mod := atom(),

@@ -13,7 +13,7 @@
          generate_session_id/0
         ]).
 
--include("../include/nova_logger.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 %%%===================================================================
 %%% Callbacks

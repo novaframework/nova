@@ -1,7 +1,7 @@
 -module(nova_erlydtl_inventory).
 -behaviour(erlydtl_library).
 
--include("../include/nova_logger.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 -export([
          version/0,
