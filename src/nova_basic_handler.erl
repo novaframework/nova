@@ -10,7 +10,7 @@
          handle_ws/2
         ]).
 
--include("../include/nova_logger.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 -type mod_fun() :: {Module :: atom(), Function :: atom()} | undefined.
 -type erlydtl_vars() :: map() | [{Key :: atom() | binary() | string(), Value :: any()}].

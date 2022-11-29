@@ -62,16 +62,10 @@
 %% @hidden
 %% @end
 %%--------------------------------------------------------------------
--if(?OTP_RELEASE >= 23).
 -spec start() -> ok.
 start() ->
     pg:start(?SCOPE),
     ok.
--else.
-start() ->
-    pg2:start(),
-    ok.
--endif.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -99,14 +93,8 @@ leave(Channel) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec join(Channel :: atom(), Pid :: pid()) -> ok.
--if(?OTP_RELEASE >= 23).
 join(Channel, Pid) when is_pid(Pid) ->
     pg:join(?SCOPE, Channel, Pid).
--else.
-join(Channel, Pid) when is_pid(Pid) ->
-    pg2:create({?SCOPE, Channel}), %% Create this to ensure it exists
-    pg2:join({?SCOPE, Channel}, Pid).
--endif.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -114,18 +102,8 @@ join(Channel, Pid) when is_pid(Pid) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec leave(Channel :: atom(), Pid :: pid()) -> ok | not_joined.
--if(?OTP_RELEASE >= 23).
 leave(Channel, Pid) ->
     pg:leave(?SCOPE, Channel, Pid).
--else.
-leave(Channel, Pid) ->
-    case pg2:leave({?SCOPE, Channel}, Pid) of
-        {error, _} ->
-            not_joined;
-        _ ->
-            ok
-    end.
--endif.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -161,18 +139,8 @@ local_broadcast(Channel, Topic, Message) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec get_members(Channel :: atom()) -> [pid()].
--if(?OTP_RELEASE >= 23).
 get_members(Channel) ->
     pg:get_members(?SCOPE, Channel).
--else.
-get_members(Channel) ->
-    case pg2:get_members({?SCOPE, Channel}) of
-        {error, _} ->
-            [];
-        Pidlist ->
-            Pidlist
-    end.
--endif.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -181,18 +149,8 @@ get_members(Channel) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec get_local_members(Channel :: atom()) -> [pid()].
--if(?OTP_RELEASE >= 23).
 get_local_members(Channel) ->
     pg:get_local_members(?SCOPE, Channel).
--else.
-get_local_members(Channel) ->
-    case pg2:get_local_members({?SCOPE, Channel}) of
-        {error, _} ->
-            [];
-        Pidlist ->
-            Pidlist
-    end.
--endif.
 
 create_envelope(Channel, Sender, Topic, Payload) ->
     #nova_pubsub{channel = Channel,
