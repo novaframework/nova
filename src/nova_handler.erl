@@ -39,10 +39,18 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
     end;
 execute(Req, Env = #{module := Module, function := Function}) ->
     %% Ensure that the module exists and have the correct function exported
-    try erlang:apply(Module, Function, [Req]) of
-        RetObj ->
-            call_handler(Module, Function, Req, RetObj, Env, false)
+    try RetObj = erlang:apply(Module, Function, [Req]),
+         call_handler(Module, Function, Req, RetObj, Env, false)
+    of
+        HandlerReturn ->
+            HandlerReturn
     catch
+        Class:{Status, Reason} when is_integer(Status) ->
+            %% This makes it so that we don't need to fetch the stacktrace
+            ?LOG_ERROR(#{msg => "Controller threw an exception",
+                         class => Class,
+                         reason => Reason}),
+            render_response(Req#{crash_info => Reason}, Env, Status);
         Class:Reason:Stacktrace ->
             ?LOG_ERROR(#{msg => "Controller crashed",
                          class => Class,
