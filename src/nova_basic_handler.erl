@@ -84,8 +84,7 @@ handle_ok({ok, Variables, Options}, {Mod, _Func}, Req) ->
     View =
         case maps:get(view, Options, undefined) of
             undefined ->
-                ViewName = atom_to_list(Mod) ++ "_dtl",
-                list_to_atom(ViewName);
+                get_view_name(Mod);
             CustomView when is_atom(CustomView) ->
                 ViewName = atom_to_list(CustomView) ++ "_dtl",
                 list_to_atom(ViewName);
@@ -254,7 +253,7 @@ render_dtl(View, Variables, Options) ->
                 {error, Reason} ->
                     %% Cast a warning since the module could not be found
                     ?LOG_ERROR(#{msg => "Nova could not render template", template => View, reason => Reason}),
-                    throw({error, template_not_found});
+                    throw({404, {template_not_found, View}});
                 _ ->
                     View:render(Variables, Options)
             end;
