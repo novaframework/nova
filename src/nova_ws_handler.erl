@@ -26,12 +26,19 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 init(Req = #{method := _Method, plugins := Plugins}, State = #{module := Module}) ->
     %% Call the http-handler in order to correctly handle potential plugins for the http-request
+    InitPlugins = proplists:get_value(init_request, Plugins, []),
     ControllerData = maps:get(controller_data, State, #{}),
     State0 = State#{mod => Module,
-                    plugins => Plugins},
+                    plugins => Plugins,
+                    commands => []},
     ControllerData2 = ControllerData#{req => Req},
-    upgrade_ws(Module, Req, State0, ControllerData2).
-
+    case run_plugins(InitPlugins, init_request, ControllerData2, State0) of
+        {ok, State1} ->
+            upgrade_ws(Module, Req, State1, ControllerData2);
+        {stop, _} ->
+            %% We will just return 500 here since it's a server related problem
+            nova_router:render_status_page(500, Req)
+    end.
 
 upgrade_ws(Module, Req, State, ControllerData) ->
     case Module:init(ControllerData) of
@@ -42,16 +49,22 @@ upgrade_ws(Module, Req, State, ControllerData) ->
             nova_router:render_status_page(500, Req)
     end.
 
-websocket_init(State = #{mod := Mod}) ->
+websocket_init(State = #{mod := Mod, plugins := Plugins}) ->
     %% Inject the websocket process into the state
     ControllerData = maps:get(controller_data, State, #{}),
     NewState = State#{controller_data => ControllerData#{ws_handler_process => self()}},
+    WsInitPlugins = proplists:get_value(ws_init_request, Plugins, []),
 
-    case erlang:function_exported(Mod, websocket_init, 1) of
-        true ->
-            handle_ws(Mod, websocket_init, [], NewState);
-        _ ->
-            {ok, NewState}
+    case run_plugins(WsInitPlugins, ws_init_request, ControllerData, NewState) of
+        {ok, NewState1} ->
+            case erlang:function_exported(Mod, websocket_init, 1) of
+                true ->
+                    handle_ws(Mod, websocket_init, [], NewState1);
+                _ ->
+                    {ok, NewState1}
+            end;
+        {stop, _} ->
+            {stop, State}
     end.
 
 websocket_handle(Frame, State = #{mod := Mod}) ->
@@ -73,7 +86,9 @@ terminate(Reason, PartialReq, State = #{controller_data := ControllerData, mod :
         _ ->
             ok
     end;
-terminate(Reason, PartialReq, State) ->
+terminate(Reason, PartialReq, State = #{controller_data := ControllerData, plugins := Plugins}) ->
+    TerminatePlugins = proplists:get_value(terminate_request, Plugins, []),
+    run_plugins(TerminatePlugins, terminate_request, ControllerData, State),
     ?LOG_ERROR(#{msg => "Terminate called", reason => Reason, partial_req => PartialReq, state => State}),
     ok.
 
@@ -82,10 +97,10 @@ handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData, plugins
     PrePlugins = proplists:get_value(pre_ws_request, Plugins, []),
     ControllerState = #{module => Mod,
                         function => Func,
-                        arguments => Args},
+                        arguments => Args,
+                        stage => pre_ws_request},
     %% First run the pre-plugins and if everything goes alright we continue
-    State0 = State#{commands => []},
-    case run_plugins(PrePlugins, pre_ws_request, ControllerState, State0) of
+    case run_plugins(PrePlugins, pre_ws_request, ControllerState, State) of
         {ok, State1} ->
             case invoke_controller(Mod, Func, Args, State1) of
                 {stop, _StopReason} = S ->
@@ -106,6 +121,8 @@ handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData, plugins
                             {Cmds, maps:remove(hibernate, State4), hibernate}
                     end
             end;
+        {break, State1 = #{commands := Cmds}} ->
+            {Cmds, State1};
         {stop, _} = Stop ->
             ?LOG_WARNING(#{msg => "Got stop signal", signal => Stop}),
             Stop
@@ -151,7 +168,7 @@ run_plugins([{Module, Options}|Tl], Callback, ControllerState, State) ->
             {stop, State0};
         %% Break is used to signal that we are stopping further executing of plugins within the same Callback
         {break, State0} ->
-            {ok, State0};
+            {break, State0};
         {error, Reason} ->
             ?LOG_ERROR(#{msg => "Plugin returned error", plugin => Module, function => Callback, reason => Reason}),
             {stop, State}

@@ -27,7 +27,7 @@
 %%%-------------------------------------------------------------------
 -module(nova_plugin).
 
--type request_type() :: pre_request | post_request.
+-type request_type() :: ws_init_request | pre_ws_request | post_ws_request | pre_request | post_request.
 -export_type([request_type/0]).
 
 %% Define the callback functions for HTTP-plugins
@@ -44,6 +44,27 @@
     {stop, State0 :: nova:state()} |
     {error, Reason :: term()}.
 -optional_callbacks([post_request/2]).
+
+-callback ws_init_request(ControllerState :: map(), State :: map(), Options :: map()) ->
+    {ok, State0 :: map()} |
+    {break, State0 :: map()} |
+    {stop, State0 :: map()} |
+    {error, Reason :: term()}.
+-optional_callbacks([ws_init_request/3]).
+
+-callback pre_ws_request(ControllerState :: map(), State :: map(), Options :: map()) ->
+    {ok, State0 :: map()} |
+    {break, State0 :: map()} |
+    {stop, State0 :: map()} |
+    {error, Reason :: term()}.
+-optional_callbacks([pre_ws_request/3]).
+
+-callback post_ws_request(ControllerState :: map(), State :: map(), Options :: map()) ->
+    {ok, State0 :: map()} |
+    {break, State0 :: map()} |
+    {stop, State0 :: map()} |
+    {error, Reason :: term()}.
+-optional_callbacks([post_ws_request/3]).
 
 -callback plugin_info() -> {Title :: binary(),
                             Version :: binary(),
