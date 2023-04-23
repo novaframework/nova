@@ -194,7 +194,7 @@ handle_websocket({websocket, ControllerData}, {Module, _Fun}, Req) ->
         {ok, NewControllerData} ->
             {cowboy_websocket, Req#{controller_data => NewControllerData}, #{}};
         Error ->
-            ?LOG_ERROR(#{msg => "Handler returned unsupported result", handler => Module, return_obj => Error}),
+            ?LOG_ERROR(#{msg => <<"Handler returned unsupported result">>, handler => Module, return_obj => Error}),
             %% Render 500
             {ok, Req}
     end.
@@ -252,7 +252,7 @@ render_dtl(View, Variables, Options) ->
             case code:load_file(View) of
                 {error, Reason} ->
                     %% Cast a warning since the module could not be found
-                    ?LOG_ERROR(#{msg => "Nova could not render template", template => View, reason => Reason}),
+                    ?LOG_ERROR(#{msg => <<"Nova could not render template">>, template => View, reason => Reason}),
                     throw({404, {template_not_found, View}});
                 _ ->
                     View:render(Variables, Options)

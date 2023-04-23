@@ -32,7 +32,7 @@ run_plugins([{Module, Options}|Tl], Callback, Req, Env) ->
             {stop, Req0}
     catch
         Class:Reason:Stacktrace ->
-            ?LOG_ERROR(#{msg => "Plugin crashed", class => Class, reason => Reason, stacktrace => Stacktrace}),
+            ?LOG_ERROR(#{msg => <<"Plugin crashed">>, class => Class, reason => Reason, stacktrace => Stacktrace}),
             Req0 = Req#{crash_info => #{class => Class,
                                         reason => Reason,
                                         stacktrace => Stacktrace}},

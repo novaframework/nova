@@ -118,7 +118,7 @@ get_session_id(Req) ->
                     {ok, SessionId}
             end;
         _ ->
-            ?LOG_ERROR(#{msg => "Session called but 'use_session' option is set to false"}),
+            ?LOG_ERROR(#{msg => <<"Session called but 'use_session' option is set to false">>}),
             throw({nova_session, unsupported_session_used})
     end.
 

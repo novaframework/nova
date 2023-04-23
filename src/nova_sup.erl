@@ -56,7 +56,7 @@ init([]) ->
 
     nova_pubsub:start(),
 
-    ?LOG_NOTICE(#{msg => "Starting nova", environment => Environment}),
+    ?LOG_NOTICE(#{msg => <<"Starting nova">>, environment => Environment}),
 
     Configuration = application:get_env(nova, cowboy_configuration, #{}),
 
@@ -99,11 +99,11 @@ setup_cowboy(Configuration) ->
             Host0 = inet:ntoa(Host),
             CowboyVersion = get_version(cowboy),
             NovaVersion = get_version(nova),
-            ?LOG_NOTICE(#{msg => "Nova is running",
+            ?LOG_NOTICE(#{msg => <<"Nova is running">>,
                           url => unicode:characters_to_list(io_lib:format("http://~s:~B", [Host0, Port])),
                           cowboy_version => CowboyVersion, nova_version => NovaVersion, app => App});
         {error, Error} ->
-            ?LOG_ERROR(#{msg => "Cowboy could not start", reason => Error})
+            ?LOG_ERROR(#{msg => <<"Cowboy could not start">>, reason => Error})
     end.
 
 -spec start_cowboy(Configuration :: map()) ->
@@ -129,7 +129,7 @@ start_cowboy(Configuration) ->
     Dispatch =
         case BootstrapApp of
             undefined ->
-                ?LOG_ERROR(#{msg => "You need to define bootstrap_application option in configuration"}),
+                ?LOG_ERROR(#{msg => <<"You need to define bootstrap_application option in configuration">>}),
                 throw({error, no_nova_app_defined});
             App ->
                 ExtraApps = application:get_env(App, nova_apps, []),
@@ -163,7 +163,7 @@ start_cowboy(Configuration) ->
             CACert = maps:get(ca_cert, Configuration),
             Cert = maps:get(cert, Configuration),
             Port = maps:get(ssl_port, Configuration, ?NOVA_STD_SSL_PORT),
-            ?LOG_NOTICE(#{msg => "Nova starting SSL", port => Port}),
+            ?LOG_NOTICE(#{msg => <<"Nova starting SSL">>, port => Port}),
             case cowboy:start_tls(
               ?NOVA_LISTENER, [
                                {port, Port},

@@ -34,7 +34,7 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
                         stacktrace => Stacktrace,
                         class => Class,
                         reason => Reason},
-            ?LOG_ERROR(#{msg => "Controller crashed", class => Class, reason => Reason, stacktrace => Stacktrace}),
+            ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class, reason => Reason, stacktrace => Stacktrace}),
             render_response(Req#{crash_info => Payload}, Env, 500)
     end;
 execute(Req, Env = #{module := Module, function := Function}) ->
@@ -47,12 +47,12 @@ execute(Req, Env = #{module := Module, function := Function}) ->
     catch
         Class:{Status, Reason} when is_integer(Status) ->
             %% This makes it so that we don't need to fetch the stacktrace
-            ?LOG_ERROR(#{msg => "Controller threw an exception",
+            ?LOG_ERROR(#{msg => <<"Controller threw an exception">>,
                          class => Class,
                          reason => Reason}),
             render_response(Req#{crash_info => Reason}, Env, Status);
         Class:Reason:Stacktrace ->
-            ?LOG_ERROR(#{msg => "Controller crashed",
+            ?LOG_ERROR(#{msg => <<"Controller crashed">>,
                          class => Class,
                          reason => Reason,
                          stacktrace => Stacktrace}),
@@ -119,7 +119,7 @@ call_handler(Module, Function, Req, RetObj, Env, IsFallbackController) ->
         {error, not_found} ->
             case IsFallbackController of
                 true ->
-                    ?LOG_ERROR(#{msg => "Controller returned unsupported result", controller => Module,
+                    ?LOG_ERROR(#{msg => <<"Controller returned unsupported result">>, controller => Module,
                                  function => Function, return => RetObj}),
                     Payload = #{status_code => 500,
                                 status => <<"Controller returned unsupported result">>,

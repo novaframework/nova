@@ -19,7 +19,7 @@ url([Url|Variables], _Options) ->
     Apps = nova:get_apps(),
     case proplists:get_value(binary_to_atom(App, utf8), Apps) of
         undefined ->
-            ?LOG_WARNING(#{msg => "Template could not find application", application => App}),
+            ?LOG_WARNING(#{msg => <<"Template could not find application">>, application => App}),
             <<"#">>;
         Prefix ->
             PrefixBin = list_to_binary(Prefix),
