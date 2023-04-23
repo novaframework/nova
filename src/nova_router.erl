@@ -259,7 +259,9 @@ parse_url(Host,
                 secure = Secure
                },
 
-    ?LOG_DEBUG(#{action => <<"Adding route">>, route => erlang:list_to_binary(string:concat(Prefix, RemotePath)), app => App}),
+    ?LOG_DEBUG(#{action => <<"Adding route">>,
+                 route => erlang:list_to_binary(string:concat(Prefix, RemotePath)),
+                 app => App}),
     Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, Tree0);
 
