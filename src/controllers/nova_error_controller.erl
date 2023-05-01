@@ -12,13 +12,15 @@ not_found(Req) ->
             JsonLib = nova:get_env(json_lib, thoas),
             Json = erlang:apply(JsonLib, encode, [#{message => "Resource not found"}]),
             {status, 404, #{<<"content-type">> => <<"application/json">>}, Json};
-        _ ->
+        <<"text/html">> ->
             %% Just assume HTML
             Variables = #{status => "Could not find the page you were looking for",
                           title => "404 Not found",
                           message => "We could not find the page you were looking for"},
             {ok, Body} = nova_error_dtl:render(Variables),
-            {status, 404, #{<<"content-type">> => <<"text/html">>}, Body}
+            {status, 404, #{<<"content-type">> => <<"text/html">>}, Body};
+        _ ->
+            {status, 404, #{<<"content-type">> => <<"text/html">>}, <<>>}
     end.
 
 server_error(#{crash_info := #{status_code := StatusCode} = CrashInfo} = Req) ->
@@ -34,9 +36,11 @@ server_error(#{crash_info := #{status_code := StatusCode} = CrashInfo} = Req) ->
                     JsonLib = nova:get_env(json_lib, thoas),
                     Json = erlang:apply(JsonLib, encode, [Variables]),
                     {status, StatusCode, #{<<"content-type">> => <<"application/json">>}, Json};
-                _ ->
+                <<"text/html">> ->
                     {ok, Body} = nova_error_dtl:render(Variables),
-                    {status, StatusCode, #{<<"content-type">> => <<"text/html">>}, Body}
+                    {status, StatusCode, #{<<"content-type">> => <<"text/html">>}, Body};
+                _ ->
+                    {status, StatusCode, #{<<"content-type">> => <<"text/html">>}, <<>>}
             end;
         _ ->
             {status, StatusCode}
@@ -56,9 +60,11 @@ server_error(#{crash_info := #{stacktrace := Stacktrace, class := Class, reason 
                     JsonLib = nova:get_env(json_lib, thoas),
                     Json = erlang:apply(JsonLib, encode, [Variables]),
                     {status, 500, #{<<"content-type">> => <<"application/json">>}, Json};
-                _ ->
+                <<"text/html">> ->
                     {ok, Body} = nova_error_dtl:render(Variables),
-                    {status, 500, #{<<"content-type">> => <<"text/html">>}, Body}
+                    {status, 500, #{<<"content-type">> => <<"text/html">>}, Body};
+                _ ->
+                    {status, 500, #{<<"content-type">> => <<"text/html">>}, <<>>}
             end;
         _ ->
             {status, 500}
