@@ -17,8 +17,13 @@
 pre_request(Req, Options) ->
     Options0 = nova_plugin_utilities:parse_options(Options),
     %% Read the body and put it into the Req object
-    Req0 = read_body(Req),
-    {ok, _Req1} = modulate_state(Req0, Options0).
+    BodyReq = case cowboy_req:has_body(Req) of
+                   true ->
+                        read_body(Req, <<>>);
+                   false ->
+                        Req#{body => <<>>}
+               end,
+    {ok, _} = modulate_state(BodyReq, Options0).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -88,12 +93,8 @@ modulate_state(Req, [parse_qs|T1]) ->
 modulate_state(State, [_|Tl]) ->
     modulate_state(State, Tl).
 
-read_body(Req) ->
-    {ok, Data, Req0} =
-        case cowboy_req:has_body(Req) of
-            true ->
-                cowboy_req:read_body(Req);
-            _ ->
-                {ok, <<>>, Req}
-        end,
-    Req0#{body => Data}.
+read_body(Req, Acc) ->
+    case cowboy_req:read_body(Req) of
+        {ok, Data, Req0} -> Req0#{body => Data};
+        {more, Data, Req0} -> read_body(Req0, <<Data/binary, Acc/binary>>)
+    end.
