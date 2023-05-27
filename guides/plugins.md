@@ -1,6 +1,6 @@
 # Plugins
 
-Plugins is used to handle things before and/or after a request. They are applied on all requests of a specified protocol.
+Plugins are used to handle things before and/or after a request. They are applied on all requests of a specified protocol.
 
 This is an example:
 
@@ -31,7 +31,7 @@ This plugin injects a UUID into the headers.
 Adding a plugin
 
 Example:
-A good example of a very useful plugin is the `nova_request_plugin` one. When we are developing a HTTP web api using json as the data format, we need the framework to
+A good example of a very useful plugin is the `nova_request_plugin`. When we are developing a HTTP web api using json as the data format, we need the framework to
 decode our message so that we can process it. To do that we need to add `decode_json_body => true` into the options field in our `sys.config`.
 
 
