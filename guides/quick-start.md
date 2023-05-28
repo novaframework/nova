@@ -5,7 +5,9 @@
 Nova provides a plugin to make working with the framework a lot easier. One can install it by either using
 an automated installation or include it manually in the global *rebar.config* file.
 
-**Note!** If you require help installing Erlang and/or rebar3 please check [https://adoptingerlang.org/docs/development/setup/](https://adoptingerlang.org/docs/development/setup/)
+> #### Note {: .tip}
+>
+> If you require help installing Erlang and/or rebar3 please check [https://adoptingerlang.org/docs/development/setup/](https://adoptingerlang.org/docs/development/setup/)
 
 ### Automated installation
 
@@ -22,8 +24,8 @@ sh -c "$(wget -O- https://raw.githubusercontent.com/novaframework/rebar3_nova/ma
 
 ### Manual installation
 
-Open your *rebar.config*-file that should reside in `~/.config/rebar3/rebar.config*`. If the file does not exist you
-can just create it. Locate the *plugins*-section of the file and include the nova-plugin. The result should look something like
+Open your `rebar.config` file that should reside in `~/.config/rebar3/rebar.config*`. If the file does not exist you
+can just create it. Locate the `plugins` section of the file and include the nova plugin. The result should look something like
 the following:
 
 ```
@@ -54,9 +56,11 @@ $ rebar3 new nova my_first_app
 ===> Writing my_first_nova/src/views/my_first_nova_main.dtl
 ```
 
-Now the skeleton have been created and you should be able to start it. Go into the newly created directory and run the *serve*-command.
+Now the skeleton have been created and you should be able to start it. Go into the newly created directory and run the `serve` command.
 
-**Note!** For the auto-compile/reload to work you need the prerequisit for [inotify](https://github.com/massemanet/inotify) to be installed.
+> #### Note {: .tip}
+>
+> For the auto-compile/reload to work you need [inotify](https://github.com/massemanet/inotify) to be installed.
 
 ```
 $ cd my_first_app

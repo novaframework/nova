@@ -1,6 +1,6 @@
 # Building releases
 
-Nova utilizes [relx](https://github.com/erlware/relx) for building releases and have a particular *profile* defined for creating such.
+Nova utilizes [relx](https://github.com/erlware/relx) for building releases and has a particular *profile* defined for creating such.
 
 ```
 $ rebar3 as prod tar

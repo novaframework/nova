@@ -1,13 +1,13 @@
 # Controllers
 
 Controllers are central in how Nova works. They are in charge of handling all user-implemented logic for a request.
-Controllers is located in `/src/controllers/` of your Nova application. A controller is basically a regular Erlang module but that exposes functions you've provided in the routing file.
+Controllers are located in the `/src/controllers/` directory of your Nova application. A controller is basically a regular Erlang module that exposes functions you've provided in the routing file.
 
-![Request life-cycle](images/controller_flow.png "Request life-cycle")
+![Request life-cycle](assets/controller_flow.png "Request life-cycle")
 
 ## Handlers
 
-Handlers is modules that interprets the resulting output from a controller and sends it to the requester. Handlers are identified by the first atom in the return of a controller, eg `{json, #{status => "ok"}}` calls the `json`-handler. You can read about the handlers below and what their function are.
+Handlers are modules that interprets the resulting output from a controller and sends it to the requester. Handlers are identified by the first atom in the return of a controller, eg `{json, #{status => "ok"}}` calls the `json` handler. You can read about the handlers below and what their functions are.
 
 ### JSON structures
 
@@ -110,7 +110,7 @@ Sends a temporary redirect (HTTP status code 302) for the specified path to requ
 
 ## Fallback controllers
 
-[Phoenix](https://www.phoenixframework.org) have a really useful feature which they call [action_fallback]( https://hexdocs.pm/phoenix/Phoenix.Controller.html#action_fallback/1). We thought it would be a good addition to Nova to include somthing similar and therefore the `fallback_controller` was introduced. If a controller returns an invalid/unhandled result the fallback controller gets invoked and can take action on the payload. It's good for separating error-handling from the controllers. A fallback controller is set by setting the `fallback_controller` attribute with the module name of the fallback controller.
+[Phoenix](https://www.phoenixframework.org) have a really useful feature which they call [action_fallback]( https://hexdocs.pm/phoenix/Phoenix.Controller.html#action_fallback/1). We thought it would be a good addition to Nova to include something similar and therefore the `fallback_controller` was introduced. If a controller returns an invalid/unhandled result the fallback controller gets invoked and can take action on the payload. It's good for separating error-handling from the controllers. A fallback controller is set by setting the `fallback_controller` attribute with the module name of the fallback controller.
 
 The following example shows how a controller defines a fallback
 
@@ -126,7 +126,7 @@ error_example(_Req) ->
     {error, example_error}.
 ```
 
-A fallback controller have one function exposed; `resolve/2` which returnes a handler like for regular controllers in order to return the response to client. If we take the previous example and try and build a fallback controller for it:
+A fallback controller exposes one function `resolve/2` which returns a handler (like for regular controllers) in order to return the response to client. If we take the previous example and try and build a fallback controller for it:
 
 ```
 -module(my_fallback_controller).
@@ -143,11 +143,11 @@ resolve(Req, {error, example_error}) ->
 
 ## Plugins
 
-Plugins is part of the Nova core and can be executed both before and after the execution of a controller. They can both terminate a request early (Like the *request plugin* does) or transform data into another structure (*json plugin*). Plugins can be defined in two different places; *Global* plugins is defined in the *sys.config* file and will be executed for every incoming request. If a plugin only should be executed for a limited set of endpoints it can be defined in the router-file for that specific application (These we call *local plugins*).
+Plugins are part of the Nova core and can be executed both before and after the execution of a controller. They can both terminate a request early (like the *request plugin* does) or transform data into another structure (*json plugin*). Plugins can be defined in two different places; *Global* plugins are defined in the *sys.config* file and will be executed for every incoming request. If a plugin should only be executed for a limited set of endpoints it can be defined in the router file for that specific application (we call there *local plugins*).
 
 ### Global plugins
 
-Global plugins are defined in the *sys.config*-file and can have two different states; *pre*- and *post-controller* and is exectued before or after a controller. Global plugins lives under the `nova` application, `plugins`-key. An exampel of a sys.config file:
+Global plugins are defined in the *sys.config* file and can have two different states: *pre* and *post* controller. They are exectued before or after a controller. Global plugins lives under the `nova` application, `plugins` key. An example of a sys.config file:
 
 ```
 {nova, [
@@ -161,15 +161,17 @@ Global plugins are defined in the *sys.config*-file and can have two different s
 ]}.
 ```
 
-In order to find the valid options one can call the `plugin_info/0` function of each plugin. Currently there's [four plugins](https://github.com/novaframework/nova/tree/master/src/plugins) shipped with Nova today.
+In order to find the valid options one can call the `plugin_info/0` function of each plugin. Currently there are [four plugins](https://github.com/novaframework/nova/tree/master/src/plugins) shipped with Nova.
 
 
-**NOTE!** If you are planning of creating an application that can be included in another Nova-application all of your plugins should be defined in the router-file (Local plugins) in order to avoid being overwritten.
+> #### NOTE {: .tip}
+>
+> If you are creating an application that can be included in another Nova application all of your plugins should be defined in the router-file (Local plugins) in order to avoid being overwritten.
 
 
 ### Local plugins
 
-Local plugins works almost as the global ditos but for a limited set of paths. Local plugins is therefore declared in the router-file for each *group* of endpoints. They are declared in the same way as the global ones.
+Local plugins works almost as the global ones but for a limited set of paths. Local plugins are therefore declared in the router-file for each *group* of endpoints. They are declared in the same way as the global ones.
 
 Example:
 ```
