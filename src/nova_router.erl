@@ -27,8 +27,8 @@
          routes/1
         ]).
 
--include_lib("routing_tree/include/routing_tree.hrl").
 -include_lib("kernel/include/logger.hrl").
+-include("../include/nova.hrl").
 -include("nova_router.hrl").
 
 -type bindings() :: #{binary() := binary()}.
@@ -44,10 +44,9 @@
 compiled_apps() ->
     persistent_term:get(?NOVA_APPS, []).
 
--spec compile(Apps :: [atom() | {atom(), map()}]) -> host_tree().
+-spec compile(Apps :: [atom() | {atom(), map()}]) -> [rt_node()].
 compile(Apps) ->
-    UseStrict = application:get_env(nova, use_strict_routing, false),
-    Dispatch = compile(Apps, routing_tree:new(#{use_strict => UseStrict, convert_to_binary => true}), #{}),
+    Dispatch = compile(Apps, [], #{}),
     persistent_term:put(nova_dispatch, Dispatch),
     Dispatch.
 
@@ -56,7 +55,7 @@ compile(Apps) ->
                                                                Env0::cowboy_middleware:env().
 execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
     Dispatch = persistent_term:get(nova_dispatch),
-    case routing_tree:lookup(Host, Path, Method, Dispatch) of
+    case nova_pathing:lookup(Host, Path, Method, Dispatch) of
         {error, not_found} -> render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
         {error, comparator_not_found} -> render_status_page('_', 405, #{error => "Method not allowed"}, Req, Env);
         {ok, Bindings, #nova_handler_value{app = App, module = Module, function = Function,
@@ -96,7 +95,7 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
                  }
             };
         Error ->
-            ?LOG_ERROR(#{reason => <<"Unexpected return from routing_tree:lookup/4">>,
+            ?LOG_ERROR(#{reason => <<"Unexpected return from nova_pathing:lookup/4">>,
                          return_object => Error}),
             render_status_page(Host, 404, #{error => Error}, Req, Env)
     end.
@@ -112,13 +111,13 @@ lookup_url(Host, Path, Method) ->
     lookup_url(Host, Path, Method, Dispatch).
 
 lookup_url(Host, Path, Method, Dispatch) ->
-    routing_tree:lookup(Host, Path, Method, Dispatch).
+    nova_pathing:lookup(Host, Path, Method, Dispatch).
 
 %%%%%%%%%%%%%%%%%%%%%%%%
 %% INTERNAL FUNCTIONS %%
 %%%%%%%%%%%%%%%%%%%%%%%%
 
--spec compile(Apps :: [atom() | {atom(), map()}], Dispatch :: host_tree(), Options :: map()) -> host_tree().
+-spec compile(Apps :: [atom() | {atom(), map()}], Dispatch :: [rt_node()], Options :: map()) -> [rt_node()].
 compile([], Dispatch, _Options) -> Dispatch;
 compile([{App, Options}|Tl], Dispatch, GlobalOptions) ->
     compile([App|Tl], Dispatch, maps:merge(Options, GlobalOptions));
@@ -328,7 +327,7 @@ render_status_page(StatusCode, Data, Req) ->
 render_status_page(Host, StatusCode, Data, Req, Env) ->
     Dispatch = persistent_term:get(nova_dispatch),
     Env0 =
-        case routing_tree:lookup(Host, StatusCode, '_', Dispatch) of
+        case nova_pathing:lookup(Host, StatusCode, '_', Dispatch) of
             {error, _} ->
                 %% Render nova page if exists - We need to determine where to find this path?
                 Env#{app => nova,
@@ -354,7 +353,7 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
 
 
 insert(Host, Path, Combinator, Value, Tree) ->
-    try routing_tree:insert(Host, Path, Combinator, Value, Tree) of
+    try nova_pathing:insert(Host, Path, Combinator, Value, Tree) of
         Tree0 -> Tree0
     catch
         throw:Exception ->
