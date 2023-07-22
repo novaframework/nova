@@ -9,4 +9,6 @@ parse_options([], Parsed) -> Parsed;
 parse_options([{K, V}|T], Parsed) when V == true ->
     parse_options(T, [K|Parsed]);
 parse_options([{K, L}|T], Parsed) when is_list(L) ->
-    parse_options(T, [{K, L}|Parsed]).
+    parse_options(T, [{K, L}|Parsed]);
+parse_options([{K, V}|T], Parsed) ->
+    parse_options(T, [{K, V}|Parsed]).
