@@ -86,10 +86,13 @@ modulate_state(#{headers := #{<<"content-type">> := <<"application/x-www-form-ur
     %% First read in the body
     Params = maps:from_list(Data),
     modulate_state(Req#{params => Params}, Tl);
-modulate_state(Req, [parse_qs|T1]) ->
+modulate_state(Req, [parse_qs|Tl]) ->
     Qs = cowboy_req:parse_qs(Req),
     MapQs = maps:from_list(Qs),
-    modulate_state(Req#{parsed_qs => MapQs}, T1);
+    case maps:keys(MapQs) of
+        [] -> modulate_state(Req, Tl);
+        _ -> modulate_state(Req#{parsed_qs => MapQs}, Tl)
+    end;
 modulate_state(State, [_|Tl]) ->
     modulate_state(State, Tl).
 
