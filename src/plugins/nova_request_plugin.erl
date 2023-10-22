@@ -65,7 +65,7 @@ plugin_info() ->
 modulate_state(Req, []) ->
     {ok, Req};
 
-modulate_state( Req = #{method := Method}, [decode_json_body|Tail]) when Method =:= <<"GET">>; Method =:= <<"DELETE">> ->
+modulate_state( Req = #{method := Method}, [{decode_json_body, true}|Tail]) when Method =:= <<"GET">>; Method =:= <<"DELETE">> ->
     modulate_state(Req, Tail);
 modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}, body := Body}, [{decode_json_body, true}|Tl]) ->
     %% Decode the data
