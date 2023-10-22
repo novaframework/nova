@@ -9,7 +9,7 @@ on:
             - synchronize
 
 permissions:
-    pull-request: read
+    pull-requests: read
 
 jobs:
     main:
