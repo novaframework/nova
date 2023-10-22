@@ -1,27 +1,26 @@
----
-    name: "Validate PR title"
+name: "Validate PR title"
 
-    "on":
-        pull_request:
-            types:
-                - edited
-                - opened
-                - reopened
-                - synchronize
+on:
+    pull_request:
+        types:
+            - edited
+            - opened
+            - reopened
+            - synchronize
 
-    permissions:
-        pull-request: read
+permissions:
+    pull-request: read
 
-    jobs:
-        main:
-            name: Validate PR title
-            runs-on: ubuntu-latest
-            steps:
-                - uses: amannn/action-semantic-pull
-                  with:
-                    types:
-                        chore
-                        feat
-                        fix
-                        style
-                        test
+jobs:
+    main:
+        name: Validate PR title
+        runs-on: ubuntu-latest
+        steps:
+            - uses: amannn/action-semantic-pull-request@v5
+              with:
+                types:
+                    chore
+                    feat
+                    fix
+                    style
+                    test
