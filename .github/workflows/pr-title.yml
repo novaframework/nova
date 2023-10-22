@@ -21,8 +21,8 @@ jobs:
                 GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
               with:
                 types:
-                    chore
-                    feat
-                    fix
-                    style
-                    test
+                  chore
+                  feat
+                  fix
+                  style
+                  test
