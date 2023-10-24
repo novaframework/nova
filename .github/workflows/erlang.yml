@@ -32,12 +32,10 @@ jobs:
     steps:
         - name: Get Next Version
           if: github.ref == 'refs/heads/master'
-          env:
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           id: semver
           uses: ietf-tools/semver-action@v1
           with:
-            token: ${{ github.token }}
+            token: ${{ secrets.GITHUB_TOKEN }}
             branch: master
   release:
     needs: [semver]
@@ -52,7 +50,7 @@ jobs:
           makeLatest: true
           name: ${{ steps.semver.outputs.next }}
           body: Changelog Contents
-          token: ${{ github.token }}
+          token: ${{ secrets.GITHUB_TOKEN }}
   publish:
     needs: [semver, build, release]
     runs-on: ubuntu-latest
