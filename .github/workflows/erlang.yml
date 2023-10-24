@@ -26,7 +26,7 @@ jobs:
       run: rebar3 xref
     - name: Run elvis
       run: rebar3 as lint lint
-  validate:
+  semver:
     name: Get semver version
     runs-on: ubuntu-latest
     steps:
@@ -40,6 +40,7 @@ jobs:
             token: ${{ github.token }}
             branch: master
   release:
+    needs: [semver]
     runs-on: ubuntu-latest
     steps:
       - name: Create Release
@@ -53,6 +54,7 @@ jobs:
           body: Changelog Contents
           token: ${{ github.token }}
   publish:
+    needs: [semver, release, build]
     runs-on: ubuntu-latest
     steps:
       - name: Check out
