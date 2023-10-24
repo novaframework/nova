@@ -1,6 +1,10 @@
 {application,nova,
  [{description,"Nova is a web application framework"},
+<<<<<<< HEAD
   {vsn, semver},
+=======
+  {vsn, git},
+>>>>>>> changed from semver to git
   {registered,[]},
   {mod,{nova_app,[]}},
   {included_applications,[]},
