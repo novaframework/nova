@@ -41,6 +41,7 @@ jobs:
               style
               test
         - name: Get Next Version
+          if: github.ref == 'refs/heads/master'
           env:
             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           id: semver
