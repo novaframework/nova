@@ -41,6 +41,8 @@ jobs:
               style
               test
         - name: Get Next Version
+          env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           id: semver
           uses: ietf-tools/semver-action@v1
           with:
