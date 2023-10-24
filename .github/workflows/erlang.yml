@@ -50,6 +50,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Create Release
+        if: github.ref == 'refs/heads/master'
         uses: ncipollo/release-action@v1.12.0
         with:
           allowUpdates: true
