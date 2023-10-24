@@ -73,11 +73,29 @@ server_error(#{crash_info := #{stacktrace := Stacktrace, class := Class, reason 
 
 format_stacktrace([]) -> [];
 format_stacktrace([{Mod, Func, Arity, [{file, File}, {line, Line}]}|Tl]) ->
-    [#{module => erlang:atom_to_binary(Mod, utf8),
-       function => erlang:atom_to_binary(Func, utf8),
-       arity => Arity,
-       file => erlang:list_to_binary(File),
-       line => Line}|format_stacktrace(Tl)];
+    Formated = #{module => erlang:atom_to_binary(Mod, utf8),
+                 function => erlang:atom_to_binary(Func, utf8),
+                 arity => format_arity(Arity, []),
+                 file => erlang:list_to_binary(File),
+                 line => Line},
+    [Formated|format_stacktrace(Tl)];
 format_stacktrace([Hd|Tl]) ->
     logger:warning("Could not format stacktrace line: ~p", [Hd]),
     format_stacktrace(Tl).
+
+
+
+format_arity(Arity) when is_pid(Arity) -> list_to_binary(pid_to_list(Arity));
+format_arity(Arity) when is_function(Arity) -> <<"fun">>;
+format_arity(Arity) -> Arity.
+
+format_arity([], Acc) ->
+    logger:warning("Acc: ~p~n", [Acc]),
+    Acc;
+format_arity([Head, Tail], Acc) ->
+    Formated = format_arity(Head),
+    format_arity(Tail, [Formated | Acc]);
+format_arity(Arity, _) when is_function(Arity)->
+    <<"fun">>;
+format_arity(Arity, _) ->
+    Arity.

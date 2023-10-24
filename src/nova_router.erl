@@ -42,20 +42,23 @@
 
 -spec compiled_apps() -> [{App :: atom(), Prefix :: list()}].
 compiled_apps() ->
-    persistent_term:get(?NOVA_APPS, []).
+    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    StorageBackend:get(?NOVA_APPS, []).
 
 -spec compile(Apps :: [atom() | {atom(), map()}]) -> host_tree().
 compile(Apps) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
     Dispatch = compile(Apps, routing_tree:new(#{use_strict => UseStrict, convert_to_binary => true}), #{}),
-    persistent_term:put(nova_dispatch, Dispatch),
+    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    StorageBackend:put(nova_dispatch, Dispatch),
     Dispatch.
 
 -spec execute(Req, Env :: cowboy_middleware:env()) -> {ok, Req, Env0} | {stop, Req}
                                                           when Req::cowboy_req:req(),
                                                                Env0::cowboy_middleware:env().
 execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
-    Dispatch = persistent_term:get(nova_dispatch),
+    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    Dispatch = StorageBackend:get(nova_dispatch),
     case routing_tree:lookup(Host, Path, Method, Dispatch) of
         {error, not_found} -> render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
         {error, comparator_not_found} -> render_status_page('_', 405, #{error => "Method not allowed"}, Req, Env);
@@ -108,7 +111,8 @@ lookup_url(Host, Path) ->
     lookup_url(Host, Path, '_').
 
 lookup_url(Host, Path, Method) ->
-    Dispatch = persistent_term:get(nova_dispatch),
+    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    Dispatch = StorageBackend:get(nova_dispatch),
     lookup_url(Host, Path, Method, Dispatch).
 
 lookup_url(Host, Path, Method, Dispatch) ->
@@ -133,10 +137,11 @@ compile([App|Tl], Dispatch, Options) ->
     {ok, Dispatch1, Options2} = compile_paths(Routes, Dispatch, Options1),
 
     %% Take out the prefix for the app and store it in the persistent store
-    CompiledApps = persistent_term:get(?NOVA_APPS, []),
+    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    CompiledApps = StorageBackend:get(?NOVA_APPS, []),
     CompiledApps0 = [{App, maps:get(prefix, Options, "/")}|CompiledApps],
 
-    persistent_term:put(?NOVA_APPS, CompiledApps0),
+    StorageBackend:put(?NOVA_APPS, CompiledApps0),
 
     compile(Tl, Dispatch1, Options2).
 
@@ -275,20 +280,27 @@ parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix,
                end,
     Methods = maps:get(methods, Options, ['_']),
 
+    Value0 = case maps:get(extra_state, Options, undefined) of
+                 undefined ->
+                     Value;
+                 ExtraState ->
+                     Value#nova_handler_value{extra_state = ExtraState}
+             end,
+
     CompiledPaths =
         lists:foldl(
           fun(Method, Tree0) ->
                   BinMethod = method_to_binary(Method),
-                  Value0 =
+                  Value1 =
                       case maps:get(protocol, Options, http) of
                           http ->
-                              Value#nova_handler_value{
+                              Value0#nova_handler_value{
                                 module = Mod,
                                 function = Func
                                }
                       end,
                   ?LOG_DEBUG(#{action => <<"Adding route">>, route => RealPath, app => App}),
-                  insert(Host, RealPath, BinMethod, Value0, Tree0)
+                  insert(Host, RealPath, BinMethod, Value1, Tree0)
           end, Tree, Methods),
     parse_url(Host, Tl, Prefix, Value, CompiledPaths);
 parse_url(Host,
@@ -317,7 +329,8 @@ render_status_page(StatusCode, Req) ->
 -spec render_status_page(StatusCode :: integer(), Data :: map(), Req :: cowboy_req:req()) ->
                                 {ok, Req0 :: cowboy_req:req(), Env :: map()}.
 render_status_page(StatusCode, Data, Req) ->
-    Dispatch = persistent_term:get(nova_dispatch),
+    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    Dispatch = StorageBackend:get(nova_dispatch),
     render_status_page('_', StatusCode, Data, Req, #{dispatch => Dispatch}).
 
 -spec render_status_page(Host :: binary() | atom(),
@@ -326,7 +339,8 @@ render_status_page(StatusCode, Data, Req) ->
                          Req :: cowboy_req:req(),
                          Env :: map()) -> {ok, Req0 :: cowboy_req:req(), Env :: map()}.
 render_status_page(Host, StatusCode, Data, Req, Env) ->
-    Dispatch = persistent_term:get(nova_dispatch),
+    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    Dispatch = StorageBackend:get(nova_dispatch),
     Env0 =
         case routing_tree:lookup(Host, StatusCode, '_', Dispatch) of
             {error, _} ->
@@ -386,7 +400,6 @@ method_to_binary(connect) -> <<"CONNECT">>;
 method_to_binary(trace) -> <<"TRACE">>;
 method_to_binary(patch) -> <<"PATCH">>;
 method_to_binary(_) -> '_'.
-
 
 -spec routes(Env :: atom()) -> [map()].
 routes(_) ->
