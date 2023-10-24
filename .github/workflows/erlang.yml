@@ -1,6 +1,6 @@
 name: Build and test
 
-on: [push, pull_request]
+on: [push]
 
 jobs:
   build:
@@ -27,19 +27,9 @@ jobs:
     - name: Run elvis
       run: rebar3 as lint lint
   validate:
-    name: Validate PR title
+    name: Get semver version
     runs-on: ubuntu-latest
     steps:
-        - uses: amannn/action-semantic-pull-request@v5
-          env:
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          with:
-            types: |
-              chore
-              feat
-              fix
-              style
-              test
         - name: Get Next Version
           if: github.ref == 'refs/heads/master'
           env:
