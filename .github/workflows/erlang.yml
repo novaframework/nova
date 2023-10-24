@@ -3,26 +3,6 @@ name: Build and test
 on: [pull_request]
 
 jobs:
-  validate:
-    name: Validate PR title
-    runs-on: ubuntu-latest
-    steps:
-        - uses: amannn/action-semantic-pull-request@v5
-          env:
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          with:
-            types: |
-              chore
-              feat
-              fix
-              style
-              test
-        - name: Get Next Version
-          id: semver
-          uses: ietf-tools/semver-action@v1
-          with:
-            token: ${{ github.token }}
-            branch: main
   build:
     runs-on: ubuntu-20.04
     name: Erlang/OTP ${{matrix.otp}} / rebar3 ${{matrix.rebar3}}
@@ -46,6 +26,26 @@ jobs:
       run: rebar3 xref
     - name: Run elvis
       run: rebar3 as lint lint
+  validate:
+    name: Validate PR title
+    runs-on: ubuntu-latest
+    steps:
+        - uses: amannn/action-semantic-pull-request@v5
+          env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          with:
+            types: |
+              chore
+              feat
+              fix
+              style
+              test
+        - name: Get Next Version
+          id: semver
+          uses: ietf-tools/semver-action@v1
+          with:
+            token: ${{ github.token }}
+            branch: main
   release:
     runs-on: ubuntu-latest
     steps:
