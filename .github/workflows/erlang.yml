@@ -46,6 +46,8 @@ jobs:
             allowUpdates: true
             draft: false
             makeLatest: true
+            tag: ${{ steps.semver.outputs.next }}
+            commit: ${{ github.head_ref }}
             name: ${{ steps.semver.outputs.next }}
             body: Changelog Contents
             token: ${{ secrets.GITHUB_TOKEN }}
