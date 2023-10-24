@@ -49,16 +49,3 @@ jobs:
             name: ${{ steps.semver.outputs.next }}
             body: Changelog Contents
             token: ${{ secrets.GITHUB_TOKEN }}
-  publish:
-    needs: [build, release]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out
-        if: github.ref == 'refs/heads/master'
-        uses: actions/checkout@v3
-
-      - name: Publish to Hex.pm
-        if: github.ref == 'refs/heads/master'
-        uses: erlangpack/github-action@v3
-        env:
-          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
