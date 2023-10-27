@@ -134,7 +134,7 @@ handle_cast({async, Application, Cmd, Args, Options}, State = #state{process_ref
     %% Set working directory
     file:set_cwd(Workdir),
     ArgList = string:join(Args, " "),
-    Port = erlang:open_port({spawn, Cmd ++ " " ++ ArgList}, []),
+    Port = erlang:open_port({spawn, Cmd ++ " " ++ ArgList}, [use_stdio, {line, 1024}, stderr_to_stdout]),
     ?LOG_NOTICE(#{action => <<"Started async command">>, command => Cmd, arguments => ArgList}),
     {noreply, State#state{process_refs = [Port|ProcessRefs]}};
 handle_cast(_Request, State) ->
@@ -152,7 +152,14 @@ handle_cast(_Request, State) ->
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: normal | term(), NewState :: term()}.
 handle_info({ProcessRef, {data, Data}}, State) ->
-    ?LOG_DEBUG(#{action => <<"Received data from async command">>, data => Data, cmd_pid => ProcessRef}),
+    Msg = case Data of
+	      {eol, Text} -> Text;
+	      _ -> Data
+	  end,
+    case nova:get_environment() of
+	dev -> io:format("~s~n", [Msg]);
+	_ -> ok %% Ignore the output
+    end,
     {noreply, State};
 handle_info({'EXIT', Ref, Reason}, State = #state{process_refs = Refs}) ->
     %% Remove the port from our list
