@@ -6,12 +6,12 @@
 -module(nova).
 
 -export([
-         get_main_app/0,
-         get_apps/0,
-         get_environment/0,
-         get_env/2,
-         set_env/2
-        ]).
+    get_main_app/0,
+    get_apps/0,
+    get_environment/0,
+    get_env/2,
+    set_env/2
+]).
 
 -type state() :: any().
 -export_type([state/0]).
@@ -26,7 +26,6 @@
 -spec get_main_app() -> {ok, Application :: atom()} | undefined.
 get_main_app() ->
     application:get_env(nova, bootstrap_application).
-
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -67,7 +66,6 @@ get_env(Parameter, Default) ->
         _ ->
             Default
     end.
-
 
 %%--------------------------------------------------------------------
 %% @doc

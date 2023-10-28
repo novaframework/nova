@@ -41,22 +41,22 @@
 
 %% API
 -export([
-         start_link/0,
-         register_handler/2,
-         unregister_handler/1,
-         get_handler/1
-        ]).
+    start_link/0,
+    register_handler/2,
+    unregister_handler/1,
+    get_handler/1
+]).
 
 %% gen_server callbacks
 -export([
-         init/1,
-         handle_call/3,
-         handle_cast/2,
-         handle_info/2,
-         terminate/2,
-         code_change/3,
-         format_status/2
-        ]).
+    init/1,
+    handle_call/3,
+    handle_cast/2,
+    handle_info/2,
+    terminate/2,
+    code_change/3,
+    format_status/2
+]).
 
 -include_lib("kernel/include/logger.hrl").
 
@@ -64,18 +64,18 @@
 
 -define(HANDLERS_TABLE, nova_handlers_table).
 
--type handler_return() :: {ok, State2 :: nova:state()} |
-                          {Module :: atom(), State :: nova:state()} |
-                          {error, Reason :: any()}.
+-type handler_return() ::
+    {ok, State2 :: nova:state()}
+    | {Module :: atom(), State :: nova:state()}
+    | {error, Reason :: any()}.
 
 -export_type([handler_return/0]).
 
--type handler_callback() :: {Module :: atom(), Function :: atom()} |
-                            fun((...) -> handler_return()).
+-type handler_callback() ::
+    {Module :: atom(), Function :: atom()}
+    | fun((...) -> handler_return()).
 
--record(state, {
-
-               }).
+-record(state, {}).
 
 %%%===================================================================
 %%% API
@@ -87,13 +87,13 @@
 %% @hidden
 %% @end
 %%--------------------------------------------------------------------
--spec start_link() -> {ok, Pid :: pid()} |
-                      {error, Error :: {already_started, pid()}} |
-                      {error, Error :: term()} |
-                      ignore.
+-spec start_link() ->
+    {ok, Pid :: pid()}
+    | {error, Error :: {already_started, pid()}}
+    | {error, Error :: term()}
+    | ignore.
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
-
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -102,7 +102,7 @@ start_link() ->
 %% @end
 %%--------------------------------------------------------------------
 -spec register_handler(Handle :: atom(), Callback :: handler_callback()) ->
-                              ok | {error, Reason :: atom()}.
+    ok | {error, Reason :: atom()}.
 register_handler(Handle, Callback) ->
     gen_server:cast(?SERVER, {register_handler, Handle, Callback}).
 
@@ -121,8 +121,9 @@ unregister_handler(Handle) ->
 %% function for it.
 %% @end
 %%--------------------------------------------------------------------
--spec get_handler(Handle :: atom()) -> {ok, Callback :: handler_callback()} |
-                                       {error, not_found}.
+-spec get_handler(Handle :: atom()) ->
+    {ok, Callback :: handler_callback()}
+    | {error, not_found}.
 get_handler(Handle) ->
     case ets:lookup(?HANDLERS_TABLE, Handle) of
         [] ->
@@ -141,11 +142,12 @@ get_handler(Handle) ->
 %% Initializes the server
 %% @end
 %%--------------------------------------------------------------------
--spec init(Args :: term()) -> {ok, State :: term()} |
-                              {ok, State :: term(), Timeout :: timeout()} |
-                              {ok, State :: term(), hibernate} |
-                              {stop, Reason :: term()} |
-                              ignore.
+-spec init(Args :: term()) ->
+    {ok, State :: term()}
+    | {ok, State :: term(), Timeout :: timeout()}
+    | {ok, State :: term(), hibernate}
+    | {stop, Reason :: term()}
+    | ignore.
 init([]) ->
     process_flag(trap_exit, true),
     ets:new(?HANDLERS_TABLE, [named_table, set, protected]),
@@ -164,19 +166,18 @@ init([]) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec handle_call(Request :: term(), From :: {pid(), term()}, State :: term()) ->
-                         {reply, Reply :: term(), NewState :: term()} |
-                         {reply, Reply :: term(), NewState :: term(), Timeout :: timeout()} |
-                         {reply, Reply :: term(), NewState :: term(), hibernate} |
-                         {noreply, NewState :: term()} |
-                         {noreply, NewState :: term(), Timeout :: timeout()} |
-                         {noreply, NewState :: term(), hibernate} |
-                         {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
-                         {stop, Reason :: term(), NewState :: term()}.
+    {reply, Reply :: term(), NewState :: term()}
+    | {reply, Reply :: term(), NewState :: term(), Timeout :: timeout()}
+    | {reply, Reply :: term(), NewState :: term(), hibernate}
+    | {noreply, NewState :: term()}
+    | {noreply, NewState :: term(), Timeout :: timeout()}
+    | {noreply, NewState :: term(), hibernate}
+    | {stop, Reason :: term(), Reply :: term(), NewState :: term()}
+    | {stop, Reason :: term(), NewState :: term()}.
 handle_call({unregister_handler, Handle}, _From, State) ->
     ets:delete(?HANDLERS_TABLE, Handle),
     ?LOG_DEBUG(#{action => <<"Removed handler">>, handler => Handle}),
     {reply, ok, State};
-
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -188,10 +189,10 @@ handle_call(_Request, _From, State) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec handle_cast(Request :: term(), State :: term()) ->
-                         {noreply, NewState :: term()} |
-                         {noreply, NewState :: term(), Timeout :: timeout()} |
-                         {noreply, NewState :: term(), hibernate} |
-                         {stop, Reason :: term(), NewState :: term()}.
+    {noreply, NewState :: term()}
+    | {noreply, NewState :: term(), Timeout :: timeout()}
+    | {noreply, NewState :: term(), hibernate}
+    | {stop, Reason :: term(), NewState :: term()}.
 handle_cast({register_handler, Handle, Callback}, State) ->
     Callback0 =
         case Callback of
@@ -204,7 +205,9 @@ handle_cast({register_handler, Handle, Callback}, State) ->
             ets:insert(?HANDLERS_TABLE, {Handle, Callback0}),
             {noreply, State};
         _ ->
-            ?LOG_ERROR(#{msg => <<"Another handler is already registered on that name">>, handler => Handle}),
+            ?LOG_ERROR(#{
+                msg => <<"Another handler is already registered on that name">>, handler => Handle
+            }),
             {noreply, State}
     end;
 handle_cast(_Request, State) ->
@@ -217,10 +220,10 @@ handle_cast(_Request, State) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec handle_info(Info :: timeout() | term(), State :: term()) ->
-                         {noreply, NewState :: term()} |
-                         {noreply, NewState :: term(), Timeout :: timeout()} |
-                         {noreply, NewState :: term(), hibernate} |
-                         {stop, Reason :: normal | term(), NewState :: term()}.
+    {noreply, NewState :: term()}
+    | {noreply, NewState :: term(), Timeout :: timeout()}
+    | {noreply, NewState :: term(), hibernate}
+    | {stop, Reason :: normal | term(), NewState :: term()}.
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -233,8 +236,10 @@ handle_info(_Info, State) ->
 %% with Reason. The return value is ignored.
 %% @end
 %%--------------------------------------------------------------------
--spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
-                State :: term()) -> any().
+-spec terminate(
+    Reason :: normal | shutdown | {shutdown, term()} | term(),
+    State :: term()
+) -> any().
 terminate(_Reason, _State) ->
     ok.
 
@@ -244,10 +249,13 @@ terminate(_Reason, _State) ->
 %% Convert process state when code is changed
 %% @end
 %%--------------------------------------------------------------------
--spec code_change(OldVsn :: term() | {down, term()},
-                  State :: term(),
-                  Extra :: term()) -> {ok, NewState :: term()} |
-                                      {error, Reason :: term()}.
+-spec code_change(
+    OldVsn :: term() | {down, term()},
+    State :: term(),
+    Extra :: term()
+) ->
+    {ok, NewState :: term()}
+    | {error, Reason :: term()}.
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
@@ -259,8 +267,10 @@ code_change(_OldVsn, State, _Extra) ->
 %% or when it appears in termination error logs.
 %% @end
 %%--------------------------------------------------------------------
--spec format_status(Opt :: normal | terminate,
-                    Status :: list()) -> Status :: term().
+-spec format_status(
+    Opt :: normal | terminate,
+    Status :: list()
+) -> Status :: term().
 format_status(_Opt, Status) ->
     Status.
 

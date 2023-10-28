@@ -1,21 +1,19 @@
 -module(nova_basic_handler).
 -export([
-         handle_json/3,
-         handle_ok/3,
-         handle_view/3,
-         handle_status/3,
-         handle_redirect/3,
-         handle_sendfile/3,
-         handle_websocket/3,
-         handle_ws/2
-        ]).
+    handle_json/3,
+    handle_ok/3,
+    handle_view/3,
+    handle_status/3,
+    handle_redirect/3,
+    handle_sendfile/3,
+    handle_websocket/3,
+    handle_ws/2
+]).
 
 -include_lib("kernel/include/logger.hrl").
 
 -type mod_fun() :: {Module :: atom(), Function :: atom()} | undefined.
 -type erlydtl_vars() :: map() | [{Key :: atom() | binary() | string(), Value :: any()}].
-
-
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -30,9 +28,13 @@
 %%     headers.
 %% @end
 %%--------------------------------------------------------------------
--spec handle_json({json, JSON :: map()} | {json, StatusCode :: integer(), Headers :: map(), JSON :: map()},
-                  ModFun :: mod_fun(), Req :: cowboy_req:req()) -> {ok, State :: cowboy_req:req()} |
-                                                                   {Module :: atom(), Req :: cowboy_req:req()}.
+-spec handle_json(
+    {json, JSON :: map()} | {json, StatusCode :: integer(), Headers :: map(), JSON :: map()},
+    ModFun :: mod_fun(),
+    Req :: cowboy_req:req()
+) ->
+    {ok, State :: cowboy_req:req()}
+    | {Module :: atom(), Req :: cowboy_req:req()}.
 handle_json({json, StatusCode, Headers, JSON}, _ModFun, Req) ->
     JsonLib = nova:get_env(json_lib, thoas),
     EncodedJSON = erlang:apply(JsonLib, encode, [JSON]),
@@ -48,8 +50,6 @@ handle_json({json, JSON}, ModFun, Req = #{method := Method}) ->
         _ ->
             handle_json({json, 200, #{}, JSON}, ModFun, Req)
     end.
-
-
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -74,8 +74,11 @@ handle_json({json, JSON}, ModFun, Req = #{method := Method}) ->
 %% - headers - Custom headers
 %% @end
 %%--------------------------------------------------------------------
--spec handle_ok({ok, Variables :: erlydtl_vars()} | {ok, Variables :: erlydtl_vars(), Options :: map()},
-                ModFun :: mod_fun(), Req :: cowboy_req:req()) -> {ok, cowboy_req:req()}.
+-spec handle_ok(
+    {ok, Variables :: erlydtl_vars()} | {ok, Variables :: erlydtl_vars(), Options :: map()},
+    ModFun :: mod_fun(),
+    Req :: cowboy_req:req()
+) -> {ok, cowboy_req:req()}.
 handle_ok({ok, Variables}, {Mod, _Func}, Req) ->
     %% Derive the view from module
     ViewNameAtom = get_view_name(Mod),
@@ -92,8 +95,6 @@ handle_ok({ok, Variables, Options}, {Mod, _Func}, Req) ->
                 list_to_atom(CustomView ++ "_dtl")
         end,
     handle_view(View, Variables, Options, Req).
-
-
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -120,10 +121,13 @@ handle_view({view, Variables, Options}, {Mod, Func}, Req) ->
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec handle_status({status, StatusCode :: integer()} |
-                    {status, StatusCode :: integer(), ExtraHeaders :: map()} |
-                    {status, StatusCode :: integer(), ExtraHeaders :: map(), Body :: binary() | map()},
-                    ModFun :: mod_fun(), Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()}.
+-spec handle_status(
+    {status, StatusCode :: integer()}
+    | {status, StatusCode :: integer(), ExtraHeaders :: map()}
+    | {status, StatusCode :: integer(), ExtraHeaders :: map(), Body :: binary() | map()},
+    ModFun :: mod_fun(),
+    Req :: cowboy_req:req()
+) -> {ok, Req :: cowboy_req:req()}.
 handle_status({status, Status, ExtraHeaders, JSON}, _ModFun, Req) when is_map(JSON) ->
     %% We do not need to render a status page since we just return a JSON structure
     JsonLib = nova:get_env(json_lib, thoas),
@@ -142,11 +146,10 @@ handle_status({status, Status, ExtraHeaders, Body}, _ModFun, Req) ->
 handle_status({status, Status, ExtraHeaders}, _ModFun, Req) ->
     Req0 = cowboy_req:set_resp_headers(ExtraHeaders, Req),
     Req1 = Req0#{resp_status_code => Status},
-    {ok, Req2, _Env} =  nova_router:render_status_page(Status, #{}, Req1),
+    {ok, Req2, _Env} = nova_router:render_status_page(Status, #{}, Req1),
     {ok, Req2};
 handle_status({status, Status}, ModFun, State) when is_integer(Status) ->
     handle_status({status, Status, #{}}, ModFun, State).
-
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -155,8 +158,11 @@ handle_status({status, Status}, ModFun, State) when is_integer(Status) ->
 %% 302 with location set to "/login"
 %% @end
 %%-----------------------------------------------------------------
--spec handle_redirect({redirect, Route :: list()|binary()}, ModFun :: mod_fun(),
-                      Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()}.
+-spec handle_redirect(
+    {redirect, Route :: list() | binary()},
+    ModFun :: mod_fun(),
+    Req :: cowboy_req:req()
+) -> {ok, Req :: cowboy_req:req()}.
 handle_redirect({redirect, Route}, ModFun, Req) when is_list(Route) ->
     handle_redirect({redirect, list_to_binary(Route)}, ModFun, Req);
 handle_redirect({redirect, Route}, _ModFun, Req) ->
@@ -170,10 +176,12 @@ handle_redirect({redirect, Route}, _ModFun, Req) ->
 %% Handles sendfile.
 %% @end
 %%-----------------------------------------------------------------
--spec handle_sendfile({sendfile, StatusCode :: integer(), Headers :: map(), {Offset :: integer(),
-                                                                             Length :: integer(),
-                                                                             Path :: list()}, Mime :: binary()},
-                  ModFun :: mod_fun(), Req) -> {ok, Req} when Req :: cowboy_req:req().
+-spec handle_sendfile(
+    {sendfile, StatusCode :: integer(), Headers :: map(), {Offset :: integer(), Length :: integer(), Path :: list()},
+        Mime :: binary()},
+    ModFun :: mod_fun(),
+    Req
+) -> {ok, Req} when Req :: cowboy_req:req().
 handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _ModFun, Req) ->
     Headers0 = maps:merge(#{<<"content-type">> => Mime}, Headers),
     Req0 = cowboy_req:set_resp_headers(Headers0, Req),
@@ -181,24 +189,28 @@ handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _
     Req2 = Req1#{resp_status_code => StatusCode},
     {ok, Req2}.
 
-
 %%--------------------------------------------------------------------
 %% @doc
 %% Handles upgrading to websocket
 %% @end
 %%-----------------------------------------------------------------
--spec handle_websocket({websocket, ControllerData :: any()}, ModFun :: mod_fun(), Req :: cowboy_req:req()) ->
-                              {ok, Req :: cowboy_req:req()}.
+-spec handle_websocket(
+    {websocket, ControllerData :: any()}, ModFun :: mod_fun(), Req :: cowboy_req:req()
+) ->
+    {ok, Req :: cowboy_req:req()}.
 handle_websocket({websocket, ControllerData}, {Module, _Fun}, Req) ->
     case Module:init(ControllerData) of
         {ok, NewControllerData} ->
             {cowboy_websocket, Req#{controller_data => NewControllerData}, #{}};
         Error ->
-            ?LOG_ERROR(#{msg => <<"Handler returned unsupported result">>, handler => Module, return_obj => Error}),
+            ?LOG_ERROR(#{
+                msg => <<"Handler returned unsupported result">>,
+                handler => Module,
+                return_obj => Error
+            }),
             %% Render 500
             {ok, Req}
     end.
-
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -210,22 +222,27 @@ handle_websocket({websocket, ControllerData}, {Module, _Fun}, Req) ->
 %% @end
 %%-----------------------------------------------------------------
 handle_ws({reply, Frame, NewControllerData}, State = #{commands := Commands}) ->
-    State#{controller_data => NewControllerData,
-           commands => [Frame|Commands]};
+    State#{
+        controller_data => NewControllerData,
+        commands => [Frame | Commands]
+    };
 handle_ws({reply, Frame, NewControllerData, hibernate}, State = #{commands := Commands}) ->
-    State#{controller_data => NewControllerData,
-           commands => [Frame|Commands],
-           hibernate => true};
+    State#{
+        controller_data => NewControllerData,
+        commands => [Frame | Commands],
+        hibernate => true
+    };
 handle_ws({ok, NewControllerData}, State) ->
     State#{controller_data => NewControllerData};
 handle_ws({ok, NewControllerData, hibernate}, State) ->
-    State#{controller_data => NewControllerData,
-          hibernate => true};
+    State#{
+        controller_data => NewControllerData,
+        hibernate => true
+    };
 handle_ws({stop, NewControllerData}, State) ->
     {stop, State#{controller_data => NewControllerData}};
 handle_ws(ok, State) ->
     State.
-
 
 %%%===================================================================
 %%% Internal functions
@@ -252,7 +269,11 @@ render_dtl(View, Variables, Options) ->
             case code:load_file(View) of
                 {error, Reason} ->
                     %% Cast a warning since the module could not be found
-                    ?LOG_ERROR(#{msg => <<"Nova could not render template">>, template => View, reason => Reason}),
+                    ?LOG_ERROR(#{
+                        msg => <<"Nova could not render template">>,
+                        template => View,
+                        reason => Reason
+                    }),
                     throw({404, {template_not_found, View}});
                 _ ->
                     View:render(Variables, Options)
@@ -261,11 +282,10 @@ render_dtl(View, Variables, Options) ->
             View:render(Variables, Options)
     end.
 
-
 get_view_name(Mod) when is_atom(Mod) ->
     StrName = get_view_name(erlang:atom_to_list(Mod)),
     erlang:list_to_atom(StrName);
 get_view_name([$_, $c, $o, $n, $t, $r, $o, $l, $l, $e, $r]) ->
     "_dtl";
-get_view_name([H|T]) ->
-    [H|get_view_name(T)].
+get_view_name([H | T]) ->
+    [H | get_view_name(T)].

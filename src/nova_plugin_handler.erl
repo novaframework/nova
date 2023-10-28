@@ -2,8 +2,8 @@
 -behaviour(cowboy_middleware).
 
 -export([
-         execute/2
-        ]).
+    execute/2
+]).
 
 -include_lib("kernel/include/logger.hrl").
 
@@ -19,10 +19,9 @@ execute(Req, Env) ->
     %% The router could not find any match for us
     {ok, Req, Env}.
 
-
 run_plugins([], Callback, Req, Env) ->
     {ok, Req, Env#{plugin_state => Callback}};
-run_plugins([{Module, Options}|Tl], Callback, Req, Env) ->
+run_plugins([{Module, Options} | Tl], Callback, Req, Env) ->
     try Module:Callback(Req, Options) of
         {ok, Req0} ->
             run_plugins(Tl, Callback, Req0, Env);
@@ -32,9 +31,18 @@ run_plugins([{Module, Options}|Tl], Callback, Req, Env) ->
             {stop, Req0}
     catch
         Class:Reason:Stacktrace ->
-            ?LOG_ERROR(#{msg => <<"Plugin crashed">>, class => Class, reason => Reason, stacktrace => Stacktrace}),
-            Req0 = Req#{crash_info => #{class => Class,
-                                        reason => Reason,
-                                        stacktrace => Stacktrace}},
+            ?LOG_ERROR(#{
+                msg => <<"Plugin crashed">>,
+                class => Class,
+                reason => Reason,
+                stacktrace => Stacktrace
+            }),
+            Req0 = Req#{
+                crash_info => #{
+                    class => Class,
+                    reason => Reason,
+                    stacktrace => Stacktrace
+                }
+            },
             nova_router:render_status_page('_', 500, #{}, Req0, Env)
     end.

@@ -32,21 +32,24 @@
 
 %% Define the callback functions for HTTP-plugins
 -callback pre_request(State :: nova:state(), Options :: map()) ->
-    {ok, State0 :: nova:state()} |
-    {break, State0 :: nova:state()} |
-    {stop, State0 :: nova:state()} |
-    {error, Reason :: term()}.
+    {ok, State0 :: nova:state()}
+    | {break, State0 :: nova:state()}
+    | {stop, State0 :: nova:state()}
+    | {error, Reason :: term()}.
 -optional_callbacks([pre_request/2]).
 
 -callback post_request(State :: nova:state(), Options :: map()) ->
-    {ok, State0 :: nova:state()} |
-    {break, State0 :: nova:state()} |
-    {stop, State0 :: nova:state()} |
-    {error, Reason :: term()}.
+    {ok, State0 :: nova:state()}
+    | {break, State0 :: nova:state()}
+    | {stop, State0 :: nova:state()}
+    | {error, Reason :: term()}.
 -optional_callbacks([post_request/2]).
 
--callback plugin_info() -> {Title :: binary(),
-                            Version :: binary(),
-                            Author :: binary(),
-                            Description :: binary(),
-                            Options :: [{Key :: atom(), OptionDescription :: binary()}]}.
+-callback plugin_info() ->
+    {
+        Title :: binary(),
+        Version :: binary(),
+        Author :: binary(),
+        Description :: binary(),
+        Options :: [{Key :: atom(), OptionDescription :: binary()}]
+    }.

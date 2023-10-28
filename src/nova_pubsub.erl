@@ -41,16 +41,16 @@
 %%%-------------------------------------------------------------------
 -module(nova_pubsub).
 -export([
-         start/0,
-         join/1,
-         join/2,
-         leave/1,
-         leave/2,
-         broadcast/3,
-         local_broadcast/3,
-         get_members/1,
-         get_local_members/1
-        ]).
+    start/0,
+    join/1,
+    join/2,
+    leave/1,
+    leave/2,
+    broadcast/3,
+    local_broadcast/3,
+    get_members/1,
+    get_local_members/1
+]).
 
 -define(SCOPE, nova_scope).
 
@@ -86,7 +86,6 @@ join(Channel) ->
 leave(Channel) ->
     leave(Channel, self()).
 
-
 %%--------------------------------------------------------------------
 %% @doc
 %% Same as join/1 but with a specified process.
@@ -115,9 +114,8 @@ leave(Channel, Pid) ->
 broadcast(Channel, Topic, Message) ->
     Members = get_members(Channel),
     Envelope = create_envelope(Channel, self(), Topic, Message),
-    [ Receiver ! Envelope || Receiver <- Members ],
+    [Receiver ! Envelope || Receiver <- Members],
     ok.
-
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -129,9 +127,8 @@ broadcast(Channel, Topic, Message) ->
 local_broadcast(Channel, Topic, Message) ->
     Members = get_local_members(Channel),
     Envelope = create_envelope(Channel, self(), Topic, Message),
-    [ Receiver ! Envelope || Receiver <- Members ],
+    [Receiver ! Envelope || Receiver <- Members],
     ok.
-
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -153,7 +150,9 @@ get_local_members(Channel) ->
     pg:get_local_members(?SCOPE, Channel).
 
 create_envelope(Channel, Sender, Topic, Payload) ->
-    #nova_pubsub{channel = Channel,
-                 sender = Sender,
-                 topic = Topic,
-                 payload = Payload}.
+    #nova_pubsub{
+        channel = Channel,
+        sender = Sender,
+        topic = Topic,
+        payload = Payload
+    }.

@@ -2,10 +2,8 @@
 -behaviour(cowboy_middleware).
 
 -export([
-         execute/2
-        ]).
-
-
+    execute/2
+]).
 
 execute(Req, Env = #{secure := false}) ->
     {ok, Req, Env};
@@ -35,7 +33,8 @@ execute(Req = #{host := Host}, Env = #{secure := {Module, Function}}) ->
             {ok, Req0, _Env0} = nova_router:render_status_page(Host, 401, #{}, Req, Env),
             Req1 = cowboy_req:reply(401, Req0),
             {stop, Req1}
-    catch _Class:_Reason ->
+    catch
+        _Class:_Reason ->
             {ok, Req0, _Env} = nova_router:render_status_page(Host, 500, #{}, Req, Env),
             Req1 = cowboy_req:reply(500, Req0),
             {stop, Req1}
