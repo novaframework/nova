@@ -15,7 +15,7 @@
 -spec pre_request(Req :: cowboy_req:req(), Options :: map()) ->
                          {ok, Req0 :: cowboy_req:req()}.
 pre_request(Req, Options) ->
-    Options0 = nova_plugin_utilities:parse_options(Options),
+    ListOptions = maps:to_list(Options),
     %% Read the body and put it into the Req object
     BodyReq = case cowboy_req:has_body(Req) of
                    true ->
@@ -23,7 +23,7 @@ pre_request(Req, Options) ->
                    false ->
                         Req#{body => <<>>}
                end,
-    {ok, _} = modulate_state(BodyReq, Options0).
+    {ok, _} = modulate_state(BodyReq, ListOptions).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -65,9 +65,9 @@ plugin_info() ->
 modulate_state(Req, []) ->
     {ok, Req};
 
-modulate_state( Req = #{method := Method}, [decode_json_body|Tail]) when Method =:= <<"GET">>; Method =:= <<"DELETE">> ->
+modulate_state( Req = #{method := Method}, [{decode_json_body, true}|Tail]) when Method =:= <<"GET">>; Method =:= <<"DELETE">> ->
     modulate_state(Req, Tail);
-modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}, body := Body}, [decode_json_body|Tl]) ->
+modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}, body := Body}, [{decode_json_body, true}|Tl]) ->
     %% Decode the data
     JsonLib = nova:get_env(json_lib, thoas),
     case erlang:apply(JsonLib, decode, [Body]) of
@@ -81,15 +81,18 @@ modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", 
             {stop, Req400}
     end;
 modulate_state(#{headers := #{<<"content-type">> := <<"application/x-www-form-urlencoded", _/binary>>}, body := Body} = Req,
-               [read_urlencoded_body|Tl]) ->
+               [{read_urlencoded_body, true}|Tl]) ->
     Data = cow_qs:parse_qs(Body),
     %% First read in the body
     Params = maps:from_list(Data),
     modulate_state(Req#{params => Params}, Tl);
-modulate_state(Req, [parse_qs|T1]) ->
+modulate_state(Req, [{parse_qs, Type}|T1]) ->
     Qs = cowboy_req:parse_qs(Req),
-    MapQs = maps:from_list(Qs),
-    modulate_state(Req#{parsed_qs => MapQs}, T1);
+    case Type of
+        true -> MapQs = maps:from_list(Qs),
+                modulate_state(Req#{parsed_qs => MapQs}, T1);
+        list -> modulate_state(Req#{parsed_qs => Qs}, T1)
+    end;
 modulate_state(State, [_|Tl]) ->
     modulate_state(State, Tl).
 

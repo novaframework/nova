@@ -14,9 +14,8 @@
 %%--------------------------------------------------------------------
 -spec pre_request(Req :: cowboy_req:req(), Options :: map()) ->
                          {ok, Req0 :: cowboy_req:req()}.
-pre_request(Req, Options) ->
-    ParsedOptions = nova_plugin_utilities:parse_options(Options),
-    ReqWithOptions = set_headers(Req, ParsedOptions),
+pre_request(Req, #{allow_origins := Origins}) ->
+    ReqWithOptions = add_cors_headers(Req, Origins),
     continue(ReqWithOptions).
 
 %%--------------------------------------------------------------------
@@ -61,14 +60,6 @@ continue(#{method := <<"OPTIONS">>} = Req) ->
     {stop, Reply};
 continue(Req) ->
     {ok, Req}.
-
-set_headers(Req, []) -> Req;
-set_headers(Req, [{allow_origins, Origins}|T]) ->
-    CorsReq = add_cors_headers(Req, Origins),
-    set_headers(CorsReq, T);
-set_headers(Req, [_H|T]) ->
-    set_headers(Req, T).
-
 add_cors_headers(Req, Origins) ->
     OriginsReq = cowboy_req:set_resp_header(
         <<"Access-Control-Allow-Origin">>, Origins, Req),
