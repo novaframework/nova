@@ -153,12 +153,12 @@ handle_cast(_Request, State) ->
                          {stop, Reason :: normal | term(), NewState :: term()}.
 handle_info({ProcessRef, {data, Data}}, State) ->
     Msg = case Data of
-	      {eol, Text} -> Text;
-	      _ -> Data
-	  end,
+              {eol, Text} -> Text;
+              _ -> Data
+          end,
     case nova:get_environment() of
-	dev -> io:format("~s~n", [Msg]);
-	_ -> ok %% Ignore the output
+        dev -> io:format(user, "~s~n", [Msg]);
+        _ -> ok %% Ignore the output
     end,
     {noreply, State};
 handle_info({'EXIT', Ref, Reason}, State = #state{process_refs = Refs}) ->
