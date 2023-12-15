@@ -26,28 +26,4 @@ jobs:
       run: rebar3 xref
     - name: Run elvis
       run: rebar3 as lint lint
-  release:
-    name: Get semver version
-    runs-on: ubuntu-latest
-    steps:
-        - name: Checkout Code
-          uses: actions/checkout@v4
-        - name: Get Next Version
-          if: github.ref == 'refs/heads/master'
-          id: semver
-          uses: ietf-tools/semver-action@v1
-          with:
-            token: ${{ secrets.GITHUB_TOKEN }}
-            branch: master
-        - name: Create Release
-          if: github.ref == 'refs/heads/master'
-          uses: ncipollo/release-action@v1.12.0
-          with:
-            allowUpdates: true
-            draft: false
-            makeLatest: true
-            tag: ${{ steps.semver.outputs.next }}
-            commit: ${{ github.head_ref }}
-            name: ${{ steps.semver.outputs.next }}
-            body: Changelog Contents
-            token: ${{ secrets.GITHUB_TOKEN }}
+
