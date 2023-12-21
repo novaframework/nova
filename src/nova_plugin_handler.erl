@@ -23,7 +23,8 @@ execute(Req, Env) ->
 run_plugins([], Callback, Req, Env) ->
     {ok, Req, Env#{plugin_state => Callback}};
 run_plugins([{Module, Options}|Tl], Callback, Req, Env) ->
-    try Module:Callback(Req, Options) of
+    ExtraState = maps:get(extra_state, Env, #{}),
+    try Module:Callback(Req#{extra_state => ExtraState}, Options) of
         {ok, Req0} ->
             run_plugins(Tl, Callback, Req0, Env);
         {break, Req0} ->
