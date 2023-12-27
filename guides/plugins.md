@@ -119,5 +119,5 @@ This plugins handle incoming data and can transform them to erlang maps dependin
 |Option|Description|Req|
 |decode_json_body|If header is application/json it will decode the body.| `Req#{json => Map}`|
 |read_urlencoded_body|If header is application/x-www-form-urlencoded it will decode it.| `Req#{params => Map}`|
-|parse_qs| If the path have qs in it we will get them.|`Req#{parsed_qs => Map|List}`|
+|parse_qs| If the path have qs in it we will get them.|`Req#{parsed_qs => Map or List}`|
 
