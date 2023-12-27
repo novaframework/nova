@@ -9,6 +9,7 @@
 
 -include_lib("kernel/include/logger.hrl").
 -include("nova_router.hrl").
+-include("../include/nova_internals.hrl").
 
 -callback init(Req, any()) -> {ok | module(), Req, any()}
                                   | {module(), Req, any(), any()}
@@ -29,7 +30,7 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
         {Mod, Req2, State, Opts} ->
             erlang:apply(Mod, upgrade, [Req2, Env, Handler, State, Opts])
     catch
-        Class:Reason:Stacktrace ->
+	?CATCH_CLAUSE(Class, Reason, Stacktrace)
             Payload = #{status_code => 500,
                         stacktrace => Stacktrace,
                         class => Class,
@@ -51,7 +52,7 @@ execute(Req, Env = #{module := Module, function := Function}) ->
                          class => Class,
                          reason => Reason}),
             render_response(Req#{crash_info => Reason}, Env, Status);
-        Class:Reason:Stacktrace ->
+	?CATCH_CLAUSE(Class, Reason, Stacktrace)
             ?LOG_ERROR(#{msg => <<"Controller crashed">>,
                          class => Class,
                          reason => Reason,
