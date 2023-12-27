@@ -7,14 +7,13 @@
 
 -include_lib("kernel/include/logger.hrl").
 
-pre_request(Req, Opts) ->
-    CorrId = get_correlation_id(Req, Opts),
+pre_request(Req0, Opts) ->
+    CorrId = get_correlation_id(Req0, Opts),
     %% Update the loggers metadata with correlation-id
     ok = update_logger_metadata(CorrId, Opts),
-    %% Redundant entry, allow controllers to erlang:get(correlation_id)
-    ok = put_process_dictionary(CorrId, Opts),
-    Req1 = cowboy_req:set_resp_header(<<"X-Correlation-ID">>, CorrId, Req),
-    {ok, Req1}.
+    Req1 = cowboy_req:set_resp_header(<<"X-Correlation-ID">>, CorrId, Req0),
+    Req = Req1#{correlation_id => CorrId},
+    {ok, Req}.
 
 post_request(Req, _) ->
     {ok, Req}.
@@ -44,9 +43,3 @@ uuid() ->
 update_logger_metadata(CorrId, Opts) ->
     LoggerKey = maps:get(logger_metadata_key, Opts, <<"correlation-id">>),
     logger:update_process_metadata(#{LoggerKey => CorrId}).
-
-put_process_dictionary(CorrId, Opts) ->
-    DictionaryKey = maps:get(dictionary_key, Opts, correlation_id),
-    erlang:put(DictionaryKey, CorrId),
-    ok.
-
