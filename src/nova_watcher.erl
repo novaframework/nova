@@ -151,7 +151,7 @@ handle_cast(_Request, State) ->
                          {noreply, NewState :: term(), Timeout :: timeout()} |
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: normal | term(), NewState :: term()}.
-handle_info({ProcessRef, {data, Data}}, State) ->
+handle_info({_ProcessRef, {data, Data}}, State) ->
     Msg = case Data of
               {eol, Text} -> Text;
               _ -> Data

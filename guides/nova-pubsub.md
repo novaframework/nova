@@ -1,6 +1,6 @@
 # Nova Pubsub
 
-With version 0.9.4 we introduced the concept of a pubsub-like mechanism in Nova so that users can build distributed services. Internally it relies on Erlangs `pg2`-module which enables distributed named process groups. The concept is really simple and there's not much depth in the current implementation - it should only be used as a simple message bus. If you need more advanced features please take a look at [RabbitMQ](rabbitmq) or [MQTT](https://mqtt.org).
+With version 0.9.4 we introduced the concept of a pubsub-like mechanism in Nova so that users can build distributed services. Internally it relies on Erlangs `pg2`-module which enables distributed named process groups. The concept is really simple and there's not much depth in the current implementation - it should only be used as a simple message bus. If you need more advanced features please take a look at [RabbitMQ](https://www.rabbitmq.com/) or [MQTT](https://mqtt.org).
 
 ## Basic concepts
 
