@@ -36,16 +36,16 @@ execute(Req = #{host := Host}, Env = #{secure := {Module, Function}}) ->
             {ok, Req0, _Env0} = nova_router:render_status_page(Host, 401, #{}, Req, Env),
             Req1 = cowboy_req:reply(401, Req0),
             {stop, Req1}
-    catch 
+    catch
         ?CATCH_CLAUSE(Class, Reason, Stacktrace)
             ?LOG_ERROR(#{msg => <<"Security handler crashed">>,
                          class => Class,
                          reason => Reason,
                          stacktrace => Stacktrace}),
             Payload = #{status_code => 500,
-			stacktrace => Stacktrace,
-			class => Class,
-			reason => Reason},
+                        stacktrace => Stacktrace,
+                        class => Class,
+                        reason => Reason},
             {ok, Req0, _Env} = nova_router:render_status_page(Host, 500, #{}, Req#{crash_info => Payload}, Env),
             Req1 = cowboy_req:reply(500, Req0),
             {stop, Req1}
