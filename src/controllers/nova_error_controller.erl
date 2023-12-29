@@ -1,18 +1,27 @@
 -module(nova_error_controller).
 -export([
          not_found/1,
-         server_error/1
+         server_error/1,
+	 status_code/1
         ]).
+
+
+status_code(Req) ->
+    {status, maps:get(resp_status_code, Req, 200)}.
 
 not_found(Req) ->
     %% Check the accept-headers
-    case cowboy_req:header(<<"accept">>, Req) of
-        <<"application/json">> ->
+    Accept = cowboy_req:header(<<"accept">>, Req),
+    AcceptList = binary:split(Accept, <<",">>, [global]),
+    
+    case {lists:member(<<"application/json">>, AcceptList),
+	  lists:member(<<"text/html">>, AcceptList)} of
+        {true, _} ->
             %% Render a json response
             JsonLib = nova:get_env(json_lib, thoas),
             Json = erlang:apply(JsonLib, encode, [#{message => "Resource not found"}]),
             {status, 404, #{<<"content-type">> => <<"application/json">>}, Json};
-        <<"text/html">> ->
+	{_, true} ->
             %% Just assume HTML
             Variables = #{status => "Could not find the page you were looking for",
                           title => "404 Not found",
@@ -99,3 +108,4 @@ format_arity(Arity, _) when is_function(Arity)->
     <<"fun">>;
 format_arity(Arity, _) ->
     Arity.
+    

@@ -35,7 +35,7 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
                         class => Class,
                         reason => Reason},
             ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class, reason => Reason, stacktrace => Stacktrace}),
-            render_response(Req#{crash_info => Payload}, Env, 500)
+            render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 404)
     end;
 execute(Req, Env = #{module := Module, function := Function}) ->
     %% Ensure that the module exists and have the correct function exported
