@@ -30,7 +30,7 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
         {Mod, Req2, State, Opts} ->
             erlang:apply(Mod, upgrade, [Req2, Env, Handler, State, Opts])
     catch
-	?CATCH_CLAUSE(Class, Reason, Stacktrace)
+        ?CATCH_CLAUSE(Class, Reason, Stacktrace)
             Payload = #{status_code => 500,
                         stacktrace => Stacktrace,
                         class => Class,
@@ -52,7 +52,7 @@ execute(Req, Env = #{module := Module, function := Function}) ->
                          class => Class,
                          reason => Reason}),
             render_response(Req#{crash_info => Reason}, Env, Status);
-	?CATCH_CLAUSE(Class, Reason, Stacktrace)
+        ?CATCH_CLAUSE(Class, Reason, Stacktrace)
             ?LOG_ERROR(#{msg => <<"Controller crashed">>,
                          class => Class,
                          reason => Reason,
