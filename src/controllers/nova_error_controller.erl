@@ -13,7 +13,7 @@ not_found(Req) ->
     %% Check the accept-headers
     Accept = cowboy_req:header(<<"accept">>, Req),
     AcceptList = binary:split(Accept, <<",">>, [global]),
-    
+
     case {lists:member(<<"application/json">>, AcceptList),
 	  lists:member(<<"text/html">>, AcceptList)} of
         {true, _} ->
@@ -80,6 +80,9 @@ server_error(#{crash_info := #{stacktrace := Stacktrace, class := Class, reason 
     end.
 
 
+format_stacktrace(not_enabled) ->
+    logger:warning("Stacktrace disabled. If you want stacktrace enabled set {erl_opts, [{d,'USE_STACKTRACES'}]} in your rebar.config."),
+    [];
 format_stacktrace([]) -> [];
 format_stacktrace([{Mod, Func, Arity, [{file, File}, {line, Line}]}|Tl]) ->
     Formated = #{module => erlang:atom_to_binary(Mod, utf8),
@@ -108,4 +111,3 @@ format_arity(Arity, _) when is_function(Arity)->
     <<"fun">>;
 format_arity(Arity, _) ->
     Arity.
-    
