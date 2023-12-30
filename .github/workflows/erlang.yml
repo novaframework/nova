@@ -26,4 +26,15 @@ jobs:
       run: rebar3 xref
     - name: Run elvis
       run: rebar3 as lint lint
+    - name: Extract branch name
+      shell: bash
+      run: echo "branch=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}" >> $GITHUB_OUTPUT
+      id: extract_branch
+    - name: PING - Dispatch initiating repository event
+      if: github.event.action != 'pong'
+      run: |
+        curl -X POST https://api.github.com/repos/Taure/nova_request_app/dispatches \
+        -H 'Accept: application/vnd.github.everest-preview+json' \
+        -u ${{ secrets.RepoTest }} \
+        --data '{"event_type": "start_test", "client_payload": { "branch": ${{ steps.extract_branch.outputs.branch }} }'
 
