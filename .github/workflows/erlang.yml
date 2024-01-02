@@ -42,7 +42,7 @@ jobs:
     - name: PING - Dispatch initiating repository event
       if: github.event.action != 'pong'
       run: |
-        curl -X POST https://api.github.com/repos/Taure/nova_request_app/dispatches \
+        curl -X POST https://api.github.com/repos/novaframework/nova_request_app/dispatches \
         -H 'Accept: application/vnd.github.everest-preview+json' \
         -u ${{ secrets.RepoTest }} \
         --data '{"event_type": "start_test", "client_payload": { "branch": ${{ steps.extract_branch.outputs.branch }} }'
