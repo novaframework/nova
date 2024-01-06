@@ -30,3 +30,17 @@ One can configure which json library to use for encoding/decoding json structure
 `encode(Structure) -> binary() | iolist()`
 
 `decode(JsonString) -> {ok, Structure}`
+
+
+# Handling errors in Nova
+
+Nova will by default render a error page if an error occurs. This page will be rendered using the `nova_error`-template. This template can be overridden by defining a template with the same name in your application.
+By defauly Nova outputs a lot of information, including the stacktrace. This might not be a good approach in production. To turn off stacktraces in production you can add the following to your *sys.config*:
+
+```erlang
+{nova, [{render_error_pages, false}]}
+```
+
+This will exclude stacktrace from the error page.
+
+*Note* Nova is aware about which `accept`-headers the request is sent with and will respond with the correct content-type. If the request is sent with `application/json` Nova will respond with a JSON-structure instead of a HTML-page.
