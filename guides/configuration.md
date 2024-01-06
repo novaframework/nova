@@ -1,4 +1,22 @@
-# Configuration parameters
+There's a lot of parameters that can be configured in Nova. This document will try to explain them all.
+
+# Cowboy configuration
+
+Nova uses Cowboy as the webserver. Cowboy is a very flexible webserver and Nova tries to expose as much of this flexibility as possible. This means that you can configure Cowboy in a lot of different ways. The configuration is done in the `nova`-application under `cowboy_configuration`-key in your *sys.config*.
+
+| Key | Description | Value | Default |
+|-----|-------------|-------|
+| `stream_handlers` | Stream handlers are used to handle streaming requests. You can configure multiple stream handlers. Read more in the subsection *Stream handlers* | `list()` | `[nova_stream_h, cowboy_compress_h, cowboy_stream_h]` |
+| `options` | Cowboy options. Read more in the subsection *Cowboy options* | `map()` | `#{compress => true}` |
+| `ip` | IP to bind to | `tuple` | `{0, 0, 0, 0}` |
+| `port` | Port to bind to | `integer()` | `8080` |
+| `use_ssl` | If SSL should be used | `boolean()` | `false` |
+| `ssl_port` | Port to bind to when using SSL | `integer()` | `8443` |
+| `ca_cert` | Path to CA-cert | `string()` | `undefined` |
+| `cert` | Path to cert | `string()` | `undefined` |
+
+
+# Nova specific configurations
 
 Following parameters should be defined under the `nova`-key in your *sys.config*.
 
