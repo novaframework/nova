@@ -381,14 +381,13 @@ insert(Host, Path, Combinator, Value, Tree) ->
 
 
 normalize_plugins(Plugins) ->
-    lists:reverse(normalize_plugins(Plugins, [])).
+    NormalizedPlugins = normalize_plugins(Plugins, []),
+    [{Type, lists:reverse(TypePlugins)} || {Type, TypePlugins} <- NormalizedPlugins].
 
 normalize_plugins([], Ack) -> Ack;
 normalize_plugins([{Type, PluginName, Options}|Tl], Ack) ->
     ExistingPlugins = proplists:get_value(Type, Ack, []),
     normalize_plugins(Tl, [{Type, [{PluginName, Options}|ExistingPlugins]}|proplists:delete(Type, Ack)]).
-
-
 
 method_to_binary(get) -> <<"GET">>;
 method_to_binary(post) -> <<"POST">>;
