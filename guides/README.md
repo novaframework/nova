@@ -6,7 +6,7 @@ Here can you find the documentation for the Nova framework. Nova is under contst
 
 ### Start of with Nova
 
-* [Quickstart](quickstart.md)
+* [Quickstart](quick-start.md)
 * [Rebar3 plugin](rebar3_nova.md)
 
 ### Configuration and concepts
