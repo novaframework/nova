@@ -3,7 +3,7 @@
 Watchers is a concept that we directly ported from [Phoenix](https://www.phoenixframework.org/) and it enables the user to have running processes alongside the server.
 It read the configuration from the `nova` application under `watchers`-key.
 
-```
+```erlang
 {nova, [
   {watchers, [
     {my_application, "npm", ["run", "watch"], #{workdir => "priv/my_js_application"}}
