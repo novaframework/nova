@@ -54,7 +54,8 @@ server_error(#{crash_info := #{status_code := StatusCode} = CrashInfo} = Req) ->
         _ ->
             {status, StatusCode}
     end;
-server_error(#{crash_info := #{stacktrace := Stacktrace, class := Class, reason := Reason}} = Req) ->
+server_error(#{crash_info := #{class := Class, reason := Reason}} = Req) ->
+    Stacktrace = maps:get(stacktrace, Req, []),
     Variables = #{status => "Internal Server Error",
                   title => "500 Internal Server Error",
                   message => "Something internal crashed. Please take a look!",
@@ -81,7 +82,7 @@ server_error(#{crash_info := #{stacktrace := Stacktrace, class := Class, reason 
 
 
 format_stacktrace(not_enabled) ->
-    logger:warning("Stacktrace disabled. If you want stacktrace enabled set {erl_opts, [{d,'USE_STACKTRACES'}]} in your rebar.config."),
+    logger:warning("Stacktrace disabled. If you want to enable stacktraces call nova:stracktrace(true) or update your sys.config - Read more in the docs"),
     [];
 format_stacktrace([]) -> [];
 format_stacktrace([{Mod, Func, Arity, [{file, File}, {line, Line}]}|Tl]) ->

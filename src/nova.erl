@@ -10,7 +10,8 @@
          get_apps/0,
          get_environment/0,
          get_env/2,
-         set_env/2
+         set_env/2,
+         stacktrace/1
         ]).
 
 -type state() :: any().
@@ -83,3 +84,16 @@ set_env(Key, Value) ->
         _ ->
             {error, main_app_not_found}
     end.
+
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Enables or disables stacktraces. This is a global setting and
+%% affects all requests.
+%% @end
+%%--------------------------------------------------------------------
+-spec stacktrace(Enable :: boolean()) -> ok.
+stacktrace(true) ->
+    persistent_term:put(nova_use_stacktrace, true);
+stacktrace(_) ->
+    persistent_term:erase(nova_use_stacktrace).

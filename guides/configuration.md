@@ -23,6 +23,7 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 | Key | Description | Value |
 |-----|-------------|-------|
 | `use_persistent_term` | Use `persistent_term` module to store routing tree | `boolean()` |
+| `use_stacktrace` | If Nova should include stacktrace in error-pages | `boolean()` |
 | `render_error_pages` | If Nova should render error-pages for HTML-request | `boolean()` |
 | `use_sessions` | Turn off/on support for sessions | `boolean()` |
 | `session_manager` | Specifify a module to use as the session manager. Defaults to `nova_session_ets` | `atom()` |
