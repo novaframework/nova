@@ -7,7 +7,7 @@ Plugins are used to handle things before and/or after a request. They are applie
 
 This is an example:
 
-```
+```erlang
 -module(correlation_id).
 -behaviour(nova_plugin).
 -export([
@@ -41,7 +41,7 @@ decode our message so that we can process it. To do that we need to add `decode_
 **sys.config**
 
 
- ```
+ ```erlang
      {nova, [
          {environment, dev},
          {cowboy_configuration, #{
@@ -62,7 +62,7 @@ Usage:
 
 **controller**
 
-```
+```erlang
 -module(test_controller).
 -export([increment/1]).
 
@@ -75,6 +75,7 @@ increment(#{<<"json">> := #{<<"id">> := Id, <<"value">> := Value}})->
 Nova has a couple of plugins for some general purposes.
 
 |Plugin|Description|Code|
+|------|-----------|----|
 |nova_correlation_plugin|This plugin will add a correlation id to header response but also add `#{correlation_id => CorrelationID}` to the request obj that is passed to the controller.|[nova_correlation_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_correlation_plugin.erl)|
 |nova_cors_plugin|This plugin will handle cors and add the cors headers into the request.|[nova_cors_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_cors_plugin.erl)|
 |nova_request_plugin|This plugin will handle incomming data like qs, form urlencoded and json|[nova_request_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_request_plugin.erl)|
@@ -90,6 +91,7 @@ This plugin will generate a uuid v4 and set it as a response header as `X-Correl
 ```
 
 |Option|Description|
+|------|-----------|
 |request_correlation_header|This is if you want a different correlation header than the standard `X-Correlation-ID`|
 |logger_metadata_key| This is if you want to have a different metadata key then the standard `correaltion_id`|
 
@@ -103,6 +105,7 @@ For other methods it will add the CORS headers to the request.
 ```
 
 |Option|Description|
+|------|-----------|
 |allow_origins|Specifies which origins to insert into Access-Control-Allow-Origin|
 
 ### Nova request
@@ -117,7 +120,7 @@ This plugins handle incoming data and can transform them to erlang maps dependin
 
 
 |Option|Description|Req|
+|------|-----------|----|
 |decode_json_body|If header is application/json it will decode the body.| `Req#{json => Map}`|
 |read_urlencoded_body|If header is application/x-www-form-urlencoded it will decode it.| `Req#{params => Map}`|
 |parse_qs| If the path have qs in it we will get them.|`Req#{parsed_qs => Map or List}`|
-
