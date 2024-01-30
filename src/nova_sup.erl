@@ -99,7 +99,7 @@ setup_cowboy(Configuration) ->
             Host0 = inet:ntoa(Host),
             CowboyVersion = get_version(cowboy),
             NovaVersion = get_version(nova),
-            UseStacktrace = application:get(nova, use_stacktrace, false),
+            UseStacktrace = application:get_env(nova, use_stacktrace, false),
             persistent_term:put(nova_use_stacktrace, UseStacktrace),
             ?LOG_NOTICE(#{msg => <<"Nova is running">>,
                           url => unicode:characters_to_list(io_lib:format("http://~s:~B", [Host0, Port])),
