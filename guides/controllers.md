@@ -3,7 +3,7 @@
 Controllers are central in how Nova works. They are in charge of handling all user-implemented logic for a request.
 Controllers are located in the `/src/controllers/` directory of your Nova application. A controller is basically a regular Erlang module that exposes functions you've provided in the routing file.
 
-![Request life-cycle](assets/controller_flow.png "Request life-cycle")
+![Request life-cycle](images/controller_flow.png "Request life-cycle")
 
 ## Handlers
 
