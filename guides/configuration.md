@@ -5,7 +5,7 @@ There's a lot of parameters that can be configured in Nova. This document will t
 Nova uses Cowboy as the webserver. Cowboy is a very flexible webserver and Nova tries to expose as much of this flexibility as possible. This means that you can configure Cowboy in a lot of different ways. The configuration is done in the `nova`-application under `cowboy_configuration`-key in your *sys.config*.
 
 | Key | Description | Value | Default |
-|-----|-------------|-------|
+|-----|-------------|-------|---------|
 | `stream_handlers` | Stream handlers are used to handle streaming requests. You can configure multiple stream handlers. Read more in the subsection *Stream handlers* | `list()` | `[nova_stream_h, cowboy_compress_h, cowboy_stream_h]` |
 | `options` | Cowboy options. Read more in the subsection *Cowboy options* | `map()` | `#{compress => true}` |
 | `ip` | IP to bind to | `tuple` | `{0, 0, 0, 0}` |

@@ -1,9 +1,12 @@
 # Rebar3 Nova #
 
-With Nova we have a rebar3 plugin that comes with some commands:
+If you have used the installation script, documented in the main README.md-file you should have a working installation of rebar3 nova. This gives you some handy commands to work with Nova;
 
-## Development mode ##
+`rebar3 new nova <project-name>` - Creates a new Nova project in the directory `<project-name>`
 
-When running rebar3 nova serve it will start a node (same as rebar3 shell) but it will reload/recompile erlang modules and dtl files.
+`rebar3 nova serve` - Starts a local webserver on port given in *sys.config*, serving the current project. This means that if something is changed in the project, the server will automatically reload the changed files.
 
-This helps when developing new solutions and it is something that needs to be solved.
+`rebar3 nova routes` - Lists all routes in the current project (Includes included Nova applications aswell if they are properly configured)
+
+
+We are hoping to increase the amount of commands that is available from the rebar3 nova command in the future.

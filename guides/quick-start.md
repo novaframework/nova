@@ -5,7 +5,7 @@
 Nova provides a plugin to make working with the framework a lot easier. One can install it by either using
 an automated installation or include it manually in the global *rebar.config* file.
 
-> #### Note {: .tip}
+> #### Note :bangbang:
 >
 > If you require help installing Erlang and/or rebar3 please check [https://adoptingerlang.org/docs/development/setup/](https://adoptingerlang.org/docs/development/setup/)
 
@@ -58,7 +58,7 @@ $ rebar3 new nova my_first_app
 
 Now the skeleton have been created and you should be able to start it. Go into the newly created directory and run the `serve` command.
 
-> #### Note {: .tip}
+> #### Note :bangbang:
 >
 > For the auto-compile/reload to work you need [inotify](https://github.com/massemanet/inotify) to be installed.
 

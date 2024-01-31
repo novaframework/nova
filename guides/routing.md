@@ -90,13 +90,18 @@ This will cause nova to return a `401` status code for all requests not coming f
 
 ## Using plugins local to a set of endpoints
 
-TBA
+It's possible to configure a small set of endpoints with a specific plugin. This is done by adding a `plugins` key to the route entry. The value of this key should be a list of plugins to use for this route entry.
 
-## Configuration of error-detection in route-tree
+```erlang
+#{prefix => "/admin",
+  plugins => [
+    {pre_request, nova_json_schemas, #{render_errors => true}}
+  ],
+  routes => [
+    {"/", {my_controller, main}, #{methods => [get]}}
+  ]
+}
+```
 
-Since Nova 0.8.0 we are using `routing_tree` as the underlying data structure to handle routes. `routing_tree` utilizes a radix-like tree structure to store the routing information
-and can also determine if a route already exists or creates a non-deterministic behaviour. The detection is turned off as default. This behaviour can be turned on by adding `{use_strict_routing, true}` under the `nova` key in your `sys.config` file.
-
-> #### Important {: .tip}
->
-> Be aware that the strict-mode is experimental and might cause false-positives, resulting in an exception when starting your application.
+In the example above we have enabled the *pre-request*-plugin `nova_json_schemas` for all routes under the `/admin` prefix. This will cause all requests to be validated against the JSON schema defined in the `nova_json_schemas` plugin.
+You can also include *post-request*-plugins in the same way.
