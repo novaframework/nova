@@ -6,7 +6,7 @@ With version 0.9.4 we introduced the concept of a pubsub-like mechanism in Nova 
 
 The idea is that a process subscribes to a *topic*. If there's any messages sent to this topic all the *subscribed* processes receivs that message.
 
-![Processes](images/pubsub.png)
+![Processes](assets/pubsub.png)
 
 *This picture shows how two processes have subscribed to a topic (Or channel) "Messages". When another process then sends *"Hello"* on this topic the other two will receive it.
 
