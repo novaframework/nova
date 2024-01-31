@@ -6,11 +6,11 @@
         ]).
 
 -include_lib("kernel/include/logger.hrl").
--include("../include/nova_internals.hrl").
 
 execute(Req, Env = #{secure := false}) ->
     {ok, Req, Env};
 execute(Req = #{host := Host}, Env = #{secure := {Module, Function}}) ->
+    UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
     try Module:Function(Req) of
         {true, AuthData} ->
             case maps:get(cowboy_handler, Env, undefined) of
@@ -37,13 +37,23 @@ execute(Req = #{host := Host}, Env = #{secure := {Module, Function}}) ->
             Req1 = cowboy_req:reply(401, Req0),
             {stop, Req1}
     catch
-        ?CATCH_CLAUSE(Class, Reason, Stacktrace)
+        Class:Reason:Stacktrace when UseStacktrace == true ->
             ?LOG_ERROR(#{msg => <<"Security handler crashed">>,
                          class => Class,
                          reason => Reason,
                          stacktrace => Stacktrace}),
             Payload = #{status_code => 500,
                         stacktrace => Stacktrace,
+                        class => Class,
+                        reason => Reason},
+            {ok, Req0, _Env} = nova_router:render_status_page(Host, 500, #{}, Req#{crash_info => Payload}, Env),
+            Req1 = cowboy_req:reply(500, Req0),
+            {stop, Req1};
+        Class:Reason ->
+            ?LOG_ERROR(#{msg => <<"Security handler crashed">>,
+                         class => Class,
+                         reason => Reason}),
+            Payload = #{status_code => 500,
                         class => Class,
                         reason => Reason},
             {ok, Req0, _Env} = nova_router:render_status_page(Host, 500, #{}, Req#{crash_info => Payload}, Env),

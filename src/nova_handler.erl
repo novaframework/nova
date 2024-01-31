@@ -9,7 +9,6 @@
 
 -include_lib("kernel/include/logger.hrl").
 -include("nova_router.hrl").
--include("../include/nova_internals.hrl").
 
 -callback init(Req, any()) -> {ok | module(), Req, any()}
                                   | {module(), Req, any(), any()}
@@ -21,6 +20,7 @@
 -spec execute(Req, Env) -> {ok, Req, Env}
                                when Req::cowboy_req:req(), Env::cowboy_middleware:env().
 execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
+    UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
     try erlang:apply(Handler, init, [Req, Arguments]) of
         {ok, Req2, _State} ->
             Result = terminate(normal, Req2, Handler),
@@ -30,16 +30,23 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
         {Mod, Req2, State, Opts} ->
             erlang:apply(Mod, upgrade, [Req2, Env, Handler, State, Opts])
     catch
-        ?CATCH_CLAUSE(Class, Reason, Stacktrace)
-            Payload = #{status_code => 500,
+        Class:Reason:Stacktrace when UseStacktrace == true ->
+            Payload = #{status_code => 404,
                         stacktrace => Stacktrace,
                         class => Class,
                         reason => Reason},
             ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class, reason => Reason, stacktrace => Stacktrace}),
+            render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 404);
+        Class:Reason ->
+            Payload = #{status_code => 404,
+                        class => Class,
+                        reason => Reason},
+            ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class, reason => Reason}),
             render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 404)
     end;
 execute(Req, Env = #{module := Module, function := Function}) ->
     %% Ensure that the module exists and have the correct function exported
+    UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
     try RetObj = erlang:apply(Module, Function, [Req]),
          call_handler(Module, Function, Req, RetObj, Env, false)
     of
@@ -52,7 +59,7 @@ execute(Req, Env = #{module := Module, function := Function}) ->
                          class => Class,
                          reason => Reason}),
             render_response(Req#{crash_info => Reason}, Env, Status);
-        ?CATCH_CLAUSE(Class, Reason, Stacktrace)
+        Class:Reason:Stacktrace when UseStacktrace == true ->
             ?LOG_ERROR(#{msg => <<"Controller crashed">>,
                          class => Class,
                          reason => Reason,
@@ -61,6 +68,16 @@ execute(Req, Env = #{module := Module, function := Function}) ->
             %% Build the payload object
             Payload = #{status_code => 500,
                         stacktrace => Stacktrace,
+                        class => Class,
+                        reason => Reason},
+            render_response(Req#{crash_info => Payload}, Env, 500);
+        Class:Reason ->
+            ?LOG_ERROR(#{msg => <<"Controller crashed">>,
+                         class => Class,
+                         reason => Reason}),
+            terminate(Reason, Req, Module),
+            %% Build the payload object
+            Payload = #{status_code => 500,
                         class => Class,
                         reason => Reason},
             render_response(Req#{crash_info => Payload}, Env, 500)
