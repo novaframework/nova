@@ -1,6 +1,8 @@
+# Configuration
+
 There's a lot of parameters that can be configured in Nova. This document will try to explain them all.
 
-# Cowboy configuration
+## Cowboy configuration
 
 Nova uses Cowboy as the webserver. Cowboy is a very flexible webserver and Nova tries to expose as much of this flexibility as possible. This means that you can configure Cowboy in a lot of different ways. The configuration is done in the `nova`-application under `cowboy_configuration`-key in your *sys.config*.
 
@@ -16,7 +18,7 @@ Nova uses Cowboy as the webserver. Cowboy is a very flexible webserver and Nova 
 | `cert` | Path to cert | `string()` | `undefined` |
 
 
-# Nova specific configurations
+## Nova specific configurations
 
 Following parameters should be defined under the `nova`-key in your *sys.config*.
 
@@ -31,7 +33,7 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 | `bootstrap_application` | Define which application to bootstrap with Nova. This should be the name of your application. | `atom()` |
 | `cowboy_configuration` | If you need some additional configuration done to Cowboy this is the place. Check `nova_sup` module to learn which keys that can be defined. | `map()` |
 
-# Application parameters
+## Application parameters
 
 These parameters can be specified in your *main* application (Eg the one you've specified in the `bootstrap`-section).
 
@@ -42,7 +44,7 @@ These parameters can be specified in your *main* application (Eg the one you've 
 
 
 
-## Configure json_lib
+### Configure json_lib
 
 One can configure which json library to use for encoding/decoding json structures. The module defined for this should expose two different functions:
 
@@ -51,7 +53,7 @@ One can configure which json library to use for encoding/decoding json structure
 `decode(JsonString) -> {ok, Structure}`
 
 
-# Handling errors in Nova
+## Handling errors in Nova
 
 Nova will by default render a error page if an error occurs. This page will be rendered using the `nova_error`-template. This template can be overridden by defining a template with the same name in your application.
 By defauly Nova outputs a lot of information, including the stacktrace. This might not be a good approach in production. To turn off stacktraces in production you can add the following to your *sys.config*:
