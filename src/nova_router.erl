@@ -66,13 +66,13 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
                                            secure = Secure, plugins = Plugins, extra_state = ExtraState}} ->
             {ok,
              Req#{plugins => Plugins,
+                  extra_state => ExtraState,
                   bindings => Bindings},
              Env#{app => App,
                   module => Module,
                   function => Function,
                   secure => Secure,
-                  controller_data => #{},
-                  extra_state => ExtraState
+                  controller_data => #{}
                  }
             };
         {ok, Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
