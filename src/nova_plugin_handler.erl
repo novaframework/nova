@@ -26,8 +26,8 @@ run_plugins([{Module, Options}|Tl], Callback, Req, Env) ->
     ExtraState = maps:get(extra_state, Env, #{}),
     Req0 = Req#{extra_state => ExtraState},
     Args = case proplists:get_value(Callback, Module:module_info(exports)) of
-               1 -> [Req0, Options];
-               2 -> [Req0, Env, Options];
+               2 -> [Req0, Options];
+               3 -> [Req0, Env, Options];
                _ -> {throw, bad_callback}
            end,
     try erlang:apply(Module, Callback, Args) of
