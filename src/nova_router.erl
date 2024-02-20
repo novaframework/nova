@@ -181,7 +181,8 @@ parse_url(Host, [{StatusCode, StaticFile}|Tl], Prefix, Value, Tree) when is_inte
     %% TODO! Fix status-code so it's being threated specially
     Tree0 = insert(Host, StatusCode, '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value0, Tree0);
-parse_url(Host, [{StatusCode, {Module, Function}, Options}|Tl], Prefix, Value, Tree) when is_integer(StatusCode) ->
+parse_url(Host, [{StatusCode, Callback, Options}|Tl], Prefix, Value, Tree) when is_integer(StatusCode) ->
+    {Module, Function} = module_name(Callback),
     Value0 = Value#nova_handler_value{
                module = Module,
                function = Function},
@@ -270,9 +271,9 @@ parse_url(Host,
     Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, Tree0);
 
-parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix,
+parse_url(Host, [{Path, Callback, Options}|Tl], Prefix,
           Value = #nova_handler_value{app = App, secure = _Secure}, Tree) ->
-
+    {Mod, Func} = module_name(Callback),
     RealPath = case Path of
                    _ when is_list(Path) -> string:concat(Prefix, Path);
                    _ when is_integer(Path) -> Path;
@@ -318,8 +319,17 @@ parse_url(Host,
     RealPath = string:concat(Prefix, Path),
     CompiledPaths = insert(Host, RealPath, '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, CompiledPaths);
-parse_url(Host, [{Path, {Mod, Func}}|Tl], Prefix, Value, Tree) ->
-    parse_url(Host, [{Path, {Mod, Func}, #{}}|Tl], Prefix, Value, Tree).
+parse_url(Host, [{Path, Callback}|Tl], Prefix, Value, Tree) ->
+    parse_url(Host, [{Path, Callback, #{}}|Tl], Prefix, Value, Tree).
+
+module_name(Callback) when is_function(Callback, 1) ->
+    Info = erlang:fun_info(Callback),
+    external = proplists:get_value(type, Info),
+    Mod = proplists:get_value(module, Info),
+    Name = proplists:get_value(name, Info),
+    {Mod, Name};
+module_name({Mod, Name}) ->
+    {Mod, Name}.
 
 -spec render_status_page(StatusCode :: integer(), Req :: cowboy_req:req()) ->
                                 {ok, Req0 :: cowboy_req:req(), Env :: map()}.
