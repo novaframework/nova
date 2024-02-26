@@ -266,7 +266,21 @@ parse_url(Host,
                  app => App}),
     Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, Tree0);
+parse_url(Host,
+          [{Path, Mod, #{protocol := ws}} | Tl],
+          Prefix, #nova_handler_value{app = App, secure = Secure} = Value,
+          Tree) ->
+     Value0 =  #cowboy_handler_value{
+                  app = App,
+                  handler = nova_ws_handler,
+                  arguments = #{module => Mod},
+                  plugins = Value#nova_handler_value.plugins,
+                  secure = Secure},
 
+    ?LOG_DEBUG(#{action => <<"Adding route">>, protocol => <<"ws">>, route => Path, app => App}),
+    RealPath = string:concat(Prefix, Path),
+    CompiledPaths = insert(Host, RealPath, '_', Value0, Tree),
+    parse_url(Host, Tl, Prefix, Value, CompiledPaths);
 parse_url(Host, [{Path, Callback, Options}|Tl], Prefix,
           Value = #nova_handler_value{app = App, secure = _Secure}, Tree) ->
     RealPath = case Path of
@@ -289,7 +303,7 @@ parse_url(Host, [{Path, Callback, Options}|Tl], Prefix,
                   BinMethod = method_to_binary(Method),
                   Value1 =
                       case maps:get(protocol, Options, http) of
-                          http ->
+                        http ->
                               Value0#nova_handler_value{
                                 callback = Callback
                                }
@@ -297,21 +311,6 @@ parse_url(Host, [{Path, Callback, Options}|Tl], Prefix,
                   ?LOG_DEBUG(#{action => <<"Adding route">>, route => RealPath, app => App}),
                   insert(Host, RealPath, BinMethod, Value1, Tree0)
           end, Tree, Methods),
-    parse_url(Host, Tl, Prefix, Value, CompiledPaths);
-parse_url(Host,
-          [{Path, Mod, #{protocol := ws}} | Tl],
-          Prefix, #nova_handler_value{app = App, secure = Secure} = Value,
-          Tree) ->
-     Value0 =  #cowboy_handler_value{
-                  app = App,
-                  handler = nova_ws_handler,
-                  arguments = #{module => Mod},
-                  plugins = Value#nova_handler_value.plugins,
-                  secure = Secure},
-
-    ?LOG_DEBUG(#{action => <<"Adding route">>, protocol => <<"ws">>, route => Path, app => App}),
-    RealPath = string:concat(Prefix, Path),
-    CompiledPaths = insert(Host, RealPath, '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, CompiledPaths);
 parse_url(Host, [{Path, Callback}|Tl], Prefix, Value, Tree) ->
     parse_url(Host, [{Path, Callback, #{}}|Tl], Prefix, Value, Tree).
