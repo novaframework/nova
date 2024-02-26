@@ -1,10 +1,9 @@
 %% Nova Routing value
 -record(nova_handler_value, {
                              app :: atom(),
-                             module :: atom(),
-                             function :: atom(),
+                             callback :: {Mod :: atom(), Fun :: atom()} | fun(),
                              plugins = [] :: list(),
-                             secure = false :: false | {Mod :: atom(), Fun :: atom()},
+                             secure = false :: false | {Mod :: atom(), Fun :: atom()} | fun(),
                              extra_state :: any()
                             }).
 
@@ -13,5 +12,5 @@
                                handler :: atom(),
                                arguments :: any(),
                                plugins = [] :: list(),
-                               secure = false :: false | {Mod :: atom(), Fun :: atom()}
+                               secure = false :: false | {Mod :: atom(), Fun :: atom()} | fun()
                               }).

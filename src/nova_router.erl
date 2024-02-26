@@ -175,17 +175,14 @@ parse_url(Host, [{StatusCode, StaticFile}|Tl], Prefix, Value, Tree) when is_inte
                                                                          is_list(StaticFile) ->
     %% We need to signal that we have a static file here somewhere
     Value0 = Value#nova_handler_value{
-               module = nova_static,
-               function = execute},
+               callback = {nova_static,execute}},
 
     %% TODO! Fix status-code so it's being threated specially
     Tree0 = insert(Host, StatusCode, '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value0, Tree0);
 parse_url(Host, [{StatusCode, Callback, Options}|Tl], Prefix, Value, Tree) when is_integer(StatusCode) ->
-    {Module, Function} = module_name(Callback),
     Value0 = Value#nova_handler_value{
-               module = Module,
-               function = Function},
+               callback = Callback},
     Res = lists:foldl(fun(Method, Tree0) ->
                               insert(Host, StatusCode, Method, Value0, Tree0)
                       end, Tree, maps:get(methods, Options, ['_'])),
@@ -273,7 +270,6 @@ parse_url(Host,
 
 parse_url(Host, [{Path, Callback, Options}|Tl], Prefix,
           Value = #nova_handler_value{app = App, secure = _Secure}, Tree) ->
-    {Mod, Func} = module_name(Callback),
     RealPath = case Path of
                    _ when is_list(Path) -> string:concat(Prefix, Path);
                    _ when is_integer(Path) -> Path;
@@ -296,8 +292,7 @@ parse_url(Host, [{Path, Callback, Options}|Tl], Prefix,
                       case maps:get(protocol, Options, http) of
                           http ->
                               Value0#nova_handler_value{
-                                module = Mod,
-                                function = Func
+                                callback = Callback
                                }
                       end,
                   ?LOG_DEBUG(#{action => <<"Adding route">>, route => RealPath, app => App}),
@@ -321,15 +316,6 @@ parse_url(Host,
     parse_url(Host, Tl, Prefix, Value, CompiledPaths);
 parse_url(Host, [{Path, Callback}|Tl], Prefix, Value, Tree) ->
     parse_url(Host, [{Path, Callback, #{}}|Tl], Prefix, Value, Tree).
-
-module_name(Callback) when is_function(Callback, 1) ->
-    Info = erlang:fun_info(Callback),
-    external = proplists:get_value(type, Info),
-    Mod = proplists:get_value(module, Info),
-    Name = proplists:get_value(name, Info),
-    {Mod, Name};
-module_name({Mod, Name}) ->
-    {Mod, Name}.
 
 -spec render_status_page(StatusCode :: integer(), Req :: cowboy_req:req()) ->
                                 {ok, Req0 :: cowboy_req:req(), Env :: map()}.
@@ -361,13 +347,11 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
                      secure => false,
                      controller_data => #{status => StatusCode, data => Data}};
             {ok, Bindings, #nova_handler_value{app = App,
-                                               module = Module,
-                                               function = Function,
+                                               callback = Callback,
                                                secure = Secure,
                                                extra_state = ExtraState}} ->
                 Env#{app => App,
-                     module => Module,
-                     function => Function,
+                     callback => Callback,
                      secure => Secure,
                      controller_data => #{status => StatusCode, data => Data},
                      bindings => Bindings,
