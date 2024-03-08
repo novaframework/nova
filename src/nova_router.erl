@@ -30,6 +30,7 @@
 -include_lib("routing_tree/include/routing_tree.hrl").
 -include_lib("kernel/include/logger.hrl").
 -include("nova_router.hrl").
+-include("nova.hrl").
 
 -type bindings() :: #{binary() := binary()}.
 -export_type([bindings/0]).
@@ -37,8 +38,9 @@
 %% This module is also exposing callbacks for routers
 -callback routes(Env :: atom()) -> Routes :: [map()].
 
-
+%% Constants
 -define(NOVA_APPS, nova_apps).
+-define(NOVA_DISPATCH, nova_dispatch).
 
 -spec compiled_apps() -> [{App :: atom(), Prefix :: list()}].
 compiled_apps() ->
@@ -48,29 +50,31 @@ compiled_apps() ->
 -spec compile(Apps :: [atom() | {atom(), map()}]) -> host_tree().
 compile(Apps) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
-    Dispatch = compile(Apps, routing_tree:new(#{use_strict => UseStrict, convert_to_binary => true}), #{}),
+    Dispatch = routing_tree:new(#{use_strict => UseStrict, convert_to_binary => true}),
+    Dispatch0 = compile_from_file(Dispatch, #{}, Apps),
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
-    StorageBackend:put(nova_dispatch, Dispatch),
-    Dispatch.
+    StorageBackend:put(?NOVA_DISPATCH, Dispatch0),
+    Dispatch0.
 
 -spec execute(Req, Env :: cowboy_middleware:env()) -> {ok, Req, Env0} | {stop, Req}
                                                           when Req::cowboy_req:req(),
                                                                Env0::cowboy_middleware:env().
 execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
-    Dispatch = StorageBackend:get(nova_dispatch),
+    Dispatch = StorageBackend:get(?NOVA_DISPATCH),
     case routing_tree:lookup(Host, Path, Method, Dispatch) of
-        {error, not_found} -> render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
-        {error, comparator_not_found} -> render_status_page('_', 405, #{error => "Method not allowed"}, Req, Env);
-        {ok, Bindings, #nova_handler_value{app = App, module = Module, function = Function,
-                                           secure = Secure, plugins = Plugins, extra_state = ExtraState}} ->
+        {error, not_found} ->
+            render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
+        {error, comparator_not_found} ->
+            render_status_page('_', 405, #{error => "Method not allowed"}, Req, Env);
+        {ok, Bindings, #nova_handler_value{app = App, callback = Callback, secure = Secure,
+                                           plugins = Plugins, extra_state = ExtraState}} ->
             {ok,
              Req#{plugins => Plugins,
                   extra_state => ExtraState,
                   bindings => Bindings},
              Env#{app => App,
-                  module => Module,
-                  function => Function,
+                  callback => Callback,
                   secure => Secure,
                   controller_data => #{}
                  }
@@ -112,7 +116,7 @@ lookup_url(Host, Path) ->
 
 lookup_url(Host, Path, Method) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
-    Dispatch = StorageBackend:get(nova_dispatch),
+    Dispatch = StorageBackend:get(?NOVA_DISPATCH),
     lookup_url(Host, Path, Method, Dispatch).
 
 lookup_url(Host, Path, Method, Dispatch) ->
@@ -121,6 +125,14 @@ lookup_url(Host, Path, Method, Dispatch) ->
 %%%%%%%%%%%%%%%%%%%%%%%%
 %% INTERNAL FUNCTIONS %%
 %%%%%%%%%%%%%%%%%%%%%%%%
+-spec compile_from_file(App :: atom(), Options :: map(), Dispatch :: term()) -> host_tree().
+compile_from_file(App, Options, Dispatch) when is_atom(App) ->
+    Router = erlang:list_to_atom(io_lib:format("~s_router", [App])),
+    Env = nova:get_environment(),
+    Routes = Router:routes(Env),
+    Dispatch = routing_tree:new(#{use_strict => maps:get(use_strict, Options, false),
+                                  convert_to_binary => true}),
+    compile(Routes, Options, persistent_term:get(?NOVA_DISPATCH, Dispatch)).
 
 -spec compile(Apps :: [atom() | {atom(), map()}], Dispatch :: host_tree(), Options :: map()) -> host_tree().
 compile([], Dispatch, _Options) -> Dispatch;
@@ -144,7 +156,6 @@ compile([App|Tl], Dispatch, Options) ->
     StorageBackend:put(?NOVA_APPS, CompiledApps0),
 
     compile(Tl, Dispatch1, Options2).
-
 compile_paths([], Dispatch, Options) -> {ok, Dispatch, Options};
 compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     App = maps:get(app, Options),
@@ -182,13 +193,18 @@ parse_url(Host, [{StatusCode, StaticFile}|Tl], Prefix, Value, Tree) when is_inte
     Tree0 = insert(Host, StatusCode, '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value0, Tree0);
 parse_url(Host, [{StatusCode, {Module, Function}, Options}|Tl], Prefix, Value, Tree) when is_integer(StatusCode) ->
-    Value0 = Value#nova_handler_value{
-               module = Module,
-               function = Function},
+    ?LOG_DEPRECATED("0.9.5", "Using the old route format, use the new format instead.
+                    Read more in the documentation. This format will be removed in 1.0.0"),
+    Value0 = Value#nova_handler_value{callback = fun Module:Function/1},
     Res = lists:foldl(fun(Method, Tree0) ->
                               insert(Host, StatusCode, Method, Value0, Tree0)
                       end, Tree, maps:get(methods, Options, ['_'])),
     parse_url(Host, Tl, Prefix, Value, Res);
+parse_url(Host, [RouterPointer|Tl], Prefix, Value, Tree) when is_function(RouterPointer) ->
+    %% We need to call the router-pointer and get the routes
+    Env = nova:get_environment(),
+    Routes = RouterPointer(Env),
+    parse_url(Host, Routes ++ Tl, Prefix, Value, Tree);
 parse_url(Host,
           [{RemotePath, LocalPath}|Tl],
           Prefix, Value = #nova_handler_value{app = App, secure = Secure},
@@ -270,8 +286,14 @@ parse_url(Host,
     Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, Tree0);
 
-parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix,
-          Value = #nova_handler_value{app = App, secure = _Secure}, Tree) ->
+parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix, Value, Tree) when is_atom(Mod),
+                                                                             is_atom(Func) ->
+    ?LOG_DEPRECATED("0.9.5", "Using the old route format, use the new format instead.
+                    Read more in the documentation. This format will be removed in 1.0.0"),
+    Callback = fun Mod:Func/1,
+    parse_url(Host, [{Path, Callback, Options}|Tl], Prefix, Value, Tree);
+parse_url(Host, [{Path, Callback, Options}|Tl], Prefix,
+          Value = #nova_handler_value{app = App, secure = _Secure}, Tree) when is_function(Callback) ->
 
     RealPath = case Path of
                    _ when is_list(Path) -> string:concat(Prefix, Path);
@@ -295,8 +317,7 @@ parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix,
                       case maps:get(protocol, Options, http) of
                           http ->
                               Value0#nova_handler_value{
-                                module = Mod,
-                                function = Func
+                                callback = Callback
                                }
                       end,
                   ?LOG_DEBUG(#{action => <<"Adding route">>, route => RealPath, app => App}),
@@ -346,18 +367,15 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
             {error, _} ->
                 %% Render nova page if exists - We need to determine where to find this path?
                 Env#{app => nova,
-                     module => nova_error_controller,
-                     function => status_code,
+                     callback => fun nova_error_controller:status_code/1,
                      secure => false,
                      controller_data => #{status => StatusCode, data => Data}};
             {ok, Bindings, #nova_handler_value{app = App,
-                                               module = Module,
-                                               function = Function,
+                                               callback = Callback,
                                                secure = Secure,
                                                extra_state = ExtraState}} ->
                 Env#{app => App,
-                     module => Module,
-                     function => Function,
+                     callback => Callback,
                      secure => Secure,
                      controller_data => #{status => StatusCode, data => Data},
                      bindings => Bindings,

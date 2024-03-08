@@ -6,12 +6,13 @@
         ]).
 
 -include_lib("kernel/include/logger.hrl").
+-include("nova.hrl").
 
 execute(Req, Env = #{secure := false}) ->
     {ok, Req, Env};
-execute(Req = #{host := Host}, Env = #{secure := {Module, Function}}) ->
+execute(Req = #{host := Host}, Env = #{secure := Callback}) when is_function(Callback) ->
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
-    try Module:Function(Req) of
+    try Callback(Req) of
         Result ->
             handle_response(Result, Req, Env)
     catch
@@ -37,8 +38,11 @@ execute(Req = #{host := Host}, Env = #{secure := {Module, Function}}) ->
             {ok, Req0, _Env} = nova_router:render_status_page(Host, 500, #{}, Req#{crash_info => Payload}, Env),
             Req1 = cowboy_req:reply(500, Req0),
             {stop, Req1}
-    end.
-
+    end;
+execute(Req, Env = #{secure := {Module, Function}}) ->
+    ?LOG_DEPRECATED("0.9.5", "Using the old route format, use the new format instead.
+                    Read more in the documentation. This format will be removed in 1.0.0"),
+    execute(Req, Env#{secure => fun Module:Function/1}).
 
 
 handle_response({true, AuthData}, Req, Env) ->

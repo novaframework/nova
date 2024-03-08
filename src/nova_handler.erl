@@ -44,11 +44,11 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
             ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class, reason => Reason}),
             render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 404)
     end;
-execute(Req, Env = #{module := Module, function := Function}) ->
+execute(Req, Env = #{callback := Callback}) ->
     %% Ensure that the module exists and have the correct function exported
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
-    try RetObj = erlang:apply(Module, Function, [Req]),
-         call_handler(Module, Function, Req, RetObj, Env, false)
+    try RetObj = Callback(Req),
+         call_handler(Callback, Req, RetObj, Env, false)
     of
         HandlerReturn ->
             HandlerReturn
@@ -64,7 +64,7 @@ execute(Req, Env = #{module := Module, function := Function}) ->
                          class => Class,
                          reason => Reason,
                          stacktrace => Stacktrace}),
-            terminate(Reason, Req, Module),
+            terminate(Reason, Req, Callback),
             %% Build the payload object
             Payload = #{status_code => 500,
                         stacktrace => Stacktrace,
@@ -75,7 +75,7 @@ execute(Req, Env = #{module := Module, function := Function}) ->
             ?LOG_ERROR(#{msg => <<"Controller crashed">>,
                          class => Class,
                          reason => Reason}),
-            terminate(Reason, Req, Module),
+            terminate(Reason, Req, Callback),
             %% Build the payload object
             Payload = #{status_code => 500,
                         class => Class,
@@ -84,7 +84,9 @@ execute(Req, Env = #{module := Module, function := Function}) ->
     end.
 
 -spec terminate(any(), Req | undefined, module()) -> ok when Req::cowboy_req:req().
-terminate(Reason, Req, Module) ->
+terminate(Reason, Req, Callback) ->
+    CallbackInfo = erlang:fun_info(Callback),
+    Module = proplists:get_value(module, CallbackInfo),
     case function_exported(Module, terminate, 3) of
         true ->
             erlang:apply(Module, terminate, [Reason, Req]);
@@ -98,7 +100,9 @@ terminate(Reason, Req, Module) ->
 %%%%%%%%%%%%%%%%%%%%%%%%
 -spec execute_fallback(Module :: atom(), Req :: cowboy_req:req(), Response :: any(), Env :: map()) ->
           {ok, Req0 :: cowboy_req:req(), Env :: map()}.
-execute_fallback(Module, Req, Response, Env) ->
+execute_fallback(Controller, Req, Response, Env) ->
+    ControllerInfo = erlang:fun_info(Controller),
+    Module = proplists:get_value(module, ControllerInfo),
     Attributes = erlang:apply(Module, module_info, [attributes]),
     case proplists:get_value(fallback_controller, Attributes, undefined) of
         undefined ->
@@ -114,7 +118,7 @@ execute_fallback(Module, Req, Response, Env) ->
             case function_exported(FallbackModule, resolve, 2) of
                 true ->
                     RetObj = erlang:apply(FallbackModule, resolve, [Req, Response]),
-                    call_handler(FallbackModule, resolve, Req, RetObj, Env, true);
+                    call_handler(fun FallbackModule:resolve/1, Req, RetObj, Env, true);
                 _ ->
                     Payload = #{status_code => 500,
                                 status => <<"Problems with fallback-controller">>,
@@ -126,15 +130,18 @@ execute_fallback(Module, Req, Response, Env) ->
             end
     end.
 
--spec call_handler(Module :: atom(), Function :: atom(), Req :: cowboy_req:req(),
+-spec call_handler(Controller :: function(), Req :: cowboy_req:req(),
                    RetObj :: any(), Env :: map(), IsFallbackController :: boolean()) ->
           {ok, Req0 :: cowboy_req:req(), Env :: map()}.
-call_handler(Module, Function, Req, RetObj, Env, IsFallbackController) ->
+call_handler(Controller, Req, RetObj, Env, IsFallbackController) ->
     case nova_handlers:get_handler(element(1, RetObj)) of
         {ok, Callback} ->
-            {ok, Req0} = Callback(RetObj, {Module, Function}, Req),
+            {ok, Req0} = Callback(RetObj, Controller, Req),
             render_response(Req0, Env);
         {error, not_found} ->
+            ControllerInfo = erlang:fun_info(Controller),
+            Module = proplists:get_value(module, ControllerInfo),
+            Function = proplists:get_value(function, ControllerInfo),
             case IsFallbackController of
                 true ->
                     ?LOG_ERROR(#{msg => <<"Controller returned unsupported result">>, controller => Module,
@@ -147,7 +154,7 @@ call_handler(Module, Function, Req, RetObj, Env, IsFallbackController) ->
                                                                           [Module, Function, RetObj]))},
                     render_response(Req#{crash_info => Payload}, Env, 500);
                 _ ->
-                    execute_fallback(Module, Req, RetObj, Env)
+                    execute_fallback(Controller, Req, RetObj, Env)
             end
     end.
 
