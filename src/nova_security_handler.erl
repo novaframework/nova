@@ -40,7 +40,8 @@ execute(Req = #{host := Host}, Env = #{secure := {Module, Function}}) ->
     end.
 
 
-
+handle_response({true, AuthData, Req}, _, Env) ->
+    handle_response({true, AuthData}, Req, Env);
 handle_response({true, AuthData}, Req, Env) ->
     case maps:get(cowboy_handler, Env, undefined) of
         nova_ws_handler ->
