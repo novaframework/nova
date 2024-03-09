@@ -26,6 +26,7 @@
 %%% Created : 12 Feb 2020 by Niclas Axelsson <niclas@burbas.se>
 %%%-------------------------------------------------------------------
 -module(nova_plugin).
+-hank([{unused_callbacks, [all]}]).
 
 -type request_type() :: pre_request | post_request.
 -export_type([request_type/0]).

@@ -40,6 +40,15 @@
 
 -define(NOVA_APPS, nova_apps).
 
+
+-record(cowboy_handler_value, {
+    app :: atom(),
+    handler :: atom(),
+    arguments :: any(),
+    plugins = [] :: list(),
+    secure = false :: false | {Mod :: atom(), Fun :: atom()}
+   }).
+
 -spec compiled_apps() -> [{App :: atom(), Prefix :: list()}].
 compiled_apps() ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),

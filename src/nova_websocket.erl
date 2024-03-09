@@ -1,4 +1,5 @@
 -module(nova_websocket).
+-hank([{unused_callbacks, [all]}]).
 
 -type call_result() :: {ok, State :: map()} |
                        {ok, State :: map(), hibernate} |

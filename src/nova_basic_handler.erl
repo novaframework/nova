@@ -5,7 +5,7 @@
          handle_view/3,
          handle_status/3,
          handle_redirect/3,
-         handle_sendfile/3,
+         handle_sendfile/2,
          handle_websocket/3,
          handle_ws/2
         ]).
@@ -173,8 +173,8 @@ handle_redirect({redirect, Route}, _ModFun, Req) ->
 -spec handle_sendfile({sendfile, StatusCode :: integer(), Headers :: map(), {Offset :: integer(),
                                                                              Length :: integer(),
                                                                              Path :: list()}, Mime :: binary()},
-                  ModFun :: mod_fun(), Req) -> {ok, Req} when Req :: cowboy_req:req().
-handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _ModFun, Req) ->
+                  Req) -> {ok, Req} when Req :: cowboy_req:req().
+handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, Req) ->
     Headers0 = maps:merge(#{<<"content-type">> => Mime}, Headers),
     Req0 = cowboy_req:set_resp_headers(Headers0, Req),
     Req1 = cowboy_req:set_resp_body({sendfile, Offset, Length, Path}, Req0),
