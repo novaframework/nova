@@ -98,6 +98,6 @@ modulate_state(State, [_|Tl]) ->
 
 read_body(Req, Acc) ->
     case cowboy_req:read_body(Req) of
-        {ok, Data, Req0} -> Req0#{body => Data};
-        {more, Data, Req0} -> read_body(Req0, <<Data/binary, Acc/binary>>)
+        {ok, Data, Req0} -> Req0#{body => <<Acc/binary, Data/binary>>};
+        {more, Data, Req0} -> read_body(Req0, <<Acc/binary, Data/binary>>)
     end.
