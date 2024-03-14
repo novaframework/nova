@@ -9,9 +9,9 @@
 
 execute(Req, Env = #{secure := false}) ->
     {ok, Req, Env};
-execute(Req = #{host := Host}, Env = #{secure := {Module, Function}}) ->
+execute(Req = #{host := Host}, Env = #{secure := SecurityCb}) ->
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
-    try Module:Function(Req) of
+    try do_call(SecurityCb, Req) of
         Result ->
             handle_response(Result, Req, Env)
     catch
@@ -39,6 +39,10 @@ execute(Req = #{host := Host}, Env = #{secure := {Module, Function}}) ->
             {stop, Req1}
     end.
 
+do_call(Fun, Req) when is_function(Fun, 1) ->
+    apply(Fun, [Req]);
+do_call({Module, Function}, Req) ->
+    apply(Module, Function, [Req]).
 
 
 handle_response({true, AuthData}, Req, Env) ->
