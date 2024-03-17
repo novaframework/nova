@@ -1,0 +1,31 @@
+{
+    "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+    "extends": [
+      "config:best-practices"
+    ],
+    "packageRules": [
+      {
+        "matchFileNames": [
+          ".github/**/*.yml"
+        ],
+        "groupName": ".github/**/*.yml"
+      },
+      {
+        "matchPackagePrefixes": [
+          "localhost:",
+          "tag"
+        ],
+        "enabled": false
+      }
+    ],
+    "customManagers": [
+      {
+        "description": "Match Hex.pm-based dependencies in rebar.config",
+        "customType": "regex",
+        "matchStrings": [
+          "{(?<depName>[^,]+), \"(?<currentValue>v?\\d+\\.\\d+(\\.\\d+)?)\""
+        ],
+        "versioningTemplate": "semver"
+      }
+    ]
+  }
