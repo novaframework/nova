@@ -59,6 +59,7 @@ init([]) ->
     ?LOG_NOTICE(#{msg => <<"Starting nova">>, environment => Environment}),
 
     Configuration = application:get_env(nova, cowboy_configuration, #{}),
+    ConfigurationDb = application:get_env(nova, database_config, #{}),
 
     SessionManager = application:get_env(nova, session_manager, nova_session_ets),
 
@@ -70,6 +71,7 @@ init([]) ->
 
     setup_cowboy(Configuration),
 
+    setup_boss_db(ConfigurationDb),
 
     {ok, {SupFlags, Children}}.
 
@@ -92,6 +94,14 @@ child(Id, Type, Mod) ->
 
 child(Id, Mod) ->
     child(Id, worker, Mod).
+
+setup_boss_db(#{}) ->
+    %% Database not enabled
+    ok;
+setup_boss_db(Configuration) ->
+    boss_db:start(Configuration),
+    boss_news:start().
+
 
 setup_cowboy(Configuration) ->
     case start_cowboy(Configuration) of
