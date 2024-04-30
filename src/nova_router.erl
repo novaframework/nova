@@ -127,7 +127,7 @@ add_routes(App, Routes) ->
     add_routes(App, Routes, #{}).
 
 add_routes(_App, [], _Options) -> ok;
-add_routes(App, Routes, Options) when is_list(Routes) ->
+add_routes(App, [Routes|Tl], Options) when is_list(Routes) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     Dispatch = StorageBackend:get(nova_dispatch),
 
@@ -147,7 +147,8 @@ add_routes(App, Routes, Options) when is_list(Routes) ->
 
     StorageBackend:put(?NOVA_APPS, CompiledApps0),
     StorageBackend:put(nova_dispatch, Dispatch1),
-    add_routes(App, CompiledApps0, Options2);
+
+    add_routes(App, Tl, Options2);
 add_routes(App, Routes, Options) ->
     add_routes(App, [Routes], Options).
 
