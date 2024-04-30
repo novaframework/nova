@@ -12,7 +12,12 @@ status_code(Req) ->
 not_found(Req) ->
     %% Check the accept-headers
     Accept = cowboy_req:header(<<"accept">>, Req),
-    AcceptList = binary:split(Accept, <<",">>, [global]),
+    AcceptList = case Accept of
+                     undefined ->
+                         [<<"application/json">>];
+                     _ ->
+                         binary:split(Accept, <<",">>, [global])
+                 end,
 
     case {lists:member(<<"application/json">>, AcceptList),
 	  lists:member(<<"text/html">>, AcceptList)} of
