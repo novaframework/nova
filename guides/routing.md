@@ -105,3 +105,23 @@ It's possible to configure a small set of endpoints with a specific plugin. This
 
 In the example above we have enabled the *pre-request*-plugin `nova_json_schemas` for all routes under the `/admin` prefix. This will cause all requests to be validated against the JSON schema defined in the `nova_json_schemas` plugin.
 You can also include *post-request*-plugins in the same way.
+
+
+## Adding routes programatically
+
+You can also add routes programatically by calling `nova_router:add_route/2`. This is useful if you want to add routes dynamically. The spec for it is:
+
+```erlang
+%% nova_router:add_route/2 specification
+-spec add_route(App :: atom(), Routes :: map() | [map()]) -> ok.
+```
+
+First argument is the application you want to add the route to. The second argument is the route or a list of routes you want to add - it uses the same structure as in the regular routers.
+
+```erlang
+nova_router:add_route(my_app, #{prefix => "/admin", routes => [{"/", {my_controller, main}, #{methods => [get]}}]}).
+```
+
+This will add the routes defined in the second argument to the `my_app` application.
+
+**Note**: If a route already exists it will be overwritten.

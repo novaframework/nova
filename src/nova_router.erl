@@ -24,12 +24,15 @@
          render_status_page/5,
 
          %% Expose the router-callback
-         routes/1
+         routes/1,
+
+         %% Modulates the routes-table
+         add_routes/2
         ]).
 
 -include_lib("routing_tree/include/routing_tree.hrl").
 -include_lib("kernel/include/logger.hrl").
--include("nova_router.hrl").
+-include("../include/nova_router.hrl").
 
 -type bindings() :: #{binary() := binary()}.
 -export_type([bindings/0]).
@@ -117,6 +120,42 @@ lookup_url(Host, Path, Method) ->
 
 lookup_url(Host, Path, Method, Dispatch) ->
     routing_tree:lookup(Host, Path, Method, Dispatch).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Add routes to the dispatch-table for the given app. The routes
+%% can be either a list of maps or a map. It use the same structure as
+%% the routes-callback in the router-module.
+%% @end
+%%--------------------------------------------------------------------
+-spec add_routes(App :: atom(), Routes :: [map()] | map()) -> ok.
+add_routes(_App, []) -> ok;
+add_routes(App, [Routes|Tl]) when is_list(Routes) ->
+    Options = #{},
+    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    Dispatch = StorageBackend:get(nova_dispatch),
+
+    %% Take out the prefix for the app and store it in the persistent store
+    CompiledApps = StorageBackend:get(?NOVA_APPS, []),
+    CompiledApps0 =
+        case lists:keyfind(App, 1, CompiledApps) of
+            false ->
+                [{App, maps:get(prefix, Options, "/")}|CompiledApps];
+            _StoredApp ->
+                CompiledApps
+        end,
+
+    Options1 = Options#{app => App},
+
+    {ok, Dispatch1, _Options2} = compile_paths(Routes, Dispatch, Options1),
+
+    StorageBackend:put(?NOVA_APPS, CompiledApps0),
+    StorageBackend:put(nova_dispatch, Dispatch1),
+
+    add_routes(App, Tl);
+add_routes(App, Routes) ->
+    add_routes(App, [Routes]).
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%
 %% INTERNAL FUNCTIONS %%
@@ -275,6 +314,7 @@ parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix,
 
     RealPath = case Path of
                    _ when is_list(Path) -> string:concat(Prefix, Path);
+                   _ when is_binary(Path) -> string:concat(Prefix, binary_to_list(Path));
                    _ when is_integer(Path) -> Path;
                    _ -> throw({unknown_path, Path})
                end,
