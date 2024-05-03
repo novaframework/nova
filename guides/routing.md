@@ -123,3 +123,5 @@ nova_router:add_route(my_app, #{prefix => "/admin", routes => [{"/", {my_control
 ```
 
 This will add the routes defined in the second argument to the `my_app` application.
+
+**Note**: If a route already exists it will be overwritten.
