@@ -23,7 +23,7 @@ pre_request(Req, Options) ->
                    false ->
                         Req#{body => <<>>}
                end,
-    {ok, _} = modulate_state(BodyReq, ListOptions).
+    modulate_state(BodyReq, ListOptions).
 
 %%--------------------------------------------------------------------
 %% @doc
