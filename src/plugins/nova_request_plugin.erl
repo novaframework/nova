@@ -67,7 +67,7 @@ modulate_state(Req, []) ->
 
 modulate_state( Req = #{method := Method}, [{decode_json_body, true}|Tail]) when Method =:= <<"GET">>; Method =:= <<"DELETE">> ->
     modulate_state(Req, Tail);
-modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}, body := <<>>}, [{decode_json_body, true}|Tl]) ->
+modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}, body := <<>>}, [{decode_json_body, true}|_Tl]) ->
     Req400 = cowboy_req:reply(400, Req),
     logger:warning(#{status_code => 400,
                      msg => "Failed to decode json.",
