@@ -320,6 +320,7 @@ parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix,
                end,
     Methods = maps:get(methods, Options, ['_']),
 
+
     Value0 = case maps:get(extra_state, Options, undefined) of
                  undefined ->
                      Value;
@@ -400,11 +401,10 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
                      function => Function,
                      secure => Secure,
                      controller_data => #{status => StatusCode, data => Data},
-                     bindings => Bindings,
-                     extra_state => ExtraState}
+                     bindings => Bindings}
 
         end,
-    {ok, Req#{resp_status_code => StatusCode}, Env0}.
+    {ok, Req#{extra_state => ExtraState, resp_status_code => StatusCode}, Env0}.
 
 
 insert(Host, Path, Combinator, Value, Tree) ->
