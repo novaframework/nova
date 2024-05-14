@@ -320,6 +320,7 @@ parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix,
                end,
     Methods = maps:get(methods, Options, ['_']),
 
+
     Value0 = case maps:get(extra_state, Options, undefined) of
                  undefined ->
                      Value;
@@ -381,30 +382,32 @@ render_status_page(StatusCode, Data, Req) ->
 render_status_page(Host, StatusCode, Data, Req, Env) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     Dispatch = StorageBackend:get(nova_dispatch),
-    Env0 =
+    {Req0, Env0} =
         case routing_tree:lookup(Host, StatusCode, '_', Dispatch) of
             {error, _} ->
                 %% Render nova page if exists - We need to determine where to find this path?
-                Env#{app => nova,
-                     module => nova_error_controller,
-                     function => status_code,
-                     secure => false,
-                     controller_data => #{status => StatusCode, data => Data}};
+                {Req, Env#{app => nova,
+                           module => nova_error_controller,
+                           function => status_code,
+                           secure => false,
+                           controller_data => #{status => StatusCode, data => Data}}};
             {ok, Bindings, #nova_handler_value{app = App,
                                                module = Module,
                                                function = Function,
                                                secure = Secure,
                                                extra_state = ExtraState}} ->
-                Env#{app => App,
-                     module => Module,
-                     function => Function,
-                     secure => Secure,
-                     controller_data => #{status => StatusCode, data => Data},
-                     bindings => Bindings,
-                     extra_state => ExtraState}
+                {
+                 Req#{extra_state => ExtraState, bindings => Bindings, resp_status_code => StatusCode},
+                 Env#{app => App,
+                      module => Module,
+                      function => Function,
+                      secure => Secure,
+                      controller_data => #{status => StatusCode, data => Data},
+                      bindings => Bindings}
+                }
 
         end,
-    {ok, Req#{resp_status_code => StatusCode}, Env0}.
+    {ok, Req0, Env0}.
 
 
 insert(Host, Path, Combinator, Value, Tree) ->
