@@ -386,11 +386,11 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
         case routing_tree:lookup(Host, StatusCode, '_', Dispatch) of
             {error, _} ->
                 %% Render nova page if exists - We need to determine where to find this path?
-                Env#{app => nova,
-                     module => nova_error_controller,
-                     function => status_code,
-                     secure => false,
-                     controller_data => #{status => StatusCode, data => Data}};
+                {Req, Env#{app => nova,
+                           module => nova_error_controller,
+                           function => status_code,
+                           secure => false,
+                           controller_data => #{status => StatusCode, data => Data}}};
             {ok, Bindings, #nova_handler_value{app = App,
                                                module = Module,
                                                function = Function,
