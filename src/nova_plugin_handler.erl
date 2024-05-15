@@ -23,36 +23,34 @@ execute(Req, Env) ->
 run_plugins([], Callback, Req, Env) ->
     {ok, Req, Env#{plugin_state => Callback}};
 run_plugins([{Module, Options}|Tl], Callback, Req, Env) ->
-    ExtraState = maps:get(extra_state, Env, #{}),
-    Req0 = Req#{extra_state => ExtraState},
     Args = case proplists:get_value(Callback, Module:module_info(exports)) of
-               2 -> [Req0, Options];
-               3 -> [Req0, Env, Options];
+               2 -> [Req, Options];
+               3 -> [Req, Env, Options];
                _ -> {throw, bad_callback}
            end,
     try erlang:apply(Module, Callback, Args) of
-        {ok, Req1} ->
+        {ok, Req0} ->
+            run_plugins(Tl, Callback, Req0, Env);
+        {ok, Reply, Req0} ->
+            Req1 = handle_reply(Reply, Req0),
             run_plugins(Tl, Callback, Req1, Env);
-        {ok, Reply, Req1} ->
-            Req2 = handle_reply(Reply, Req1),
-            run_plugins(Tl, Callback, Req2, Env);
-        {break, Req1} ->
+        {break, Req0} ->
+            {ok, Req0};
+        {break, Reply, Req0} ->
+            Req1 = handle_reply(Reply, Req0),
             {ok, Req1};
-        {break, Reply, Req1} ->
-            Req2 = handle_reply(Reply, Req1),
-            {ok, Req2};
-        {stop, Req1} ->
-            {stop, Req1};
-        {stop, Reply, Req1} ->
-            Req2 = handle_reply(Reply, Req1),
-            {stop, Req2}
+        {stop, Req0} ->
+            {stop, Req0};
+        {stop, Reply, Req0} ->
+            Req1 = handle_reply(Reply, Req0),
+            {stop, Req1}
     catch
         Class:Reason:Stacktrace ->
             ?LOG_ERROR(#{msg => <<"Plugin crashed">>, class => Class, reason => Reason, stacktrace => Stacktrace}),
-            Req1 = Req0#{crash_info => #{class => Class,
-                                         reason => Reason,
-                                         stacktrace => Stacktrace}},
-            nova_router:render_status_page('_', 500, #{}, Req1, Env)
+            Req0 = Req#{crash_info => #{class => Class,
+                                        reason => Reason,
+                                        stacktrace => Stacktrace}},
+            nova_router:render_status_page('_', 500, #{}, Req0, Env)
     end.
 
 handle_reply({reply, Body}, Req) ->
