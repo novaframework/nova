@@ -17,12 +17,12 @@
 pre_request(Req, Options) ->
     ListOptions = maps:to_list(Options),
     %% Read the body and put it into the Req object
-    BodyReq = case cowboy_req:has_body(Req) of
-                   true ->
-                        read_body(Req, <<>>);
-                   false ->
-                        Req#{body => <<>>}
-               end,
+    BodyReq = case should_read_body(ListOptions) andalso cowboy_req:has_body(Req) of
+                  true ->
+                      read_body(Req, <<>>);
+                  false ->
+                      Req#{body => <<>>}
+              end,
     modulate_state(BodyReq, ListOptions).
 
 %%--------------------------------------------------------------------
@@ -52,9 +52,8 @@ plugin_info() ->
      <<"Nova team <info@novaframework.org">>,
      <<"This plugin modulates the body of a request.">>,
      [
-      {parse_bindings, <<"Used to parse bindings and put them in state under `bindings` key">>},
       {decode_json_body, <<"Decodes the body as JSON and puts it under `json`">>},
-      {parse_qs, <<"Used to parse qs and put hem in state under `qs` key">>}
+      {read_urlencoded_body, <<"Used to parse body as query-string and put them in state under `qs` key">>}
      ]}.
 
 
@@ -107,3 +106,8 @@ read_body(Req, Acc) ->
         {ok, Data, Req0} -> Req0#{body => <<Acc/binary, Data/binary>>};
         {more, Data, Req0} -> read_body(Req0, <<Acc/binary, Data/binary>>)
     end.
+
+should_read_body([]) -> false;
+should_read_body([{decode_json_body, true}|Tl]) -> true;
+should_read_body([{read_urlencoded_body, true}|Tl]) -> true;
+should_read_body([_|Tl]) -> should_read_body(Tl).
