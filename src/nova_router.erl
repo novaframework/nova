@@ -340,7 +340,7 @@ parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix,
                                 function = Func
                                }
                       end,
-                  ?LOG_DEBUG(#{action => <<"Adding route">>, route => RealPath, app => App}),
+                  ?LOG_DEBUG(#{action => <<"Adding route">>, route => RealPath, app => App, method => Method}),
                   insert(Host, RealPath, BinMethod, Value1, Tree0)
           end, Tree, Methods),
     parse_url(Host, Tl, Prefix, Value, CompiledPaths);
@@ -432,6 +432,7 @@ normalize_plugins([{Type, PluginName, Options}|Tl], Ack) ->
     ExistingPlugins = proplists:get_value(Type, Ack, []),
     normalize_plugins(Tl, [{Type, [{PluginName, Options}|ExistingPlugins]}|proplists:delete(Type, Ack)]).
 
+method_to_binary(Bin) when is_binary(Bin) -> Bin;
 method_to_binary(get) -> <<"GET">>;
 method_to_binary(post) -> <<"POST">>;
 method_to_binary(put) -> <<"PUT">>;
@@ -441,7 +442,9 @@ method_to_binary(head) -> <<"HEAD">>;
 method_to_binary(connect) -> <<"CONNECT">>;
 method_to_binary(trace) -> <<"TRACE">>;
 method_to_binary(patch) -> <<"PATCH">>;
-method_to_binary(_) -> '_'.
+method_to_binary(Method) ->
+    ?LOG_WARNING(#{reason => <<"Unknown method - defaulting to '_'">>, given_method => Method}),
+    '_'.
 
 -spec routes(Env :: atom()) -> [map()].
 routes(_) ->
