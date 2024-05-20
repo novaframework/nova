@@ -63,6 +63,7 @@ compile(Apps) ->
 execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     Dispatch = StorageBackend:get(nova_dispatch),
+    logger:debug("Host: ~p, Path: ~p, Method: ~p", [Host, Path, Method]),
     case routing_tree:lookup(Host, Path, Method, Dispatch) of
         {error, not_found} -> render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
         {error, comparator_not_found} -> render_status_page('_', 405, #{error => "Method not allowed"}, Req, Env);
@@ -74,6 +75,19 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
                   bindings => Bindings},
              Env#{app => App,
                   callback => Callback,
+                  secure => Secure,
+                  controller_data => #{}
+                 }
+            };
+        {ok, Bindings, #nova_handler_value{app = App, module = Module, function = Function,
+                                           secure = Secure, plugins = Plugins, extra_state = ExtraState}, Pathinfo} ->
+            {ok,
+             Req#{plugins => Plugins,
+                  extra_state => ExtraState#{pathinfo => Pathinfo},
+                  bindings => Bindings},
+             Env#{app => App,
+                  module => Module,
+                  function => Function,
                   secure => Secure,
                   controller_data => #{}
                  }
@@ -218,8 +232,14 @@ parse_url(Host, [{StatusCode, Callback, Options}|Tl], Prefix, Value, Tree) when 
     parse_url(Host, Tl, Prefix, Value, Res);
 parse_url(Host,
           [{RemotePath, LocalPath}|Tl],
+          Prefix, Value = #nova_handler_value{}, Tree)
+  when is_list(RemotePath), is_list(LocalPath) ->
+    parse_url(Host, [{RemotePath, LocalPath, #{}}|Tl], Prefix, Value, Tree);
+parse_url(Host,
+          [{RemotePath, LocalPath, Options}|Tl],
           Prefix, Value = #nova_handler_value{app = App, secure = Secure},
           Tree) when is_list(RemotePath), is_list(LocalPath) ->
+
     %% Static assets - check that the path exists
     PrivPath = filename:join(code:lib_dir(App, priv), LocalPath),
 
@@ -256,7 +276,7 @@ parse_url(Host,
                 app = App,
                 module = nova_file_controller,
                 function = TargetFun,
-                extra_state = #{static => Payload},
+                extra_state = #{static => Payload, options => Options},
                 plugins = Value#nova_handler_value.plugins,
                 secure = Secure
                },
@@ -354,7 +374,7 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
                       bindings => Bindings}
                 }
         end,
-    {ok, Req0, Env0}.
+    {ok, Req0#{resp_status_code => StatusCode}, Env0}.
 
 
 insert(Host, Path, Combinator, Value, Tree) ->
@@ -379,7 +399,6 @@ normalize_plugins([{Type, PluginName, Options}|Tl], Ack) ->
     ExistingPlugins = proplists:get_value(Type, Ack, []),
     normalize_plugins(Tl, [{Type, [{PluginName, Options}|ExistingPlugins]}|proplists:delete(Type, Ack)]).
 
-method_to_binary(Bin) when is_binary(Bin) -> Bin;
 method_to_binary(get) -> <<"GET">>;
 method_to_binary(post) -> <<"POST">>;
 method_to_binary(put) -> <<"PUT">>;
@@ -389,9 +408,7 @@ method_to_binary(head) -> <<"HEAD">>;
 method_to_binary(connect) -> <<"CONNECT">>;
 method_to_binary(trace) -> <<"TRACE">>;
 method_to_binary(patch) -> <<"PATCH">>;
-method_to_binary(Method) ->
-    ?LOG_WARNING(#{reason => <<"Unknown method - defaulting to '_'">>, given_method => Method}),
-    '_'.
+method_to_binary(_) -> '_'.
 
 
 concat_strings(Path1, Path2) when is_binary(Path1) ->

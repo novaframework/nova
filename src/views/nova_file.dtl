@@ -1,0 +1,46 @@
+<html>
+  <head>
+    <title>Listing of {{dir}}</title>
+  </head>
+
+  <body>
+    <style>
+      table {
+      width: 100%;
+      max-width: 1080px;
+      margin: 0 auto;
+      border-collapse: collapse;
+      }
+      thead {
+      font-size: 1.2em;
+      }
+      td {
+      padding: 5px;
+      }
+    </style>
+    <table>
+      <thead>
+        <tr>
+          <td>Name</td>
+          <td>Size</td>
+          <td>Last Modified</td>
+        </tr>
+      </thead>
+      {% for file in files %}
+      {% if file %}
+      <tr>
+        <td><a href="{{path}}/{{file.filename}}">{{file.filename}}</a></td>
+        <td>{{file.size|filesizeformat}}</td>
+        <td>{{file.last_modified|date:"c"}}</td>
+      </tr>
+      {% endif %}
+      {% endfor %}
+      <tr>
+        <td colspan="3">
+          <i>Generated at {{date}} by <a href="https://novaframework.org">Nova Framework</a></i>
+        </td>
+      </tr>
+    </table>
+
+  </body>
+</html>
