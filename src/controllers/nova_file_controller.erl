@@ -23,7 +23,7 @@ get_file(#{extra_state := #{static := File, options := Options}}) ->
 get_file(_Req) ->
     {status, 404}.
 
-get_dir(#{extra_state := #{pathinfo := Pathinfo, static := Dir, options := Options}} = Req) ->
+get_dir(#{path := Path, extra_state := #{pathinfo := Pathinfo, static := Dir, options := Options}} = Req) ->
     %% This case will be invoked if a directory was set with wildcard - pathinfo will then
     %% contain the segments of the wildcard value
     Filepath = get_filepath(Dir),
@@ -50,7 +50,12 @@ get_dir(#{path := Path, extra_state := #{static := Dir, options := Options}}) ->
         true ->
             {ok, Files} = file:list_dir(Filepath),
             FileInfos = [file_info(Filepath, F) || F <- Files],
-            {ok, #{path => Path, files => FileInfos}}
+            ParentDir = case re:replace(Path , "/[^/]+/?$", "") of
+                            [[]] -> undefined;
+                            Parent -> Parent
+                        end,
+            logger:info("Parent dir: ~p", [ParentDir]),
+            {ok, #{date => calendar:local_time(), parent_dir => ParentDir, path => Path, files => FileInfos}}
     end;
 get_dir(_Req) ->
     {status, 404}.
@@ -72,7 +77,8 @@ get_filepath({priv_dir, App, LocalPath}) ->
 
 file_info(Filepath, Filename) ->
     case file:read_file_info(filename:join(Filepath, Filename)) of
-        {ok, #file_info{type = Type, size = Size, mtime = LastModified}} ->
+        {ok, #file_info{type = Type, size = Size, mtime = LastModified} = Info} ->
+            logger:debug("File info: ~p", [Info]),
             #{type => Type, size => Size,
               last_modified => LastModified, filename => Filename};
         _ ->

@@ -1,6 +1,6 @@
 <html>
   <head>
-    <title>Listing of {{dir}}</title>
+    <title>Listing of {{path}}</title>
   </head>
 
   <body>
@@ -13,23 +13,41 @@
       }
       thead {
       font-size: 1.2em;
+      font-weight: bold;
       }
       td {
       padding: 5px;
       }
+      a {
+      text-decoration: none;
+      color: #336699;
+      }
+      .fa-folder {
+      color: #FFA500;
+      }
     </style>
+
     <table>
       <thead>
+        <tr colspan="3">
+          <td><h2>{{path}}</h2></td>
+        </tr>
         <tr>
           <td>Name</td>
           <td>Size</td>
           <td>Last Modified</td>
         </tr>
       </thead>
+      {% if parent_dir %}
+      <tr>
+        <td><a href="{{parent_dir}}"><i class="fa-solid fa-folder"></i> .. Parent directory</a></td>
+      </tr>
+      {% endif %}
+
       {% for file in files %}
       {% if file %}
       <tr>
-        <td><a href="{{path}}/{{file.filename}}">{{file.filename}}</a></td>
+        <td><a href="{{path}}/{{file.filename}}">{% if file.type == "directory" %}<i class="fa-solid fa-folder"></i>{% else %}<i class="fa-regular fa-file"></i>{% endif %} {{file.filename}}</a></td>
         <td>{{file.size|filesizeformat}}</td>
         <td>{{file.last_modified|date:"c"}}</td>
       </tr>
@@ -37,10 +55,10 @@
       {% endfor %}
       <tr>
         <td colspan="3">
-          <i>Generated at {{date}} by <a href="https://novaframework.org">Nova Framework</a></i>
+          <i>Generated at {{date|date:"c"}} by <a href="https://novaframework.org">Nova Framework</a></i>
         </td>
       </tr>
     </table>
-
+    <script src="https://kit.fontawesome.com/a5122f2e67.js" crossorigin="anonymous"></script>
   </body>
 </html>
