@@ -319,7 +319,8 @@ parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix,
 parse_url(Host, [{Path, Callback}|Tl], Prefix, Value, Tree) when is_function(Callback) ->
     %% Recurse with same args but with added options
     parse_url(Host, [{Path, Callback, #{}}|Tl], Prefix, Value, Tree);
-parse_url(Host, [{Path, Callback, Options}|Tl], Prefix, Value = #nova_handler_value{app = App}, Tree) when is_function(Callback) ->
+parse_url(Host, [{Path, Callback, Options}|Tl], Prefix, Value = #nova_handler_value{app = App}, Tree)
+  when is_function(Callback) ->
     case maps:get(protocol, Options, http) of
         http ->
             %% Transform the path to a string format
