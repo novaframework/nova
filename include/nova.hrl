@@ -1,0 +1,1 @@
+-define(LOG_DEPRECATED(SinceVersion, Msg), logger:warning("Deprecation warning. Since version: ~s, Message: ~s~nRead more about deprecations on https://github.com/novaframework/nova/blob/master/guides/deprecations.md", [SinceVersion, Msg])).
