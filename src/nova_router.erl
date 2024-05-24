@@ -33,6 +33,7 @@
 -include_lib("routing_tree/include/routing_tree.hrl").
 -include_lib("kernel/include/logger.hrl").
 -include("../include/nova_router.hrl").
+-include("../include/nova.hrl").
 
 -type bindings() :: #{binary() := binary()}.
 -export_type([bindings/0]).
@@ -65,15 +66,14 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
     case routing_tree:lookup(Host, Path, Method, Dispatch) of
         {error, not_found} -> render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
         {error, comparator_not_found} -> render_status_page('_', 405, #{error => "Method not allowed"}, Req, Env);
-        {ok, Bindings, #nova_handler_value{app = App, module = Module, function = Function,
-                                           secure = Secure, plugins = Plugins, extra_state = ExtraState}} ->
+        {ok, Bindings, #nova_handler_value{app = App, callback = Callback, secure = Secure, plugins = Plugins,
+                                           extra_state = ExtraState}} ->
             {ok,
              Req#{plugins => Plugins,
                   extra_state => ExtraState,
                   bindings => Bindings},
              Env#{app => App,
-                  module => Module,
-                  function => Function,
+                  callback => Callback,
                   secure => Secure,
                   controller_data => #{}
                  }
@@ -154,7 +154,8 @@ add_routes(App, [Routes|Tl]) when is_list(Routes) ->
 
     add_routes(App, Tl);
 add_routes(App, Routes) ->
-    add_routes(App, [Routes]).
+    ?LOG_ERROR(#{reason => <<"Invalid routes structure">>, app => App, routes => Routes}),
+    throw({error, {invalid_routes, App, Routes}}).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%
@@ -169,8 +170,8 @@ compile([App|Tl], Dispatch, Options) ->
     %% Fetch the router-module for this application
     Router = erlang:list_to_atom(io_lib:format("~s_router", [App])),
     Env = nova:get_environment(),
-    %% Ensure that the module is loaded
-    Routes = erlang:apply(Router, routes, [Env]),
+    %% Call the router
+    Routes = Router:routes(Env),
     Options1 = Options#{app => App},
 
     {ok, Dispatch1, Options2} = compile_paths(Routes, Dispatch, Options1),
@@ -191,11 +192,21 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     GlobalPlugins = application:get_env(nova, plugins, []),
     Plugins = maps:get(plugins, RouteInfo, GlobalPlugins),
 
-    Value = #nova_handler_value{secure = maps:get(secure, Options, maps:get(security, RouteInfo, false)),
-                                app = App, plugins = normalize_plugins(Plugins),
+    Secure =
+        case maps:get(secure, Options, maps:get(security, RouteInfo, false)) of
+            false ->
+                false;
+            {SMod, SFun} ->
+                ?LOG_DEPRECATED("v0.9.24", "The {Mod,Fun} format have been deprecated. Use the new format for routes."),
+                fun SMod:SFun/1;
+            SCallback ->
+                SCallback
+        end,
+
+    Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins),
                                 extra_state = maps:get(extra_state, RouteInfo, #{})},
 
-    Prefix = maps:get(prefix, Options, "") ++ maps:get(prefix, RouteInfo, ""),
+    Prefix = concat_strings(maps:get(prefix, Options, ""), maps:get(prefix, RouteInfo, "")),
     Host = maps:get(host, RouteInfo, '_'),
     SubApps = maps:get(apps, RouteInfo, []),
     %% We need to add this app info to nova-env
@@ -210,20 +221,9 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     compile_paths(Tl, Dispatch2, Options).
 
 parse_url(_Host, [], _Prefix, _Value, Tree) -> {ok, Tree};
-parse_url(Host, [{StatusCode, StaticFile}|Tl], Prefix, Value, Tree) when is_integer(StatusCode),
-                                                                         is_list(StaticFile) ->
-    %% We need to signal that we have a static file here somewhere
-    Value0 = Value#nova_handler_value{
-               module = nova_static,
-               function = execute},
-
-    %% TODO! Fix status-code so it's being threated specially
-    Tree0 = insert(Host, StatusCode, '_', Value0, Tree),
-    parse_url(Host, Tl, Prefix, Value0, Tree0);
-parse_url(Host, [{StatusCode, {Module, Function}, Options}|Tl], Prefix, Value, Tree) when is_integer(StatusCode) ->
-    Value0 = Value#nova_handler_value{
-               module = Module,
-               function = Function},
+parse_url(Host, [{StatusCode, Callback, Options}|Tl], Prefix, Value, Tree) when is_integer(StatusCode) andalso
+                                                                                is_function(Callback) ->
+    Value0 = Value#nova_handler_value{callback = Callback},
     Res = lists:foldl(fun(Method, Tree0) ->
                               insert(Host, StatusCode, Method, Value0, Tree0)
                       end, Tree, maps:get(methods, Options, ['_'])),
@@ -309,45 +309,47 @@ parse_url(Host,
     Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, Tree0);
 
+parse_url(Host, [{Path, {Mod, Func}}|Tl], Prefix, Value, Tree) ->
+    %% Recurse with same args but with added options
+    parse_url(Host, [{Path, {Mod, Func}, #{}}|Tl], Prefix, Value, Tree);
 parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix,
-          Value = #nova_handler_value{app = App, secure = _Secure}, Tree) ->
+          Value = #nova_handler_value{app = _App, secure = _Secure}, Tree) ->
+    ?LOG_DEPRECATED(<<"v0.9.24">>, <<"The {Mod,Fun} format have been deprecated. Use the new format for routes.">>),
+    parse_url(Host, [{Path, fun Mod:Func/1, Options}|Tl], Prefix, Value, Tree);
+parse_url(Host, [{Path, Callback}|Tl], Prefix, Value, Tree) when is_function(Callback) ->
+    %% Recurse with same args but with added options
+    parse_url(Host, [{Path, Callback, #{}}|Tl], Prefix, Value, Tree);
+parse_url(Host, [{Path, Callback, Options}|Tl], Prefix, Value = #nova_handler_value{app = App}, Tree)
+  when is_function(Callback) ->
+    case maps:get(protocol, Options, http) of
+        http ->
+            %% Transform the path to a string format
+            RealPath = concat_strings(Prefix, Path),
 
-    RealPath = case Path of
-                   _ when is_list(Path) -> string:concat(Prefix, Path);
-                   _ when is_binary(Path) -> string:concat(Prefix, binary_to_list(Path));
-                   _ when is_integer(Path) -> Path;
-                   _ -> throw({unknown_path, Path})
-               end,
-    Methods = maps:get(methods, Options, ['_']),
+            Methods = maps:get(methods, Options, ['_']),
 
+            ExtraState = maps:get(extra_state, Options, undefined),
+            Value0 = Value#nova_handler_value{extra_state = ExtraState},
 
-    Value0 = case maps:get(extra_state, Options, undefined) of
-                 undefined ->
-                     Value;
-                 ExtraState ->
-                     Value#nova_handler_value{extra_state = ExtraState}
-             end,
-
-    CompiledPaths =
-        lists:foldl(
-          fun(Method, Tree0) ->
-                  BinMethod = method_to_binary(Method),
-                  Value1 =
-                      case maps:get(protocol, Options, http) of
-                          http ->
-                              Value0#nova_handler_value{
-                                module = Mod,
-                                function = Func
-                               }
-                      end,
-                  ?LOG_DEBUG(#{action => <<"Adding route">>, route => RealPath, app => App, method => Method}),
-                  insert(Host, RealPath, BinMethod, Value1, Tree0)
-          end, Tree, Methods),
-    parse_url(Host, Tl, Prefix, Value, CompiledPaths);
+            CompiledPaths =
+                lists:foldl(
+                  fun(Method, Tree0) ->
+                          BinMethod = method_to_binary(Method),
+                          Value1 = Value0#nova_handler_value{
+                                     callback = Callback
+                                    },
+                          ?LOG_DEBUG(#{action => <<"Adding route">>, route => RealPath, app => App, method => Method}),
+                          insert(Host, RealPath, BinMethod, Value1, Tree0)
+                  end, Tree, Methods),
+            parse_url(Host, Tl, Prefix, Value, CompiledPaths);
+        OtherProtocol ->
+            ?LOG_ERROR(#{reason => <<"Unknown protocol">>, protocol => OtherProtocol}),
+            parse_url(Host, Tl, Prefix, Value, Tree)
+    end;
 parse_url(Host,
           [{Path, Mod, #{protocol := ws}} | Tl],
           Prefix, #nova_handler_value{app = App, secure = Secure} = Value,
-          Tree) ->
+          Tree) when is_atom(Mod) ->
      Value0 =  #cowboy_handler_value{
                   app = App,
                   handler = nova_ws_handler,
@@ -356,11 +358,10 @@ parse_url(Host,
                   secure = Secure},
 
     ?LOG_DEBUG(#{action => <<"Adding route">>, protocol => <<"ws">>, route => Path, app => App}),
-    RealPath = string:concat(Prefix, Path),
+    RealPath = concat_strings(Prefix, Path),
     CompiledPaths = insert(Host, RealPath, '_', Value0, Tree),
-    parse_url(Host, Tl, Prefix, Value, CompiledPaths);
-parse_url(Host, [{Path, {Mod, Func}}|Tl], Prefix, Value, Tree) ->
-    parse_url(Host, [{Path, {Mod, Func}, #{}}|Tl], Prefix, Value, Tree).
+    parse_url(Host, Tl, Prefix, Value, CompiledPaths).
+
 
 -spec render_status_page(StatusCode :: integer(), Req :: cowboy_req:req()) ->
                                 {ok, Req0 :: cowboy_req:req(), Env :: map()}.
@@ -387,25 +388,21 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
             {error, _} ->
                 %% Render nova page if exists - We need to determine where to find this path?
                 {Req, Env#{app => nova,
-                           module => nova_error_controller,
-                           function => status_code,
+                           callback => fun nova_error_controller:status_code/1,
                            secure => false,
                            controller_data => #{status => StatusCode, data => Data}}};
             {ok, Bindings, #nova_handler_value{app = App,
-                                               module = Module,
-                                               function = Function,
+                                               callback = Callback,
                                                secure = Secure,
                                                extra_state = ExtraState}} ->
                 {
                  Req#{extra_state => ExtraState, bindings => Bindings, resp_status_code => StatusCode},
                  Env#{app => App,
-                      module => Module,
-                      function => Function,
+                      callback => Callback,
                       secure => Secure,
                       controller_data => #{status => StatusCode, data => Data},
                       bindings => Bindings}
                 }
-
         end,
     {ok, Req0, Env0}.
 
@@ -445,6 +442,16 @@ method_to_binary(patch) -> <<"PATCH">>;
 method_to_binary(Method) ->
     ?LOG_WARNING(#{reason => <<"Unknown method - defaulting to '_'">>, given_method => Method}),
     '_'.
+
+
+concat_strings(Path1, Path2) when is_binary(Path1) ->
+    concat_strings(binary_to_list(Path1), Path2);
+concat_strings(Path1, Path2) when is_binary(Path2) ->
+    concat_strings(Path1, binary_to_list(Path2));
+concat_strings(_Path1, Path2) when is_integer(Path2) ->
+    Path2;
+concat_strings(Path1, Path2) when is_list(Path1), is_list(Path2) ->
+    string:concat(Path1, Path2).
 
 -spec routes(Env :: atom()) -> [map()].
 routes(_) ->

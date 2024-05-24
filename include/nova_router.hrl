@@ -3,6 +3,7 @@
                              app :: atom(),
                              module :: atom(),
                              function :: atom(),
+                             callback :: function() | undefined,
                              plugins = [] :: list(),
                              secure = false :: false | {Mod :: atom(), Fun :: atom()},
                              extra_state :: any()

@@ -15,7 +15,7 @@ routes(_Environment) ->
   [#{prefix => "/admin",
     security => false,
     routes => [
-      {"/", {my_controller, main}, #{methods => [get]}}
+      {"/", fun my_controller:main/1, #{methods => [get]}}
     ]
   }].
 ```
@@ -29,7 +29,7 @@ The routing object consists of three or four fields.
 ### HTTP(S) Routing ###
 
 ```
-{Route :: list(), {Controller :: atom(), Function :: atom()}, Options :: map()}
+{Route :: list(), ControllerCallback :: function(), Options :: map()}
 ```
 
 As you saw in the initial example in the [Basic components](#basic-components) section, we defined a route for the root path `/`.
@@ -47,12 +47,11 @@ As you saw in the initial example in the [Basic components](#basic-components) s
 
 ## How to create routes
 
-A route consists of four different components:
+A route consists of three different components:
 
 * `Path` - This is the actual path to the endpoint. Eg `"/admin"`
 * `Method` - What method you want to support for this endpoint (get, post, update, delete). If you want to support all methods you can use the `'_'`-atom.
-* `Controller` - What erlang module should be called on when the path gets called.
-* `Function` - Which function in the `Controller` will be called when path gets called.
+* `ControllerCallback` - What erlang callback should be called on when the path gets called. This is defined as a function reference, eg `fun my_controller:main/1`.
 
 ## Using prefix
 
@@ -67,9 +66,9 @@ You can secure routes by providing a module and function to the `security` direc
 ```erlang
 #{prefix => "/admin",
   type => html,
-  security => {security_controller, do_security},
+  security => fun security_controller:do_security/1,
   routes => [
-    {"/", {my_controller, main}, #{methods => [get]}}
+    {"/", fun my_controller:main/1, #{methods => [get]}}
   ]
 }
 ```
@@ -98,7 +97,7 @@ It's possible to configure a small set of endpoints with a specific plugin. This
     {pre_request, nova_json_schemas, #{render_errors => true}}
   ],
   routes => [
-    {"/", {my_controller, main}, #{methods => [get]}}
+    {"/", fun my_controller:main/1, #{methods => [get]}}
   ]
 }
 ```
@@ -119,7 +118,7 @@ You can also add routes programatically by calling `nova_router:add_route/2`. Th
 First argument is the application you want to add the route to. The second argument is the route or a list of routes you want to add - it uses the same structure as in the regular routers.
 
 ```erlang
-nova_router:add_route(my_app, #{prefix => "/admin", routes => [{"/", {my_controller, main}, #{methods => [get]}}]}).
+nova_router:add_route(my_app, #{prefix => "/admin", routes => [{"/", fun my_controller:main/1, #{methods => [get]}}]}).
 ```
 
 This will add the routes defined in the second argument to the `my_app` application.

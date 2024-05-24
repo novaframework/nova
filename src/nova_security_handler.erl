@@ -6,12 +6,13 @@
         ]).
 
 -include_lib("kernel/include/logger.hrl").
+-include("../include/nova.hrl").
 
 execute(Req, Env = #{secure := false}) ->
     {ok, Req, Env};
-execute(Req = #{host := Host}, Env = #{secure := {Module, Function}}) ->
+execute(Req = #{host := Host}, Env = #{secure := Callback}) ->
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
-    try Module:Function(Req) of
+    try Callback(Req) of
         Result ->
             handle_response(Result, Req, Env)
     catch
