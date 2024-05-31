@@ -63,7 +63,6 @@ compile(Apps) ->
 execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     Dispatch = StorageBackend:get(nova_dispatch),
-    logger:debug("Host: ~p, Path: ~p, Method: ~p", [Host, Path, Method]),
     case routing_tree:lookup(Host, Path, Method, Dispatch) of
         {error, not_found} -> render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
         {error, comparator_not_found} -> render_status_page('_', 405, #{error => "Method not allowed"}, Req, Env);
@@ -79,15 +78,14 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
                   controller_data => #{}
                  }
             };
-        {ok, Bindings, #nova_handler_value{app = App, module = Module, function = Function,
+        {ok, Bindings, #nova_handler_value{app = App, callback = Callback,
                                            secure = Secure, plugins = Plugins, extra_state = ExtraState}, Pathinfo} ->
             {ok,
              Req#{plugins => Plugins,
                   extra_state => ExtraState#{pathinfo => Pathinfo},
                   bindings => Bindings},
              Env#{app => App,
-                  module => Module,
-                  function => Function,
+                  callback => Callback,
                   secure => Secure,
                   controller_data => #{}
                  }
@@ -274,8 +272,7 @@ parse_url(Host,
 
     Value0 = #nova_handler_value{
                 app = App,
-                module = nova_file_controller,
-                function = TargetFun,
+                callback = fun nova_file_controller:TargetFun/1,
                 extra_state = #{static => Payload, options => Options},
                 plugins = Value#nova_handler_value.plugins,
                 secure = Secure

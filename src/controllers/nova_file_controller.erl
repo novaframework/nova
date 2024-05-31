@@ -91,7 +91,7 @@ get_filepath({priv_dir, App, LocalPath}) ->
 
 file_info(Filepath, Filename) ->
     case file:read_file_info(filename:join(Filepath, Filename)) of
-        {ok, #file_info{type = Type, size = Size, mtime = LastModified} = Info} ->
+        {ok, #file_info{type = Type, size = Size, mtime = LastModified}} ->
             #{type => Type, size => Size,
               last_modified => LastModified, filename => Filename};
         _ ->
