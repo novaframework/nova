@@ -45,6 +45,23 @@ As you saw in the initial example in the [Basic components](#basic-components) s
 > One needs to define `protocol => ws` in the options-map in order to enable websocket communications.
 
 
+### Static files
+
+One can also define static files to be served by nova. This is done by adding a tuple to the route entries. The value of this tuple should be of size 2 or  3  where the first element is the url and the second element is the path to the file on the filesystem related from the apps `priv` directory. An additional third element can be added to the tuple to define options for this particular static file or directory.
+
+*Note*! The notation `[...]` can be used as a wildcard (Zero or many occurences) in the url-section.
+Valid options is;
+
+- `mimetype` - which mimetype the file should be served as. If not defined nova will try to guess the mimetype based on the file extension.
+- `index_files` - a list of filenames that can be used as an index. This is relevant if a directory is served.
+- `list_dir` - Set to true if allowing the requester to list the content of a directory (if such is served)
+
+Example:
+```erlang
+{"/my/static/directory/[...]", "assets/a-local-dir", #{list_dir => true}},
+{"/with-index/[...]", "assets/another-dir", #{index_files => ["index.html"]}}
+```
+
 ## How to create routes
 
 A route consists of three different components:

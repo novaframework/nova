@@ -78,22 +78,22 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
                   controller_data => #{}
                  }
             };
+        {ok, Bindings, #nova_handler_value{app = App, callback = Callback,
+                                           secure = Secure, plugins = Plugins, extra_state = ExtraState}, Pathinfo} ->
+            {ok,
+             Req#{plugins => Plugins,
+                  extra_state => ExtraState#{pathinfo => Pathinfo},
+                  bindings => Bindings},
+             Env#{app => App,
+                  callback => Callback,
+                  secure => Secure,
+                  controller_data => #{}
+                 }
+            };
         {ok, Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
                                               plugins = Plugins, secure = Secure}} ->
             {ok,
              Req#{plugins => Plugins,
-                  bindings => Bindings},
-             Env#{app => App,
-                  cowboy_handler => Handler,
-                  arguments => Args,
-                  secure => Secure
-                 }
-            };
-        {ok, Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
-                                              plugins = Plugins, secure = Secure}, PathInfo} ->
-            {ok,
-             Req#{path_info => PathInfo,
-                  plugins => Plugins,
                   bindings => Bindings},
              Env#{app => App,
                   cowboy_handler => Handler,
@@ -230,8 +230,14 @@ parse_url(Host, [{StatusCode, Callback, Options}|Tl], Prefix, Value, Tree) when 
     parse_url(Host, Tl, Prefix, Value, Res);
 parse_url(Host,
           [{RemotePath, LocalPath}|Tl],
+          Prefix, Value = #nova_handler_value{}, Tree)
+  when is_list(RemotePath), is_list(LocalPath) ->
+    parse_url(Host, [{RemotePath, LocalPath, #{}}|Tl], Prefix, Value, Tree);
+parse_url(Host,
+          [{RemotePath, LocalPath, Options}|Tl],
           Prefix, Value = #nova_handler_value{app = App, secure = Secure},
           Tree) when is_list(RemotePath), is_list(LocalPath) ->
+
     %% Static assets - check that the path exists
     PrivPath = filename:join(code:lib_dir(App, priv), LocalPath),
 
@@ -257,61 +263,22 @@ parse_url(Host,
                 {priv_dir, App, LocalPath}
         end,
 
-    Value0 = #cowboy_handler_value{
+    TargetFun = case Payload of
+                    {file, _} -> get_file;
+                    {priv_file, _, _} -> get_file;
+                    {dir, _} -> get_dir;
+                    {priv_dir, _, _} -> get_dir
+                end,
+
+    Value0 = #nova_handler_value{
                 app = App,
-                handler = cowboy_static,
-                arguments = Payload,
+                callback = fun nova_file_controller:TargetFun/1,
+                extra_state = #{static => Payload, options => Options},
                 plugins = Value#nova_handler_value.plugins,
                 secure = Secure
                },
     Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, Tree0);
-parse_url(Host,
-          [{RemotePath, LocalPath}|Tl],
-          Prefix,
-          Value = #nova_handler_value{app = App, secure = Secure}, Tree)
-          when is_list(RemotePath), is_list(LocalPath) ->
-    %% Static assets - check that the path exists
-    PrivPath = filename:join(code:lib_dir(App, priv), LocalPath),
-
-    Payload =
-        case {filelib:is_dir(LocalPath), filelib:is_dir(PrivPath)} of
-            {false, false} ->
-                %% No directory - check if it's a file
-                case {filelib:is_file(LocalPath), filelib:is_file(PrivPath)} of
-                    {false, false} ->
-                        %% No dir nor file
-                        ?LOG_WARNING(#{reason => <<"Could not find local path for the given resource">>,
-                                       local_path => LocalPath,
-                                       remote_path => RemotePath}),
-                        not_found;
-                    {true, false} ->
-                        {file, LocalPath};
-                    {_, true} ->
-                        {priv_file, App, LocalPath}
-                end;
-            {true, false} ->
-                {dir, LocalPath};
-            {_, true} ->
-                {priv_dir, App, LocalPath}
-        end,
-    Value0 = #cowboy_handler_value{
-                app = App,
-                handler = cowboy_static,
-                arguments = Payload,
-                plugins = Value#nova_handler_value.plugins,
-                secure = Secure
-               },
-
-    ?LOG_DEBUG(#{action => <<"Adding route">>,
-                 route => erlang:list_to_binary(string:concat(Prefix, RemotePath)),
-                 app => App}),
-    Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree),
-    parse_url(Host, Tl, Prefix, Value, Tree0);
-
-parse_url(Host, [{Path, {Mod, Func}}|Tl], Prefix, Value, Tree) ->
-    %% Recurse with same args but with added options
-    parse_url(Host, [{Path, {Mod, Func}, #{}}|Tl], Prefix, Value, Tree);
 parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix,
           Value = #nova_handler_value{app = _App, secure = _Secure}, Tree) ->
     ?LOG_DEPRECATED(<<"v0.9.24">>, <<"The {Mod,Fun} format have been deprecated. Use the new format for routes.">>),
@@ -404,7 +371,7 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
                       bindings => Bindings}
                 }
         end,
-    {ok, Req0, Env0}.
+    {ok, Req0#{resp_status_code => StatusCode}, Env0}.
 
 
 insert(Host, Path, Combinator, Value, Tree) ->
@@ -429,7 +396,6 @@ normalize_plugins([{Type, PluginName, Options}|Tl], Ack) ->
     ExistingPlugins = proplists:get_value(Type, Ack, []),
     normalize_plugins(Tl, [{Type, [{PluginName, Options}|ExistingPlugins]}|proplists:delete(Type, Ack)]).
 
-method_to_binary(Bin) when is_binary(Bin) -> Bin;
 method_to_binary(get) -> <<"GET">>;
 method_to_binary(post) -> <<"POST">>;
 method_to_binary(put) -> <<"PUT">>;
@@ -439,9 +405,7 @@ method_to_binary(head) -> <<"HEAD">>;
 method_to_binary(connect) -> <<"CONNECT">>;
 method_to_binary(trace) -> <<"TRACE">>;
 method_to_binary(patch) -> <<"PATCH">>;
-method_to_binary(Method) ->
-    ?LOG_WARNING(#{reason => <<"Unknown method - defaulting to '_'">>, given_method => Method}),
-    '_'.
+method_to_binary(_) -> '_'.
 
 
 concat_strings(Path1, Path2) when is_binary(Path1) ->
