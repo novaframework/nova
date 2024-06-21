@@ -9,6 +9,8 @@
 
 -include_lib("kernel/include/logger.hrl").
 -include("../include/nova_router.hrl").
+-include_lib("opentelemetry_api/include/otel_tracer.hrl").
+-include_lib("opentelemetry_api/include/opentelemetry.hrl").
 
 -callback init(Req, any()) -> {ok | module(), Req, any()}
                                   | {module(), Req, any(), any()}

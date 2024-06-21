@@ -66,7 +66,10 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
     case routing_tree:lookup(Host, Path, Method, Dispatch) of
         {error, not_found} -> render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
         {error, comparator_not_found} -> render_status_page('_', 405, #{error => "Method not allowed"}, Req, Env);
-        {ok, Bindings, #nova_handler_value{app = App, callback = Callback, secure = Secure, plugins = Plugins,
+        {ok, Bindings, #nova_handler_value{app = App,
+                                           callback = Callback,
+                                           secure = Secure,
+                                           plugins = Plugins,
                                            extra_state = ExtraState}} ->
             {ok,
              Req#{plugins => Plugins,
