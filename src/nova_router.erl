@@ -239,7 +239,7 @@ parse_url(Host,
           Tree) when is_list(RemotePath), is_list(LocalPath) ->
 
     %% Static assets - check that the path exists
-    PrivPath = filename:join(code:lib_dir(App, priv), LocalPath),
+    PrivPath = filename:join(code:priv_dir(App), LocalPath),
 
     Payload =
         case {filelib:is_dir(LocalPath), filelib:is_dir(PrivPath)} of
