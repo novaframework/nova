@@ -40,6 +40,7 @@ jobs:
     - name: Run xref
       run: rebar3 xref
   nova_request_app:
+    if: github.ref != 'refs/heads/main'
     needs: [build]
     uses: ./.github/workflows/run_nra.yml
     with:
