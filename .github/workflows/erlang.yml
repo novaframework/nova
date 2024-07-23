@@ -32,16 +32,8 @@ jobs:
     outputs:
       extract_branch: ${{ steps.extract_branch.outputs.branch }}
     steps:
-      - name: Branch used
-        id: extract_branch
-        run: |
-          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
-            echo "name=branch" >> ::$(echo ${GITHUB_REF##*/})"
-          elif [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
-            echo "::set-output name=branch::$(echo $GITHUB_BASE_REF)"
-          else
-            echo "::set-output name=branch::INVALID_EVENT_BRANCH_UNKNOWN"
-          fi
+      - name: Get branch name
+        run: echo "${GITHUB_REF#refs/heads/}"
   nova_request_app:
     needs: [build, get_branch]
     uses: ./.github/workflows/run_nra.yml
