@@ -46,6 +46,7 @@ More on how things work can be read in the docs [Getting Started](https://hexdoc
 ### Articles
 
 * [Building an Erlang Web Api using Nova Framework and Redis](https://bercovici-adrian-simon.medium.com/building-an-erlang-web-api-using-nova-framework-and-redis-141edf170ef7)
+* [Gettings started with Nova](https://dev.to/taure/getting-started-with-nova-1ioo)
 
 ## Contributing
 
