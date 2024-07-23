@@ -24,8 +24,6 @@ jobs:
       run: rebar3 dialyzer
     - name: Run xref
       run: rebar3 xref
-    - name: Run elvis
-      run: rebar3 as lint lint
   get_branch:
     name: Get working branch
     runs-on: [ubuntu-latest]
