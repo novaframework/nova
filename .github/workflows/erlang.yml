@@ -20,21 +20,28 @@ jobs:
         version-type: strict
     - name: Compile
       run: rebar3 compile
+  testing:
+    runs-on: ubuntu-20.04
+    name: Testing Erlang/OTP ${{matrix.otp}} / rebar3 ${{matrix.rebar3}}
+    strategy:
+      fail-fast: false
+      matrix:
+        otp: ['25.1.1', '26.1', '27.0']
+        rebar3: ['3.23.0']
+    steps:
+    - uses: actions/checkout@v4
+    - uses: erlef/setup-beam@v1
+      with:
+        otp-version: ${{matrix.otp}}
+        rebar3-version: ${{matrix.rebar3}}
+        version-type: strict
     - name: Run dialyzer
       run: rebar3 dialyzer
     - name: Run xref
       run: rebar3 xref
-  get_branch:
-    name: Get working branch
-    runs-on: [ubuntu-latest]
-    outputs:
-      extract_branch: ${{ steps.extract_branch.outputs.branch }}
-    steps:
-      - name: Get branch name
-        run: echo "${GITHUB_REF#refs/heads/}"
   nova_request_app:
-    needs: [build, get_branch]
+    needs: [build]
     uses: ./.github/workflows/run_nra.yml
     with:
-      branch: "${{ needs.get_branch.outputs.extract_branch }}"
+      branch: "${GITHUB_REF#refs/heads/}"
     secrets: inherit
