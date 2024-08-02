@@ -83,7 +83,7 @@ get_correlation_id(_Req, _Opts) ->
     uuid().
 
 uuid() ->
-    uuid:uuid_to_string(uuid:get_v4()).
+    jhn_uuid:gen(v4, [binary]).
 
 update_logger_metadata(CorrId, Opts) ->
     LoggerKey = maps:get(logger_metadata_key, Opts, <<"correlation-id">>),
