@@ -55,7 +55,7 @@
          handle_info/2,
          terminate/2,
          code_change/3,
-         format_status/2
+         format_status/1
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -260,9 +260,8 @@ code_change(_OldVsn, State, _Extra) ->
 %% or when it appears in termination error logs.
 %% @end
 %%--------------------------------------------------------------------
--spec format_status(Opt :: normal | terminate,
-                    Status :: list()) -> Status :: term().
-format_status(_Opt, Status) ->
+-spec format_status(Status :: list()) -> Status :: term().
+format_status(Status) ->
     Status.
 
 %%%===================================================================
