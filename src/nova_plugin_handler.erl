@@ -23,27 +23,35 @@ execute(Req, Env) ->
 run_plugins([], Callback, Req, Env) ->
     {ok, Req, Env#{plugin_state => Callback}};
 run_plugins([{Module, Options}|Tl], Callback, Req, Env) ->
-    Args = case proplists:get_value(Callback, Module:module_info(exports)) of
-               2 -> [Req, Options];
-               3 -> [Req, Env, Options];
-               _ -> {throw, bad_callback}
-           end,
-    try erlang:apply(Module, Callback, Args) of
-        {ok, Req0} ->
-            run_plugins(Tl, Callback, Req0, Env);
-        {ok, Reply, Req0} ->
-            Req1 = handle_reply(Reply, Req0),
-            run_plugins(Tl, Callback, Req1, Env);
-        {break, Req0} ->
-            {ok, Req0};
-        {break, Reply, Req0} ->
-            Req1 = handle_reply(Reply, Req0),
-            {ok, Req1};
-        {stop, Req0} ->
-            {stop, Req0};
-        {stop, Reply, Req0} ->
-            Req1 = handle_reply(Reply, Req0),
-            {stop, Req1}
+    %% Fetch state
+    State =
+        case nova_plugin_manager:get_state(Module) of
+            {ok, State0} ->
+                State0;
+            {error, _Reason} ->
+                undefined
+        end,
+
+    try Module:Callback(Req, Env, Options, State) of
+        Result ->
+            set_state(Module, Result),
+            case Result of
+                {ok, Req0, _State0} ->
+                    run_plugins(Tl, Callback, Req0, Env);
+                {ok, Reply, Req0, _State0} ->
+                    Req1 = handle_reply(Reply, Req0),
+                    run_plugins(Tl, Callback, Req1, Env);
+                {break, Req0, _State0} ->
+                    {ok, Req0};
+                {break, Reply, Req0, _State0} ->
+                    Req1 = handle_reply(Reply, Req0),
+                    {ok, Req1};
+                {stop, Req0, _State0} ->
+                    {stop, Req0};
+                {stop, Reply, Req0, _State0} ->
+                    Req1 = handle_reply(Reply, Req0),
+                    {stop, Req1}
+            end
     catch
         Class:Reason:Stacktrace ->
             ?LOG_ERROR(#{msg => <<"Plugin crashed">>, class => Class, reason => Reason, stacktrace => Stacktrace}),
@@ -63,3 +71,10 @@ handle_reply({reply, Status, Headers, Body}, Req) ->
     Req1#{resp_status_code => Status};
 handle_reply(_, Req) ->
     Req.
+
+
+
+set_state(Module, Return) ->
+    ReturnList = erlang:tuple_to_list(Return),
+    State = lists:last(ReturnList),
+    nova_plugin_manager:set_state(Module, State).

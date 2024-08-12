@@ -250,6 +250,9 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
                 SCallback
         end,
 
+    %% Add the plugins to the plugin-manager
+    [ nova_plugin_manager:add_plugin(Plugin) || {_, Plugin, _} <- Plugins ],
+
     Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins),
                                 extra_state = maps:get(extra_state, RouteInfo, #{})},
 
