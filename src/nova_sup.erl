@@ -65,6 +65,7 @@ init([]) ->
     Children = [
                 child(nova_handlers, nova_handlers),
                 child(SessionManager, SessionManager),
+                child(nova_plugin_manager, nova_plugin_manager),
                 child(nova_watcher, nova_watcher)
                ],
 
