@@ -60,9 +60,7 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 add_plugin(Module) ->
-    ModuleInfo = Module:plugin_info(),
-    Title = element(1, ModuleInfo),
-    Version = element(2, ModuleInfo),
+    #{title := Title, version := Version} = Module:plugin_info(),
     add_plugin(Module, Title, Version).
 
 add_plugin(Module, Name, Version) ->
@@ -118,8 +116,8 @@ init([]) ->
           {stop, Reason :: term(), NewState :: term()}.
 handle_call({set_state, Module, NewState}, _From, State) ->
     case ets:lookup(?TABLE, Module) of
-        [#plugin{}] ->
-            ets:insert(?TABLE, #plugin{module = Module, state = NewState}),
+        [#plugin{} = P] ->
+            ets:insert(?TABLE, P#plugin{state = NewState}),
             {reply, ok, State};
         [] ->
             {reply, {error, not_found}, State}
@@ -185,7 +183,7 @@ handle_info(_Info, State) ->
                 State :: term()) -> any().
 terminate(_Reason, _State) ->
     %% Stop all plugins and clean state
-    Plugins = ets:tab2file(?TABLE),
+    Plugins = ets:tab2list(?TABLE),
     [ Plugin:stop() || #plugin{module = Plugin} <- Plugins ],
     ets:delete(?TABLE),
     ok.
