@@ -64,18 +64,31 @@ add_plugin(Module) ->
     add_plugin(Module, Title, Version).
 
 add_plugin(Module, Name, Version) ->
-    gen_server:call(?SERVER, {add_plugin, Module, Name, Version}).
+    case ets:lookup(?TABLE, Module) of
+        [#plugin{}] ->
+            ?LOG_DEBUG("Plugin ~p already initialized.", [Module]),
+            ok;
+        [] ->
+            gen_server:cast(?SERVER, {add_plugin, Module, Name, Version})
+    end.
 
 get_state(Module) ->
     case ets:lookup(?TABLE, Module) of
         [#plugin{state = State}] ->
             {ok, State};
         _ ->
+            ?LOG_DEBUG("Plugin ~p not found. get_state/1 failed.", [Module]),
             {error, not_found}
     end.
 
 set_state(Module, NewState) ->
-    gen_server:call(?SERVER, {set_state, Module, NewState}).
+    case ets:lookup(?TABLE, Module) of
+        [#plugin{} = P] ->
+            gen_server:call(?SERVER, {set_state, Module, P, NewState});
+        _ ->
+            ?LOG_DEBUG("Plugin ~p not found. set_state/2 failed.", [Module]),
+            {error, not_found}
+    end.
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -114,30 +127,10 @@ init([]) ->
           {noreply, NewState :: term(), hibernate} |
           {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
           {stop, Reason :: term(), NewState :: term()}.
-handle_call({set_state, Module, NewState}, _From, State) ->
-    case ets:lookup(?TABLE, Module) of
-        [#plugin{} = P] ->
-            ets:insert(?TABLE, P#plugin{state = NewState}),
-            {reply, ok, State};
-        [] ->
-            {reply, {error, not_found}, State}
-    end;
-handle_call({add_plugin, Module, Name, Version}, _From, State) ->
-    case ets:lookup(?TABLE, Module) of
-        [#plugin{}] ->
-            {reply, ok, State};
-        [] ->
-            PluginState =
-                case erlang:function_exported(Module, init, 0) of
-                    true ->
-                        ?LOG_INFO("Initializing plugin ~p", [Module]),
-                        Module:init();
-                    _ ->
-                        undefined
-                end,
-            ets:insert(?TABLE, #plugin{module = Module, name = Name, version = Version, state = PluginState}),
-            {reply, ok, State}
-    end;
+handle_call({set_state, Module, P, NewState}, _From, State) ->
+    ?LOG_DEBUG("Set state for plugin ~p; NewState: ~p", [Module, NewState]),
+    ets:insert(?TABLE, P#plugin{state = NewState}),
+    {reply, ok, State};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -153,6 +146,18 @@ handle_call(_Request, _From, State) ->
           {noreply, NewState :: term(), Timeout :: timeout()} |
           {noreply, NewState :: term(), hibernate} |
           {stop, Reason :: term(), NewState :: term()}.
+handle_cast({add_plugin, Module, Name, Version}, State) ->
+    PluginState =
+        case erlang:function_exported(Module, init, 0) of
+            true ->
+                ?LOG_INFO("Initializing plugin ~p", [Module]),
+                Module:init();
+            _ ->
+                ?LOG_DEBUG("Plugin ~p has no init/0 function", [Module]),
+                undefined
+        end,
+    ets:insert(?TABLE, #plugin{module = Module, name = Name, version = Version, state = PluginState}),
+    {noreply, State};
 handle_cast(_Request, State) ->
     {noreply, State}.
 
