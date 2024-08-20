@@ -59,6 +59,8 @@
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
+add_plugin({_Class, Module, _Opts}) ->
+    add_plugin(Module);
 add_plugin(Module) ->
     #{title := Title, version := Version} = Module:plugin_info(),
     add_plugin(Module, Title, Version).
@@ -189,7 +191,8 @@ handle_info(_Info, State) ->
 terminate(_Reason, _State) ->
     %% Stop all plugins and clean state
     Plugins = ets:tab2list(?TABLE),
-    [ Plugin:stop() || #plugin{module = Plugin} <- Plugins ],
+    [ Plugin:stop() || #plugin{module = Plugin} <- Plugins,
+                       erlang:function_exported(Plugin, stop, 0) ],
     ets:delete(?TABLE),
     ok.
 

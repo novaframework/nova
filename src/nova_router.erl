@@ -14,7 +14,6 @@
 
 %% API
 -export([
-         compiled_apps/0,
          compile/1,
          lookup_url/1,
          lookup_url/2,
@@ -27,7 +26,11 @@
          routes/1,
 
          %% Modulates the routes-table
-         add_routes/2
+         add_routes/2,
+
+         %% Fetch information about the routing table
+         plugins/0,
+         compiled_apps/0
         ]).
 
 -include_lib("routing_tree/include/routing_tree.hrl").
@@ -46,11 +49,16 @@
 
 
 -define(NOVA_APPS, nova_apps).
+-define(NOVA_PLUGINS, nova_plugins).
 
 -spec compiled_apps() -> [{App :: atom(), Prefix :: list()}].
 compiled_apps() ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     StorageBackend:get(?NOVA_APPS, []).
+
+plugins() ->
+    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    StorageBackend:get(?NOVA_PLUGINS, []).
 
 -spec compile(Apps :: [atom() | {atom(), map()}]) -> host_tree().
 compile(Apps) ->
@@ -223,7 +231,9 @@ compile([App|Tl], Dispatch, Options) ->
 
     %% Take out the prefix for the app and store it in the persistent store
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+
     CompiledApps = StorageBackend:get(?NOVA_APPS, []),
+
     CompiledApps0 = [{App, maps:get(prefix, Options, "/")}|CompiledApps],
 
     StorageBackend:put(?NOVA_APPS, CompiledApps0),
@@ -434,6 +444,13 @@ insert(Host, Path, Combinator, Value, Tree) ->
             throw(Exception)
     end.
 
+
+add_plugins(Plugins) ->
+    Plugins0 = [ Plugin || {_, Plugin} <- Plugins],
+    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    StoredPlugins = StorageBackend:get(?NOVA_PLUGINS, []),
+    Plugins1 = lists:umerge([Plugins0, StoredPlugins]),
+    StorageBackend:put(?NOVA_PLUGINS, Plugins1).
 
 normalize_plugins(Plugins) ->
     NormalizedPlugins = normalize_plugins(Plugins, []),
