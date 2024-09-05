@@ -446,7 +446,7 @@ insert(Host, Path, Combinator, Value, Tree) ->
 
 
 add_plugins(Plugins) ->
-    Plugins0 = [ Plugin || {_, Plugin} <- Plugins],
+    Plugins0 = [ Plugin || {_, Plugin, _} <- Plugins],
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     StoredPlugins = StorageBackend:get(?NOVA_PLUGINS, []),
     Plugins1 = lists:umerge([Plugins0, StoredPlugins]),
