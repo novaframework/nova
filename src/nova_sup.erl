@@ -114,21 +114,21 @@ setup_cowboy(Configuration) ->
 start_cowboy(Configuration) ->
     Middlewares = case nova:get_trace_value() of
                        true -> [
-                                            nova_otel_handler, %% Start a span
-                                            nova_router, %% Lookup routes
-                                            nova_plugin_handler, %% Handle pre-request plugins
-                                            nova_security_handler, %% Handle security
-                                            nova_handler, %% Controller
-                                            nova_plugin_handler, %% Handle post-request plugins
-                                            nova_otel_handler %% Stop a span
-                                           ];
-                        false -> 
-                            [
+                                nova_otel_handler, %% Start a span
                                 nova_router, %% Lookup routes
                                 nova_plugin_handler, %% Handle pre-request plugins
                                 nova_security_handler, %% Handle security
                                 nova_handler, %% Controller
-                                nova_plugin_handler %% Handle post-request plugins
+                                nova_plugin_handler, %% Handle post-request plugins
+                                nova_otel_handler %% Stop a span
+                               ];
+                        false -> 
+                            [
+                             nova_router, %% Lookup routes
+                             nova_plugin_handler, %% Handle pre-request plugins
+                             nova_security_handler, %% Handle security
+                             nova_handler, %% Controller
+                             nova_plugin_handler %% Handle post-request plugins
                             ]
                         end,
     StreamHandlers = maps:get(stream_handlers, Configuration, [nova_stream_h, cowboy_compress_h, cowboy_stream_h]),
