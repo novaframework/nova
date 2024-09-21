@@ -7,16 +7,20 @@
 
 -include_lib("kernel/include/logger.hrl").
 -include("../include/nova.hrl").
+-include_lib("opentelemetry_api/include/otel_tracer.hrl").
+-include_lib("opentelemetry_api/include/opentelemetry.hrl").
 
 execute(Req, Env = #{secure := false}) ->
     {ok, Req, Env};
 execute(Req = #{host := Host}, Env = #{secure := Callback}) ->
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
+    ?add_event(<<"nova security">>, #{<<"callback">> => Callback}),
     try Callback(Req) of
         Result ->
             handle_response(Result, Req, Env)
     catch
         Class:Reason:Stacktrace when UseStacktrace == true ->
+            ?record_exception(Class, Reason, <<"security handler crash">>, Stacktrace, #{}),
             ?LOG_ERROR(#{msg => <<"Security handler crashed">>,
                          class => Class,
                          reason => Reason,
@@ -29,6 +33,7 @@ execute(Req = #{host := Host}, Env = #{secure := Callback}) ->
             Req1 = cowboy_req:reply(500, Req0),
             {stop, Req1};
         Class:Reason ->
+            ?record_exception(Class, Reason, <<"security handler crash">>, [], #{}),
             ?LOG_ERROR(#{msg => <<"Security handler crashed">>,
                          class => Class,
                          reason => Reason}),

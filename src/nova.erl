@@ -11,7 +11,8 @@
          get_environment/0,
          get_env/2,
          set_env/2,
-         use_stacktrace/1
+         use_stacktrace/1,
+         get_trace_value/0
         ]).
 
 -type state() :: any().
@@ -98,3 +99,11 @@ use_stacktrace(true) ->
     persistent_term:put(nova_use_stacktrace, true);
 use_stacktrace(_) ->
     persistent_term:erase(nova_use_stacktrace).
+
+
+get_trace_value() ->
+    Config =  application:get_env(nova, cowboy_configuration, #{}),
+    case Config of
+        #{trace := Trace} -> Trace;
+        _ -> false
+    end.

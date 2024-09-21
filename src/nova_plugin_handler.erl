@@ -6,6 +6,8 @@
         ]).
 
 -include_lib("kernel/include/logger.hrl").
+-include_lib("opentelemetry_api/include/otel_tracer.hrl").
+-include_lib("opentelemetry_api/include/opentelemetry.hrl").
 
 execute(Req = #{plugins := Plugins}, Env = #{plugin_state := pre_request}) ->
     %% This is a post plugin
@@ -28,6 +30,8 @@ run_plugins([{Module, Options}|Tl], Callback, Req, Env) ->
                3 -> [Req, Env, Options];
                _ -> {throw, bad_callback}
            end,
+    EventName = iolist_to_binary([<<"nova ">>, atom_to_binary(Callback), <<" plugin">>]),
+    ?add_event(EventName, #{<<"nova.plugin">> => Module}),
     try erlang:apply(Module, Callback, Args) of
         {ok, Req0} ->
             run_plugins(Tl, Callback, Req0, Env);
@@ -46,6 +50,7 @@ run_plugins([{Module, Options}|Tl], Callback, Req, Env) ->
             {stop, Req1}
     catch
         Class:Reason:Stacktrace ->
+            ?record_exception(Class, Reason, <<"plugin crash">>, Stacktrace, #{}),
             ?LOG_ERROR(#{msg => <<"Plugin crashed">>, class => Class, reason => Reason, stacktrace => Stacktrace}),
             Req0 = Req#{crash_info => #{class => Class,
                                         reason => Reason,
