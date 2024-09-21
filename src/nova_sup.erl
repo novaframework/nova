@@ -112,8 +112,8 @@ setup_cowboy(Configuration) ->
           {ok, BootstrapApp :: atom(), Host :: string() | {integer(), integer(), integer(), integer()},
            Port :: integer()} | {error, Reason :: any()}.
 start_cowboy(Configuration) ->
-    Middlewares = case Configuration of
-                       #{trace := true} -> [
+    Middlewares = case nova:get_trace_value() of
+                       true -> [
                                             nova_otel_handler, %% Start a span
                                             nova_router, %% Lookup routes
                                             nova_plugin_handler, %% Handle pre-request plugins
@@ -122,7 +122,7 @@ start_cowboy(Configuration) ->
                                             nova_plugin_handler, %% Handle post-request plugins
                                             nova_otel_handler %% Stop a span
                                            ];
-                        _ -> 
+                        false -> 
                             [
                                 nova_router, %% Lookup routes
                                 nova_plugin_handler, %% Handle pre-request plugins

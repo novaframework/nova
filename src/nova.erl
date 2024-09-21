@@ -102,8 +102,4 @@ use_stacktrace(_) ->
 
 
 get_trace_value() ->
-    Config =  application:get_env(nova, cowboy_configuration, #{}),
-    case Config of
-        #{trace := Trace} -> Trace;
-        _ -> false
-    end.
+    application:get_env(nova, trace, true).
