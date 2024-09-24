@@ -11,8 +11,7 @@
          get_environment/0,
          get_env/2,
          set_env/2,
-         use_stacktrace/1,
-         get_trace_value/0
+         use_stacktrace/1
         ]).
 
 -type state() :: any().
@@ -99,7 +98,3 @@ use_stacktrace(true) ->
     persistent_term:put(nova_use_stacktrace, true);
 use_stacktrace(_) ->
     persistent_term:erase(nova_use_stacktrace).
-
-
-get_trace_value() ->
-    application:get_env(nova, trace, true).
