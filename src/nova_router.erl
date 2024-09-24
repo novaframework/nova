@@ -70,8 +70,8 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
         {error, comparator_not_found} -> render_status_page('_', 405, #{error => "Method not allowed"}, Req, Env);
         {ok, Bindings, #nova_handler_value{app = App, callback = Callback, secure = Secure, plugins = Plugins,
                                            extra_state = ExtraState, realpath = RealPath}} ->
-            ?update_name(iolist_to_binary([Method, " ", RealPath]),
-            ?set_attributes(<<"http.route">>, RealPath),
+            ?update_name(iolist_to_binary([Method, " ", RealPath])),
+            ?set_attribute(<<"http.route">>, RealPath),
             {ok,
              Req#{plugins => Plugins,
                   extra_state => ExtraState,
@@ -310,6 +310,7 @@ parse_url(Host, [{Path, Callback, Options}|Tl], Prefix, Value = #nova_handler_va
                                      callback = Callback
                                     },
                           ?LOG_DEBUG(#{action => <<"Adding route">>, route => RealPath, app => App, method => Method}),
+                          Value2 = Value1#nova_handler_value{realpath = RealPath},
                           insert(Host, RealPath, BinMethod, Value1, Tree0)
                   end, Tree, Methods),
             parse_url(Host, Tl, Prefix, Value, CompiledPaths);
@@ -330,7 +331,6 @@ parse_url(Host,
 
     ?LOG_DEBUG(#{action => <<"Adding route">>, protocol => <<"ws">>, route => Path, app => App}),
     RealPath = concat_strings(Prefix, Path),
-    Value2 = Value1#nova_handler_value{realpath = RealPath},
     CompiledPaths = insert(Host, RealPath, '_', Value0, Tree),
     parse_url(Host, Tl, Prefix, Value, CompiledPaths).
 

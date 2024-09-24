@@ -1,4 +1,4 @@
--module(cowboy_otel_middleware).
+-module(nova_otel_handler).
 -behaviour(cowboy_middleware).
 
 %% Callbacks
