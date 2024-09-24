@@ -9,6 +9,8 @@
 
 -include_lib("kernel/include/logger.hrl").
 -include("../include/nova_router.hrl").
+-include_lib("opentelemetry_api/include/otel_tracer.hrl").
+-include_lib("opentelemetry_api/include/opentelemetry.hrl").
 
 -callback init(Req, any()) -> {ok | module(), Req, any()}
                                   | {module(), Req, any(), any()}
@@ -21,6 +23,10 @@
                                when Req::cowboy_req:req(), Env::cowboy_middleware:env().
 execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
+    ?set_attributes(#{
+        <<"nova.handler.type">> => cowboy_handler,
+        <<"nova.handler.module">> => Handler
+        }),
     try Handler:init(Req, Arguments) of
         {ok, Req2, _State} ->
             Result = terminate(normal, Req2, fun Handler:dummy/1),
@@ -47,6 +53,10 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
 execute(Req, Env = #{callback := Callback}) ->
     %% Ensure that the module exists and have the correct function exported
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
+    ?set_attributes(#{
+        <<"nova.handler.type">> => nova_handler,
+        <<"nova.handler.callback">> => Callback
+        }),
     try RetObj = Callback(Req),
          call_handler(Callback, Req, RetObj, Env, false)
     of
@@ -54,12 +64,14 @@ execute(Req, Env = #{callback := Callback}) ->
             HandlerReturn
     catch
         Class:{Status, Reason} when is_integer(Status) ->
+            ?record_exception(Class, Reason, <<"handler crash">>, [], #{}),
             %% This makes it so that we don't need to fetch the stacktrace
             ?LOG_ERROR(#{msg => <<"Controller threw an exception">>,
                          class => Class,
                          reason => Reason}),
             render_response(Req#{crash_info => Reason}, Env, Status);
         Class:Reason:Stacktrace when UseStacktrace == true ->
+            ?record_exception(Class, Reason, <<"handler crash">>, Stacktrace, #{}),
             ?LOG_ERROR(#{msg => <<"Controller crashed">>,
                          class => Class,
                          reason => Reason,
@@ -72,6 +84,7 @@ execute(Req, Env = #{callback := Callback}) ->
                         reason => Reason},
             render_response(Req#{crash_info => Payload}, Env, 500);
         Class:Reason ->
+            ?record_exception(Class, Reason, <<"handler crash">>, [], #{}),
             ?LOG_ERROR(#{msg => <<"Controller crashed">>,
                          class => Class,
                          reason => Reason}),

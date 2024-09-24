@@ -34,6 +34,8 @@
 -include_lib("kernel/include/logger.hrl").
 -include("../include/nova_router.hrl").
 -include("../include/nova.hrl").
+-include_lib("opentelemetry_api/include/otel_tracer.hrl").
+-include_lib("opentelemetry_api/include/opentelemetry.hrl").
 
 -type bindings() :: #{binary() := binary()}.
 -export_type([bindings/0]).
@@ -67,7 +69,9 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
         {error, not_found} -> render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
         {error, comparator_not_found} -> render_status_page('_', 405, #{error => "Method not allowed"}, Req, Env);
         {ok, Bindings, #nova_handler_value{app = App, callback = Callback, secure = Secure, plugins = Plugins,
-                                           extra_state = ExtraState}} ->
+                                           extra_state = ExtraState, realpath = RealPath}} ->
+            ?update_name(iolist_to_binary([Method, " ", RealPath])),
+            ?set_attribute(<<"http.route">>, RealPath),
             {ok,
              Req#{plugins => Plugins,
                   extra_state => ExtraState,
@@ -306,7 +310,8 @@ parse_url(Host, [{Path, Callback, Options}|Tl], Prefix, Value = #nova_handler_va
                                      callback = Callback
                                     },
                           ?LOG_DEBUG(#{action => <<"Adding route">>, route => RealPath, app => App, method => Method}),
-                          insert(Host, RealPath, BinMethod, Value1, Tree0)
+                          Value2 = Value1#nova_handler_value{realpath = RealPath},
+                          insert(Host, RealPath, BinMethod, Value2, Tree0)
                   end, Tree, Methods),
             parse_url(Host, Tl, Prefix, Value, CompiledPaths);
         OtherProtocol ->
