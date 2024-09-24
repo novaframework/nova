@@ -311,7 +311,7 @@ parse_url(Host, [{Path, Callback, Options}|Tl], Prefix, Value = #nova_handler_va
                                     },
                           ?LOG_DEBUG(#{action => <<"Adding route">>, route => RealPath, app => App, method => Method}),
                           Value2 = Value1#nova_handler_value{realpath = RealPath},
-                          insert(Host, RealPath, BinMethod, Value1, Tree0)
+                          insert(Host, RealPath, BinMethod, Value2, Tree0)
                   end, Tree, Methods),
             parse_url(Host, Tl, Prefix, Value, CompiledPaths);
         OtherProtocol ->
