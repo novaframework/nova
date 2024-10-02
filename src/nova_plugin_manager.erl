@@ -123,8 +123,8 @@ set_state(Callback, NewState) when is_function(Callback) ->
 init([]) ->
     process_flag(trap_exit, true),
     ets:new(?TABLE, [named_table, set, protected, {keypos, #plugin.module}]),
-    GlobalPlugins = application:get_env(nova, plugins, []),
-    [ add_plugin(Module) || Module <- GlobalPlugins ],
+    Plugins = nova_router:plugins(),
+    [ add_plugin(Callback) || Callback <- Plugins ],
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------
