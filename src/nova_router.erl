@@ -413,7 +413,7 @@ normalize_plugins(Plugins) ->
 normalize_plugins([], Ack) -> Ack;
 normalize_plugins([{Type, PluginName, Options}|Tl], Ack) ->
     ExistingPlugins = proplists:get_value(Type, Ack, []),
-    normalize_plugins(Tl, [{Type, [{PluginName, Options}|ExistingPlugins]}|proplists:delete(Type, Ack)]).
+    normalize_plugins(Tl, [{Type, [{fun PluginName:Type/4, Options}|ExistingPlugins]}|proplists:delete(Type, Ack)]).
 
 method_to_binary(get) -> <<"GET">>;
 method_to_binary(post) -> <<"POST">>;

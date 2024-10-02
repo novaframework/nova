@@ -22,25 +22,27 @@ execute(Req, Env) ->
 
 run_plugins([], Callback, Req, Env) ->
     {ok, Req, Env#{plugin_state => Callback}};
-run_plugins([{Module, Options}|Tl], Callback, Req, Env) ->
+run_plugins([{Module, Options}|Tl], Callback, Req, Env) when is_atom(Module) ->
+    run_plugins([{fun Module:Callback/1, Options}|Tl], Callback, Req, Env);
+run_plugins([{Callback, Options}|Tl], CallbackType, Req, Env) when is_function(Callback) ->
     %% Fetch state
     State =
-        case nova_plugin_manager:get_state(Module) of
+        case nova_plugin_manager:get_state(Callback) of
             {ok, State0} ->
                 State0;
             {error, _Reason} ->
                 undefined
         end,
 
-    try Module:Callback(Req, Env, Options, State) of
+    try Callback(Req, Env, Options, State) of
         Result ->
-            set_state(Module, Result),
+            set_state(Callback, Result),
             case Result of
                 {ok, Req0, _State0} ->
-                    run_plugins(Tl, Callback, Req0, Env);
+                    run_plugins(Tl, CallbackType, Req0, Env);
                 {ok, Reply, Req0, _State0} ->
                     Req1 = handle_reply(Reply, Req0),
-                    run_plugins(Tl, Callback, Req1, Env);
+                    run_plugins(Tl, CallbackType, Req1, Env);
                 {break, Req0, _State0} ->
                     {ok, Req0};
                 {break, Reply, Req0, _State0} ->
@@ -74,7 +76,7 @@ handle_reply(_, Req) ->
 
 
 
-set_state(Module, Return) ->
+set_state(Callback, Return) when is_function(Callback) ->
     ReturnList = erlang:tuple_to_list(Return),
     State = lists:last(ReturnList),
-    nova_plugin_manager:set_state(Module, State).
+    nova_plugin_manager:set_state(Callback, State).
