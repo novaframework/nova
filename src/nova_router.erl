@@ -445,12 +445,16 @@ insert(Host, Path, Combinator, Value, Tree) ->
     end.
 
 
-add_plugins(Plugins) ->
-    Plugins0 = [ Plugin || {_, Plugin, _} <- Plugins],
+add_plugin(Plugin) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     StoredPlugins = StorageBackend:get(?NOVA_PLUGINS, []),
-    Plugins1 = lists:umerge([Plugins0, StoredPlugins]),
-    StorageBackend:put(?NOVA_PLUGINS, Plugins1).
+    Plugins1 = lists:umerge([[Plugin], StoredPlugins]),
+    case Plugins1 of
+        StoredPlugins ->
+            ok;
+        _ ->
+            StorageBackend:put(?NOVA_PLUGINS, Plugins1)
+    end.
 
 normalize_plugins(Plugins) ->
     NormalizedPlugins = normalize_plugins(Plugins, []),
@@ -459,6 +463,7 @@ normalize_plugins(Plugins) ->
 normalize_plugins([], Ack) -> Ack;
 normalize_plugins([{Type, PluginName, Options}|Tl], Ack) ->
     ExistingPlugins = proplists:get_value(Type, Ack, []),
+    add_plugin(PluginName),
     normalize_plugins(Tl, [{Type, [{fun PluginName:Type/4, Options}|ExistingPlugins]}|proplists:delete(Type, Ack)]).
 
 method_to_binary(get) -> <<"GET">>;
