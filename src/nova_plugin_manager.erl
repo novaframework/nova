@@ -61,9 +61,13 @@ start_link() ->
 
 add_plugin({_Class, Module, _Opts}) ->
     add_plugin(Module);
-add_plugin(Module) ->
+add_plugin(Module) when is_atom(Module) ->
     #{title := Title, version := Version} = Module:plugin_info(),
-    add_plugin(Module, Title, Version).
+    add_plugin(Module, Title, Version);
+add_plugin(Callback) when is_function(Callback) ->
+    Info = erlang:fun_info(Callback),
+    Module = proplists:get_value(module, Info),
+    add_plugin(Module).
 
 add_plugin(Module, Name, Version) ->
     case ets:lookup(?TABLE, Module) of
@@ -74,23 +78,32 @@ add_plugin(Module, Name, Version) ->
             gen_server:cast(?SERVER, {add_plugin, Module, Name, Version})
     end.
 
-get_state(Module) ->
+get_state(Module) when is_atom(Module) ->
     case ets:lookup(?TABLE, Module) of
         [#plugin{state = State}] ->
             {ok, State};
         _ ->
             ?LOG_DEBUG("Plugin ~p not found. get_state/1 failed.", [Module]),
             {error, not_found}
-    end.
+    end;
+get_state(Callback) when is_function(Callback) ->
+    Info = erlang:fun_info(Callback),
+    Module = proplists:get_value(module, Info),
+    get_state(Module).
 
-set_state(Module, NewState) ->
+
+set_state(Module, NewState) when is_atom(Module) ->
     case ets:lookup(?TABLE, Module) of
         [#plugin{} = P] ->
             gen_server:call(?SERVER, {set_state, Module, P, NewState});
         _ ->
             ?LOG_DEBUG("Plugin ~p not found. set_state/2 failed.", [Module]),
             {error, not_found}
-    end.
+    end;
+set_state(Callback, NewState) when is_function(Callback) ->
+    Info = erlang:fun_info(Callback),
+    Module = proplists:get_value(module, Info),
+    set_state(Module, NewState).
 
 %%%===================================================================
 %%% gen_server callbacks
