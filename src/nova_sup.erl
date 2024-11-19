@@ -127,7 +127,7 @@ start_cowboy(Configuration) ->
     Options = maps:get(options, Configuration, #{compress => true}),
 
     %% Build the options map
-    CowboyOptions1 = Options#{middlewares => Middlewares,
+    CowboyOptions1 = Options#{middlewares => MiddlewareHandlers,
                               stream_handlers => StreamHandlers},
 
     BootstrapApp = application:get_env(nova, bootstrap_application, undefined),
