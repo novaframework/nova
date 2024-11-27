@@ -9,6 +9,7 @@ Nova uses Cowboy as the webserver. Cowboy is a very flexible webserver and Nova 
 | Key | Description | Value | Default |
 |-----|-------------|-------|---------|
 | `stream_handlers` | Stream handlers are used to handle streaming requests. You can configure multiple stream handlers. Read more in the subsection *Stream handlers* | `list()` | `[nova_stream_h, cowboy_compress_h, cowboy_stream_h]` |
+| `middleware_handlers` | Middleware handlers are used to handle middleware requests. You can configure multiple middleware handlers. Read more in the subsection *Middleware handlers* | `list()` | `[nova_router, nova_plugin_handler, nova_security_handler, nova_handler, nova_plugin_handler]` |
 | `options` | Cowboy options. Read more in the subsection *Cowboy options* | `map()` | `#{compress => true}` |
 | `ip` | IP to bind to | `tuple` | `{0, 0, 0, 0}` |
 | `port` | Port to bind to | `integer()` | `8080` |
