@@ -5,31 +5,59 @@ These can be used to create access logs, insert CORS headers or similar.
 
 Plugins are used to handle things before and/or after a request. They are applied on all requests of a specified protocol.
 
+A rule of thumb is that if you want to store a short-lived state (For the local request) then you could store that under the Env-object. If you want to store a long-lived state (For the global request) then you could store that under the State-object which is initialized in the optional `init/0` callback and (potentially) updated in each call to `pre_request/4` and `post_request/4`. The long-lived state is only applicable to the plugin-module while the local state belongs to the request and is distributed to each invoked plugin.
+
 This is an example:
 
 ```erlang
 -module(correlation_id).
 -behaviour(nova_plugin).
 -export([
-    pre_request/2,
-    post_request/2,
+    pre_request/4,
+    post_request/4,
     plugin_info/0
   ]).
 
-pre_request(Req, NovaState) ->
+pre_request(Req, _Env, _Opts, State) ->
     UUID = uuid:uuid_to_string(uuid:get_v4()),
-    {ok, cowboy_req:set_resp_header(<<"x-correlation-id">>, UUID, Req), NovaState}.
+    {ok, cowboy_req:set_resp_header(<<"x-correlation-id">>, UUID, Req), State}.
 
-post_request(Req, NovaState) ->
-    {ok, Req, NovaState}.
+post_request(Req, _Env, _Opts, State) ->
+    {ok, Req, State}.
 
 plugin_info() ->
-    {<<"Correlation plugin">>, <<"1.0.0">>, <<"Niclas Axelsson <niclas@burbas.se>">>,
-     <<"Example plugin for nova">>}.
+    #{
+      title => <<"nova_cors_plugin">>,
+      version => <<"0.2.0">>,
+      url => <<"https://github.com/novaframework/nova">>,
+      authors => [<<"Nova team <info@novaframework.org">>],
+      description => <<"Add CORS headers to request">>,
+      options => [
+                 ]
+     }.
 ```
 
 This plugin injects a UUID into the headers.
 
+
+## Optional callbacks
+
+There's two optional callbacks for a plugin that can be used for storing a global long-lived state. This can be useful if you want to keep track of something like a `pid` or similar.
+The first callback is `init/0` and the second is `stop/1`. `init/0` is called when the plugin is loaded and `stop/1` is called when the plugin is unloaded (Usually when the nova-application is started/stopped).
+Following example shows how we spawn a process and returns the pid in a map - this map will become our new state. When the plugin is stopped, `stop/1` will get invoked and we will send a stop message to the pid.
+
+```erlang
+init() ->
+    %% Setup some pids
+    Pid = spawn(fun() -> ok end),
+    #{my_pid => Pid}.
+
+stop(State) ->
+    %% Stop the pids
+    Pid = maps:get(my_pid, State),
+    Pid ! stop,
+    ok.
+```
 
 Adding a plugin
 
