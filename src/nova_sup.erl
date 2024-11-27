@@ -15,6 +15,7 @@
 
 -include_lib("kernel/include/logger.hrl").
 -include("nova.hrl").
+-include("../include/nova.hrl").
 
 -define(SERVER, ?MODULE).
 
@@ -127,6 +128,7 @@ start_cowboy(Configuration) ->
                               stream_handlers => StreamHandlers},
 
     BootstrapApp = application:get_env(nova, bootstrap_application, undefined),
+
     %% Compile the routes
     Dispatch =
         case BootstrapApp of
@@ -162,24 +164,43 @@ start_cowboy(Configuration) ->
                     Error
             end;
         _ ->
-            CACert = maps:get(ca_cert, Configuration),
-            Cert = maps:get(cert, Configuration),
-            Port = maps:get(ssl_port, Configuration, ?NOVA_STD_SSL_PORT),
-            ?LOG_NOTICE(#{msg => <<"Nova starting SSL">>, port => Port}),
-            case cowboy:start_tls(
-              ?NOVA_LISTENER, [
-                               {port, Port},
-                               {ip, Host},
-                               {certfile, Cert},
-                               {cacertfile, CACert}
-                              ],
-              CowboyOptions2) of
-                {ok, _Pid} ->
-                    {ok, BootstrapApp, Host, Port};
-                Error ->
-                    Error
+            case maps:get(ca_cert, Configuration, undefined) of
+                undefined ->
+                    Port = maps:get(ssl_port, Configuration, ?NOVA_STD_SSL_PORT),
+                    SSLOptions = maps:get(ssl_options, Configuration, #{}),
+                    TransportOpts = maps:put(port, Port, SSLOptions),
+                    TransportOpts1 = maps:put(ip, Host, TransportOpts),
+
+                    case cowboy:start_tls(
+                           ?NOVA_LISTENER, maps:to_list(TransportOpts1), CowboyOptions2) of
+                        {ok, _Pid} ->
+                            ?LOG_NOTICE(#{msg => <<"Nova starting SSL">>, port => Port}),
+                            {ok, BootstrapApp, Host, Port};
+                        Error ->
+                            ?LOG_ERROR(#{msg => <<"Could not start cowboy with SSL">>, reason => Error}),
+                            Error
+                    end;
+                CACert ->
+                    Cert = maps:get(cert, Configuration),
+                    Port = maps:get(ssl_port, Configuration, ?NOVA_STD_SSL_PORT),
+                    ?LOG_DEPRECATED(<<"0.10.3">>, <<"Use of use_ssl is deprecated, use ssl instead">>),
+                    case cowboy:start_tls(
+                           ?NOVA_LISTENER, [
+                                            {port, Port},
+                                            {ip, Host},
+                                            {certfile, Cert},
+                                            {cacertfile, CACert}
+                                           ],
+                           CowboyOptions2) of
+                        {ok, _Pid} ->
+                            ?LOG_NOTICE(#{msg => <<"Nova starting SSL">>, port => Port}),
+                            {ok, BootstrapApp, Host, Port};
+                        Error ->
+                            Error
+                    end
             end
     end.
+
 
 
 get_version(Application) ->

@@ -12,10 +12,12 @@ Nova uses Cowboy as the webserver. Cowboy is a very flexible webserver and Nova 
 | `options` | Cowboy options. Read more in the subsection *Cowboy options* | `map()` | `#{compress => true}` |
 | `ip` | IP to bind to | `tuple` | `{0, 0, 0, 0}` |
 | `port` | Port to bind to | `integer()` | `8080` |
+| `ssl` |  | `boolean()` | `false` |
 | `use_ssl` | If SSL should be used | `boolean()` | `false` |
-| `ssl_port` | Port to bind to when using SSL | `integer()` | `8443` |
-| `ca_cert` | Path to CA-cert | `string()` | `undefined` |
-| `cert` | Path to cert | `string()` | `undefined` |
+| `ssl_options` | Transport options for SSL. Nova uses ranch_ssl module so read about available options on [their page](https://ninenines.eu/docs/en/ranch/2.0/manual/ranch_ssl/). | `ranch_ssl:opts()` | `#{cert => "/path/to/cert.pem", key => "/path/to/key.pem"}` |
+| `ssl_port` | Port to bind to when using SSL *Deprecated since 0.10.3 - Use the `port` option instead* | `integer()` | `8443` |
+| `ca_cert` | Path to CA-cert *Deprecated since 0.10.3 - Read with `ssl_options`*| `string()` | `undefined` |
+| `cert` | Path to cert *Deprecated since 0.10.3 - Replaced with `ssl_options`*| `string()` | `undefined` |
 
 
 ## Nova specific configurations
