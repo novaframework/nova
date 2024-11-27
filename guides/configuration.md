@@ -14,7 +14,7 @@ Nova uses Cowboy as the webserver. Cowboy is a very flexible webserver and Nova 
 | `port` | Port to bind to | `integer()` | `8080` |
 | `use_ssl` | If SSL should be used | `boolean()` | `false` |
 | `ssl_options` | Transport options for SSL. Nova uses ranch_ssl module so read about available options on [their page](https://ninenines.eu/docs/en/ranch/2.0/manual/ranch_ssl/). | `ranch_ssl:opts()` | `#{cert => "/path/to/cert.pem", key => "/path/to/key.pem"}` |
-| `ssl_port` | Port to bind to when using SSL *Deprecated since 0.10.3 - Use the `port` option instead* | `integer()` | `8443` |
+| `ssl_port` | Port to bind to when using SSL | `integer()` | `8443` |
 | `ca_cert` | Path to CA-cert *Deprecated since 0.10.3 - Read with `ssl_options`*| `string()` | `undefined` |
 | `cert` | Path to cert *Deprecated since 0.10.3 - Replaced with `ssl_options`*| `string()` | `undefined` |
 
