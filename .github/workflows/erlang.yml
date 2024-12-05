@@ -46,3 +46,17 @@ jobs:
     with:
       branch: "${GITHUB_REF#refs/heads/}"
     secrets: inherit
+  security-check:
+    runs-on: ubuntu-latest
+    container:
+      image: erlangsolutions/safe:1.0.0-otp-24
+    steps:
+    - uses: actions/checkout@v4
+    - run: safe start
+      env:
+        SAFE_LICENSE: ${{ secrets.SAFE_LICENSE }}
+    - name: Persist results
+      uses: actions/upload-artifact@v3
+      with:
+        name: project-safe-results
+        path: _results/nova.safe
