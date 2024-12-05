@@ -1,16 +1,18 @@
 {
-  "output": "stdio",
-  "version": "1.0",
-  "project": {
-    "name": "nova",
-    "type": "erlang",
-    "macros": [],
-    "includes": [],
-    "excludes": [
-      "_build/default/plugins/erlydtl/test",
-      "_checkouts/boss_db/test"
-    ],
-    "appbases": [],
-    "extra_paths": []
-  }
+    "output": "stdio",
+    "version": "1.0",
+    "project": {
+        "name": "nova",
+        "type": "erlang",
+        "macros": [],
+        "includes": [],
+        "excludes": [
+            "_build/default/plugins/erlydtl/test",
+            "_checkouts/boss_db/test"
+        ],
+        "appbases": [
+            "_build/default/lib"
+        ],
+        "extra_paths": []
+    }
 }
