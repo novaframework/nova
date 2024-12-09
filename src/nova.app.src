@@ -13,7 +13,6 @@
                  compiler,
                  erlydtl,
                  jhn_stdlib,
-                 uuid,
                  routing_tree,
                  thoas
                 ]},
