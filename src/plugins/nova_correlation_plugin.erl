@@ -56,7 +56,7 @@ pre_request(Req0, Opts) ->
     CorrId = get_correlation_id(Req0, Opts),
     %% Update the loggers metadata with correlation-id
     ok = update_logger_metadata(CorrId, Opts),
-    Req1 = cowboy_req:set_resp_header(<<"X-Correlation-ID">>, CorrId, Req0),
+    Req1 = cowboy_req:set_resp_header(<<"x-correlation-id">>, CorrId, Req0),
     Req = Req1#{correlation_id => CorrId},
     {ok, Req}.
 
@@ -73,7 +73,8 @@ plugin_info() ->
     }.
 
 get_correlation_id(Req, #{ request_correlation_header := CorrelationHeader }) ->
-    case cowboy_req:header(CorrelationHeader, Req) of
+    CorrelationHeaderLower = jhn_bstring:to_lower(CorrelationHeader),
+    case cowboy_req:header(CorrelationHeaderLower, Req) of
         undefined ->
             uuid();
         CorrId ->
