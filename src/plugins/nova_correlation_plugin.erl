@@ -73,7 +73,7 @@ plugin_info() ->
     }.
 
 get_correlation_id(Req, #{ request_correlation_header := CorrelationHeader }) ->
-    CorrelationHeaderLower = jhn_stdlib:to_lower(CorrelationHeader),
+    CorrelationHeaderLower = jhn_bstring:to_lower(CorrelationHeader),
     case cowboy_req:header(CorrelationHeaderLower, Req) of
         undefined ->
             uuid();
