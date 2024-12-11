@@ -20,6 +20,13 @@ jobs:
         version-type: strict
     - name: Compile
       run: rebar3 compile
+
+    - name: Upload _build directory
+      uses: actions/upload-artifact@v3
+      with:
+        name: build-artifact
+        path: _build
+  
   testing:
     runs-on: ubuntu-20.04
     name: Testing Erlang/OTP ${{matrix.otp}} / rebar3 ${{matrix.rebar3}}
@@ -48,10 +55,18 @@ jobs:
     secrets: inherit
   security-check:
     runs-on: ubuntu-latest
+    needs: build
     container:
       image: erlangsolutions/safe:1.0.0-otp-24
     steps:
     - uses: actions/checkout@v4
+
+    - name: Download _build directory
+      uses: actions/download-artifact@v3
+      with:
+        name: build-artifact
+        path: _build
+    
     - run: safe start
       env:
         SAFE_LICENSE: ${{ secrets.SAFE_LICENSE }}
