@@ -78,31 +78,60 @@ Prefix is defined at top level of a route-entry which can be seen in the [Basic 
 
 ## Secure routing
 
-You can secure routes by providing a module and function to the `security` directive in the route entry. Here's a simple example of this:
+When building web applications, ensuring the security of your routing layer is critical. Nova Framework’s routing system is designed with flexibility and security in mind, but developers must implement best practices to protect their applications from common vulnerabilities. This section outlines key considerations and features of Nova's routing system to help you achieve secure routing.
+
+### Invoking security functions for a set of endpoints
+
+You can define a security function that will be called before the actual controller is called. This is useful if you want to check if the user is allowed to access the endpoint. The security function should return a boolean value (Or a special one - more about that later in this section). If the function returns `false` the request will be stopped and a `401` status code will be returned.
+
+The following code will invoke `security_controller:do_security/1` before calling the actual controller to do the security check.
 
 ```erlang
-#{prefix => "/admin",
-  type => html,
-  security => fun security_controller:do_security/1,
-  routes => [
-    {"/", fun my_controller:main/1, #{methods => [get]}}
-  ]
-}
+-module(my_example_app_router).
+-behaviour(nova_router).
+
+-export([routes/1]).
+
+routes(_Environment) ->
+    [#{prefix => "/admin",
+        security => fun security_controller:do_security/1,
+        routes => [
+            {"/", fun my_controller:main/1, #{methods => [get]}}
+        ]
+    }].
 ```
 
-This will cause nova to call `security_controller:do_security/1` before calling the actual controller for all routes defined in the above route entry.
-The security function should return a boolean (If the user can proceed or not).
+### The security-function callback
 
-
-An example of a security function:
-
+The most simple way to implement a security function is to return a boolean value. If the function returns `false` the request will be stopped and a `401` status code will be returned. There's also an additional return value that can be used to store data that will be available to the controller. This is particularly useful if you want to pass data like user information, roles, etc. to the controller.
 
 ```erlang
+-module(security_controller).
+-export([do_security/1]).
+
 do_security(Req) ->
-    maps:get(host, Req) == "my_domain.com".
+    case get_user(Req) of
+        {ok, User} ->
+            {true, #{user => User}};
+        _ ->
+            false
+    end.
+
+get_user(Req) ->
+    ## Do some validatation and return the user
+    {ok, #{name => "John Doe", role => "Admin"}}.
 ```
 
-This will cause nova to return a `401` status code for all requests not coming from `my_domain.com`
+Once the security function has been called, the data will be available in the `Req` object under the `auth_data` key.
+
+```erlang
+-module(my_controller).
+-export([main/1]).
+
+main(Req = #{auth_data := User}) ->
+    io:format("User: ~p~n", [User]),
+    {ok, Req, <<"Hello world!">>}.
+```
 
 ## Using plugins local to a set of endpoints
 
