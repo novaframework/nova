@@ -15,6 +15,7 @@ Here can you find the documentation for the Nova framework. Nova is under contst
 * [Routing](routing.md)
 * [Controllers](controllers.md)
 * [Views](views.md)
+* [Cookies / Sessions](cookies.md)
 * [Watchers](watchers.md)
 * [Plugins](plugins.md)
 
