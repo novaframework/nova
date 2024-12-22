@@ -248,16 +248,11 @@ handle_view(View, Variables, Options, Req) ->
     {ok, Req2}.
 
 render_dtl(View, Variables, Options) ->
-    case code:is_loaded(View) of
+    case erlang:module_loaded(View) of
         false ->
-            case code:load_file(View) of
-                {error, Reason} ->
-                    %% Cast a warning since the module could not be found
-                    ?LOG_ERROR(#{msg => <<"Nova could not render template">>, template => View, reason => Reason}),
-                    throw({404, {template_not_found, View}});
-                _ ->
-                    View:render(Variables, Options)
-            end;
+            %% Cast a warning since the module could not be found
+            ?LOG_ERROR(#{msg => <<"Nova could not render template">>, template => View, reason => <<"Module not found">>}),
+            throw({404, {template_not_found, View}});
         _ ->
             View:render(Variables, Options)
     end.
@@ -265,7 +260,7 @@ render_dtl(View, Variables, Options) ->
 
 get_view_name(Mod) when is_atom(Mod) ->
     StrName = get_view_name(erlang:atom_to_list(Mod)),
-    erlang:list_to_atom(StrName);
+    erlang:list_to_existing_atom(StrName);
 get_view_name([$_, $c, $o, $n, $t, $r, $o, $l, $l, $e, $r]) ->
     "_dtl";
 get_view_name([H|T]) ->
