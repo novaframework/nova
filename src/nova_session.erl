@@ -30,9 +30,9 @@
 -callback set_value(SessionId, Key, Value) ->
     ok |
     {error, Reason :: atom()}
-    when SessionId :: binary(),
-         Key :: binary(),
-         Value :: binary().
+        when SessionId :: binary(),
+             Key :: binary(),
+             Value :: binary().
 
 %% Deletes a whole session
 -callback delete_value(SessionId) ->
@@ -51,7 +51,7 @@
 %%% Public functions
 %%%===================================================================
 -spec get(Req :: cowboy_req:req(), Key :: binary()) ->
-                 {ok, Value :: binary()} | {error, Reason :: atom()} | no_return().
+          {ok, Value :: binary()} | {error, Reason :: atom()} | no_return().
 get(Req, Key) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
@@ -62,7 +62,7 @@ get(Req, Key) ->
     end.
 
 -spec set(Req :: cowboy_req:req(), Key :: binary(), Value :: binary()) ->
-                 ok | {error, Reason :: atom()} | no_return().
+          ok | {error, Reason :: atom()} | no_return().
 set(Req, Key, Value) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
@@ -73,7 +73,7 @@ set(Req, Key, Value) ->
     end.
 
 -spec delete(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} |
-                                                                      {error, Reason :: atom()}.
+          {error, Reason :: atom()}.
 delete(Req) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
@@ -88,7 +88,7 @@ delete(Req) ->
     end.
 
 -spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} |
-                                                          {error, Reason :: atom()} | no_return().
+          {error, Reason :: atom()} | no_return().
 delete(Req, Key) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
