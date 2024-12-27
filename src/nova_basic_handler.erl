@@ -18,7 +18,7 @@
 
 %%--------------------------------------------------------------------
 %% @doc
-%% Handler for JSON. It takes two different return objects:
+%% Handler for JSON. It can take one of three different return objects:
 %%
 %%   {json, JSON :: map()} returns the JSON encoded to the user.
 %%     If the operation was a POST the HTTP-status code will be 201, otherwise
@@ -27,10 +27,17 @@
 %%   {json, StatusCode :: integer(), Headers :: map(), JSON :: map()} Same
 %%     operation as the above except you can set custom status code and custom
 %%     headers.
+%%
+%%   {json, StatusCode :: integer(), Headers :: map(), Req0 :: cowboy_req:req(), JSON :: map()}
+%%     This is the same as the above but you can also return the request object. This is particularly
+%%     useful if you want to set cookies or other headers that are not supported by the handler.
 %% @end
 %%--------------------------------------------------------------------
--spec handle_json({json, JSON :: map()} | {json, StatusCode :: integer(), Headers :: map(), JSON :: map()},
+-spec handle_json({json, JSON :: map()} | {json, StatusCode :: integer(), Headers :: map(), JSON :: map()} |
+                  {json, StatusCode :: integer(), Headers :: map(), JSON :: map(), Req0 :: cowboy_req:req()},
                   Callback :: function(), Req :: cowboy_req:req()) -> {ok, State :: cowboy_req:req()}.
+handle_json({json, StatusCode, Headers, Req0, JSON}, Callback, _Req) ->
+    handle_json({json, StatusCode, Headers, JSON}, Callback, Req0);
 handle_json({json, StatusCode, Headers, JSON}, _Callback, Req) ->
     JsonLib = nova:get_env(json_lib, thoas),
     EncodedJSON = JsonLib:encode(JSON),
@@ -65,11 +72,20 @@ handle_json({json, JSON}, Callback, Req = #{method := Method}) ->
 %%
 %% The example above will then render the view named 'app_main.dtl'
 %%
-%% Options can be specified as follows:
+%% The tuple can have three different forms:
 %%
-%% - view - Specifies if another view should be rendered instead of default one
+%% {ok, Variables} - This will render the default view with the given variables
 %%
-%% - headers - Custom headers
+%% {ok, Variables, Options} - This will render the default view with the given variables and options
+%%   Options can be specified as follows:
+%%
+%%   - view - Specifies if another view should be rendered instead of default one
+%%
+%%   - headers - Custom headers
+%%
+%% {ok, Variables, Options, Req0} - This will render the default view with the given variables and options
+%%   but also takes a request object. This is useful if you want to set cookies or other headers that are not
+%%   supported by the handler.
 %% @end
 %%--------------------------------------------------------------------
 -spec handle_ok({ok, Variables :: erlydtl_vars()} | {ok, Variables :: erlydtl_vars(), Options :: map()},
@@ -91,7 +107,9 @@ handle_ok({ok, Variables, Options}, Callback, Req) ->
             CustomView ->
                 list_to_atom(CustomView ++ "_dtl")
         end,
-    handle_view(View, Variables, Options, Req).
+    handle_view(View, Variables, Options, Req);
+handle_ok({ok, Variables, Options, Req0}, Callback, _Req) ->
+    handle_ok({ok, Variables, Options}, Callback, Req0).
 
 
 
@@ -104,7 +122,9 @@ handle_ok({ok, Variables, Options}, Callback, Req) ->
 handle_view({view, Variables}, Callback, Req) ->
     handle_ok({ok, Variables}, Callback, Req);
 handle_view({view, Variables, Options}, Callback, Req) ->
-    handle_ok({ok, Variables, Options}, Callback, Req).
+    handle_ok({ok, Variables, Options}, Callback, Req);
+handle_view({view, Variables, Options, Req0}, Callback, _Req) ->
+    handle_ok({ok, Variables, Options}, Callback, Req0).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -118,12 +138,16 @@ handle_view({view, Variables, Options}, Callback, Req) ->
 %% One can also send in a body as a fourth argument in the tuple. It can either be a binary or
 %% a map. If it's a map it will be considered a JSON-structure and encoded.
 %%
+%% And if you want to modulate the request object you can send it in as the fifth argument.
+%%
 %% @end
 %%--------------------------------------------------------------------
 -spec handle_status({status, StatusCode :: integer()} |
                     {status, StatusCode :: integer(), ExtraHeaders :: map()} |
                     {status, StatusCode :: integer(), ExtraHeaders :: map(), Body :: binary() | map()},
                     Callback :: function(), Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()}.
+handle_status({status, Status, ExtraHeaders, JSON, Req0}, Callback, _Req) ->
+    handle_status({status, Status, ExtraHeaders, JSON}, Callback, Req0);
 handle_status({status, Status, ExtraHeaders, JSON}, _Callback, Req) when is_map(JSON) ->
     %% We do not need to render a status page since we just return a JSON structure
     JsonLib = nova:get_env(json_lib, thoas),
@@ -153,10 +177,15 @@ handle_status({status, Status}, Callback, State) when is_integer(Status) ->
 %% Handles redirects. This will return a 302-status code with a location given
 %% by the user. Something like {redirect, "/login"} will send a
 %% 302 with location set to "/login"
+%%
+%% Optionally you can attach the request object as the third argument. This is useful
+%% if you want to set cookies or other headers that are not supported by the handler.
 %% @end
 %%-----------------------------------------------------------------
 -spec handle_redirect({redirect, Route :: list()|binary()}, Callback :: function(),
                       Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()}.
+handle_redirect({redirect, Route, Req0}, Callback, _Req) ->
+    handle_redirect({redirect, Route}, Callback, Req0);
 handle_redirect({redirect, Route}, Callback, Req) when is_list(Route) ->
     handle_redirect({redirect, list_to_binary(Route)}, Callback, Req);
 handle_redirect({redirect, Route}, _Callback, Req) ->
@@ -168,12 +197,35 @@ handle_redirect({redirect, Route}, _Callback, Req) ->
 %%--------------------------------------------------------------------
 %% @doc
 %% Handles sendfile.
+%%
+%% The tuple have the following structure:
+%% {sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}
+%%
+%% - sendfile is the atom that tells the handler to send a file.
+%%
+%% - StatusCode is the HTTP status code that should be returned.
+%%
+%% - Headers is a map with headers that should be sent along with the file.
+%%
+%% - Offset is the offset in the file where the sending should start.
+%%
+%% - Length is the length of the file that should be sent.
+%%
+%% - Path is the path to the file that should be sent.
+%%
+%% - Mime is the mime-type of the file.
+%%
+%%
+%% Optionally a sixth element can be added to the tuple. This is the request object. This is useful
+%% if you want to set cookies or other headers that are not supported by the handler.
 %% @end
 %%-----------------------------------------------------------------
 -spec handle_sendfile({sendfile, StatusCode :: integer(), Headers :: map(), {Offset :: integer(),
                                                                              Length :: integer(),
                                                                              Path :: list()}, Mime :: binary()},
                   Callback :: function(), Req) -> {ok, Req} when Req :: cowboy_req:req().
+handle_sendfile({sendfile, StatusCode, Headers, FileInfo, Mime, Req0}, Callback, _Req) ->
+    handle_sendfile({sendfile, StatusCode, Headers, FileInfo, Mime}, Callback, Req0);
 handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _Callback, Req) ->
     Headers0 = maps:merge(#{<<"content-type">> => Mime}, Headers),
     Req0 = cowboy_req:set_resp_headers(Headers0, Req),
@@ -184,11 +236,15 @@ handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _
 
 %%--------------------------------------------------------------------
 %% @doc
-%% Handles upgrading to websocket
+%% Handles upgrading to websocket. This is a special handler in regards to
+%% arguments. The tuple-object for websocket only takes two arguments; What the initial state
+%% of the websocket handler should be and the request object.
 %% @end
 %%-----------------------------------------------------------------
 -spec handle_websocket({websocket, ControllerData :: any()}, Callback :: function(), Req :: cowboy_req:req()) ->
                               {ok, Req :: cowboy_req:req()}.
+handle_websocket({websocket, ControllerData, Req0}, Callback, _Req) ->
+    handle_websocket({websocket, ControllerData}, Callback, Req0);
 handle_websocket({websocket, ControllerData}, Callback, Req) ->
     {module, Module} = erlang:fun_info(Callback, module),
     case Module:init(ControllerData) of
