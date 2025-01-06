@@ -52,8 +52,13 @@ compiled_apps() ->
 -spec compile(Apps :: [atom() | {atom(), map()}]) -> host_tree().
 compile(Apps) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
-    Dispatch = compile(Apps, routing_tree:new(#{use_strict => UseStrict, convert_to_binary => true}), #{}),
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+
+    StoredDispatch = StorageBackend:get(nova_dispatch,
+                                        routing_tree:new(#{use_strict => UseStrict,
+                                                           convert_to_binary => true})),
+    Dispatch = compile(Apps, StoredDispatch, #{}),
+    %% Write the updated dispatch to storage
     StorageBackend:put(nova_dispatch, Dispatch),
     Dispatch.
 
