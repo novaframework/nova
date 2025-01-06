@@ -8,7 +8,10 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/0]).
+-export([
+         start_link/0,
+         add_application/2
+        ]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -36,6 +39,20 @@
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Add a Nova application. This can either be on the same cowboy server that
+%% a previous application was started with, or a new one if the configuration
+%% ie port is different.
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec add_application(App :: atom(), Configuration :: map()) -> {ok, App :: atom(),
+                                                                 Host :: inet:ip_address(), Port :: number()}
+              | {error, Reason :: any()}.
+add_application(App, Configuration) ->
+    setup_cowboy(App, Configuration).
+
 %%%===================================================================
 %%% Supervisor callbacks
 %%%===================================================================
@@ -56,13 +73,11 @@ init([]) ->
                  intensity => 1,
                  period => 5},
 
+    %% Bootstrap the environment
     Environment = nova:get_environment(),
-
     nova_pubsub:start(),
 
     ?LOG_NOTICE(#{msg => <<"Starting nova">>, environment => Environment}),
-
-    Configuration = application:get_env(nova, cowboy_configuration, #{}),
 
     SessionManager = application:get_env(nova, session_manager, nova_session_ets),
 
@@ -72,7 +87,7 @@ init([]) ->
                 child(nova_watcher, nova_watcher)
                ],
 
-    setup_cowboy(Configuration),
+    setup_cowboy(),
 
 
     {ok, {SupFlags, Children}}.
@@ -97,8 +112,17 @@ child(Id, Type, Mod) ->
 child(Id, Mod) ->
     child(Id, worker, Mod).
 
-setup_cowboy(Configuration) ->
-    case start_cowboy(Configuration) of
+
+%%%-------------------------------------------------------------------
+%%% Nova Cowboy setup
+%%%-------------------------------------------------------------------
+setup_cowboy() ->
+    CowboyConfiguration = application:get_env(nova, cowboy_configuration, #{}),
+    BootstrapApp = application:get_env(nova, bootstrap_application, undefined),
+    setup_cowboy(BootstrapApp, CowboyConfiguration).
+
+setup_cowboy(BootstrapApp, Configuration) ->
+    case start_cowboy(BootstrapApp, Configuration) of
         {ok, App, Host, Port} ->
             Host0 = inet:ntoa(Host),
             CowboyVersion = get_version(cowboy),
@@ -112,10 +136,13 @@ setup_cowboy(Configuration) ->
             ?LOG_ERROR(#{msg => <<"Cowboy could not start">>, reason => Error})
     end.
 
+
 -spec start_cowboy(Configuration :: map()) ->
           {ok, BootstrapApp :: atom(), Host :: string() | {integer(), integer(), integer(), integer()},
            Port :: integer()} | {error, Reason :: any()}.
-start_cowboy(Configuration) ->
+start_cowboy(BootstrapApp, Configuration) ->
+
+    %% Cowboy configuration
     Middlewares = [
                    nova_router, %% Lookup routes
                    nova_plugin_handler, %% Handle pre-request plugins
@@ -126,6 +153,10 @@ start_cowboy(Configuration) ->
     StreamH = [nova_stream_h,
                cowboy_compress_h,
                cowboy_stream_h],
+
+    %% Good debug message in case someone wants to double check which config they are running with
+    logger:debug(#{msg => <<"Configure cowboy">>, stream_handlers => StreamH, middlewares => Middlewares}),
+
     StreamHandlers = maps:get(stream_handlers, Configuration, StreamH),
     MiddlewareHandlers = maps:get(middleware_handlers, Configuration, Middlewares),
     Options = maps:get(options, Configuration, #{compress => true}),
@@ -133,8 +164,6 @@ start_cowboy(Configuration) ->
     %% Build the options map
     CowboyOptions1 = Options#{middlewares => MiddlewareHandlers,
                               stream_handlers => StreamHandlers},
-
-    BootstrapApp = application:get_env(nova, bootstrap_application, undefined),
 
     %% Compile the routes
     Dispatch =
