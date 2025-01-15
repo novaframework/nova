@@ -189,7 +189,7 @@ handle_redirect({redirect, Route, Req0}, Callback, _Req) ->
 handle_redirect({redirect, Route}, Callback, Req) when is_list(Route) ->
     handle_redirect({redirect, list_to_binary(Route)}, Callback, Req);
 handle_redirect({redirect, Route}, _Callback, Req) ->
-    Headers = #{<<"Location">> => Route},
+    Headers = #{<<"location">> => Route},
     Req0 = cowboy_req:set_resp_headers(Headers, Req),
     Req1 = Req0#{resp_status_code => 302},
     {ok, Req1}.
