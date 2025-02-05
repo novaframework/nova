@@ -71,7 +71,7 @@ handle_response({false, StatusCode, Headers, Body}, Req = #{host := Host}, Env) 
 handle_response({redirect, Route}, Req, _Env) ->
     Req0 = cowboy_req:set_resp_headers(#{<<"location">> => list_to_binary(Route)}, Req),
     Req1 = cowboy_req:reply(302, Req0),
-    {stop, Req0};
+    {stop, Req1};
 handle_response(_, Req = #{host := Host}, Env) ->
     {ok, Req0, _Env0} = nova_router:render_status_page(Host, 401, #{}, Req, Env),
     Req1 = cowboy_req:reply(401, Req0),
