@@ -105,6 +105,21 @@ routes(_Environment) ->
 
 The most simple way to implement a security function is to return a boolean value. If the function returns `false` the request will be stopped and a `401` status code will be returned. There's also an additional return value that can be used to store data that will be available to the controller. This is particularly useful if you want to pass data like user information, roles, etc. to the controller.
 
+#### Return values for the secure function
+
+| **Return value** | **Description** |
+| ---------------- | --------------- |
+| `true` | The request will continue to the controller. |
+| `{true, Data :: term()}` | The request will continue to the controller and the data will be available in the `Req` object under the `auth_data` key. |
+| `{redirect, Url :: binary()}` | The request will be redirected to the specified URL with HTTP status 302. |
+| `false` | The request will be stopped and a `401` status code will be returned. |
+| `{false, Headers :: map()}` | Same as above but also adds additional headers to the response. |
+| `{false, StatusCode :: integer(), Headers :: map()}` | Same as above but uses a custom status code. |
+| `{false, StatusCode :: integer(), Headers :: map(), Body :: iodata()}` | Same as above but also adds a custom body to the response. |
+
+*Note* If `false` is returned in any form the request will be stopped from executing the controller.
+
+
 ```erlang
 -module(security_controller).
 -export([do_security/1]).
