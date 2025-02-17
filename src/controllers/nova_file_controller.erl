@@ -6,30 +6,28 @@
 
 -include_lib("kernel/include/file.hrl").
 
+get_file(#{method := <<"HEAD">>, extra_state := #{static := File, options := Options}}) ->
+    Filepath = get_filepath(File),
+    MimeType = get_mimetype(Filepath, Options),
+    {status, 200, #{<<"accept-ranges">> => <<"bytes">>,
+                    <<"content-type">> => MimeType}};
 get_file(#{extra_state := #{static := File, options := Options}, headers := Headers}) ->
     Filepath = get_filepath(File),
-    MimeType =
-        case maps:get(mimetype, Options, undefined) of
-            undefined ->
-                {T, V, _} = cow_mimetypes:web(erlang:list_to_binary(Filepath)),
-                <<T/binary, "/", V/binary>>;
-            MType ->
-                MType
-        end,
-    
     %% Fetch file size
     #{size := Size} = file_info("", Filepath),
 
     %% Check if Range header is present
     case maps:get(<<"range">>, Headers, undefined) of
         undefined ->
+            MimeType = get_mimetype(Filepath, Options),
             %% No range header, return full file
             {sendfile, 200, #{}, {0, Size, Filepath}, MimeType};
-        
+
         <<"bytes=", RangeSpec/binary>> ->
             %% Handle Range Request
             case parse_range(RangeSpec, Size) of
                 {ok, {Start, End}} when Start < Size, End < Size, Start =< End ->
+                    MimeType = get_mimetype(Filepath, Options),
                     Length = End - Start + 1,
                     RespHeaders = #{<<"content-range">> => <<"bytes ", (integer_to_binary(Start))/binary, "-",
                                                              (integer_to_binary(End))/binary, "/",
@@ -91,6 +89,15 @@ get_dir(_Req) ->
 %%%%%%%%%%%%%%%%%%%%%%%%
 %% Internal functions %%
 %%%%%%%%%%%%%%%%%%%%%%%%
+get_mimetype(Filepath, Options) ->
+    case maps:get(mimetype, Options, undefined) of
+        undefined ->
+            {T, V, _} = cow_mimetypes:web(erlang:list_to_binary(Filepath)),
+            <<T/binary, "/", V/binary>>;
+        MType ->
+            MType
+    end.
+
 
 parse_range(RangeSpec, FileSize) ->
     %% Parse the "bytes=" range header value
