@@ -6,6 +6,7 @@
          handle_status/3,
          handle_redirect/3,
          handle_sendfile/3,
+         handle_multipart_segment/3,
          handle_websocket/3,
          handle_ws/2
         ]).
@@ -232,6 +233,74 @@ handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _
     Req1 = cowboy_req:set_resp_body({sendfile, Offset, Length, Path}, Req0),
     Req2 = Req1#{resp_status_code => StatusCode},
     {ok, Req2}.
+
+
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Handles multipart-segments. This handler can be used when you want to send a segment of a file.
+%% It's primarily used by the nova_file_controller when sending partial content, but can be used by
+%% any controller that wants to send a segment of a file.
+%%
+%% The tuple have the following structure:
+%% {multipart_segment, Filepath, Segments}
+%%
+%% - Filepath is the path to the file that should be sent.
+%%
+%% - MimeType is the mime-type of the file. (OPTIONAL)
+%%
+%% - Segments is a list of segments that should be sent. A segment indicates a range of bytes in the file. They can either
+%% be a tuple with two elements, `{StartByte, Length}` or a single positive integer that indicates the length from the beginning or
+%% a single negative integer that indicates the length from the end.
+%%
+%% The MimeType is optional and can be omitted. If omitted Nova will try to guess the mime-type from the file extension.
+%% @end
+handle_multipart_segment({multipart_segment, Filepath, Segments}, Callback, Req) ->
+    {T, V, _} = cow_mimetypes:web(erlang:list_to_binary(Filepath)),
+    MimeType = <<T/binary, "/", V/binary>>,
+    handle_multipart_segment({multipart_segment, Filepath, MimeType, Segments}, Callback, Req);
+handle_multipart_segment({multipart_segment, Filepath, ContentType, [SegmentsHd|Segments]}, _Callback, Req) ->
+    %% Set boundary id
+    Boundary = cow_multipart:boundary(Req),
+    FileSize = integer_to_binary(filelib:file_size(Filepath)),
+    Req0 = cowboy_req:set_resp_header(<<"content-type">>, [<<"multipart/byteranges; boundary=">>, Boundary], Req),
+    Req1 = cowboy_req:stream_reply(206, Req0),
+
+    {ok, Fd} = file:open(Filepath, [read, binary]),
+    {FirstContentRange, FirstPartBody} = get_ranged_body(SegmentsHd, FileSize, Fd),
+    FirstPartHead = cow_multipart:first_part(Boundary, [{<<"content-type">>, ContentType},
+                                                        {<<"content-range">>, FirstContentRange}]),
+    cowboy_req:stream_body(FirstPartHead, nofin, Req1),
+    cowboy_req:stream_body(FirstPartBody, nofin, Req1),
+
+    _ = [begin
+             {NextContentRange, NextPartBody} = get_ranged_body(NextRange, FileSize, Fd),
+             NextPartHead = cow_multipart:part(Boundary, [
+                                                          {<<"content-type">>, ContentType},
+                                                          {<<"content-range">>, NextContentRange}
+                                                         ]),
+             cowboy_req:stream_body(NextPartHead, nofin, Req1),
+             cowboy_req:stream_body(NextPartBody, nofin, Req1),
+             [NextPartHead, NextPartBody]
+         end || NextRange <- Segments],
+    cowboy_req:stream_body(cow_multipart:close(Boundary), fin, Req1),
+    file:close(Fd),
+    {terminate, normal, Req1}.
+
+
+%% Right now we are calling pread/3 for every segment. It would be better to use pread/2 and read all
+%% segments at one time, but that is for a future improvement.
+get_ranged_body([{Start, Stop}|_Tl], FileSize, Fd) ->
+    %% We expect the file to be read okay
+    {ok, Res} = file:pread(Fd, Start, Stop - Start - 1),
+    {["bytes ", integer_to_binary(Start), $-, integer_to_binary(Stop), $/, FileSize], Res};
+get_ranged_body([Length|_Tl], FileSize, Fd) when Length > 0 ->
+    {ok, Res} = file:pread(Fd, 0, Length),
+    {["bytes 0-", integer_to_binary(Length), $/, FileSize], Res};
+get_ranged_body([FromEnd|_Tl], FileSize, Fd) when FromEnd < 0 ->
+    {ok, Res} = file:pread(Fd, FileSize - FromEnd, FromEnd),
+    {["bytes ", integer_to_binary(FromEnd), $-, FileSize], Res}.
+
 
 
 %%--------------------------------------------------------------------

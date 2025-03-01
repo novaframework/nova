@@ -134,8 +134,13 @@ execute_fallback(Callback, Req, Response, Env) ->
 call_handler(Callback, Req, RetObj, Env, IsFallbackController) ->
     case nova_handlers:get_handler(element(1, RetObj)) of
         {ok, HandlerCallback} ->
-            {ok, Req0} = HandlerCallback(RetObj, Callback, Req),
-            render_response(Req0, Env);
+            case HandlerCallback(RetObj, Callback, Req) of
+                {ok, Req0} ->
+                    render_response(Req0, Env);
+                {terminate, Reason, Req0} ->
+                    Result = terminate(Reason, Req0, Callback),
+                    {ok, Req0, Env#{result => Result}}
+            end;
         {error, not_found} ->
             case IsFallbackController of
                 true ->
