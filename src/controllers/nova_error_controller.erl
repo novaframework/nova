@@ -93,7 +93,7 @@ format_stacktrace([]) -> [];
 format_stacktrace([{Mod, Func, Arity, TraceOpts}|Tl]) ->
     File = case proplists:get_value(file, TraceOpts) of
                 undefined -> undefined;
-                File -> list_to_binary(File)
+                F -> list_to_binary(F)
            end,
     Line = proplists:get_value(line, TraceOpts),
     Formated = #{module => erlang:atom_to_binary(Mod, utf8),
