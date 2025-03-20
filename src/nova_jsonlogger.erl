@@ -1,3 +1,14 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% This module is copied from https://github.com/kivra/jsonformat
+%%%
+%%% What is changed is that we don't use jsx but the json library in Nova
+%%%
+%%% @doc Custom formatter for the Erlang OTP logger application which
+%%%      outputs single-line JSON formatted data
+%%% @end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
 -module(nova_jsonlogger).
 %%%_* Exports ==========================================================
 -export([format/2,
