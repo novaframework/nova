@@ -15,9 +15,12 @@
 
 -include_lib("kernel/include/logger.hrl").
 -include("nova.hrl").
--include("../include/nova.hrl").
 
 -define(SERVER, ?MODULE).
+-define(NOVA_LISTENER, nova_listener).
+-define(NOVA_STD_PORT, 8080).
+-define(NOVA_STD_SSL_PORT, 8443).
+
 
 %%%===================================================================
 %%% API functions
