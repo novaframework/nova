@@ -168,7 +168,7 @@ compile([{App, Options}|Tl], Dispatch, GlobalOptions) ->
     compile([App|Tl], Dispatch, maps:merge(Options, GlobalOptions));
 compile([App|Tl], Dispatch, Options) ->
     %% Fetch the router-module for this application
-    Router = application:get_env(nova_router, App, erlang:list_to_atom(io_lib:format("~s_router", [App]))),
+    Router = application:get_env(App, nova_router, erlang:list_to_atom(io_lib:format("~s_router", [App]))),
     Env = nova:get_environment(),
     %% Call the router
     Routes = Router:routes(Env),
