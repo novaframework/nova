@@ -4,7 +4,7 @@ on: [push]
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     name: Erlang/OTP ${{matrix.otp}} / rebar3 ${{matrix.rebar3}}
     strategy:
       fail-fast: false
@@ -21,12 +21,12 @@ jobs:
     - name: Compile
       run: rebar3 compile
   testing:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     name: Testing Erlang/OTP ${{matrix.otp}} / rebar3 ${{matrix.rebar3}}
     strategy:
       fail-fast: false
       matrix:
-        otp: ['25.1.1', '26.1', '27.1']
+        otp: ['26.1', '27.1', '28.0']
         rebar3: ['3.23.0']
     steps:
     - uses: actions/checkout@v4
