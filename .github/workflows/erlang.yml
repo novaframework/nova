@@ -9,8 +9,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: ['25.1.1', '26.1', '27.0']
-        rebar3: ['3.23.0']
+        otp: ['26.1', '27.1', '28.0']
+        rebar3: ['3.25.0']
     steps:
     - uses: actions/checkout@v4
     - uses: erlef/setup-beam@v1
@@ -27,7 +27,7 @@ jobs:
       fail-fast: false
       matrix:
         otp: ['26.1', '27.1', '28.0']
-        rebar3: ['3.23.0']
+        rebar3: ['3.25.0']
     steps:
     - uses: actions/checkout@v4
     - uses: erlef/setup-beam@v1
