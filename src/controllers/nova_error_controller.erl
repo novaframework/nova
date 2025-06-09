@@ -90,11 +90,16 @@ format_stacktrace(not_enabled) ->
     logger:warning("Stacktrace disabled. If you want to enable stacktraces call nova:stracktrace(true) or update your sys.config - Read more in the docs"),
     [];
 format_stacktrace([]) -> [];
-format_stacktrace([{Mod, Func, Arity, [{file, File}, {line, Line}]}|Tl]) ->
+format_stacktrace([{Mod, Func, Arity, TraceOpts}|Tl]) ->
+    File = case proplists:get_value(file, TraceOpts) of
+                undefined -> undefined;
+                F -> list_to_binary(F)
+           end,
+    Line = proplists:get_value(line, TraceOpts),
     Formated = #{module => erlang:atom_to_binary(Mod, utf8),
                  function => erlang:atom_to_binary(Func, utf8),
                  arity => format_arity(Arity, []),
-                 file => erlang:list_to_binary(File),
+                 file => File,
                  line => Line},
     [Formated|format_stacktrace(Tl)];
 format_stacktrace([Hd|Tl]) ->

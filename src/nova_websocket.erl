@@ -16,6 +16,7 @@
                    {remote, cow_ws:close_code(), binary()} |
                    {error, badencoding | badframe | closed | atom()} |
                    {crash, error | exit | throw, any()}.
+-export_type([reason/0]).
 
 -callback init(State :: map()) -> {ok, State0 :: map()} | any().
 -callback websocket_init(State :: map()) -> Result :: call_result().

@@ -15,9 +15,12 @@
 
 -include_lib("kernel/include/logger.hrl").
 -include("nova.hrl").
--include("../include/nova.hrl").
 
 -define(SERVER, ?MODULE).
+-define(NOVA_LISTENER, nova_listener).
+-define(NOVA_STD_PORT, 8080).
+-define(NOVA_STD_SSL_PORT, 8443).
+
 
 %%%===================================================================
 %%% API functions
@@ -121,11 +124,15 @@ start_cowboy(Configuration) ->
                    nova_handler, %% Controller
                    nova_plugin_handler %% Handle post-request plugins
                   ],
-    StreamHandlers = maps:get(stream_handlers, Configuration, [nova_stream_h, cowboy_compress_h, cowboy_stream_h]),
+    StreamH = [nova_stream_h,
+               cowboy_compress_h,
+               cowboy_stream_h],
+    StreamHandlers = maps:get(stream_handlers, Configuration, StreamH),
+    MiddlewareHandlers = maps:get(middleware_handlers, Configuration, Middlewares),
     Options = maps:get(options, Configuration, #{compress => true}),
 
     %% Build the options map
-    CowboyOptions1 = Options#{middlewares => Middlewares,
+    CowboyOptions1 = Options#{middlewares => MiddlewareHandlers,
                               stream_handlers => StreamHandlers},
 
     BootstrapApp = application:get_env(nova, bootstrap_application, undefined),
