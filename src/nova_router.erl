@@ -168,11 +168,25 @@ compile([{App, Options}|Tl], Dispatch, GlobalOptions) ->
     compile([App|Tl], Dispatch, maps:merge(Options, GlobalOptions));
 compile([App|Tl], Dispatch, Options) ->
     %% Fetch the router-module for this application
-    Router = erlang:list_to_atom(io_lib:format("~s_router", [App])),
+    Router =
+        case nova:detect_language() of
+            erlang ->
+                %% Router will be app_router
+                erlang:list_to_atom(io_lib:format("~s_router", [App]));
+            elixir ->
+                %% We build the router as App.Router
+                erlang:list_to_atom(io_lib:format(".~s.Router", [App]));
+            lfe ->
+                %% We will build the router as app_router here aswell, but might change in the future
+                erlang:list_to_atom(io_lib:format("~s_router", [App]))
+        end,
     Env = nova:get_environment(),
     %% Call the router
     Routes = Router:routes(Env),
-    Options1 = Options#{app => App},
+    CompileParameters = Router:module_info(compile),
+
+    RouterFile = proplists:get_value(source, CompileParameters),
+    Options1 = Options#{app => App, router_file => RouterFile},
 
     {ok, Dispatch1, Options2} = compile_paths(Routes, Dispatch, Options1),
 
@@ -188,6 +202,7 @@ compile([App|Tl], Dispatch, Options) ->
 compile_paths([], Dispatch, Options) -> {ok, Dispatch, Options};
 compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     App = maps:get(app, Options),
+    RouterFile = maps:get(router_file, Options),
     %% Fetch the global plugins
     GlobalPlugins = application:get_env(nova, plugins, []),
     Plugins = maps:get(plugins, RouteInfo, GlobalPlugins),
@@ -197,7 +212,8 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
             false ->
                 false;
             {SMod, SFun} ->
-                ?LOG_DEPRECATED("v0.9.24", "The {Mod,Fun} format have been deprecated. Use the new format for routes."),
+                ?LOG_DEPRECATED("v0.9.24", "The {Mod,Fun} format have been deprecated for "
+                                "the 'secure'-section of a route table. Use the new format for routes.", RouterFile),
                 fun SMod:SFun/1;
             SCallback ->
                 SCallback
@@ -214,30 +230,27 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     NovaEnv0 = [{App, #{prefix => Prefix}} | NovaEnv],
     nova:set_env(apps, NovaEnv0),
 
-    {ok, Dispatch1} = parse_url(Host, maps:get(routes, RouteInfo, []), Prefix, Value, Dispatch),
+    {ok, Dispatch1} = parse_url(Host, maps:get(routes, RouteInfo, []), #{prefix => Prefix,
+                                                                         router_file => maps:get(router_file, Options)},
+                                Value, Dispatch),
 
     Dispatch2 = compile(SubApps, Dispatch1, Options#{value => Value, prefix => Prefix}),
 
     compile_paths(Tl, Dispatch2, Options).
 
 parse_url(_Host, [], _Prefix, _Value, Tree) -> {ok, Tree};
-parse_url(Host, [{StatusCode, Callback, Options}|Tl], Prefix, Value, Tree) when is_integer(StatusCode) andalso
-                                                                                is_function(Callback) ->
+parse_url(Host, [{StatusCode, Callback, Options}|Tl], T, Value, Tree) when is_integer(StatusCode) andalso
+                                                                           is_function(Callback) ->
     Value0 = Value#nova_handler_value{callback = Callback},
     Res = lists:foldl(fun(Method, Tree0) ->
                               insert(Host, StatusCode, Method, Value0, Tree0)
                       end, Tree, maps:get(methods, Options, ['_'])),
-    parse_url(Host, Tl, Prefix, Value, Res);
-parse_url(Host,
-          [{RemotePath, LocalPath}|Tl],
-          Prefix, Value = #nova_handler_value{}, Tree)
-  when is_list(RemotePath), is_list(LocalPath) ->
-    parse_url(Host, [{RemotePath, LocalPath, #{}}|Tl], Prefix, Value, Tree);
-parse_url(Host,
-          [{RemotePath, LocalPath, Options}|Tl],
-          Prefix, Value = #nova_handler_value{app = App, secure = Secure},
-          Tree) when is_list(RemotePath), is_list(LocalPath) ->
-
+    parse_url(Host, Tl, T, Value, Res);
+parse_url(Host, [{RemotePath, LocalPath}|Tl], T, Value = #nova_handler_value{}, Tree) when is_list(RemotePath),
+                                                                                           is_list(LocalPath) ->
+    parse_url(Host, [{RemotePath, LocalPath, #{}}|Tl], T, Value, Tree);
+parse_url(Host, [{RemotePath, LocalPath, Options}|Tl], T = #{prefix := Prefix},
+          Value = #nova_handler_value{app = App, secure = Secure}, Tree) when is_list(RemotePath), is_list(LocalPath) ->
     %% Static assets - check that the path exists
     PrivPath = filename:join(code:priv_dir(App), LocalPath),
 
@@ -250,7 +263,8 @@ parse_url(Host,
                         %% No dir nor file
                         ?LOG_WARNING(#{reason => <<"Could not find local path for the given resource">>,
                                        local_path => LocalPath,
-                                       remote_path => RemotePath}),
+                                       remote_path => RemotePath,
+                                       router_file => maps:get(router_file, Options, undefined)}),
                         not_found;
                     {true, false} ->
                         {file, LocalPath};
@@ -278,15 +292,15 @@ parse_url(Host,
                 secure = Secure
                },
     Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree),
-    parse_url(Host, Tl, Prefix, Value, Tree0);
-parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], Prefix,
-          Value = #nova_handler_value{app = _App, secure = _Secure}, Tree) ->
-    ?LOG_DEPRECATED(<<"v0.9.24">>, <<"The {Mod,Fun} format have been deprecated. Use the new format for routes.">>),
-    parse_url(Host, [{Path, fun Mod:Func/1, Options}|Tl], Prefix, Value, Tree);
-parse_url(Host, [{Path, Callback}|Tl], Prefix, Value, Tree) when is_function(Callback) ->
+    parse_url(Host, Tl, T, Value, Tree0);
+parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], T, Value = #nova_handler_value{app = _App, secure = _Secure}, Tree) ->
+    RouterFile = maps:get(router_file, T, undefined),
+    ?LOG_DEPRECATED(<<"v0.9.24">>, <<"The {Mod,Fun} format have been deprecated. Use the new format for routes.">>, RouterFile),
+    parse_url(Host, [{Path, fun Mod:Func/1, Options}|Tl], T, Value, Tree);
+parse_url(Host, [{Path, Callback}|Tl], T, Value, Tree) when is_function(Callback) ->
     %% Recurse with same args but with added options
-    parse_url(Host, [{Path, Callback, #{}}|Tl], Prefix, Value, Tree);
-parse_url(Host, [{Path, Callback, Options}|Tl], Prefix, Value = #nova_handler_value{app = App}, Tree)
+    parse_url(Host, [{Path, Callback, #{}}|Tl], T, Value, Tree);
+parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value = #nova_handler_value{app = App}, Tree)
   when is_function(Callback) ->
     case maps:get(protocol, Options, http) of
         http ->
@@ -305,29 +319,32 @@ parse_url(Host, [{Path, Callback, Options}|Tl], Prefix, Value = #nova_handler_va
                           Value1 = Value0#nova_handler_value{
                                      callback = Callback
                                     },
-                          ?LOG_DEBUG(#{action => <<"Adding route">>, route => RealPath, app => App, method => Method}),
+                          ?LOG_DEBUG(#{action => <<"Adding route">>, route => to_binary(RealPath), app => App, method => Method,
+                                       router_file => maps:get(router_file, Options, undefined)}),
                           insert(Host, RealPath, BinMethod, Value1, Tree0)
                   end, Tree, Methods),
-            parse_url(Host, Tl, Prefix, Value, CompiledPaths);
+            parse_url(Host, Tl, T, Value, CompiledPaths);
         OtherProtocol ->
-            ?LOG_ERROR(#{reason => <<"Unknown protocol">>, protocol => OtherProtocol}),
-            parse_url(Host, Tl, Prefix, Value, Tree)
+            ?LOG_ERROR(#{reason => <<"Unknown protocol">>, protocol => OtherProtocol,
+                        router_file => maps:get(router_file, Options, undefined)}),
+            parse_url(Host, Tl, T, Value, Tree)
     end;
 parse_url(Host,
           [{Path, Mod, #{protocol := ws}} | Tl],
-          Prefix, #nova_handler_value{app = App, secure = Secure} = Value,
+          T = #{prefix := Prefix}, #nova_handler_value{app = App, secure = Secure} = Value,
           Tree) when is_atom(Mod) ->
-     Value0 =  #cowboy_handler_value{
+    Value0 =  #cowboy_handler_value{
                   app = App,
                   handler = nova_ws_handler,
                   arguments = #{module => Mod},
                   plugins = Value#nova_handler_value.plugins,
                   secure = Secure},
 
-    ?LOG_DEBUG(#{action => <<"Adding route">>, protocol => <<"ws">>, route => Path, app => App}),
+    ?LOG_DEBUG(#{action => <<"Adding route">>, protocol => <<"ws">>, route => Path, app => App,
+                 router_file => maps:get(router_file, T, undefined)}),
     RealPath = concat_strings(Prefix, Path),
     CompiledPaths = insert(Host, RealPath, '_', Value0, Tree),
-    parse_url(Host, Tl, Prefix, Value, CompiledPaths).
+    parse_url(Host, Tl, T, Value, CompiledPaths).
 
 
 -spec render_status_page(StatusCode :: integer(), Req :: cowboy_req:req()) ->
@@ -407,6 +424,13 @@ method_to_binary(trace) -> <<"TRACE">>;
 method_to_binary(patch) -> <<"PATCH">>;
 method_to_binary(_) -> '_'.
 
+to_binary(L) when is_list(L) ->
+    erlang:list_to_binary(L);
+to_binary(A) when is_atom(A) ->
+    erlang:atom_to_binary(A, utf8);
+to_binary(B) when is_binary(B) ->
+    B.
+
 
 concat_strings(Path1, Path2) when is_binary(Path1) ->
     concat_strings(binary_to_list(Path1), Path2);
@@ -421,8 +445,8 @@ concat_strings(Path1, Path2) when is_list(Path1), is_list(Path2) ->
 routes(_) ->
  [#{
     routes => [
-               {404, { nova_error_controller, not_found }, #{}},
-               {500, { nova_error_controller, server_error }, #{}}
+               {404, fun nova_error_controller:not_found/1, #{}},
+               {500, fun nova_error_controller:server_error/1, #{}}
               ]
    }].
 
