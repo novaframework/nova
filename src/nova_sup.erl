@@ -190,7 +190,7 @@ start_cowboy(Configuration) ->
                 CACert ->
                     Cert = maps:get(cert, Configuration),
                     Port = maps:get(ssl_port, Configuration, ?NOVA_STD_SSL_PORT),
-                    ?LOG_DEPRECATED(<<"0.10.3">>, <<"Use of use_ssl is deprecated, use ssl instead">>, undefined),
+                    ?LOG_DEPRECATED(<<"0.10.3">>, <<"Use of use_ssl is deprecated, use ssl instead">>),
                     case cowboy:start_tls(
                            ?NOVA_LISTENER, [
                                             {port, Port},
