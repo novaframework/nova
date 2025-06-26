@@ -14,7 +14,7 @@
 -export([init/1]).
 
 -include_lib("kernel/include/logger.hrl").
--include("nova.hrl").
+-include("../include/nova.hrl").
 
 -define(SERVER, ?MODULE).
 -define(NOVA_LISTENER, nova_listener).
@@ -106,7 +106,7 @@ setup_cowboy(Configuration) ->
             UseStacktrace = application:get_env(nova, use_stacktrace, false),
             persistent_term:put(nova_use_stacktrace, UseStacktrace),
             ?LOG_NOTICE(#{msg => <<"Nova is running">>,
-                          url => unicode:characters_to_list(io_lib:format("http://~s:~B", [Host0, Port])),
+                          url => unicode:characters_to_binary(io_lib:format("http://~s:~B", [Host0, Port])),
                           cowboy_version => CowboyVersion, nova_version => NovaVersion, app => App});
         {error, Error} ->
             ?LOG_ERROR(#{msg => <<"Cowboy could not start">>, reason => Error})
@@ -190,7 +190,7 @@ start_cowboy(Configuration) ->
                 CACert ->
                     Cert = maps:get(cert, Configuration),
                     Port = maps:get(ssl_port, Configuration, ?NOVA_STD_SSL_PORT),
-                    ?LOG_DEPRECATED(<<"0.10.3">>, <<"Use of use_ssl is deprecated, use ssl instead">>),
+                    ?LOG_DEPRECATED(<<"0.10.3">>, <<"Use of use_ssl is deprecated, use ssl instead">>, undefined),
                     case cowboy:start_tls(
                            ?NOVA_LISTENER, [
                                             {port, Port},
@@ -213,7 +213,7 @@ start_cowboy(Configuration) ->
 get_version(Application) ->
     case lists:keyfind(Application, 1, application:loaded_applications()) of
         {_, _, Version} ->
-            Version;
+            erlang:list_to_binary(Version);
         false ->
             not_found
     end.
