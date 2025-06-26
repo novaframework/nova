@@ -11,7 +11,8 @@
          get_environment/0,
          get_env/2,
          set_env/2,
-         use_stacktrace/1
+         use_stacktrace/1,
+         detect_language/0
         ]).
 
 -type state() :: any().
@@ -98,3 +99,19 @@ use_stacktrace(true) ->
     persistent_term:put(nova_use_stacktrace, true);
 use_stacktrace(_) ->
     persistent_term:erase(nova_use_stacktrace).
+
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Detects the language Nova is running in. It checks for the presence
+%% of the Elixir and LFE modules, and returns the language.
+%% @end
+%%--------------------------------------------------------------------
+-spec detect_language() -> elixir | lfe | erlang.
+detect_language() ->
+    case {code:which('Elixir.System'), code:which(lfe_eval)} of
+        {non_existing, non_existing} -> erlang;
+        {_, non_existing}            -> elixir;
+        {non_existing, _}            -> lfe;
+        {_, _}                       -> elixir  % prefer Elixir if both are present
+    end.
