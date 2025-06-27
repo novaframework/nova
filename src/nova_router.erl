@@ -319,7 +319,7 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
                           Value1 = Value0#nova_handler_value{
                                      callback = Callback
                                     },
-                          ?LOG_DEBUG(#{action => <<"Adding route">>, route => to_binary(RealPath), app => App, method => Method,
+                          ?LOG_DEBUG(#{action => <<"Adding route">>, route => RealPath, app => App, method => Method,
                                        router_file => maps:get(router_file, Options, undefined)}),
                           insert(Host, RealPath, BinMethod, Value1, Tree0)
                   end, Tree, Methods),
@@ -423,15 +423,6 @@ method_to_binary(connect) -> <<"CONNECT">>;
 method_to_binary(trace) -> <<"TRACE">>;
 method_to_binary(patch) -> <<"PATCH">>;
 method_to_binary(_) -> '_'.
-
--spec to_binary(A :: term()) -> binary().
-to_binary(L) when is_list(L) ->
-    erlang:list_to_binary(L);
-to_binary(A) when is_atom(A) ->
-    erlang:atom_to_binary(A, utf8);
-to_binary(Other) ->
-    Other.
-
 
 concat_strings(Path1, Path2) when is_binary(Path1) ->
     concat_strings(binary_to_list(Path1), Path2);
