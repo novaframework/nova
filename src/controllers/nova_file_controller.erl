@@ -16,7 +16,7 @@ get_file(#{extra_state := #{static := File, options := Options}, headers := Head
             MType ->
                 MType
         end,
-    
+
     %% Fetch file size
     #{size := Size} = file_info("", Filepath),
 
@@ -25,7 +25,7 @@ get_file(#{extra_state := #{static := File, options := Options}, headers := Head
         undefined ->
             %% No range header, return full file
             {sendfile, 200, #{}, {0, Size, Filepath}, MimeType};
-        
+
         <<"bytes=", RangeSpec/binary>> ->
             %% Handle Range Request
             case parse_range(RangeSpec, Size) of
@@ -63,12 +63,12 @@ get_dir(#{extra_state := #{pathinfo := Pathinfo, static := Dir, options := Optio
         true ->
             get_dir(Req#{extra_state => #{static => {dir, Filepath0}, options => Options}})
     end;
-get_dir(#{path := Path, extra_state := #{static := Dir, options := Options}}) ->
+get_dir(#{path := Path, extra_state := #{static := Dir, options := Options}} = Req) ->
     Filepath = get_filepath(Dir),
     {ok, Files} = file:list_dir(Filepath),
     case get_index_file(Files, maps:get(index_files, Options, ["index.html"])) of
         {ok, IndexFile} ->
-            get_file(#{extra_state => #{static => {file, filename:join(Filepath, IndexFile)}, options => Options}});
+            get_file(Req#{extra_state => #{static => {file, filename:join(Filepath, IndexFile)}, options => Options}});
         false ->
             case maps:get(list_dir, Options, false) of
                 false ->
