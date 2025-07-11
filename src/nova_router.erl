@@ -64,8 +64,12 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     Dispatch = StorageBackend:get(nova_dispatch),
     case routing_tree:lookup(Host, Path, Method, Dispatch) of
-        {error, not_found} -> render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
-        {error, comparator_not_found} -> render_status_page('_', 405, #{error => "Method not allowed"}, Req, Env);
+        {error, not_found} ->
+            logger:debug("Path ~p not found for ~p in ~p", [Path, Method, Host]),
+            render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
+        {error, comparator_not_found} ->
+            logger:debug("Method not allowed: ~p for ~p", [Method, Path]),
+            render_status_page('_', 405, #{error => "Method not allowed"}, Req, Env);
         {ok, Bindings, #nova_handler_value{app = App, callback = Callback, secure = Secure, plugins = Plugins,
                                            extra_state = ExtraState}} ->
             {ok,
