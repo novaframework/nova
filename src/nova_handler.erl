@@ -31,11 +31,12 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
             Mod:upgrade(Req2, Env, Handler, State, Opts)
     catch
         Class:Reason:Stacktrace when UseStacktrace == true ->
+            FormattedStacktrace = nova:format_stacktrace(Stacktrace),
             Payload = #{status_code => 404,
-                        stacktrace => Stacktrace,
+                        stacktrace => FormattedStacktrace,
                         class => Class,
                         reason => Reason},
-            ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class, reason => Reason, stacktrace => Stacktrace}),
+            ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class, reason => Reason, stacktrace => FormattedStacktrace}),
             render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 404);
         Class:Reason ->
             Payload = #{status_code => 404,
@@ -60,14 +61,15 @@ execute(Req, Env = #{callback := Callback}) ->
                          reason => Reason}),
             render_response(Req#{crash_info => Reason}, Env, Status);
         Class:Reason:Stacktrace when UseStacktrace == true ->
+            FormattedStacktrace = nova:format_stacktrace(Stacktrace),
             ?LOG_ERROR(#{msg => <<"Controller crashed">>,
                          class => Class,
                          reason => Reason,
-                         stacktrace => Stacktrace}),
+                         stacktrace => FormattedStacktrace}),
             terminate(Reason, Req, Callback),
             %% Build the payload object
             Payload = #{status_code => 500,
-                        stacktrace => Stacktrace,
+                        stacktrace => FormattedStacktrace,
                         class => Class,
                         reason => Reason},
             render_response(Req#{crash_info => Payload}, Env, 500);
