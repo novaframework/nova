@@ -12,6 +12,7 @@
          get_env/2,
          set_env/2,
          use_stacktrace/1,
+         format_stacktrace/1,
          detect_language/0
         ]).
 
@@ -99,6 +100,25 @@ use_stacktrace(true) ->
     persistent_term:put(nova_use_stacktrace, true);
 use_stacktrace(_) ->
     persistent_term:erase(nova_use_stacktrace).
+
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Formats a stacktrace into a list of maps. Each map contains
+%% the module, function, arity, file, and line number of the
+%% function call.
+%% @end
+-spec format_stacktrace(Stacktrace :: [{M :: atom(), F :: atom(), A :: integer(), Info :: list()}])
+                       -> [map()].
+format_stacktrace(Stacktrace) ->
+    SingleFun = fun({M, F, A, Info}) ->
+                        #{module => M,
+                          function => F,
+                          arity => A,
+                          file => proplists:get_value(file, Info, <<"unknown">>),
+                          line => proplists:get_value(line, Info, -1)}
+                end,
+    [SingleFun(S) || S <- Stacktrace].
 
 
 %%--------------------------------------------------------------------
