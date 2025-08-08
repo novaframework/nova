@@ -179,7 +179,7 @@ compile([App|Tl], Dispatch, Options) ->
                 erlang:list_to_atom(io_lib:format("~s_router", [App]));
             elixir ->
                 %% We build the router as App.Router
-                erlang:list_to_atom(io_lib:format(".~s.Router", [App]));
+                erlang:list_to_atom(io_lib:format("~s.Router", [App]));
             lfe ->
                 %% We will build the router as app_router here aswell, but might change in the future
                 erlang:list_to_atom(io_lib:format("~s_router", [App]))
