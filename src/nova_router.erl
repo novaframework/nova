@@ -67,9 +67,13 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
         {error, not_found} ->
             logger:debug("Path ~p not found for ~p in ~p", [Path, Method, Host]),
             render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
-        {error, comparator_not_found} ->
-            logger:debug("Method not allowed: ~p for ~p", [Method, Path]),
-            render_status_page('_', 405, #{error => "Method not allowed"}, Req, Env);
+        {error, comparator_not_found, AllowedMethods} ->
+            logger:debug("Method not allowed: ~p for ~p. Allowed methods: ", [Method, Path, AllowedMethods]),
+            %% Join the elements in AllowedMethods with a colon
+            AllowHeader = iolist_to_binary(string:join([binary_to_list(M) || M <- AllowedMethods], ", ")),
+            %% Set the 'allow'-header
+            Req1 = cowboy_req:set_resp_header(<<"allow">>, AllowHeader, Req),
+            render_status_page('_', 405, #{error => "Method not allowed"}, Req1, Env);
         {ok, Bindings, #nova_handler_value{app = App, callback = Callback, secure = Secure, plugins = Plugins,
                                            extra_state = ExtraState}} ->
             {ok,
