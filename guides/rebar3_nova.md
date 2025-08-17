@@ -10,7 +10,7 @@ Creates a new Nova project scaffold in the directory `<project-name>`. This sets
 
 ### `rebar3 nova serve`
 
-Starts a local web server using the Nova framework. The server will listen on the port specified in your `sys.config` file. This command also enables hot code reloading, so any changes to your code are automatically reflected without restarting the server.
+Starts the Nova project with live reload. The server will listen on the port specified in your `sys.config` file. This command also enables hot code reloading, so any changes to your code are automatically reflected without restarting the server.
 
 ### `rebar3 nova routes`
 
@@ -41,7 +41,3 @@ Prints a list of all routes configured in your project, including those from any
 ## Future Features
 
 The Nova team plans to expand the set of available rebar3 commands. If you have suggestions or feature requests, please open an issue on the [Nova GitHub repository](https://github.com/novaframework/nova/issues).
-
----
-
-For more details on using rebar3, see the [official rebar3 documentation](https://www.rebar3.org/docs/getting-started).
