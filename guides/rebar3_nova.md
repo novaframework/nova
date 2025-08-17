@@ -1,12 +1,47 @@
-# Rebar3 Nova #
+# Rebar3 Nova
 
-If you have used the installation script, documented in the main README.md-file you should have a working installation of rebar3 nova. This gives you some handy commands to work with Nova;
+Nova comes with a set of handy [rebar3](https://www.rebar3.org/) commands to make development and management of your Nova projects easier. These commands are provided by the `rebar3_nova` plugin, which is typically installed automatically when you follow Nova’s installation instructions.
 
-`rebar3 new nova <project-name>` - Creates a new Nova project in the directory `<project-name>`
+## Available Commands
 
-`rebar3 nova serve` - Starts a local webserver on port given in *sys.config*, serving the current project. This means that if something is changed in the project, the server will automatically reload the changed files.
+### `rebar3 new nova <project-name>`
 
-`rebar3 nova routes` - Lists all routes in the current project (Includes included Nova applications aswell if they are properly configured)
+Creates a new Nova project scaffold in the directory `<project-name>`. This sets up the recommended directory structure, configuration files, and example modules so you can get started quickly.
 
+### `rebar3 nova serve`
 
-We are hoping to increase the amount of commands that is available from the rebar3 nova command in the future.
+Starts a local web server using the Nova framework. The server will listen on the port specified in your `sys.config` file. This command also enables hot code reloading, so any changes to your code are automatically reflected without restarting the server.
+
+### `rebar3 nova routes`
+
+Prints a list of all routes configured in your project, including those from any included Nova applications. This is helpful for quickly reviewing your application’s endpoints.
+
+---
+
+## Example Workflow
+
+1. **Create a new project:**
+    ```sh
+    $ rebar3 new nova my_app
+    $ cd my_app
+    ```
+
+2. **Start the development server:**
+    ```sh
+    $ rebar3 nova serve
+    ```
+
+3. **Check your routes:**
+    ```sh
+    $ rebar3 nova routes
+    ```
+
+---
+
+## Future Features
+
+The Nova team plans to expand the set of available rebar3 commands. If you have suggestions or feature requests, please open an issue on the [Nova GitHub repository](https://github.com/novaframework/nova/issues).
+
+---
+
+For more details on using rebar3, see the [official rebar3 documentation](https://www.rebar3.org/docs/getting-started).
