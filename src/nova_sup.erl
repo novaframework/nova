@@ -10,7 +10,9 @@
 %% API
 -export([
          start_link/0,
-         add_application/2
+         add_application/2,
+         remove_application/1,
+         get_started_applications/0
         ]).
 
 %% Supervisor callbacks
@@ -21,10 +23,20 @@
 
 -define(SERVER, ?MODULE).
 
--define(NOVA_LISTENER, nova_listener).
+-define(NOVA_LISTENER, fun(LApp, LPort) -> list_to_atom(atom_to_list(LApp) ++ integer_to_list(LPort)) end).
 -define(NOVA_STD_PORT, 8080).
 -define(NOVA_STD_SSL_PORT, 8443).
+-define(NOVA_SUP_TABLE, nova_sup_table).
 -define(COWBOY_LISTENERS, cowboy_listeners).
+
+
+-record(nova_server, {
+                      app :: atom(),
+                      host :: inet:ip_address(),
+                      port :: number(),
+                      listener :: ranch:ref()
+                     }).
+
 
 %%%===================================================================
 %%% API functions
@@ -54,6 +66,40 @@ start_link() ->
 add_application(App, Configuration) ->
     setup_cowboy(App, Configuration).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Get all started Nova applications. This will return a list of
+%% #nova_server{} records that contains the application name, host, port
+%% and listener reference.
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec get_started_applications() -> [#{app => atom(), host => inet:ip_address(), port => number()}].
+get_started_applications() ->
+    %% Fetch all started applications from the ETS table
+    Apps = ets:tab2list(?NOVA_SUP_TABLE),
+    [ #{app => App, host => Host, port => Port} ||
+        #nova_server{app = App, host = Host, port = Port} <- Apps ].
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Remove a Nova application. This will stop the cowboy listener so request
+%% to that application will not be handled anymore.
+%%
+%% @end
+%%--------------------------------------------------------------------
+remove_application(App) ->
+    case ets:lookup(?NOVA_SUP_TABLE, App) of
+        [] ->
+            ?LOG_ERROR(#{msg => <<"Application not found">>, app => App}),
+            {error, not_found};
+        [#nova_server{listener = Listener}] ->
+            ?LOG_NOTICE(#{msg => <<"Stopping cowboy listener">>, app => App, listener => Listener}),
+            cowboy:stop_listener(Listener),
+            ets:delete(?NOVA_SUP_TABLE, App),
+            ok
+    end.
+
 %%%===================================================================
 %%% Supervisor callbacks
 %%%===================================================================
@@ -69,6 +115,9 @@ add_application(App, Configuration) ->
 %% @end
 %%--------------------------------------------------------------------
 init([]) ->
+    %% Initialize the ETS table for application state
+    ets:new(?NOVA_SUP_TABLE, [named_table, protected, set]),
+
     %% This is a bit ugly, but we need to do this anyhow(?)
     SupFlags = #{strategy => one_for_one,
                  intensity => 1,
@@ -206,12 +255,18 @@ start_cowboy(BootstrapApp, Configuration) ->
             case maps:get(use_ssl, Configuration, false) of
                 false ->
                     case cowboy:start_clear(
-                           ?NOVA_LISTENER,
+                           ?NOVA_LISTENER(BootstrapApp, Port),
                            [{port, Port},
                             {ip, Host}],
                            CowboyOptions2) of
                         {ok, _Pid} ->
                             nova:set_env(?COWBOY_LISTENERS, [{Host, Port}|Listeners]),
+                            ets:insert(?NOVA_SUP_TABLE, #nova_server{
+                                                           app = BootstrapApp,
+                                                           host = Host,
+                                                           port = Port,
+                                                           listener = ?NOVA_LISTENER(BootstrapApp, Port)
+                                                          }),
                             {ok, BootstrapApp, Host, Port};
                         Error ->
                             Error
@@ -223,9 +278,16 @@ start_cowboy(BootstrapApp, Configuration) ->
                     TransportOpts1 = maps:put(ip, Host, TransportOpts),
 
                     case cowboy:start_tls(
-                           ?NOVA_LISTENER, maps:to_list(TransportOpts1), CowboyOptions2) of
+                           ?NOVA_LISTENER(BootstrapApp, SSLPort),
+                           maps:to_list(TransportOpts1), CowboyOptions2) of
                         {ok, _Pid} ->
                             ?LOG_NOTICE(#{msg => <<"Nova starting SSL">>, port => SSLPort}),
+                            ets:insert(?NOVA_SUP_TABLE, #nova_server{
+                                                           app = BootstrapApp,
+                                                           host = Host,
+                                                           port = SSLPort,
+                                                           listener = ?NOVA_LISTENER(BootstrapApp, SSLPort)
+                                                          }),
                             nova:set_env(?COWBOY_LISTENERS, [{Host, SSLPort}|Listeners]),
                             {ok, BootstrapApp, Host, SSLPort};
                         Error ->
