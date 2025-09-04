@@ -23,5 +23,10 @@ url([Url|Variables], _Options) ->
             <<"#">>;
         Prefix ->
             PrefixBin = list_to_binary(Prefix),
-            << PrefixBin/binary, Url/binary >>
+            maybe_remove_starting_slash(<< PrefixBin/binary, Url/binary >>)
     end.
+
+maybe_remove_starting_slash(<<"/", "/", Rest/binary>>) ->
+    <<"/", Rest/binary>>;
+maybe_remove_starting_slash(Url) ->
+    Url.
