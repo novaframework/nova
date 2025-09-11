@@ -319,6 +319,7 @@ render_dtl(View, Variables, Options) ->
     end.
 
 
+get_view_name({Mod, _Opts}) -> get_view_name(Mod);
 get_view_name(Mod) when is_atom(Mod) ->
     StrName = get_view_name(erlang:atom_to_list(Mod)),
     erlang:list_to_atom(StrName);

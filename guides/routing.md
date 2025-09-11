@@ -8,6 +8,7 @@ A simple route file could look something like this:
 
 ```erlang
 -module(my_app_router).
+-behaviour(nova_router).
 
 -export([routes/1]).
 
@@ -21,6 +22,47 @@ routes(_Environment) ->
 ```
 
 This will create a path for `/admin` which, when a user enters will call `my_controller:main/1`. The `_Environment` variable that is consumed by the `routes` function will have the value that `nova:get_environment/0` returns. The *environment* variable is an important thing cause it enables the devlopers to define different routes for different environments. To change the running environment edit the `sys.config` file to include an `{environment, Env}` tuple under the `nova` application where `Env` can be any erlang-term.
+
+You can also defer the routing information to the controllers, like this:
+```erlang
+-module(my_app_router).
+-behaviour(nova_router).
+
+-export([controllers/1]).
+
+controllers(_Environment) ->
+  [my_controller,
+   {my_file_controller, #{root => "/pub"}},
+   {my_file_controller, #{root => "/internal"}}
+  ].
+```
+
+The controller modules then need to provide the `routes/2` callback, like
+this (note the extra `Options` argument):
+
+```erlang
+-module(my_controller).
+-behaviour(nova_controller).
+
+-export([routes/2]).
+
+routes(_Environment, _Options) ->
+  [#{prefix => "/admin",
+    security => false,
+    routes => [
+      {"/", fun ?MODULE:main/1, #{methods => [get]}}
+    ]
+  }].
+```
+
+If a controller module is listed as `{Module, Options}`, then `Options`
+will be passed as the second argument to `routes/2`, so you can have
+multiple uses of the same controller module with different configurations.
+If a controller is listed by name only, the options will be an empty map
+`#{}`.
+
+These methods are not exclusive - it is possible to specify routes both in
+the main router module and in the controllers.
 
 ### The routing object
 

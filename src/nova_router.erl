@@ -40,6 +40,9 @@
 
 %% This module is also exposing callbacks for routers
 -callback routes(Env :: atom()) -> Routes :: [map()].
+-callback controllers(Env :: atom()) -> Controllers :: [module() | {module(), map()}].
+
+-optional_callbacks([routes/1, controllers/1]).
 
 
 -define(NOVA_APPS, nova_apps).
@@ -170,6 +173,26 @@ add_routes(App, Routes) ->
 %% INTERNAL FUNCTIONS %%
 %%%%%%%%%%%%%%%%%%%%%%%%
 
+get_routes(Router, Env) ->
+    %% Call the router
+    Controllers = apply_callback(Router, controllers, [Env]),
+    apply_callback(Router, routes, [Env])
+        ++ lists:append([nova_controller:routes(C, Env) || C <- Controllers ]).
+
+%% yields an empty list if callback does not exist
+apply_callback(Module, Function, Args) ->
+    Arity = length(Args),
+    %% try to ensure callback module is loaded first
+    try Module:module_info(module)
+    catch _:_ -> ok
+    end,
+    case erlang:function_exported(Module, Function, Arity) of
+        true ->
+            apply(Module, Function, Args);
+        false ->
+            []
+    end.
+
 -spec compile(Apps :: [atom() | {atom(), map()}], Dispatch :: host_tree(), Options :: map()) -> host_tree().
 compile([], Dispatch, _Options) -> Dispatch;
 compile([{App, Options}|Tl], Dispatch, GlobalOptions) ->
@@ -189,8 +212,8 @@ compile([App|Tl], Dispatch, Options) ->
                 erlang:list_to_atom(io_lib:format("~s_router", [App]))
         end,
     Env = nova:get_environment(),
-    %% Call the router
-    Routes = Router:routes(Env),
+    Routes = get_routes(Router, Env),
+
     CompileParameters = Router:module_info(compile),
 
     RouterFile = proplists:get_value(source, CompileParameters),
