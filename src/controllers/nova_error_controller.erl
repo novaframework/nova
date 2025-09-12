@@ -24,7 +24,7 @@ not_found(Req) ->
         {true, _} ->
             %% Render a json response
             JsonLib = nova:get_env(json_lib, thoas),
-            Json = erlang:apply(JsonLib, encode, [#{message => "Resource not found"}]),
+            Json = JsonLib:encode(#{message => "Resource not found"}),
             {status, 404, #{<<"content-type">> => <<"application/json">>}, Json};
 	{_, true} ->
             %% Just assume HTML
@@ -48,7 +48,7 @@ server_error(#{crash_info := #{status_code := StatusCode} = CrashInfo} = Req) ->
             case cowboy_req:header(<<"accept">>, Req) of
                 <<"application/json">> ->
                     JsonLib = nova:get_env(json_lib, thoas),
-                    Json = erlang:apply(JsonLib, encode, [Variables]),
+                    Json = JsonLib:encode(Variables),
                     {status, StatusCode, #{<<"content-type">> => <<"application/json">>}, Json};
                 <<"text/html">> ->
                     {ok, Body} = nova_error_dtl:render(Variables),
@@ -73,7 +73,7 @@ server_error(#{crash_info := #{class := Class, reason := Reason}} = Req) ->
             case cowboy_req:header(<<"accept">>, Req) of
                 <<"application/json">> ->
                     JsonLib = nova:get_env(json_lib, thoas),
-                    Json = erlang:apply(JsonLib, encode, [Variables]),
+                    Json = JsonLib:encode(Variables),
                     {status, 500, #{<<"content-type">> => <<"application/json">>}, Json};
                 <<"text/html">> ->
                     {ok, Body} = nova_error_dtl:render(Variables),
