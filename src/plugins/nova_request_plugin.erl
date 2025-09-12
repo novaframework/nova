@@ -75,7 +75,7 @@ modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", 
 modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}, body := Body}, [{decode_json_body, true}|Tl]) ->
     %% Decode the data
     JsonLib = nova:get_env(json_lib, thoas),
-    case erlang:apply(JsonLib, decode, [Body]) of
+    case JsonLib:decode(Body) of
         {ok, JSON} ->
             modulate_state(Req#{json => JSON}, Tl);
         Error ->
