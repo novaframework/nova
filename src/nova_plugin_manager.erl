@@ -25,8 +25,7 @@
          handle_cast/2,
          handle_info/2,
          terminate/2,
-         code_change/3,
-         format_status/2
+         code_change/3
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -59,6 +58,17 @@
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Adds a plugin to the manager. The plugin module must implement
+%% the plugin_info/0 function returning #{title := Title, version := Version}.
+%% Optionally it can implement init/0 returning the initial state
+%% for the plugin, and stop/0 for cleaning up when the manager
+%% terminates.
+%% @end
+-spec add_plugin({Class :: atom(), Module :: atom(), Opts :: map()} |
+                 Module :: atom() | Callback :: function()) ->
+            ok | {error, Reason :: term()}.
 add_plugin({_Class, Module, _Opts}) ->
     add_plugin(Module);
 add_plugin(Module) when is_atom(Module) ->
@@ -69,6 +79,8 @@ add_plugin(Callback) when is_function(Callback) ->
     Module = proplists:get_value(module, Info),
     add_plugin(Module).
 
+-spec add_plugin(Module :: atom(), Name :: binary(), Version :: binary()) ->
+          ok | {error, Reason :: term()}.
 add_plugin(Module, Name, Version) ->
     case ets:lookup(?TABLE, Module) of
         [#plugin{}] ->
@@ -78,6 +90,15 @@ add_plugin(Module, Name, Version) ->
             gen_server:cast(?SERVER, {add_plugin, Module, Name, Version})
     end.
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Gets the state of a plugin. The plugin can be specified
+%% either as a module or as a callback function. The callback function
+%% is used to extract the module name in order to retrieve the state.
+%% @end
+%%--------------------------------------------------------------------
+-spec get_state(Module :: atom() | Callback :: function()) ->
+          {ok, State :: nova:state()} | {error, not_found}.
 get_state(Module) when is_atom(Module) ->
     case ets:lookup(?TABLE, Module) of
         [#plugin{state = State}] ->
@@ -92,6 +113,16 @@ get_state(Callback) when is_function(Callback) ->
     get_state(Module).
 
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Sets the state of a plugin. The plugin can be specified
+%% either as a module or as a callback function. The callback function
+%% is used to extract the module name in order to set the state.
+%% @end
+%%--------------------------------------------------------------------
+-spec set_state(Module :: atom() | Callback :: function(),
+                          NewState :: term()) ->
+          ok | {error, not_found}.
 set_state(Module, NewState) when is_atom(Module) ->
     case ets:lookup(?TABLE, Module) of
         [#plugin{} = P] ->
@@ -168,8 +199,8 @@ handle_cast({add_plugin, Module, Name, Version}, State) ->
                 ?LOG_INFO("Initializing plugin ~p", [Module]),
                 Module:init();
             _ ->
-                ?LOG_DEBUG("Plugin ~p has no init/0 function", [Module]),
-                undefined
+                ?LOG_DEBUG("Plugin ~p has no init/0 function. Defaulting to empty map #{}", [Module]),
+                #{}
         end,
     ets:insert(?TABLE, #plugin{module = Module, name = Name, version = Version, state = PluginState}),
     {noreply, State};
@@ -222,18 +253,6 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% This function is called for changing the form and appearance
-%% of gen_server status when it is returned from sys:get_status/1,2
-%% or when it appears in termination error logs.
-%% @end
-%%--------------------------------------------------------------------
--spec format_status(Opt :: normal | terminate,
-                    Status :: list()) -> Status :: term().
-format_status(_Opt, Status) ->
-    Status.
 
 %%%===================================================================
 %%% Internal functions
