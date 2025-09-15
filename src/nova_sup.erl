@@ -66,19 +66,17 @@ init([]) ->
 
     SessionManager = application:get_env(nova, session_manager, nova_session_ets),
 
-    Children = [
-                child(nova_handlers, nova_handlers),
-                child(SessionManager, SessionManager),
-                child(nova_watcher, nova_watcher)
-               ],
+    Children0 = [child(nova_handlers, nova_handlers), child(nova_watcher, nova_watcher)],
+    Children =
+        case erlang:function_exported(SessionManager, start_link, 0) of
+            true -> [child(SessionManager, SessionManager) | Children0];
+            false -> Children0
+        end,
 
     setup_cowboy(Configuration),
 
 
     {ok, {SupFlags, Children}}.
-
-
-
 
 %%%===================================================================
 %%% Internal functions
