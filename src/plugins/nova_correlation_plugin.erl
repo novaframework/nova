@@ -39,8 +39,8 @@
 -module(nova_correlation_plugin).
 -behaviour(nova_plugin).
 
--export([pre_request/2,
-         post_request/2,
+-export([pre_request/4,
+         post_request/4,
          plugin_info/0]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -52,25 +52,28 @@
 %% @end
 %%--------------------------------------------------------------------
 
-pre_request(Req0, Opts) ->
+pre_request(Req0, _Env, Opts, State) ->
     CorrId = get_correlation_id(Req0, Opts),
     %% Update the loggers metadata with correlation-id
     ok = update_logger_metadata(CorrId, Opts),
     Req1 = cowboy_req:set_resp_header(<<"x-correlation-id">>, CorrId, Req0),
     Req = Req1#{correlation_id => CorrId},
-    {ok, Req}.
+    {ok, Req, State}.
 
-post_request(Req, _) ->
-    {ok, Req}.
+post_request(Req, _Env, _, State) ->
+    {ok, Req, State}.
 
 plugin_info() ->
-    {
-     <<"nova_correlation_plugin">>,
-     <<"0.2.0">>,
-     <<"Nova team <info@novaframework.org">>,
-     <<"Add X-Correlation-ID headers to response">>,
-     []
-    }.
+    #{
+      title => <<"nova_correlation_plugin">>,
+      version => <<"0.2.0">>,
+      url => <<"https://github.com/novaframework/nova">>,
+      authors => [<<"Nova team <info@novaframework.org">>],
+      description => <<"Add X-Correlation-ID headers to response">>,
+      options => [
+                  {logger_metadata_key, <<"Under which key should the UUID be put in logger metadata?">>}
+                 ]
+     }.
 
 get_correlation_id(Req, #{ request_correlation_header := CorrelationHeader }) ->
     CorrelationHeaderLower = jhn_bstring:to_lower(CorrelationHeader),
