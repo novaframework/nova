@@ -27,6 +27,7 @@
          routes/1,
 
          %% Modulates the routes-table
+         add_routes/1,
          add_routes/2
         ]).
 
@@ -55,8 +56,13 @@ compiled_apps() ->
 -spec compile(Apps :: [atom() | {atom(), map()}]) -> host_tree().
 compile(Apps) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
-    Dispatch = compile(Apps, routing_tree:new(#{use_strict => UseStrict, convert_to_binary => true}), #{}),
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+
+    StoredDispatch = StorageBackend:get(nova_dispatch,
+                                        routing_tree:new(#{use_strict => UseStrict,
+                                                           convert_to_binary => true})),
+    Dispatch = compile(Apps, StoredDispatch, #{}),
+    %% Write the updated dispatch to storage
     StorageBackend:put(nova_dispatch, Dispatch),
     Dispatch.
 
@@ -131,6 +137,24 @@ lookup_url(Host, Path, Method) ->
 
 lookup_url(Host, Path, Method, Dispatch) ->
     routing_tree:lookup(Host, Path, Method, Dispatch).
+
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Works the same way as add_routes/2 but with the exception that you
+%% don't need to provide the routes explicitly. When using this it's
+%% expected that there's a routing-module associated with the application.
+%% Eg. for the application 'test' the corresponding router would then be
+%% 'test_router'. Read more about routers in the official documentation.
+%% @end
+%%--------------------------------------------------------------------
+-spec add_routes(App :: atom()) -> ok.
+add_routes(App) ->
+    Router = erlang:list_to_atom(io_lib:format("~s_router", [App])),
+    Env = nova:get_environment(),
+    %% Call the router
+    Routes = Router:routes(Env),
+    add_routes(App, Routes).
 
 %%--------------------------------------------------------------------
 %% @doc
