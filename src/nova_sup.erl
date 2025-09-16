@@ -66,7 +66,11 @@ init([]) ->
 
     SessionManager = application:get_env(nova, session_manager, nova_session_ets),
 
-    Children0 = [child(nova_handlers, nova_handlers), child(nova_watcher, nova_watcher)],
+    Children0 = [
+                 child(nova_handlers, nova_handlers),
+                 child(nova_plugin_manager, nova_plugin_manager),
+                 child(nova_watcher, nova_watcher)
+                ],
     Children =
         case erlang:function_exported(SessionManager, start_link, 0) of
             true -> [child(SessionManager, SessionManager) | Children0];
