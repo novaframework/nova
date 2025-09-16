@@ -47,6 +47,15 @@
         when SessionId :: binary(),
              Key :: binary().
 
+%% Start a server process for session backend, if necessary
+-callback start_link() ->
+    {ok, Pid :: pid()} |
+    {error, Error :: {already_started, pid()}} |
+    {error, Error :: term()} |
+    ignore.
+
+-optional_callbacks([start_link/0]).
+
 %%%===================================================================
 %%% Public functions
 %%%===================================================================

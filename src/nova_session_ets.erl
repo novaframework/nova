@@ -9,6 +9,7 @@
 -module(nova_session_ets).
 
 -behaviour(gen_server).
+-behaviour(nova_session).
 
 %% API
 -export([
