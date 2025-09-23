@@ -53,7 +53,8 @@ run_plugins([{Callback, Options}|Tl], CallbackType, Req, Env) when is_function(C
                 {stop, Reply, Req0, _State0} ->
                     Req1 = handle_reply(Reply, Req0),
                     %% Since we are stopping we need to send the statuscode to the requester. This is a special case for stop.
-                    cowboy_req:reply(Req1#resp_status_code, Req1),
+                    StatusCode = maps:get(resp_status_code, Req1, 200),
+                    cowboy_req:reply(StatusCode, Req1),
                     {stop, Req1}
             end
     catch
