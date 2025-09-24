@@ -73,7 +73,7 @@ add_plugin({_Class, Module, _Opts}) ->
     add_plugin(Module);
 add_plugin(Module) when is_atom(Module) ->
     #{title := Title, version := Version} =  case Module:plugin_info() of
-                                                {Title, Version, _, _} -> #{title => Title, version => Version};
+                                                {Title0, Version0, _, _} -> #{title => Title0, version => Version0};
                                                 PluginInfo -> PluginInfo
                                              end,
     add_plugin(Module, Title, Version);
