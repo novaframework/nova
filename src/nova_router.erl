@@ -31,7 +31,9 @@
 
          %% Modulates the routes-table
          add_routes/1,
-         add_routes/2
+         add_routes/2,
+         remove_routes_for_app/1
+
         ]).
 
 -include_lib("routing_tree/include/routing_tree.hrl").
@@ -146,6 +148,25 @@ lookup_url(Host, Path, Method) ->
 lookup_url(Host, Path, Method, Dispatch) ->
     routing_tree:lookup(Host, Path, Method, Dispatch).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Remove all routes associated with the given application. Returns either
+%% {ok, Amount} where Amount is the number of removed routes or {error, Reason}.
+%% @end
+%%--------------------------------------------------------------------
+-spec remove_routes_for_app(Application :: atom()) -> {ok, RemovedRoutes :: number()} |
+          {error, Reason :: term()}.
+remove_routes_for_app(Application) ->
+    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    Dispatch = StorageBackend:get(nova_dispatch),
+    CompiledApps = StorageBackend:get(?NOVA_APPS, []),
+    %% Remove the app from the compiled apps
+    CompiledApps0 = lists:filter(fun({App, _Prefix}) -> App =/= Application end, CompiledApps),
+    %% Remove all routes for this app
+    Dispatch1 = routing_tree:remove_app(Application, Dispatch),
+    StorageBackend:put(nova_dispatch, Dispatch1),
+    StorageBackend:put(?NOVA_APPS, CompiledApps0),
+    ok.
 
 %%--------------------------------------------------------------------
 %% @doc

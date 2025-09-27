@@ -97,6 +97,7 @@ remove_application(App) ->
             ?LOG_NOTICE(#{msg => <<"Stopping cowboy listener">>, app => App, listener => Listener}),
             cowboy:stop_listener(Listener),
             ets:delete(?NOVA_SUP_TABLE, App),
+            %% Now we need to remove all routes associated with this listener
             ok
     end.
 
