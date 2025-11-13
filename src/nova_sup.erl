@@ -71,6 +71,7 @@ init([]) ->
                  child(nova_plugin_manager, nova_plugin_manager),
                  child(nova_watcher, nova_watcher)
                 ],
+    code:ensure_loaded(SessionManager),
     Children =
         case erlang:function_exported(SessionManager, start_link, 0) of
             true -> [child(SessionManager, SessionManager) | Children0];
