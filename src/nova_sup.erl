@@ -73,13 +73,12 @@ init([]) ->
                 ],
 
     %% try to ensure callback module is loaded first
-    try SessionManager:module_info(module)
-    catch _:_ -> ok
-    end,
+    ExportedFuns = SessionManager:module_info(exports),
+    
     Children =
-        case erlang:function_exported(SessionManager, start_link, 0) of
-            true -> [child(SessionManager, SessionManager) | Children0];
-            false -> Children0
+        case proplists:get_value(start_link, ExportedFuns) of
+            0 -> [child(SessionManager, SessionManager) | Children0];
+            _ -> Children0
         end,
 
     setup_cowboy(Configuration),
