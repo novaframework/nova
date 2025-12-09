@@ -22,8 +22,7 @@
          handle_cast/2,
          handle_info/2,
          terminate/2,
-         code_change/3,
-         format_status/2
+         code_change/3
         ]).
 
 -define(SERVER, ?MODULE).
@@ -138,19 +137,6 @@ terminate(_Reason, _State) ->
           {error, Reason :: term()}.
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% This function is called for changing the form and appearance
-%% of gen_server status when it is returned from sys:get_status/1,2
-%% or when it appears in termination error logs.
-%% @end
-%%--------------------------------------------------------------------
--spec format_status(Opt :: normal | terminate,
-                    Status :: list()) -> Status :: term().
-format_status(_Opt, Status) ->
-    Status.
 
 %%%===================================================================
 %%% Internal functions
