@@ -67,7 +67,7 @@ compile(Apps) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
 
     StoredDispatch = StorageBackend:get(nova_dispatch,
-                                        routing_trie:new(#{strict => UseStrict}),
+                                        routing_trie:new(#{strict => UseStrict})),
     Dispatch = compile(Apps, StoredDispatch, #{}),
     %% Write the updated dispatch to storage
     StorageBackend:put(nova_dispatch, Dispatch),
@@ -79,7 +79,7 @@ compile(Apps) ->
 execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     Dispatch = StorageBackend:get(nova_dispatch),
-    case routing_tree:lookup(Host, Path, Method, Dispatch) of
+    case routing_trie:find(Host, Path, Method, Dispatch) of
         {error, not_found} ->
             logger:debug("Path ~p not found for ~p in ~p", [Path, Method, Host]),
             render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
