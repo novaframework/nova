@@ -311,11 +311,12 @@ render_dtl(View, Variables, Options) ->
     catch
         error:undef:Stacktrace ->
             %% Check if the error is specifically from View:render/2
+            %% (arity 2 is the standard erlydtl render function signature)
             case Stacktrace of
                 [{View, render, 2, _} | _] ->
                     %% Module doesn't exist or render/2 not exported
-                    ?LOG_ERROR(#{msg => <<"Nova could not render template">>, 
-                                template => View, reason => module_not_found}),
+                    ?LOG_ERROR(#{msg => <<"Nova could not render template">>,
+                                 template => View, reason => module_not_found}),
                     throw({404, {template_not_found, View}});
                 _ ->
                     %% undef error from somewhere else, re-raise it
