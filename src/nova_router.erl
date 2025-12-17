@@ -139,9 +139,6 @@ lookup_url(Host, Path, Method) ->
     Dispatch = StorageBackend:get(nova_dispatch),
     routing_tree:lookup(Host, Path, Method, Dispatch).
 
-lookup_url(Host, Path, Method, Dispatch) ->
-    routing_tree:lookup(Host, Path, Method, Dispatch).
-
 %%--------------------------------------------------------------------
 %% @doc
 %% Add routes to the dispatch-table for the given app. The routes
