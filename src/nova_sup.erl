@@ -65,6 +65,8 @@ init([]) ->
     Configuration = application:get_env(nova, cowboy_configuration, #{}),
 
     SessionManager = application:get_env(nova, session_manager, nova_session_ets),
+    %% Cache session manager in persistent_term for faster lookups in hot path
+    persistent_term:put(nova_session_manager, SessionManager),
 
     Children0 = [
                  child(nova_handlers, nova_handlers),
