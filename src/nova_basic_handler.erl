@@ -305,14 +305,22 @@ handle_view(View, Variables, Options, Req) ->
 
 render_dtl(View, Variables, Options) ->
     %% Erlang's code server will auto-load modules on first call
-    %% No need for explicit is_loaded check - just try to render
+    %% Try to render and catch cases where module or function doesn't exist
     try View:render(Variables, Options) of
         Result -> Result
     catch
-        error:undef ->
-            %% Module doesn't exist or render/2 not exported
-            ?LOG_ERROR(#{msg => <<"Nova could not render template">>, template => View, reason => module_not_found}),
-            throw({404, {template_not_found, View}})
+        error:undef:Stacktrace ->
+            %% Check if the error is specifically from View:render/2
+            case Stacktrace of
+                [{View, render, [Variables, Options], _} | _] ->
+                    %% Module doesn't exist or render/2 not exported
+                    ?LOG_ERROR(#{msg => <<"Nova could not render template">>, 
+                                template => View, reason => module_not_found}),
+                    throw({404, {template_not_found, View}});
+                _ ->
+                    %% undef error from somewhere else, re-raise it
+                    erlang:raise(error, undef, Stacktrace)
+            end
     end.
 
 

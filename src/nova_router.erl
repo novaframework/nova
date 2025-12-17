@@ -186,7 +186,7 @@ get_routes(Router, Env) ->
     Controllers = apply_callback(Router, controllers, [Env]),
     RouterRoutes = apply_callback(Router, routes, [Env]),
     ControllerRoutes = [nova_controller:routes(C, Env) || C <- Controllers],
-    %% Use lists:concat/1 to concatenate list of lists without deep flattening
+    %% Concatenate list of lists into a single list (one level only)
     RouterRoutes ++ lists:concat(ControllerRoutes).
 
 %% yields an empty list if callback does not exist
