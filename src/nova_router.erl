@@ -25,15 +25,16 @@
          %% Expose the router-callback
          routes/1,
 
-         %% Modulates the routes-table
-         add_routes/2,
-
          %% Fetch information about the routing table
          plugins/0,
-         compiled_apps/0
+         compiled_apps/0,
+
+         %% Modulates the routes-table
+         add_routes/1,
+         add_routes/2,
+         remove_application/1
         ]).
 
--include_lib("routing_tree/include/routing_tree.hrl").
 -include_lib("kernel/include/logger.hrl").
 -include("../include/nova_router.hrl").
 -include("../include/nova.hrl").
@@ -56,15 +57,21 @@ compiled_apps() ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     StorageBackend:get(?NOVA_APPS, []).
 
+
+%% TODO! We need to implement a way to get and remove plugins for a path
 plugins() ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     StorageBackend:get(?NOVA_PLUGINS, []).
 
--spec compile(Apps :: [atom() | {atom(), map()}]) -> host_tree().
+-spec compile(Apps :: [atom() | {atom(), map()}]) -> nova_routing_trie:trie().
 compile(Apps) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
-    Dispatch = compile(Apps, routing_tree:new(#{use_strict => UseStrict, convert_to_binary => true}), #{}),
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+
+    StoredDispatch = StorageBackend:get(nova_dispatch,
+                                        nova_routing_trie:new(#{options => #{strict => UseStrict}})),
+    Dispatch = compile(Apps, StoredDispatch, #{}),
+    %% Write the updated dispatch to storage
     StorageBackend:put(nova_dispatch, Dispatch),
     Dispatch.
 
@@ -74,7 +81,7 @@ compile(Apps) ->
 execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     Dispatch = StorageBackend:get(nova_dispatch),
-    case routing_tree:lookup(Host, Path, Method, Dispatch) of
+    case nova_routing_trie:find(Host, Path, Method, Dispatch) of
         {error, not_found} ->
             logger:debug("Path ~p not found for ~p in ~p", [Path, Method, Host]),
             render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
@@ -121,7 +128,7 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
                  }
             };
         Error ->
-            ?LOG_ERROR(#{reason => <<"Unexpected return from routing_tree:lookup/4">>,
+            ?LOG_ERROR(#{reason => <<"Unexpected return from nova_routing_trie:lookup/4">>,
                          return_object => Error}),
             render_status_page(Host, 404, #{error => Error}, Req, Env)
     end.
@@ -138,7 +145,25 @@ lookup_url(Host, Path, Method) ->
     lookup_url(Host, Path, Method, Dispatch).
 
 lookup_url(Host, Path, Method, Dispatch) ->
-    routing_tree:lookup(Host, Path, Method, Dispatch).
+    nova_routing_trie:lookup(Host, Path, Method, Dispatch).
+
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Works the same way as add_routes/2 but with the exception that you
+%% don't need to provide the routes explicitly. When using this it's
+%% expected that there's a routing-module associated with the application.
+%% Eg. for the application 'test' the corresponding router would then be
+%% 'test_router'. Read more about routers in the official documentation.
+%% @end
+%%--------------------------------------------------------------------
+-spec add_routes(App :: atom()) -> ok.
+add_routes(App) ->
+    Router = erlang:list_to_atom(io_lib:format("~s_router", [App])),
+    Env = nova:get_environment(),
+    %% Call the router
+    Routes = Router:routes(Env),
+    add_routes(App, Routes).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -177,6 +202,25 @@ add_routes(App, Routes) ->
     throw({error, {invalid_routes, App, Routes}}).
 
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Remove all routes associated with the given application.
+%% @end
+%%--------------------------------------------------------------------
+-spec remove_application(Application :: atom()) -> ok.
+remove_application(Application) when is_atom(Application) ->
+    Dispatch = persistent_term:get(nova_dispatch),
+    %% Remove all routes for this application
+    {ok, Dispatch0} =
+        nova_routing_trie:foldl(Dispatch,
+                                fun(R) ->
+                                        [ X || X = {_Host, _Prefix, #nova_handler_value{app = App}} <- R,
+                                               App =/= Application ]
+                                end),
+    persistent_term:put(nova_dispatch, Dispatch0),
+    ok.
+
+
 %%%%%%%%%%%%%%%%%%%%%%%%
 %% INTERNAL FUNCTIONS %%
 %%%%%%%%%%%%%%%%%%%%%%%%
@@ -201,7 +245,7 @@ apply_callback(Module, Function, Args) ->
             []
     end.
 
--spec compile(Apps :: [atom() | {atom(), map()}], Dispatch :: host_tree(), Options :: map()) -> host_tree().
+-spec compile(Apps :: [atom() | {atom(), map()}], Dispatch :: nova_routing_trie:trie(), Options :: map()) -> nova_routing_trie:trie().
 compile([], Dispatch, _Options) -> Dispatch;
 compile([{App, Options}|Tl], Dispatch, GlobalOptions) ->
     compile([App|Tl], Dispatch, maps:merge(Options, GlobalOptions));
@@ -409,7 +453,7 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     Dispatch = StorageBackend:get(nova_dispatch),
     {Req0, Env0} =
-        case routing_tree:lookup(Host, StatusCode, '_', Dispatch) of
+        case nova_routing_trie:find(Host, StatusCode, '_', Dispatch) of
             {error, _} ->
                 %% Render nova page if exists - We need to determine where to find this path?
                 {Req, Env#{app => nova,
@@ -433,7 +477,7 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
 
 
 insert(Host, Path, Combinator, Value, Tree) ->
-    try routing_tree:insert(Host, Path, Combinator, Value, Tree) of
+    try nova_routing_trie:insert(Host, Path, Combinator, Value, Tree) of
         Tree0 -> Tree0
     catch
         throw:Exception ->
@@ -499,6 +543,8 @@ routes(_) ->
 -compile(export_all). %% Export all functions for testing purpose
 -include_lib("eunit/include/eunit.hrl").
 
-
+compile_empty_test() ->
+    Dispatch = compile([]),
+    ?assertEqual(nova_routing_trie:new(#{options => #{strict => false}}), Dispatch).
 
 -endif.
