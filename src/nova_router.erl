@@ -31,7 +31,8 @@
 
          %% Modulates the routes-table
          add_routes/1,
-         add_routes/2
+         add_routes/2,
+         remove_application/1
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -199,6 +200,25 @@ add_routes(App, [Routes|Tl]) when is_list(Routes) ->
 add_routes(App, Routes) ->
     ?LOG_ERROR(#{reason => <<"Invalid routes structure">>, app => App, routes => Routes}),
     throw({error, {invalid_routes, App, Routes}}).
+
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Remove all routes associated with the given application.
+%% @end
+%%--------------------------------------------------------------------
+-spec remove_application(Application :: atom()) -> ok.
+remove_application(Application) when is_atom(Application) ->
+    Dispatch = persistent_term:get(nova_dispatch),
+    %% Remove all routes for this application
+    {ok, Dispatch0} =
+        nova_routing_trie:foldl(Dispatch,
+                                fun(R) ->
+                                        [ X || X = {_Host, _Prefix, #nova_handler_value{app = App}} <- R,
+                                               App =/= Application ]
+                                end),
+    persistent_term:put(nova_dispatch, Dispatch0),
+    ok.
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%
