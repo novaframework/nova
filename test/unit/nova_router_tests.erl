@@ -24,7 +24,11 @@ router_test_() ->
       {"URL lookup - method matching", fun test_url_lookup_method/0},
       {"Empty route list", fun test_empty_routes/0},
       {"Method to binary conversion", fun test_method_to_binary/0},
-      {"String concatenation", fun test_concat_strings/0}
+      {"String concatenation", fun test_concat_strings/0},
+      {"WebSocket route", fun test_websocket_route/0},
+      {"Route with security callback", fun test_route_with_security/0},
+      {"Host-based routing", fun test_host_routing/0},
+      {"Render status page", fun test_render_status_page/0}
      ]}.
 
 setup() ->
@@ -239,3 +243,85 @@ test_concat_strings() ->
 
     %% Test with integer (status code)
     ?assertEqual(404, nova_router:concat_strings("/api", 404)).
+
+test_websocket_route() ->
+    %% Test WebSocket route registration
+    Tree = routing_tree:new(#{use_strict => false, convert_to_binary => true}),
+
+    Value = #cowboy_handler_value{
+               app = test_app,
+               handler = nova_ws_handler,
+               arguments = #{module => test_ws_module},
+               plugins = [],
+               secure = false
+              },
+
+    Tree1 = nova_router:insert('_', "/ws", '_', Value, Tree),
+
+    %% Verify route was inserted
+    Result = routing_tree:lookup('_', <<"/ws">>, <<"GET">>, Tree1),
+
+    ?assertMatch({ok, #{}, #cowboy_handler_value{handler = nova_ws_handler}}, Result).
+
+test_route_with_security() ->
+    %% Test route with security callback
+    Tree = routing_tree:new(#{use_strict => false, convert_to_binary => true}),
+    Callback = fun(_) -> {ok, #{}} end,
+    SecurityCallback = fun(Req) -> {true, Req} end,
+
+    Value = #nova_handler_value{
+               app = test_app,
+               callback = Callback,
+               plugins = [],
+               secure = SecurityCallback,
+               extra_state = #{}
+              },
+
+    Tree1 = nova_router:insert('_', "/secure", <<"GET">>, Value, Tree),
+    persistent_term:put(nova_dispatch, Tree1),
+
+    %% Verify secure callback is set
+    {ok, _, #nova_handler_value{secure = Secure}} = nova_router:lookup_url('_', <<"/secure">>, <<"GET">>),
+
+    ?assert(is_function(Secure)).
+
+test_host_routing() ->
+    %% Test host-based routing
+    Tree = routing_tree:new(#{use_strict => false, convert_to_binary => true}),
+    Callback = fun(_) -> {ok, #{}} end,
+
+    Value = #nova_handler_value{
+               app = test_app,
+               callback = Callback,
+               plugins = [],
+               secure = false,
+               extra_state = #{}
+              },
+
+    %% Insert route for specific host
+    Tree1 = nova_router:insert(<<"api.example.com">>, "/users", <<"GET">>, Value, Tree),
+
+    %% Lookup with matching host
+    Result1 = routing_tree:lookup(<<"api.example.com">>, <<"/users">>, <<"GET">>, Tree1),
+    ?assertMatch({ok, #{}, #nova_handler_value{}}, Result1),
+
+    %% Lookup with different host should fail
+    Result2 = routing_tree:lookup(<<"www.example.com">>, <<"/users">>, <<"GET">>, Tree1),
+    ?assertEqual({error, not_found}, Result2).
+
+test_render_status_page() ->
+    %% Test rendering status pages
+    Tree = routing_tree:new(#{use_strict => false, convert_to_binary => true}),
+    persistent_term:put(nova_dispatch, Tree),
+
+    Req = #{method => <<"GET">>, path => <<"/test">>},
+
+    %% Render 404 page
+    {ok, Req1, Env1} = nova_router:render_status_page(404, #{error => "Not found"}, Req),
+
+    %% Should have status code set
+    ?assertEqual(404, maps:get(resp_status_code, Req1)),
+
+    %% Should have error controller callback
+    ?assertMatch(#{callback := _}, Env1).
+
