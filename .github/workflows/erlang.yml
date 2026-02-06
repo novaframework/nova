@@ -39,6 +39,10 @@ jobs:
       run: rebar3 dialyzer
     - name: Run xref
       run: rebar3 xref
+    - name: Run EUnit tests
+      run: rebar3 eunit --cover
+    - name: Generate coverage report
+      run: rebar3 cover --verbose
   nova_request_app:
     if: github.ref != 'refs/heads/main'
     needs: [build]
