@@ -1,6 +1,6 @@
 name: Build and test
 
-on: [push]
+on: [push, pull_request]
 
 jobs:
   build:
@@ -12,15 +12,25 @@ jobs:
         otp: ['26.1', '27.1', '28.0']
         rebar3: ['3.25.0']
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - uses: erlef/setup-beam@v1
       with:
         otp-version: ${{matrix.otp}}
         rebar3-version: ${{matrix.rebar3}}
         version-type: strict
+    - name: Cache rebar3 deps and build
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/rebar3
+          _build
+        key: ${{runner.os}}-rebar3-${{matrix.otp}}-${{matrix.rebar3}}-${{hashFiles('rebar.lock')}}
+        restore-keys: |
+          ${{runner.os}}-rebar3-${{matrix.otp}}-${{matrix.rebar3}}-
     - name: Compile
       run: rebar3 compile
   testing:
+    needs: [build]
     runs-on: ubuntu-24.04
     name: Testing Erlang/OTP ${{matrix.otp}} / rebar3 ${{matrix.rebar3}}
     strategy:
@@ -29,12 +39,23 @@ jobs:
         otp: ['26.1', '27.1', '28.0']
         rebar3: ['3.25.0']
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - uses: erlef/setup-beam@v1
       with:
         otp-version: ${{matrix.otp}}
         rebar3-version: ${{matrix.rebar3}}
         version-type: strict
+    - name: Cache rebar3 deps and build
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/rebar3
+          _build
+        key: ${{runner.os}}-rebar3-${{matrix.otp}}-${{matrix.rebar3}}-${{hashFiles('rebar.lock')}}
+        restore-keys: |
+          ${{runner.os}}-rebar3-${{matrix.otp}}-${{matrix.rebar3}}-
+    - name: Run eunit
+      run: rebar3 eunit
     - name: Run dialyzer
       run: rebar3 dialyzer
     - name: Run xref
@@ -48,5 +69,5 @@ jobs:
     needs: [build]
     uses: ./.github/workflows/run_nra.yml
     with:
-      branch: "${GITHUB_REF#refs/heads/}"
+      branch: ${{ github.head_ref || github.ref_name }}
     secrets: inherit
