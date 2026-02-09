@@ -1,0 +1,27 @@
+ci:
+  - changed-files:
+    - any-glob-to-any-file: '.github/**'
+
+documentation:
+  - changed-files:
+    - any-glob-to-any-file: ['guides/**', '*.md']
+
+source:
+  - changed-files:
+    - any-glob-to-any-file: ['src/**', 'include/**']
+
+plugins:
+  - changed-files:
+    - any-glob-to-any-file: 'src/plugins/**'
+
+controllers:
+  - changed-files:
+    - any-glob-to-any-file: 'src/controllers/**'
+
+views:
+  - changed-files:
+    - any-glob-to-any-file: 'src/views/**'
+
+dependencies:
+  - changed-files:
+    - any-glob-to-any-file: ['rebar.config', 'rebar.lock']
