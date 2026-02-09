@@ -65,5 +65,5 @@ jobs:
     needs: [build]
     uses: ./.github/workflows/run_nra.yml
     with:
-      branch: ${{ github.ref_name }}
+      branch: ${{ github.head_ref || github.ref_name }}
     secrets: inherit
