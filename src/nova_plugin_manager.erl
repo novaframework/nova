@@ -72,7 +72,10 @@ start_link() ->
 add_plugin({_Class, Module, _Opts}) ->
     add_plugin(Module);
 add_plugin(Module) when is_atom(Module) ->
-    #{title := Title, version := Version} = Module:plugin_info(),
+    #{title := Title, version := Version} =  case Module:plugin_info() of
+                                                {Title0, Version0, _, _, _} -> #{title => Title0, version => Version0};
+                                                PluginInfo -> PluginInfo
+                                             end,
     add_plugin(Module, Title, Version);
 add_plugin(Callback) when is_function(Callback) ->
     Info = erlang:fun_info(Callback),

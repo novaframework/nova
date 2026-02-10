@@ -8,7 +8,6 @@ on:
 
 jobs:
   run_nra:
-    if: github.ref != 'refs/heads/main'
     uses: novaframework/nova_request_app/.github/workflows/run_nra.yml@main
     with:
         nova_branch:  "${{ inputs.branch }}"

@@ -137,10 +137,14 @@ init([]) ->
                  child(nova_plugin_manager, nova_plugin_manager),
                  child(nova_watcher, nova_watcher)
                 ],
+
+    %% try to ensure callback module is loaded first
+    ExportedFuns = SessionManager:module_info(exports),
+    
     Children =
-        case erlang:function_exported(SessionManager, start_link, 0) of
-            true -> [child(SessionManager, SessionManager) | Children0];
-            false -> Children0
+        case proplists:get_value(start_link, ExportedFuns) of
+            0 -> [child(SessionManager, SessionManager) | Children0];
+            _ -> Children0
         end,
 
     setup_cowboy(),
