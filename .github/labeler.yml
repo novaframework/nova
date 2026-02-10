@@ -1,0 +1,14 @@
+labels:
+  code-change:
+    - changed-files:
+        - any-glob-to-any-file:
+            - "src/**"
+            - "include/**"
+            - "priv/**"
+            - "**/*.erl"
+            - "**/*.hrl"
+            - "**/*.app.src"
+            - "**/*.app"
+  documentation:
+    - changed-files:
+      - '*.md'
