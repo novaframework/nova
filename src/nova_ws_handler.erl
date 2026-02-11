@@ -163,7 +163,3 @@ run_plugins([{Module, Options}|Tl], Callback, ControllerState, State) ->
 
 
 
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
-
--endif.
