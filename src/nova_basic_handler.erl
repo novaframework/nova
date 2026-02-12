@@ -12,6 +12,10 @@
 
 -include_lib("kernel/include/logger.hrl").
 
+-ifdef(TEST).
+-export([maybe_inject_csrf_token/2]).
+-endif.
+
 -type erlydtl_vars() :: map() | [{Key :: atom() | binary() | string(), Value :: any()}].
 
 
