@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get latest tag
+        id: latest_tag
+        run: |
+          TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          echo "tag=${TAG:-v0.0.0}" >> "$GITHUB_OUTPUT"
+
+      - name: Determine version bump
+        id: bump
+        run: |
+          LATEST="${{ steps.latest_tag.outputs.tag }}"
+          if [ "$LATEST" = "v0.0.0" ]; then
+            RANGE="HEAD"
+          else
+            RANGE="${LATEST}..HEAD"
+          fi
+
+          COMMITS=$(git log "$RANGE" --pretty=format:"%s" 2>/dev/null || git log --pretty=format:"%s")
+
+          BUMP="none"
+          while IFS= read -r msg; do
+            if echo "$msg" | grep -qiE '^[a-z]+(\(.+\))?!:|BREAKING CHANGE'; then
+              BUMP="major"
+              break
+            elif echo "$msg" | grep -qiE '^feat(\(.+\))?:'; then
+              BUMP="minor"
+            elif echo "$msg" | grep -qiE '^fix(\(.+\))?:' && [ "$BUMP" != "minor" ]; then
+              BUMP="patch"
+            fi
+          done <<< "$COMMITS"
+
+          if [ "$BUMP" = "none" ] && [ -n "$COMMITS" ]; then
+            BUMP="patch"
+          fi
+
+          echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
+
+      - name: Calculate next version
+        id: next
+        if: steps.bump.outputs.bump != 'none'
+        run: |
+          CURRENT="${{ steps.latest_tag.outputs.tag }}"
+          CURRENT="${CURRENT#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+          case "${{ steps.bump.outputs.bump }}" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          echo "version=v${MAJOR}.${MINOR}.${PATCH}" >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        if: steps.bump.outputs.bump != 'none'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.next.outputs.version }}" \
+            --title "${{ steps.next.outputs.version }}" \
+            --generate-notes \
+            --latest
