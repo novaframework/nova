@@ -118,3 +118,27 @@ jobs:
     with:
       branch: ${{ github.head_ref || github.ref_name }}
     secrets: inherit
+  buildExpected:
+    needs: [build, dialyzer, xref]
+    runs-on: ubuntu-24.04
+    if: always()
+    steps:
+      - run: |
+          if [ "${{ needs.build.result }}" != "success" ] || \
+             [ "${{ needs.dialyzer.result }}" != "success" ] || \
+             [ "${{ needs.xref.result }}" != "success" ]; then
+            exit 1
+          fi
+  testingExpected:
+    needs: [eunit, nova_request_app]
+    runs-on: ubuntu-24.04
+    if: always()
+    steps:
+      - run: |
+          if [ "${{ needs.eunit.result }}" != "success" ]; then
+            exit 1
+          fi
+          if [ "${{ needs.nova_request_app.result }}" != "success" ] && \
+             [ "${{ needs.nova_request_app.result }}" != "skipped" ]; then
+            exit 1
+          fi
