@@ -60,6 +60,8 @@ jobs:
       run: rebar3 dialyzer
     - name: Run xref
       run: rebar3 xref
+    - name: Generate docs
+      run: rebar3 ex_doc
   nova_request_app:
     if: github.ref != 'refs/heads/main'
     needs: [build]
