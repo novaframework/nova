@@ -1,6 +1,9 @@
 name: Build and test
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [master]
+  pull_request:
 
 jobs:
   build:
@@ -29,10 +32,10 @@ jobs:
           ${{runner.os}}-rebar3-${{matrix.otp}}-${{matrix.rebar3}}-
     - name: Compile
       run: rebar3 compile
-  testing:
+  eunit:
     needs: [build]
     runs-on: ubuntu-24.04
-    name: Testing Erlang/OTP ${{matrix.otp}} / rebar3 ${{matrix.rebar3}}
+    name: EUnit Erlang/OTP ${{matrix.otp}} / rebar3 ${{matrix.rebar3}}
     strategy:
       fail-fast: false
       matrix:
@@ -56,14 +59,62 @@ jobs:
           ${{runner.os}}-rebar3-${{matrix.otp}}-${{matrix.rebar3}}-
     - name: Run eunit
       run: rebar3 eunit
+  dialyzer:
+    runs-on: ubuntu-24.04
+    name: Dialyzer Erlang/OTP ${{matrix.otp}} / rebar3 ${{matrix.rebar3}}
+    strategy:
+      fail-fast: false
+      matrix:
+        otp: ['26.1', '27.1', '28.0']
+        rebar3: ['3.25.0']
+    steps:
+    - uses: actions/checkout@v6
+    - uses: erlef/setup-beam@v1
+      with:
+        otp-version: ${{matrix.otp}}
+        rebar3-version: ${{matrix.rebar3}}
+        version-type: strict
+    - name: Cache rebar3 deps and build
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/rebar3
+          _build
+        key: ${{runner.os}}-rebar3-${{matrix.otp}}-${{matrix.rebar3}}-${{hashFiles('rebar.lock')}}
+        restore-keys: |
+          ${{runner.os}}-rebar3-${{matrix.otp}}-${{matrix.rebar3}}-
     - name: Run dialyzer
       run: rebar3 dialyzer
+  xref:
+    runs-on: ubuntu-24.04
+    name: Xref Erlang/OTP ${{matrix.otp}} / rebar3 ${{matrix.rebar3}}
+    strategy:
+      fail-fast: false
+      matrix:
+        otp: ['26.1', '27.1', '28.0']
+        rebar3: ['3.25.0']
+    steps:
+    - uses: actions/checkout@v6
+    - uses: erlef/setup-beam@v1
+      with:
+        otp-version: ${{matrix.otp}}
+        rebar3-version: ${{matrix.rebar3}}
+        version-type: strict
+    - name: Cache rebar3 deps and build
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/rebar3
+          _build
+        key: ${{runner.os}}-rebar3-${{matrix.otp}}-${{matrix.rebar3}}-${{hashFiles('rebar.lock')}}
+        restore-keys: |
+          ${{runner.os}}-rebar3-${{matrix.otp}}-${{matrix.rebar3}}-
     - name: Run xref
       run: rebar3 xref
     - name: Generate docs
       run: rebar3 ex_doc
   nova_request_app:
-    if: github.ref != 'refs/heads/main'
+    if: github.ref != 'refs/heads/master'
     needs: [build]
     uses: ./.github/workflows/run_nra.yml
     with:
