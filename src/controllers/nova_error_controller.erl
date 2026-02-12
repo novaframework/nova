@@ -122,3 +122,7 @@ format_arity(Arity, _) when is_function(Arity)->
     <<"fun">>;
 format_arity(Arity, _) ->
     Arity.
+
+-ifdef(TEST).
+-compile(export_all).
+-endif.

@@ -339,3 +339,7 @@ get_view_name([$_, $c, $o, $n, $t, $r, $o, $l, $l, $e, $r]) ->
     "_dtl";
 get_view_name([H|T]) ->
     [H|get_view_name(T)].
+
+-ifdef(TEST).
+-compile(export_all).
+-endif.
