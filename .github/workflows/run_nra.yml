@@ -5,9 +5,15 @@ on:
           description: "Branch name"
           required: true
           type: string
+        repo:
+          description: "Repository full name (owner/repo)"
+          required: false
+          type: string
+          default: "novaframework/nova"
 
 jobs:
   run_nra:
     uses: novaframework/nova_request_app/.github/workflows/run_nra.yml@main
     with:
-        nova_branch:  "${{ inputs.branch }}"
+        nova_branch: "${{ inputs.branch }}"
+        nova_repo: "${{ inputs.repo }}"

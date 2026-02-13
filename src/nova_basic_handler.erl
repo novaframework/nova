@@ -12,6 +12,10 @@
 
 -include_lib("kernel/include/logger.hrl").
 
+-ifdef(TEST).
+-export([maybe_inject_csrf_token/2]).
+-endif.
+
 -type erlydtl_vars() :: map() | [{Key :: atom() | binary() | string(), Value :: any()}].
 
 
@@ -289,7 +293,8 @@ handle_ws(ok, State) ->
 %%%===================================================================
 
 handle_view(View, Variables, Options, Req) ->
-    {ok, HTML} = render_dtl(View, Variables, []),
+    Variables1 = maybe_inject_csrf_token(Variables, Req),
+    {ok, HTML} = render_dtl(View, Variables1, []),
     Headers =
         case maps:get(headers, Options, undefined) of
             undefined ->
@@ -318,6 +323,13 @@ render_dtl(View, Variables, Options) ->
             View:render(Variables, Options)
     end.
 
+
+maybe_inject_csrf_token(Variables, #{csrf_token := Token}) when is_list(Variables) ->
+    [{csrf_token, Token} | Variables];
+maybe_inject_csrf_token(Variables, #{csrf_token := Token}) when is_map(Variables) ->
+    Variables#{csrf_token => Token};
+maybe_inject_csrf_token(Variables, _Req) ->
+    Variables.
 
 get_view_name({Mod, _Opts}) -> get_view_name(Mod);
 get_view_name(Mod) when is_atom(Mod) ->
