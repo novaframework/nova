@@ -28,7 +28,7 @@
 -module(nova_plugin).
 
 -type request_type() :: pre_request | post_request.
--export_type([request_type/0]).
+-export_type([request_type/0, reply/0]).
 
 -type reply() :: {reply, Body :: binary()} |
                  {reply, Status :: integer(), Body :: binary()} |
