@@ -120,11 +120,16 @@ get_session_module() ->
 get_session_id(Req) ->
     case nova:get_env(use_sessions, true) of
         true ->
-            #{session_id := SessionId} = cowboy_req:match_cookies([{session_id, [], undefined}], Req),
-            case SessionId of
+            case maps:get(nova_session_id, Req, undefined) of
                 undefined ->
-                    {error, not_found};
-                _ ->
+                    #{session_id := SessionId} = cowboy_req:match_cookies([{session_id, [], undefined}], Req),
+                    case SessionId of
+                        undefined ->
+                            {error, not_found};
+                        _ ->
+                            {ok, SessionId}
+                    end;
+                SessionId ->
                     {ok, SessionId}
             end;
         _ ->
