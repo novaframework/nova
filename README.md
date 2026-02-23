@@ -1,84 +1,138 @@
-![nova logo](https://raw.githubusercontent.com/novaframework/nova/master/priv/static/nova.png)
+<p align="center">
+  <img src="https://raw.githubusercontent.com/novaframework/nova/master/priv/static/nova.png" alt="Nova" width="200">
+</p>
 
-> ### Simple. Fault-tolerant. Distributed.
-> - Create a basic webpage in minutes
-> - Using Erlang OTP to achieve both fault-tolerance and distribution
+<h1 align="center">Nova</h1>
 
-[http://www.novaframework.org](http://www.novaframework.org)
+<p align="center">
+  <strong>A web framework for Erlang/OTP</strong><br>
+  Build fault-tolerant, distributed web applications in pure Erlang.
+</p>
 
-![Build status](https://github.com/novaframework/nova/actions/workflows/erlang.yml/badge.svg)
+<p align="center">
+  <a href="https://github.com/novaframework/nova/actions/workflows/erlang.yml"><img src="https://github.com/novaframework/nova/actions/workflows/erlang.yml/badge.svg" alt="Build Status"></a>
+  <a href="https://hex.pm/packages/nova"><img src="https://img.shields.io/hexpm/v/nova.svg" alt="Hex.pm"></a>
+  <a href="https://hexdocs.pm/nova/"><img src="https://img.shields.io/badge/docs-hexdocs-blue.svg" alt="Docs"></a>
+  <a href="https://erlef.org/slack-invite/erlanger"><img src="https://img.shields.io/badge/chat-Erlang%20Slack-4A154B.svg" alt="Slack"></a>
+</p>
 
+---
 
-## Getting started
+## Why Nova?
 
-Start by adding the `rebar3` template for Nova. This can be done by running the installation script;
+Nova is the web framework for developers who **think in Erlang**. If you want the productivity of a modern web framework without leaving the language you love, Nova gives you:
+
+- **Routing, controllers, and views** — familiar MVC patterns that map naturally to Erlang modules
+- **Plugin pipeline** — composable middleware for auth, CORS, logging, and custom concerns
+- **WebSockets and Pub/Sub** — real-time features backed by OTP's `pg` module, distributed out of the box
+- **Session management** — ETS-backed by default, pluggable for custom backends
+- **Template rendering** — ErlyDTL (Django Template Language) with hot reload
+- **OTP-native** — your web app is a proper OTP application with supervision trees, hot code upgrades, and releases
+
+Nova runs on [Cowboy](https://github.com/ninenines/cowboy) and supports **Erlang**, **Elixir**, and **LFE**.
+
+## Quick start
+
+Install the rebar3 plugin:
 
 ```bash
+# One-line install
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/novaframework/rebar3_nova/master/install.sh)"
+
+# Or add to ~/.config/rebar3/rebar.config
+{project_plugins, [rebar3_nova]}.
 ```
 
-#### Manually with rebar.config
-
-Add rebar3_nova to ~/.config/rebar3/rebar.config
-```erlang
-{project_plugins, [rebar3_nova]}
-```
-
-After this is done use `rebar3` to generate a new project with Nova.
+Create and run your app:
 
 ```bash
-rebar3 new nova my_first_nova
-```
-
-
-
-
-## Supported Erlang versions
-
-Nova is supported with OTP 23 and above.
-
-## Documentation
-
-Hex docs: https://hexdocs.pm/nova/
-
-More on how things work can be read in the docs [Getting Started](https://hexdocs.pm/nova/quick-start.html#content).
-
-### Articles
-
-* [Building an Erlang Web Api using Nova Framework and Redis](https://bercovici-adrian-simon.medium.com/building-an-erlang-web-api-using-nova-framework-and-redis-141edf170ef7)
-* [Gettings started with Nova](https://dev.to/taure/getting-started-with-nova-1ioo)
-
-## Contributing
-
-Contribution is welcome to Nova. Check our [CODE OF CONDUCT](CODE_OF_CONDUCT.md) for more information. We will add features and bugs to the issues list.
-
-### Generating a Nova project
-
-Start a new project with:
-
-```bash
-rebar3 new nova my_first_nova
-```
-
-That will generate a Nova project for you.
-
-```bash
+rebar3 new nova my_app
+cd my_app
 rebar3 nova serve
 ```
 
-This will fetch all dependencies and compile. After the compilation it will start a shell that says which port it is running on and a few debug lines.
+Open [localhost:8080](http://localhost:8080) — you're running Nova.
 
-When the shell is started, open a browser and go to localhost:8080 which will point to the `my_first_nova` server running Nova.
+## What a controller looks like
 
-## Important links
+```erlang
+-module(my_app_main_controller).
+-export([index/1, create/1]).
 
-* [Erlang Slack channel][1]
-* [Issue tracker][2]
-* [Nova Forum (questions)][3]
-* Visit Nova's sponsors for expert Nova consulting:
-    * [Burbas Consulting](http://burbasconsulting.com)
-    * [Widgrens IT](https://widgrensit.com)
+index(#{method := <<"GET">>} = _Req) ->
+    {json, #{message => <<"Hello from Nova!">>}}.
 
-[1]: https://erlef.org/slack-invite/erlanger
-[2]: https://github.com/novaframework/nova/issues
-[3]: https://erlangforums.com/c/erlang-frameworks/nova-forum/65
+create(#{method := <<"POST">>, json := Body} = _Req) ->
+    %% Validate, persist, respond
+    {json, #{status => <<"created">>, data => Body}}.
+```
+
+Route it:
+
+```erlang
+routes(_Environment) ->
+    [#{prefix => "/api",
+       security => false,
+       routes => [
+           {"/", {my_app_main_controller, index}},
+           {"/items", {my_app_main_controller, create}}
+       ]}].
+```
+
+## Features
+
+| Feature | Details |
+|---------|---------|
+| **Routing** | Path parameters, prefixes, per-route security, environment-based routing |
+| **Controllers** | Return `{json, Map}`, `{ok, Variables}`, `{status, Code}`, `{redirect, Path}`, `{sendfile, ...}` |
+| **Plugins** | Pre/post request hooks — built-in CORS, CSRF, correlation ID, or write your own |
+| **WebSockets** | Full WebSocket support via `nova_websocket` behaviour |
+| **Pub/Sub** | Distributed messaging via `nova_pubsub` — channels, topics, broadcast |
+| **Sessions** | ETS-backed sessions with pluggable backends |
+| **Templates** | ErlyDTL (Django-style) with hot reload via `rebar3 nova serve` |
+| **Security** | Per-route security functions for authentication and authorization |
+| **Static files** | Built-in file controller with range request support |
+| **Observability** | [OpenTelemetry integration](https://github.com/novaframework/opentelemetry_nova) for tracing and metrics |
+| **Database** | [Kura](https://github.com/novaframework/kura) — an Ecto-inspired database layer for Erlang |
+
+## Request pipeline
+
+```
+Request → Cowboy → Nova Router → Plugins (pre) → Security → Controller → Plugins (post) → Response
+```
+
+## Ecosystem
+
+| Package | Description |
+|---------|-------------|
+| [nova](https://hex.pm/packages/nova) | Core framework |
+| [rebar3_nova](https://github.com/novaframework/rebar3_nova) | Project scaffolding and generators |
+| [nova_test](https://github.com/novaframework/nova_test) | Testing utilities and request builder |
+| [kura](https://hex.pm/packages/kura) | Database layer — schemas, migrations, changesets, queries |
+| [rebar3_kura](https://github.com/novaframework/rebar3_kura) | Migration generator for Kura |
+| [opentelemetry_nova](https://github.com/novaframework/opentelemetry_nova) | Automatic OpenTelemetry instrumentation |
+
+## Documentation
+
+- **[The Nova Book](https://novaframework.github.io/nova-book)** — step-by-step tutorial building a complete blog platform
+- **[API Reference](https://hexdocs.pm/nova/)** — module documentation on HexDocs
+- **[Quick Start Guide](https://hexdocs.pm/nova/quick-start.html)** — get up and running in 5 minutes
+
+## Requirements
+
+- Erlang/OTP 23+
+- Rebar3
+
+## Community
+
+- [Erlang Slack](https://erlef.org/slack-invite/erlanger) — `#erlanger` channel
+- [Nova Forum](https://erlangforums.com/c/erlang-frameworks/nova-forum/65) — questions and discussion
+- [Issue Tracker](https://github.com/novaframework/nova/issues) — bugs and feature requests
+
+## Contributing
+
+Contributions are welcome! Check [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) and look for issues labeled `good first issue`.
+
+## License
+
+[Apache 2.0](LICENSE)
