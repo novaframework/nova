@@ -5,8 +5,8 @@
 <h1 align="center">Nova</h1>
 
 <p align="center">
-  <strong>A web framework for Erlang/OTP</strong><br>
-  Build fault-tolerant, distributed web applications in pure Erlang.
+  <strong>A web framework for the BEAM</strong><br>
+  Build fault-tolerant, distributed web applications in Erlang, Elixir, or LFE.
 </p>
 
 <p align="center">
