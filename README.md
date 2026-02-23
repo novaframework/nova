@@ -20,7 +20,7 @@
 
 ## Why Nova?
 
-Nova is the web framework for developers who **think in Erlang**. If you want the productivity of a modern web framework without leaving the language you love, Nova gives you:
+Nova is the web framework for the **BEAM**. Whether you write Erlang, Elixir, or LFE, Nova gives you the productivity of a modern web framework on the runtime you already trust:
 
 - **Routing, controllers, and views** — familiar MVC patterns that map naturally to Erlang modules
 - **Plugin pipeline** — composable middleware for auth, CORS, logging, and custom concerns
