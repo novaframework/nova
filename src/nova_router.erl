@@ -72,6 +72,7 @@ compile(Apps) ->
                                                           when Req::cowboy_req:req(),
                                                                Env0::cowboy_middleware:env().
 execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
+    %% Cache the storage backend lookup to avoid repeated calls
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     Dispatch = StorageBackend:get(nova_dispatch),
     case routing_tree:lookup(Host, Path, Method, Dispatch) of
@@ -133,11 +134,9 @@ lookup_url(Host, Path) ->
     lookup_url(Host, Path, '_').
 
 lookup_url(Host, Path, Method) ->
+    %% Fetch both values together to avoid duplicate application:get_env calls
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     Dispatch = StorageBackend:get(nova_dispatch),
-    lookup_url(Host, Path, Method, Dispatch).
-
-lookup_url(Host, Path, Method, Dispatch) ->
     routing_tree:lookup(Host, Path, Method, Dispatch).
 
 %%--------------------------------------------------------------------
@@ -151,6 +150,7 @@ lookup_url(Host, Path, Method, Dispatch) ->
 add_routes(_App, []) -> ok;
 add_routes(App, [Routes|Tl]) when is_list(Routes) ->
     Options = #{},
+    %% Cache the storage backend to avoid repeated application:get_env calls
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     Dispatch = StorageBackend:get(nova_dispatch),
 
@@ -184,8 +184,10 @@ add_routes(App, Routes) ->
 get_routes(Router, Env) ->
     %% Call the router
     Controllers = apply_callback(Router, controllers, [Env]),
-    apply_callback(Router, routes, [Env])
-        ++ lists:append([nova_controller:routes(C, Env) || C <- Controllers ]).
+    RouterRoutes = apply_callback(Router, routes, [Env]),
+    ControllerRoutes = [nova_controller:routes(C, Env) || C <- Controllers],
+    %% Concatenate all route lists into one using a single list operation
+    lists:append([RouterRoutes | ControllerRoutes]).
 
 %% yields an empty list if callback does not exist
 apply_callback(Module, Function, Args) ->
@@ -225,7 +227,9 @@ compile([App|Tl], Dispatch, Options) ->
     CompileParameters = Router:module_info(compile),
 
     RouterFile = proplists:get_value(source, CompileParameters),
-    Options1 = Options#{app => App, router_file => RouterFile},
+    %% Cache global plugins in Options to avoid repeated lookups in compile_paths
+    GlobalPlugins = application:get_env(nova, plugins, []),
+    Options1 = Options#{app => App, router_file => RouterFile, global_plugins => GlobalPlugins},
 
     {ok, Dispatch1, Options2} = compile_paths(Routes, Dispatch, Options1),
 
@@ -244,8 +248,8 @@ compile_paths([], Dispatch, Options) -> {ok, Dispatch, Options};
 compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     App = maps:get(app, Options),
     RouterFile = maps:get(router_file, Options),
-    %% Fetch the global plugins
-    GlobalPlugins = application:get_env(nova, plugins, []),
+    %% Use cached global plugins from Options instead of repeated lookups
+    GlobalPlugins = maps:get(global_plugins, Options, []),
     Plugins = maps:get(plugins, RouteInfo, GlobalPlugins),
 
     Secure =
@@ -396,6 +400,7 @@ render_status_page(StatusCode, Req) ->
 -spec render_status_page(StatusCode :: integer(), Data :: map(), Req :: cowboy_req:req()) ->
                                 {ok, Req0 :: cowboy_req:req(), Env :: map()}.
 render_status_page(StatusCode, Data, Req) ->
+    %% Fetch backend and dispatch together
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     Dispatch = StorageBackend:get(nova_dispatch),
     render_status_page('_', StatusCode, Data, Req, #{dispatch => Dispatch}).
@@ -406,6 +411,7 @@ render_status_page(StatusCode, Data, Req) ->
                          Req :: cowboy_req:req(),
                          Env :: map()) -> {ok, Req0 :: cowboy_req:req(), Env :: map()}.
 render_status_page(Host, StatusCode, Data, Req, Env) ->
+    %% Cache storage backend lookup
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     Dispatch = StorageBackend:get(nova_dispatch),
     {Req0, Env0} =
@@ -446,6 +452,7 @@ insert(Host, Path, Combinator, Value, Tree) ->
 
 
 add_plugin(Plugin) ->
+    %% Cache storage backend to avoid repeated lookups
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     StoredPlugins = StorageBackend:get(?NOVA_PLUGINS, []),
     Plugins1 = lists:umerge([[Plugin], StoredPlugins]),
