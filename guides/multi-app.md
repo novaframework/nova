@@ -32,3 +32,14 @@ There's currently two different options available and they works in the same way
   ]}
 ...
 ```
+
+## Pragmatically starting other nova applications
+
+### Starting an application
+
+You can also start other nova applications pragmatically by calling `nova_sup:add_application/2` to add another nova application to your supervision tree. The routes will automatically be added to the routing-module.
+
+
+## Stopping an application
+
+To stop a nova application you can call `nova_sup:remove_application/1` with the name of the application you want to stop. Use this with caution since calling this method all routes for all other applications will be removed and re-added in order to filter out the one removed.
