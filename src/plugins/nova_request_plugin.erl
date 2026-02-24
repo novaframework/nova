@@ -115,3 +115,7 @@ should_read_body([]) -> false;
 should_read_body([{decode_json_body, true}|_Tl]) -> true;
 should_read_body([{read_urlencoded_body, true}|_Tl]) -> true;
 should_read_body([_|Tl]) -> should_read_body(Tl).
+
+-ifdef(TEST).
+-compile(export_all).
+-endif.

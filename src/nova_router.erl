@@ -532,7 +532,7 @@ routes(_) ->
    }].
 
 -ifdef(TEST).
--compile(export_all). %% Export all functions for testing purpose
+-compile(export_all).
 -include_lib("eunit/include/eunit.hrl").
 
 compile_empty_test() ->
