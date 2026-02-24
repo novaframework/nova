@@ -111,6 +111,8 @@ jobs:
           ${{runner.os}}-rebar3-${{matrix.otp}}-${{matrix.rebar3}}-
     - name: Run xref
       run: rebar3 xref
+    - name: Generate docs
+      run: rebar3 ex_doc
   nova_request_app:
     if: github.ref != 'refs/heads/master'
     needs: [build]
