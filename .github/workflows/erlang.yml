@@ -119,4 +119,5 @@ jobs:
     uses: ./.github/workflows/run_nra.yml
     with:
       branch: ${{ github.head_ref || github.ref_name }}
+      repo: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
     secrets: inherit

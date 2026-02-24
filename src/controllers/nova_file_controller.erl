@@ -102,7 +102,7 @@ parse_range(RangeSpec, FileSize) ->
                 _ ->
                     error
             end;
-        [StartBin] when StartBin =/= <<>> ->
+        [StartBin, <<>>] when StartBin =/= <<>> ->
             case binary_to_integer(StartBin) of
                 Start when Start >= 0, Start < FileSize ->
                     {ok, {Start, FileSize - 1}};
