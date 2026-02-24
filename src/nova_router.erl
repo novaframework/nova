@@ -63,13 +63,13 @@ plugins() ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     StorageBackend:get(?NOVA_PLUGINS, []).
 
--spec compile(Apps :: [atom() | {atom(), map()}]) -> nova_routing_trie:trie().
+-spec compile(Apps :: [atom() | {atom(), map()}]) -> nova_routing_tree:tree().
 compile(Apps) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
 
     StoredDispatch = StorageBackend:get(nova_dispatch,
-                                        nova_routing_trie:new(#{options => #{strict => UseStrict}})),
+                                        nova_routing_tree:new(#{options => #{strict => UseStrict}})),
     Dispatch = compile(Apps, StoredDispatch, #{}),
     %% Write the updated dispatch to storage
     StorageBackend:put(nova_dispatch, Dispatch),
@@ -81,7 +81,7 @@ compile(Apps) ->
 execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     Dispatch = StorageBackend:get(nova_dispatch),
-    case nova_routing_trie:find(Host, Path, Method, Dispatch) of
+    case nova_routing_tree:find(Host, Path, Method, Dispatch) of
         {error, not_found} ->
             logger:debug("Path ~p not found for ~p in ~p", [Path, Method, Host]),
             render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
@@ -104,18 +104,6 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
                   controller_data => #{}
                  }
             };
-        {ok, Bindings, #nova_handler_value{app = App, callback = Callback,
-                                           secure = Secure, plugins = Plugins, extra_state = ExtraState}, Pathinfo} ->
-            {ok,
-             Req#{plugins => Plugins,
-                  extra_state => ExtraState#{pathinfo => Pathinfo},
-                  bindings => Bindings},
-             Env#{app => App,
-                  callback => Callback,
-                  secure => Secure,
-                  controller_data => #{}
-                 }
-            };
         {ok, Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
                                               plugins = Plugins, secure = Secure}} ->
             {ok,
@@ -128,7 +116,7 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
                  }
             };
         Error ->
-            ?LOG_ERROR(#{reason => <<"Unexpected return from nova_routing_trie:lookup/4">>,
+            ?LOG_ERROR(#{reason => <<"Unexpected return from nova_routing_tree:find/4">>,
                          return_object => Error}),
             render_status_page(Host, 404, #{error => Error}, Req, Env)
     end.
@@ -145,7 +133,7 @@ lookup_url(Host, Path, Method) ->
     lookup_url(Host, Path, Method, Dispatch).
 
 lookup_url(Host, Path, Method, Dispatch) ->
-    nova_routing_trie:lookup(Host, Path, Method, Dispatch).
+    nova_routing_tree:find(Host, Path, Method, Dispatch).
 
 
 %%--------------------------------------------------------------------
@@ -209,15 +197,15 @@ add_routes(App, Routes) ->
 %%--------------------------------------------------------------------
 -spec remove_application(Application :: atom()) -> ok.
 remove_application(Application) when is_atom(Application) ->
-    Dispatch = persistent_term:get(nova_dispatch),
-    %% Remove all routes for this application
+    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    Dispatch = StorageBackend:get(nova_dispatch),
     {ok, Dispatch0} =
-        nova_routing_trie:foldl(Dispatch,
+        nova_routing_tree:foldl(Dispatch,
                                 fun(R) ->
-                                        [ X || X = {_Host, _Prefix, #nova_handler_value{app = App}} <- R,
+                                        [ X || X = {_Host, _Prefix, _Method, #nova_handler_value{app = App}} <- R,
                                                App =/= Application ]
                                 end),
-    persistent_term:put(nova_dispatch, Dispatch0),
+    StorageBackend:put(nova_dispatch, Dispatch0),
     ok.
 
 
@@ -245,7 +233,7 @@ apply_callback(Module, Function, Args) ->
             []
     end.
 
--spec compile(Apps :: [atom() | {atom(), map()}], Dispatch :: nova_routing_trie:trie(), Options :: map()) -> nova_routing_trie:trie().
+-spec compile(Apps :: [atom() | {atom(), map()}], Dispatch :: nova_routing_tree:tree(), Options :: map()) -> nova_routing_tree:tree().
 compile([], Dispatch, _Options) -> Dispatch;
 compile([{App, Options}|Tl], Dispatch, GlobalOptions) ->
     compile([App|Tl], Dispatch, maps:merge(Options, GlobalOptions));
@@ -453,7 +441,7 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     Dispatch = StorageBackend:get(nova_dispatch),
     {Req0, Env0} =
-        case nova_routing_trie:find(Host, StatusCode, '_', Dispatch) of
+        case nova_routing_tree:find(Host, StatusCode, '_', Dispatch) of
             {error, _} ->
                 %% Render nova page if exists - We need to determine where to find this path?
                 {Req, Env#{app => nova,
@@ -477,8 +465,12 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
 
 
 insert(Host, Path, Combinator, Value, Tree) ->
-    try nova_routing_trie:insert(Host, Path, Combinator, Value, Tree) of
-        Tree0 -> Tree0
+    try nova_routing_tree:insert(Host, Path, Combinator, Value, Tree) of
+        {ok, Tree0} -> Tree0;
+        {error, conflict, Conf} ->
+            ?LOG_ERROR(#{reason => <<"Route conflict">>, route => Path,
+                         combinator => Combinator, conflict => Conf}),
+            throw({error, conflict, Conf})
     catch
         throw:Exception ->
             ?LOG_ERROR(#{reason => <<"Error when inserting route">>, route => Path, combinator => Combinator}),
@@ -545,6 +537,6 @@ routes(_) ->
 
 compile_empty_test() ->
     Dispatch = compile([]),
-    ?assertEqual(nova_routing_trie:new(#{options => #{strict => false}}), Dispatch).
+    ?assertEqual(nova_routing_tree:new(#{options => #{strict => false}}), Dispatch).
 
 -endif.

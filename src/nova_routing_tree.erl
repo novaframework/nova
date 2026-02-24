@@ -1,4 +1,4 @@
--module(nova_routing_trie).
+-module(nova_routing_tree).
 
 -export([
          new/0,
@@ -22,24 +22,27 @@
          lookup/3,
          lookup/4,
 
+         %% Router-compatible lookup (Host, Path, Method, Tree)
+         find/4,
+
          to_list/1,
          from_list/1
         ]).
 
-%% Host-aware trie:
-%%  - 'trie()' is the host root
-%%  - each host key maps to a per-host trie_node() (routing tree)
--opaque trie() :: #{
-                    options := map(),                     %% global/root options
-                    hosts   := #{ host_key() => trie_node() }
+%% Host-aware tree:
+%%  - 'tree()' is the host root
+%%  - each host key maps to a per-host tree_node() (routing tree)
+-opaque tree() :: #{
+                    options := map(),
+                    hosts   := #{ host_key() => tree_node() }
                    }.
 
 %% Per-host routing tree node
 %%  - children: nested segments
 %%  - terminal: map MethodBin => Payload
--opaque trie_node() :: #{
-                         options  := map(),         %% options for this node
-                         children := #{ child_key() => trie_node() },
+-opaque tree_node() :: #{
+                         options  := map(),
+                         children := #{ child_key() => tree_node() },
                          plugins := #{
                                       pre_request  := [module()],
                                       post_request := [module()]
@@ -60,7 +63,7 @@
 
 -type payload() :: term().
 
-%% A "route" is the canonical unit we can rebuild the trie from.
+%% A "route" is the canonical unit we can rebuild the tree from.
 %%
 %% Supported input shapes:
 %%   {Path, Method, Payload}
@@ -70,7 +73,7 @@
 %%
 %% Where:
 %%   - Host is optional (defaults to '_')
-%%   - Opts is optional (defaults to #{}) and is merged into trie options for that insertion
+%%   - Opts is optional (defaults to #{}) and is merged into tree options for that insertion
 -type route() ::
         {iodata(), method_in(), payload()} |
         {iodata(), method_in(), payload(), map()} |
@@ -88,7 +91,7 @@
                       existing_methods:= [method()]
                      }.
 
--export_type([trie/0, trie_node/0, method/0]).
+-export_type([tree/0, tree_node/0, method/0]).
 
 %%====================================================================
 %% API
@@ -98,20 +101,20 @@
 %% Constructors
 %%--------------------------------------------------------------------
 
--spec new() -> trie().
+-spec new() -> tree().
 new() ->
     new(#{}).
 
--spec new(map()) -> trie().
+-spec new(map()) -> tree().
 new(Opts) when is_map(Opts) ->
     #{options => Opts, hosts => #{}}.
 
 %% Internal node constructor (per-host trees)
--spec new_node() -> trie_node().
+-spec new_node() -> tree_node().
 new_node() ->
     new_node(#{}).
 
--spec new_node(map()) -> trie_node().
+-spec new_node(map()) -> tree_node().
 new_node(Opts) when is_map(Opts) ->
     #{children => #{}, terminal => #{}, options => Opts, plugins => #{pre_request => [],
                                                                       post_request => []}}.
@@ -134,56 +137,56 @@ norm_host(Host) when is_atom(Host) ->
 %% Insert
 %%
 %% Canonical full form:
-%%   insert(Host, Path, Method, Payload, Trie, Opts)
+%%   insert(Host, Path, Method, Payload, Tree, Opts)
 %%
 %% Convenience:
-%%   insert(Path, Method, Payload, Trie).        % Host='_', Opts=#{}
-%%   insert(Host, Path, Method, Payload, Trie).  % Opts=#{}
+%%   insert(Path, Method, Payload, Tree).        % Host='_', Opts=#{}
+%%   insert(Host, Path, Method, Payload, Tree).  % Opts=#{}
 %%--------------------------------------------------------------------
 
--spec insert(iodata(), method_in(), payload(), trie()) ->
-          {ok, trie()} | {error, conflict, conflict()}.
-insert(Path, Method, Payload, Trie) ->
-    insert('_', Path, Method, Payload, Trie, #{}).
+-spec insert(iodata() | integer(), method_in(), payload(), tree()) ->
+          {ok, tree()} | {error, conflict, conflict()}.
+insert(Path, Method, Payload, Tree) ->
+    insert('_', Path, Method, Payload, Tree, #{}).
 
--spec insert(host_in(), iodata(), method_in(), payload(), trie()) ->
-          {ok, trie()} | {error, conflict, conflict()}.
-insert(HostIn, Path, Method, Payload, Trie) ->
-    insert(HostIn, Path, Method, Payload, Trie, #{}).
+-spec insert(host_in(), iodata() | integer(), method_in(), payload(), tree()) ->
+          {ok, tree()} | {error, conflict, conflict()}.
+insert(HostIn, Path, Method, Payload, Tree) ->
+    insert(HostIn, Path, Method, Payload, Tree, #{}).
 
--spec insert(host_in(), iodata(), method_in(), payload(), trie(), map()) ->
-          {ok, trie()} | {error, conflict, conflict()}.
-insert(HostIn, Path, Method, Payload, Trie0, Opts) ->
+-spec insert(host_in(), iodata() | integer(), method_in(), payload(), tree(), map()) ->
+          {ok, tree()} | {error, conflict, conflict()}.
+insert(HostIn, Path, Method, Payload, Tree0, Opts) ->
     Host = norm_host(HostIn),
-    RootOpts0 = maps:get(options, Trie0, #{}),
+    RootOpts0 = maps:get(options, Tree0, #{}),
     RootOpts1 = maps:merge(RootOpts0, Opts),
-    Trie1 = Trie0#{options => RootOpts1},
-    Hosts = maps:get(hosts, Trie1, #{}),
-    {Trie2, HostTrie0} =
+    Tree1 = Tree0#{options => RootOpts1},
+    Hosts = maps:get(hosts, Tree1, #{}),
+    {Tree2, HostTree0} =
         case maps:get(Host, Hosts, undefined) of
             undefined ->
-                HostTrie = new_node(RootOpts1),
-                Hosts1 = Hosts#{Host => HostTrie},
-                {Trie1#{hosts := Hosts1}, HostTrie};
-            HostTrie ->
-                {Trie1, HostTrie}
+                HostTree = new_node(RootOpts1),
+                Hosts1 = Hosts#{Host => HostTree},
+                {Tree1#{hosts := Hosts1}, HostTree};
+            HostTree ->
+                {Tree1, HostTree}
         end,
-    case insert_inner(Method, Path, Payload, HostTrie0, RootOpts1) of
-        {ok, HostTrie1} ->
-            Hosts2 = maps:get(hosts, Trie2, #{}),
-            Hosts3 = Hosts2#{Host => HostTrie1},
-            {ok, Trie2#{hosts := Hosts3}};
+    case insert_inner(Method, normalize_path(Path), Payload, HostTree0, RootOpts1) of
+        {ok, HostTree1} ->
+            Hosts2 = maps:get(hosts, Tree2, #{}),
+            Hosts3 = Hosts2#{Host => HostTree1},
+            {ok, Tree2#{hosts := Hosts3}};
         {error, conflict, Conf} ->
             {error, conflict, Conf}
     end.
 
-%% Internal: insert into a single host's routing trie
--spec insert_inner(method_in(), iodata(), payload(), trie_node(), map()) ->
-          {ok, trie_node()} | {error, conflict, conflict()}.
-insert_inner(Method, Path, Payload, TrieNode, Opts) ->
-    Opts0 = maps:get(options, TrieNode, #{}),
+%% Internal: insert into a single host's routing tree
+-spec insert_inner(method_in(), iodata(), payload(), tree_node(), map()) ->
+          {ok, tree_node()} | {error, conflict, conflict()}.
+insert_inner(Method, Path, Payload, TreeNode, Opts) ->
+    Opts0 = maps:get(options, TreeNode, #{}),
     Opts1 = maps:merge(Opts0, Opts),
-    Trie1 = TrieNode#{options := Opts1},
+    Tree1 = TreeNode#{options := Opts1},
 
     M = norm_method(Method),
     Segs = segs_for_insert(Path),
@@ -191,17 +194,14 @@ insert_inner(Method, Path, Payload, TrieNode, Opts) ->
 
     case Strict of
         true ->
-            %% Strict: conflicts become errors
-            safe_insert_segs(M, Payload, Segs, Trie1, [], Segs);
+            safe_insert_segs(M, Payload, Segs, Tree1, [], Segs);
         false ->
-            %% Non-strict: run safe_insert_segs only for detection,
-            %% then always perform regular insert_segs. Conflicts -> warnings.
-            case safe_insert_segs(M, Payload, Segs, Trie1, [], Segs) of
+            case safe_insert_segs(M, Payload, Segs, Tree1, [], Segs) of
                 {error, conflict, Conf} ->
                     warn_conflict(Conf),
-                    {ok, insert_segs(M, Payload, Segs, Trie1)};
+                    {ok, insert_segs(M, Payload, Segs, Tree1)};
                 {ok, _TmpNode} ->
-                    {ok, insert_segs(M, Payload, Segs, Trie1)}
+                    {ok, insert_segs(M, Payload, Segs, Tree1)}
             end
     end.
 
@@ -214,7 +214,7 @@ warn_conflict(Conf) ->
     IncomingPath  = maps:get(incoming_path, Conf),
     ConflictsWith = maps:get(conflicts_with, Conf),
     io:format(
-      "routing_trie warning (~p): ~s ~s conflicts with ~s~n",
+      "routing_tree warning (~p): ~s ~s conflicts with ~s~n",
       [Reason, render_method(Method), IncomingPath, ConflictsWith]
      ).
 
@@ -222,17 +222,17 @@ warn_conflict(Conf) ->
 %% Membership (uses lookup)
 %%--------------------------------------------------------------------
 
--spec member(iodata(), trie()) -> boolean().
-member(Path, Trie) ->
-    member(<<"ALL">>, Path, Trie).
+-spec member(iodata(), tree()) -> boolean().
+member(Path, Tree) ->
+    member(<<"ALL">>, Path, Tree).
 
--spec member(method_in(), iodata(), trie()) -> boolean().
-member(Method0, Path, Trie) ->
-    member(Method0, '_', Path, Trie).
+-spec member(method_in(), iodata(), tree()) -> boolean().
+member(Method0, Path, Tree) ->
+    member(Method0, '_', Path, Tree).
 
--spec member(method_in(), host_in(), iodata(), trie()) -> boolean().
-member(Method0, HostIn, Path, Trie) ->
-    case lookup(Method0, HostIn, Path, Trie) of
+-spec member(method_in(), host_in(), iodata(), tree()) -> boolean().
+member(Method0, HostIn, Path, Tree) ->
+    case lookup(Method0, HostIn, Path, Tree) of
         {ok, _Node, _Payload, _Binds} -> true;
         error                         -> false
     end.
@@ -248,29 +248,29 @@ member(Method0, HostIn, Path, Trie) ->
 %%      | {ok, Node, Payload, Bindings}
 %%--------------------------------------------------------------------
 
--spec lookup(iodata(), trie()) ->
-          {ok, trie_node(), term(), #{binary() => binary()}} | error.
-lookup(Path, Trie) ->
-    lookup(<<"ALL">>, '_', Path, Trie).
+-spec lookup(iodata(), tree()) ->
+          {ok, tree_node(), term(), #{binary() => binary()}} | error.
+lookup(Path, Tree) ->
+    lookup(<<"ALL">>, '_', Path, Tree).
 
--spec lookup(method_in(), iodata(), trie()) ->
-          {ok, trie_node(), term(), #{binary() => binary()}} | error.
-lookup(Method0, Path, Trie) ->
-    lookup(Method0, '_', Path, Trie).
+-spec lookup(method_in(), iodata(), tree()) ->
+          {ok, tree_node(), term(), #{binary() => binary()}} | error.
+lookup(Method0, Path, Tree) ->
+    lookup(Method0, '_', Path, Tree).
 
--spec lookup(method_in(), host_in(), iodata(), trie()) ->
-          {ok, trie_node(), term(), #{binary() => binary()}} | error.
-lookup(Method0, HostIn, Path, Trie = #{hosts := Hosts}) ->
+-spec lookup(method_in(), host_in(), iodata(), tree()) ->
+          {ok, tree_node(), term(), #{binary() => binary()}} | error.
+lookup(Method0, HostIn, Path, Tree = #{hosts := Hosts}) ->
     Host = norm_host(HostIn),
     case maps:get(Host, Hosts, undefined) of
         undefined when Host =/= '_' ->
-            lookup(Method0, '_', Path, Trie);
+            lookup(Method0, '_', Path, Tree);
         undefined ->
             error;
-        HostTrie ->
+        HostTree ->
             M    = norm_method(Method0),
-            Segs = segs_for_match(Path),
-            case do_match(Segs, HostTrie, #{}) of
+            Segs = segs_for_match(normalize_path(Path)),
+            case do_match(Segs, HostTree, #{}) of
                 {ok, Node, Binds} ->
                     case method_payload(M, Node) of
                         {ok, Payload} -> {ok, Node, Payload, Binds};
@@ -281,45 +281,95 @@ lookup(Method0, HostIn, Path, Trie = #{hosts := Hosts}) ->
             end
     end.
 
+%%--------------------------------------------------------------------
+%% find/4 — Router-compatible lookup
+%%
+%% Signature: find(Host, Path, Method, Tree)
+%%   same argument order as the old routing_tree:lookup/4
+%%
+%% Returns:
+%%   {ok, Bindings, Payload}
+%%   {error, not_found}
+%%   {error, comparator_not_found, AllowedMethods}
+%%--------------------------------------------------------------------
+
+-spec find(host_in(), iodata() | integer(), method_in(), tree()) ->
+          {ok, #{binary() => binary()}, payload()} |
+          {error, not_found} |
+          {error, comparator_not_found, [method()]}.
+find(HostIn, Path, Method, #{hosts := Hosts}) ->
+    Host = norm_host(HostIn),
+    Path0 = normalize_path(Path),
+    HostTree = resolve_host_tree(Host, Hosts),
+    case HostTree of
+        undefined ->
+            {error, not_found};
+        _ ->
+            Segs = segs_for_match(Path0),
+            case do_match(Segs, HostTree, #{}) of
+                {ok, Node, Binds} ->
+                    M = norm_method(Method),
+                    case method_payload(M, Node) of
+                        {ok, Payload} ->
+                            {ok, Binds, Payload};
+                        error ->
+                            AllowedMethods = methods_list(Node),
+                            case AllowedMethods of
+                                [] -> {error, not_found};
+                                _  -> {error, comparator_not_found, AllowedMethods}
+                            end
+                    end;
+                _ ->
+                    {error, not_found}
+            end
+    end.
+
+resolve_host_tree(Host, Hosts) ->
+    case maps:get(Host, Hosts, undefined) of
+        undefined when Host =/= '_' ->
+            maps:get('_', Hosts, undefined);
+        Result ->
+            Result
+    end.
 
 %%--------------------------------------------------------------------
 %% to_list: flattened host view (ignores payloads)
 %%--------------------------------------------------------------------
 
--spec to_list(trie()) -> [binary()].
-to_list(Trie) ->
-    Hosts = maps:get(hosts, Trie, #{}),
+-spec to_list(tree()) -> [binary()].
+to_list(Tree) ->
+    Hosts = maps:get(hosts, Tree, #{}),
     maps:fold(
-      fun(_Host, HostTrie, Acc) ->
-              gather(HostTrie, [], Acc)
+      fun(_Host, HostTree, Acc) ->
+              gather(HostTree, [], Acc)
       end, [], Hosts).
 
 %%--------------------------------------------------------------------
-%% from_list: build a routing trie from a list of routes
+%% from_list: build a routing tree from a list of routes
 %%--------------------------------------------------------------------
 
--spec from_list([route()]) -> {ok, trie()} | {error, conflict, conflict()}.
+-spec from_list([route()]) -> {ok, tree()} | {error, conflict, conflict()}.
 from_list(Routes) when is_list(Routes) ->
     from_list(Routes, #{}).
 
 %%--------------------------------------------------------------------
-%% foldl: rebuild the trie by transforming its extracted routes
+%% foldl: rebuild the tree by transforming its extracted routes
 %%
 %% Function :: fun(([route()]) -> [route()])
 %%
-%% 1) Extracts routes from the trie (including payloads)
+%% 1) Extracts routes from the tree (including payloads)
 %% 2) Calls Function(Routes)
-%% 3) Rebuilds a new trie from the returned routes
+%% 3) Rebuilds a new tree from the returned routes
 %%--------------------------------------------------------------------
 
--spec foldl(trie(), fun(([route()]) -> [route()])) ->
-          {ok, trie()} | {error, conflict, conflict()}.
-foldl(Trie0, Fun) when is_map(Trie0), is_function(Fun, 1) ->
-    Routes0 = routes(Trie0),
+-spec foldl(tree(), fun(([route()]) -> [route()])) ->
+          {ok, tree()} | {error, conflict, conflict()}.
+foldl(Tree0, Fun) when is_map(Tree0), is_function(Fun, 1) ->
+    Routes0 = routes(Tree0),
     Routes1 = Fun(Routes0),
     case is_list(Routes1) of
         true ->
-            from_list(Routes1, maps:get(options, Trie0, #{}));
+            from_list(Routes1, maps:get(options, Tree0, #{}));
         false ->
             erlang:error({badreturn, {foldl, Fun, Routes1}})
     end.
@@ -332,12 +382,12 @@ foldl(Trie0, Fun) when is_map(Trie0), is_function(Fun, 1) ->
 %% from_list helpers
 %%--------------------------------------------------------------------
 
--spec from_list([route()], map()) -> {ok, trie()} | {error, conflict, conflict()}.
+-spec from_list([route()], map()) -> {ok, tree()} | {error, conflict, conflict()}.
 from_list(Routes, RootOpts) when is_list(Routes), is_map(RootOpts) ->
     lists:foldl(
       fun
-          (Route, {ok, TrieAcc}) ->
-              insert_route(Route, TrieAcc);
+          (Route, {ok, TreeAcc}) ->
+              insert_route(Route, TreeAcc);
           (_Route, Err={error, conflict, _Conf}) ->
               Err
       end,
@@ -345,28 +395,28 @@ from_list(Routes, RootOpts) when is_list(Routes), is_map(RootOpts) ->
       Routes
      ).
 
--spec insert_route(route(), trie()) -> {ok, trie()} | {error, conflict, conflict()}.
-insert_route({Path, Method, Payload}, Trie) ->
-    insert(Path, Method, Payload, Trie);
-insert_route({Path, Method, Payload, Opts}, Trie) when is_map(Opts) ->
-    insert('_', Path, Method, Payload, Trie, Opts);
-insert_route({Host, Path, Method, Payload}, Trie) ->
-    insert(Host, Path, Method, Payload, Trie);
-insert_route({Host, Path, Method, Payload, Opts}, Trie) when is_map(Opts) ->
-    insert(Host, Path, Method, Payload, Trie, Opts);
-insert_route(Other, _Trie) ->
+-spec insert_route(route(), tree()) -> {ok, tree()} | {error, conflict, conflict()}.
+insert_route({Path, Method, Payload}, Tree) ->
+    insert(Path, Method, Payload, Tree);
+insert_route({Path, Method, Payload, Opts}, Tree) when is_map(Opts) ->
+    insert('_', Path, Method, Payload, Tree, Opts);
+insert_route({Host, Path, Method, Payload}, Tree) ->
+    insert(Host, Path, Method, Payload, Tree);
+insert_route({Host, Path, Method, Payload, Opts}, Tree) when is_map(Opts) ->
+    insert(Host, Path, Method, Payload, Tree, Opts);
+insert_route(Other, _Tree) ->
     erlang:error({bad_route, Other}).
 
 %%--------------------------------------------------------------------
 %% Route extraction (used by foldl/2)
 %%--------------------------------------------------------------------
 
--spec routes(trie()) -> [route()].
-routes(Trie) ->
-    Hosts = maps:get(hosts, Trie, #{}),
+-spec routes(tree()) -> [route()].
+routes(Tree) ->
+    Hosts = maps:get(hosts, Tree, #{}),
     maps:fold(
-      fun(Host, HostTrie, Acc) ->
-              gather_routes(HostTrie, [], Host, Acc)
+      fun(Host, HostTree, Acc) ->
+              gather_routes(HostTree, [], Host, Acc)
       end,
       [],
       Hosts
@@ -395,8 +445,9 @@ gather_routes(Node, AccSegs, Host, Acc0) ->
 %% Methods
 
 -spec norm_method(method_in()) -> method().
+norm_method('_') ->
+    <<"ALL">>;
 norm_method(M) when is_binary(M) ->
-    %% Assume already normalized (e.g. <<"GET">>, <<"POST">>, <<"ALL">>)
     M;
 norm_method(M) when is_atom(M) ->
     list_to_binary(string:uppercase(atom_to_list(M)));
@@ -407,7 +458,7 @@ terminal_add(M, Payload, Node0=#{terminal := Term0}) ->
     Node0#{terminal := Term0#{ M => Payload }}.
 
 %% Resolve payload for a given method at a terminal node
--spec method_payload(method(), trie_node()) -> {ok, term()} | error.
+-spec method_payload(method(), tree_node()) -> {ok, term()} | error.
 method_payload(M, #{terminal := Term}) ->
     case M of
         <<"ALL">> ->
@@ -432,12 +483,6 @@ method_payload(M, #{terminal := Term}) ->
             end
     end.
 
-%% method_member(M, Node) ->
-%%     case method_payload(M, Node) of
-%%         {ok, _} -> true;
-%%         error   -> false
-%%     end.
-
 methods_list(#{terminal := Term}) ->
     [K || {K, _} <- maps:to_list(Term)].
 
@@ -446,14 +491,25 @@ render_method(M) when is_binary(M) ->
 render_method(M) ->
     norm_method(M).
 
+%% Path normalization
+
+normalize_path(Path) when is_integer(Path) ->
+    integer_to_binary(Path);
+normalize_path(Path) ->
+    Path.
+
 %% Segments and paths
 
+segs_for_insert(Path) when is_integer(Path) ->
+    segs_for_insert(integer_to_binary(Path));
 segs_for_insert(Path) when is_list(Path) ->
     segs_for_insert(list_to_binary(Path));
 segs_for_insert(Path) when is_binary(Path) ->
     Parts = [S || S <- binary:split(Path, <<"/">>, [global, trim]), S =/= <<>>],
     [<<"/">> | [ to_key(S) || S <- Parts ]].
 
+segs_for_match(Path) when is_integer(Path) ->
+    segs_for_match(integer_to_binary(Path));
 segs_for_match(Path) when is_list(Path) ->
     segs_for_match(list_to_binary(Path));
 segs_for_match(Path) when is_binary(Path) ->
@@ -489,7 +545,7 @@ render_path(Segs) ->
             join_with_sep([render_key(S) || S <- Segs], <<"/">>)
     end.
 
-%% Insert without conflict checking (single-host trie)
+%% Insert without conflict checking (single-host tree)
 
 insert_segs(M, Payload, [], N0) ->
     terminal_add(M, Payload, N0);
@@ -535,7 +591,7 @@ overshadow_methods(M, ExistingMs) ->
                 lists:member(<<"ALL">>, ExistingMs)
     end.
 
-%% Safe insert with conflict checking (single-host trie)
+%% Safe insert with conflict checking (single-host tree)
 safe_insert_segs(M, Payload, [], N0, Prefix, Full) ->
     Ms = methods_list(N0),
     case lists:member(M, Ms) of
@@ -936,7 +992,6 @@ foldl_can_rewrite_payloads_test() ->
     {ok, T1} = insert(<<"/a">>, get, payload_a, T0),
     {ok, T2} = insert(<<"/b">>, get, payload_b, T1),
 
-    %% Byt payload för /a men låt /b vara oförändrad
     {ok, T3} =
         foldl(
           T2,
@@ -959,8 +1014,6 @@ foldl_can_rewrite_methods_test() ->
     T0 = new(),
     {ok, T1} = insert(<<"/a">>, get, payload_a, T0),
 
-    %% Flytta routen från GET till POST (vi skickar 'post' som atom för att
-    %% samtidigt testa att from_list/insert normaliserar method korrekt)
     {ok, T2} =
         foldl(
           T1,
@@ -974,11 +1027,37 @@ foldl_can_rewrite_methods_test() ->
           end
         ),
 
-    %% GET ska inte längre matcha
     ?assertEqual(error,
                  lookup(get, <<"/a">>, T2)),
-    %% POST ska matcha och ge samma payload
     ?assertMatch({ok, _Node, payload_a, #{}},
                  lookup(post, <<"/a">>, T2)).
+
+%% find/4 tests
+
+find_basic_test() ->
+    T0 = new(),
+    {ok, T1} = insert('_', <<"/users">>, get, payload1, T0),
+    ?assertMatch({ok, #{}, payload1}, find('_', <<"/users">>, <<"GET">>, T1)).
+
+find_not_found_test() ->
+    T0 = new(),
+    {ok, T1} = insert('_', <<"/users">>, get, payload1, T0),
+    ?assertEqual({error, not_found}, find('_', <<"/nope">>, <<"GET">>, T1)).
+
+find_method_not_allowed_test() ->
+    T0 = new(),
+    {ok, T1} = insert('_', <<"/users">>, get, payload1, T0),
+    ?assertMatch({error, comparator_not_found, [<<"GET">>]},
+                 find('_', <<"/users">>, <<"POST">>, T1)).
+
+find_integer_path_test() ->
+    T0 = new(),
+    {ok, T1} = insert('_', 404, '_', payload_404, T0),
+    ?assertMatch({ok, #{}, payload_404}, find('_', 404, '_', T1)).
+
+find_wildcard_method_test() ->
+    T0 = new(),
+    {ok, T1} = insert('_', <<"/users">>, '_', payload1, T0),
+    ?assertMatch({ok, #{}, payload1}, find('_', <<"/users">>, '_', T1)).
 
 -endif.
