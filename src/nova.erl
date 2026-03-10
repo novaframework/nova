@@ -155,24 +155,19 @@ drain_connections(Timeout) ->
 
 drain_loop(Deadline) ->
     case ranch:info(nova_listener) of
-        Info when is_list(Info) ->
-            case proplists:get_value(active_connections, Info, 0) of
-                0 ->
+        #{active_connections := 0} ->
+            ok;
+        #{active_connections := N} ->
+            Now = erlang:monotonic_time(millisecond),
+            case Now >= Deadline of
+                true ->
+                    ?LOG_WARNING(#{msg => <<"Drain timeout reached">>,
+                                   remaining_connections => N}),
                     ok;
-                N ->
-                    Now = erlang:monotonic_time(millisecond),
-                    case Now >= Deadline of
-                        true ->
-                            ?LOG_WARNING(#{msg => <<"Drain timeout reached">>,
-                                           remaining_connections => N}),
-                            ok;
-                        false ->
-                            timer:sleep(500),
-                            drain_loop(Deadline)
-                    end
-            end;
-        _ ->
-            ok
+                false ->
+                    timer:sleep(500),
+                    drain_loop(Deadline)
+            end
     end.
 
 -spec detect_language() -> elixir | lfe | erlang.
