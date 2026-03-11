@@ -23,8 +23,7 @@ not_found(Req) ->
 	  lists:member(<<"text/html">>, AcceptList)} of
         {true, _} ->
             %% Render a json response
-            JsonLib = nova:get_env(json_lib, thoas),
-            Json = JsonLib:encode(#{message => "Resource not found"}),
+            Json = json:encode(#{message => <<"Resource not found">>}),
             {status, 404, #{<<"content-type">> => <<"application/json">>}, Json};
 	{_, true} ->
             %% Just assume HTML
@@ -47,8 +46,7 @@ server_error(#{crash_info := #{status_code := StatusCode} = CrashInfo} = Req) ->
         true ->
             case cowboy_req:header(<<"accept">>, Req) of
                 <<"application/json">> ->
-                    JsonLib = nova:get_env(json_lib, thoas),
-                    Json = JsonLib:encode(Variables),
+                    Json = json:encode(ensure_json_safe(Variables)),
                     {status, StatusCode, #{<<"content-type">> => <<"application/json">>}, Json};
                 <<"text/html">> ->
                     {ok, Body} = nova_error_dtl:render(Variables),
@@ -61,10 +59,10 @@ server_error(#{crash_info := #{status_code := StatusCode} = CrashInfo} = Req) ->
     end;
 server_error(#{crash_info := #{class := Class, reason := Reason}} = Req) ->
     Stacktrace = maps:get(stacktrace, Req, []),
-    Variables = #{status => "Internal Server Error",
-                  title => "500 Internal Server Error",
-                  message => "Something internal crashed. Please take a look!",
-                  extra_msg => io_lib:format("Class: ~p<br /> Reason: ~p", [Class, Reason]),
+    Variables = #{status => <<"Internal Server Error">>,
+                  title => <<"500 Internal Server Error">>,
+                  message => <<"Something internal crashed. Please take a look!">>,
+                  extra_msg => iolist_to_binary(io_lib:format("Class: ~p<br /> Reason: ~p", [Class, Reason])),
                   stacktrace => format_stacktrace(Stacktrace)},
 
     case nova:get_environment() of
@@ -72,8 +70,7 @@ server_error(#{crash_info := #{class := Class, reason := Reason}} = Req) ->
             %% We do show a proper error response
             case cowboy_req:header(<<"accept">>, Req) of
                 <<"application/json">> ->
-                    JsonLib = nova:get_env(json_lib, thoas),
-                    Json = JsonLib:encode(Variables),
+                    Json = json:encode(Variables),
                     {status, 500, #{<<"content-type">> => <<"application/json">>}, Json};
                 <<"text/html">> ->
                     {ok, Body} = nova_error_dtl:render(Variables),
@@ -122,6 +119,16 @@ format_arity(Arity, _) when is_function(Arity)->
     <<"fun">>;
 format_arity(Arity, _) ->
     Arity.
+
+ensure_json_safe(Map) when is_map(Map) ->
+    maps:map(fun(_K, V) -> ensure_json_safe(V) end, Map);
+ensure_json_safe(List) when is_list(List) ->
+    case io_lib:printable_unicode_list(List) of
+        true -> unicode:characters_to_binary(List);
+        false -> [ensure_json_safe(E) || E <- List]
+    end;
+ensure_json_safe(Value) ->
+    Value.
 
 -ifdef(TEST).
 -compile(export_all).

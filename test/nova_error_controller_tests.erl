@@ -69,7 +69,7 @@ not_found_json_accept_test_() ->
          Req1 = nova_test_helper:with_header(<<"accept">>, <<"application/json">>, Req),
          {status, 404, Headers, Body} = nova_error_controller:not_found(Req1),
          ?assertEqual(<<"application/json">>, maps:get(<<"content-type">>, Headers)),
-         ?assert(is_binary(Body))
+         ?assert(is_list(Body) orelse is_binary(Body))
      end}.
 
 %% When no accept header, defaults to JSON

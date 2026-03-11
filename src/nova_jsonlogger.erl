@@ -85,8 +85,7 @@ merge_meta(Msg, Meta0, Config) ->
     maps:merge(Msg, Meta2).
 
 encode(Data, Config) ->
-    JsonLib = nova:get_env(json_lib, thoas),
-    Json = JsonLib:encode(Data),
+    Json = json:encode(Data),
     case new_line(Config) of
         true -> [Json, new_line_type(Config)];
         false -> Json
@@ -162,7 +161,7 @@ meta_with(Meta, _ConfigNotPresent) ->
 -include_lib("eunit/include/eunit.hrl").
 
 -define(assertJSONEqual(Expected, Actual),
-    ?assertEqual(thoas:decode(Expected), thoas:decode(Actual))
+    ?assertEqual(json:decode(Expected), json:decode(iolist_to_binary(Actual)))
 ).
 
 format_test() ->
@@ -260,20 +259,20 @@ meta_without_test() ->
         meta => #{secret => xyz}
     },
     ?assertEqual(
-        {ok, #{
+        #{
             <<"answer">> => 42,
             <<"level">> => <<"info">>,
             <<"secret">> => <<"xyz">>
-        }},
-        thoas:decode(format(Error, #{}))
+        },
+        json:decode(iolist_to_binary(format(Error, #{})))
     ),
     Config2 = #{meta_without => [secret]},
     ?assertEqual(
-        {ok, #{
+        #{
             <<"answer">> => 42,
             <<"level">> => <<"info">>
-        }},
-        thoas:decode(format(Error, Config2))
+        },
+        json:decode(iolist_to_binary(format(Error, Config2)))
     ),
     ok.
 
@@ -284,36 +283,34 @@ meta_with_test() ->
         meta => #{secret => xyz}
     },
     ?assertEqual(
-        {ok, #{
+        #{
             <<"answer">> => 42,
             <<"level">> => <<"info">>,
             <<"secret">> => <<"xyz">>
-        }},
-        thoas:decode(format(Error, #{}))
+        },
+        json:decode(iolist_to_binary(format(Error, #{})))
     ),
     Config2 = #{meta_with => [level]},
     ?assertEqual(
-        {ok, #{
+        #{
             <<"answer">> => 42,
             <<"level">> => <<"info">>
-        }},
-        thoas:decode(format(Error, Config2))
+        },
+        json:decode(iolist_to_binary(format(Error, Config2)))
     ),
     ok.
 
 newline_test() ->
     ConfigDefault = #{new_line => true},
-    ?assertEqual(
-        [<<"{\"level\":\"alert\",\"text\":\"derp\"}">>, <<"\n">>],
-        format(#{level => alert, msg => {string, "derp"}, meta => #{}}, ConfigDefault)
-    ),
-    ConfigCRLF = #{
-        new_line_type => crlf,
-        new_line => true
-    },
-    ?assertEqual(
-        [<<"{\"level\":\"alert\",\"text\":\"derp\"}">>, <<"\r\n">>],
-        format(#{level => alert, msg => {string, "derp"}, meta => #{}}, ConfigCRLF)
-    ).
+    [JsonDefault, NlDefault] = format(#{level => alert, msg => {string, "derp"}, meta => #{}}, ConfigDefault),
+    ?assertEqual(#{<<"level">> => <<"alert">>, <<"text">> => <<"derp">>},
+                 json:decode(iolist_to_binary(JsonDefault))),
+    ?assertEqual(<<"\n">>, NlDefault),
+
+    ConfigCRLF = #{new_line_type => crlf, new_line => true},
+    [JsonCRLF, NlCRLF] = format(#{level => alert, msg => {string, "derp"}, meta => #{}}, ConfigCRLF),
+    ?assertEqual(#{<<"level">> => <<"alert">>, <<"text">> => <<"derp">>},
+                 json:decode(iolist_to_binary(JsonCRLF))),
+    ?assertEqual(<<"\r\n">>, NlCRLF).
 
 -endif.

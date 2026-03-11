@@ -41,18 +41,9 @@ These parameters can be specified in your *main* application (Eg the one you've 
 
 | Key | Description | Value |
 |-----|-------------|-------|
-| `json_lib` | JSON lib to use. Read more in the subsection *Configure json lib* | `atom()` |
 | `watchers` | Watchers are external programs that will run together with Nova. Watchers are defined as list of tuples where the tuples is in format `{Command, ArgumentList}` (Like `[{my_app, "npm", ["run", "watch"], #{workdir => "priv/assets/js/my-app"}}]`) | `[{string(), string()}] | [{atom(), string(), map()}] | [{atom(), string(), list(), map()}]` |
 
-
-
-### Configure json_lib
-
-One can configure which json library to use for encoding/decoding json structures. The module defined for this should expose two different functions:
-
-`encode(Structure) -> binary() | iolist()`
-
-`decode(JsonString) -> {ok, Structure}`
+> **Note:** Nova uses the Erlang/OTP `json` module for JSON encoding and decoding. The `json_lib` configuration option has been removed.
 
 
 ## Handling errors in Nova

@@ -32,7 +32,7 @@ with_header(Name, Value, Req = #{headers := Headers}) ->
 
 -spec with_json_body(map() | binary(), map()) -> map().
 with_json_body(JSON, Req) when is_map(JSON) ->
-    Body = thoas:encode(JSON),
+    Body = iolist_to_binary(json:encode(JSON)),
     with_json_body(Body, Req);
 with_json_body(Body, Req) when is_binary(Body) ->
     Req1 = with_content_type(<<"application/json">>, Req),
@@ -61,7 +61,6 @@ setup_nova_env() ->
     Prev = application:get_env(nova, bootstrap_application),
     application:set_env(nova, bootstrap_application, nova),
     application:set_env(nova, environment, dev),
-    application:set_env(nova, json_lib, thoas),
     Prev.
 
 -spec cleanup_nova_env(undefined | {ok, atom()}) -> ok.
