@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: ['26.1', '27.1', '28.0']
+        otp: ['27.1', '28.0']
         rebar3: ['3.25.0']
     steps:
     - uses: actions/checkout@v6
@@ -39,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: ['26.1', '27.1', '28.0']
+        otp: ['27.1', '28.0']
         rebar3: ['3.25.0']
     steps:
     - uses: actions/checkout@v6
@@ -65,7 +65,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: ['26.1', '27.1', '28.0']
+        otp: ['27.1', '28.0']
         rebar3: ['3.25.0']
     steps:
     - uses: actions/checkout@v6
@@ -91,7 +91,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: ['26.1', '27.1', '28.0']
+        otp: ['27.1', '28.0']
         rebar3: ['3.25.0']
     steps:
     - uses: actions/checkout@v6
