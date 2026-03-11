@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         otp: ['27.1', '28.0']
-        rebar3: ['3.25.0']
+        rebar3: ['3.26.0']
     steps:
     - uses: actions/checkout@v6
     - uses: erlef/setup-beam@v1
@@ -40,7 +40,7 @@ jobs:
       fail-fast: false
       matrix:
         otp: ['27.1', '28.0']
-        rebar3: ['3.25.0']
+        rebar3: ['3.26.0']
     steps:
     - uses: actions/checkout@v6
     - uses: erlef/setup-beam@v1
@@ -66,7 +66,7 @@ jobs:
       fail-fast: false
       matrix:
         otp: ['27.1', '28.0']
-        rebar3: ['3.25.0']
+        rebar3: ['3.26.0']
     steps:
     - uses: actions/checkout@v6
     - uses: erlef/setup-beam@v1
@@ -92,7 +92,7 @@ jobs:
       fail-fast: false
       matrix:
         otp: ['27.1', '28.0']
-        rebar3: ['3.25.0']
+        rebar3: ['3.26.0']
     steps:
     - uses: actions/checkout@v6
     - uses: erlef/setup-beam@v1
