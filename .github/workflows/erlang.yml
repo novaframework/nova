@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: ['27.1', '28.0']
+        otp: ['27.3', '28.3']
         rebar3: ['3.26.0']
     steps:
     - uses: actions/checkout@v6
@@ -22,7 +22,7 @@ jobs:
         rebar3-version: ${{matrix.rebar3}}
         version-type: strict
     - name: Cache rebar3 deps and build
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           ~/.cache/rebar3
@@ -39,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: ['27.1', '28.0']
+        otp: ['27.3', '28.3']
         rebar3: ['3.26.0']
     steps:
     - uses: actions/checkout@v6
@@ -49,7 +49,7 @@ jobs:
         rebar3-version: ${{matrix.rebar3}}
         version-type: strict
     - name: Cache rebar3 deps and build
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           ~/.cache/rebar3
@@ -65,7 +65,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: ['27.1', '28.0']
+        otp: ['27.3', '28.3']
         rebar3: ['3.26.0']
     steps:
     - uses: actions/checkout@v6
@@ -75,7 +75,7 @@ jobs:
         rebar3-version: ${{matrix.rebar3}}
         version-type: strict
     - name: Cache rebar3 deps and build
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           ~/.cache/rebar3
@@ -91,7 +91,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: ['27.1', '28.0']
+        otp: ['27.3', '28.3']
         rebar3: ['3.26.0']
     steps:
     - uses: actions/checkout@v6
@@ -101,7 +101,7 @@ jobs:
         rebar3-version: ${{matrix.rebar3}}
         version-type: strict
     - name: Cache rebar3 deps and build
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           ~/.cache/rebar3
