@@ -64,7 +64,7 @@ server_error(#{crash_info := #{class := Class, reason := Reason}} = Req) ->
     Variables = #{status => "Internal Server Error",
                   title => "500 Internal Server Error",
                   message => "Something internal crashed. Please take a look!",
-                  extra_msg => io_lib:format("Class: ~p<br /> Reason: ~p", [Class, Reason]),
+                  extra_msg => io_lib:format("Class: ~p~nReason: ~p", [Class, Reason]),
                   stacktrace => format_stacktrace(Stacktrace)},
 
     case nova:get_environment() of
