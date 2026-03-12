@@ -118,6 +118,43 @@ cookie_opts_allows_overrides_test() ->
     end.
 
 %%====================================================================
+%% Tests for rotate/1
+%%====================================================================
+
+rotate_generates_new_session_id_test() ->
+    setup_meck(),
+    try
+        OldSessionId = <<"old-session-id">>,
+        meck:expect(nova_session_ets, rotate_session,
+                    fun(Old, New) when Old =:= OldSessionId ->
+                            ?assert(is_binary(New)),
+                            ?assertNotEqual(OldSessionId, New),
+                            ok
+                    end),
+        meck:expect(cowboy_req, set_resp_cookie,
+                    fun(<<"session_id">>, NewId, Req, _Opts) when is_binary(NewId) ->
+                            Req#{resp_cookie_set => NewId}
+                    end),
+        Req = #{nova_session_id => OldSessionId},
+        {ok, Req1} = nova_session:rotate(Req),
+        ?assert(maps:is_key(nova_session_id, Req1)),
+        ?assertNotEqual(OldSessionId, maps:get(nova_session_id, Req1))
+    after
+        cleanup_meck()
+    end.
+
+rotate_returns_error_without_session_test() ->
+    setup_meck(),
+    try
+        meck:expect(cowboy_req, match_cookies,
+                    fun([{session_id, [], undefined}], _Req) -> #{session_id => undefined} end),
+        Req = #{},
+        ?assertEqual({error, no_session}, nova_session:rotate(Req))
+    after
+        cleanup_meck()
+    end.
+
+%%====================================================================
 %% Helpers
 %%====================================================================
 
