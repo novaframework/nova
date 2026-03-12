@@ -23,7 +23,6 @@
 -ignore_xref([{arizona_cowboy_request, new, 1},
               {arizona_view, call_mount_callback, 3},
               {arizona_renderer, render_layout, 1},
-              {arizona_pubsub, set_scope, 1},
               {cowboy_router, execute, 2},
               resolve_view/1]).
 -dialyzer({nowarn_function, [render_view/3, resolve_view/1, finalize/1]}).
@@ -65,7 +64,6 @@ finalize(Dispatch) ->
             Dispatch;
         _ ->
             setup_arizona_dispatch(Views),
-            arizona_pubsub:set_scope(nova_scope),
             setup_live_websocket(Dispatch)
     end.
 
@@ -120,7 +118,7 @@ setup_live_websocket(Dispatch) ->
     LivePath = application:get_env(nova, arizona_live_path, "/live"),
     Value = #cowboy_handler_value{
         app = nova,
-        handler = arizona_websocket,
+        handler = arizona_nova_websocket,
         arguments = #{view_resolver => fun nova_arizona:resolve_view/1},
         plugins = [],
         secure = false
