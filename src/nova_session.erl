@@ -10,6 +10,7 @@
          set/3,
          delete/1,
          delete/2,
+         rotate/1,
          generate_session_id/0,
          cookie_opts/0
         ]).
@@ -48,6 +49,13 @@
         when SessionId :: binary(),
              Key :: binary().
 
+%% Copy all session data from OldSessionId to NewSessionId and delete old
+-callback rotate_session(OldSessionId, NewSessionId) ->
+    ok |
+    {error, Reason :: atom()}
+        when OldSessionId :: binary(),
+             NewSessionId :: binary().
+
 %% Start a server process for session backend, if necessary
 -callback start_link() ->
     {ok, Pid :: pid()} |
@@ -55,7 +63,7 @@
     {error, Error :: term()} |
     ignore.
 
--optional_callbacks([start_link/0]).
+-optional_callbacks([start_link/0, rotate_session/2]).
 
 %%%===================================================================
 %%% Public functions
@@ -110,6 +118,26 @@ delete(Req, Key) ->
             {ok, Req}
     end.
 
+
+-spec rotate(Req :: cowboy_req:req()) ->
+          {ok, Req :: cowboy_req:req()} | {error, Reason :: atom()}.
+rotate(Req) ->
+    case get_session_id(Req) of
+        {ok, OldSessionId} ->
+            {ok, NewSessionId} = generate_session_id(),
+            Mod = get_session_module(),
+            case erlang:function_exported(Mod, rotate_session, 2) of
+                true ->
+                    Mod:rotate_session(OldSessionId, NewSessionId);
+                false ->
+                    Mod:delete_value(OldSessionId)
+            end,
+            Req1 = cowboy_req:set_resp_cookie(<<"session_id">>, NewSessionId, Req,
+                                              cookie_opts()),
+            {ok, Req1#{nova_session_id => NewSessionId}};
+        _ ->
+            {error, no_session}
+    end.
 
 %%%===================================================================
 %%% Private functions
