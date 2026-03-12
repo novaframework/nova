@@ -331,7 +331,7 @@ parse_url(Host, [{RemotePath, LocalPath, Options}|Tl], T = #{prefix := Prefix},
 
     Value0 = #nova_handler_value{
                 app = App,
-                callback = fun nova_file_controller:TargetFun/1,
+                callback = erlang:make_fun(nova_file_controller, TargetFun, 1),
                 extra_state = #{static => Payload, options => Options},
                 plugins = Value#nova_handler_value.plugins,
                 secure = Secure
