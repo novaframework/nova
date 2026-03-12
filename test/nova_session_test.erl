@@ -85,6 +85,39 @@ nova_session_id_takes_priority_over_cookie_test() ->
     end.
 
 %%====================================================================
+%% Tests for cookie_opts/0
+%%====================================================================
+
+cookie_opts_returns_secure_defaults_test() ->
+    meck:new(nova, [passthrough]),
+    try
+        meck:expect(nova, get_env,
+                    fun(session_cookie_opts, #{}) -> #{} end),
+        Opts = nova_session:cookie_opts(),
+        ?assertEqual(true, maps:get(http_only, Opts)),
+        ?assertEqual(true, maps:get(secure, Opts)),
+        ?assertEqual(lax, maps:get(same_site, Opts)),
+        ?assertEqual(<<"/">>, maps:get(path, Opts))
+    after
+        meck:unload(nova)
+    end.
+
+cookie_opts_allows_overrides_test() ->
+    meck:new(nova, [passthrough]),
+    try
+        meck:expect(nova, get_env,
+                    fun(session_cookie_opts, #{}) ->
+                            #{same_site => strict, secure => false}
+                    end),
+        Opts = nova_session:cookie_opts(),
+        ?assertEqual(true, maps:get(http_only, Opts)),
+        ?assertEqual(false, maps:get(secure, Opts)),
+        ?assertEqual(strict, maps:get(same_site, Opts))
+    after
+        meck:unload(nova)
+    end.
+
+%%====================================================================
 %% Helpers
 %%====================================================================
 
@@ -92,7 +125,10 @@ setup_meck() ->
     meck:new(nova, [passthrough]),
     meck:new(cowboy_req, [passthrough]),
     meck:new(nova_session_ets, [passthrough]),
-    meck:expect(nova, get_env, fun(use_sessions, true) -> true end),
+    meck:expect(nova, get_env,
+                fun(use_sessions, true) -> true;
+                   (session_cookie_opts, #{}) -> #{}
+                end),
     application:set_env(nova, session_manager, nova_session_ets).
 
 cleanup_meck() ->

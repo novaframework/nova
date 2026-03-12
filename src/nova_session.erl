@@ -10,7 +10,8 @@
          set/3,
          delete/1,
          delete/2,
-         generate_session_id/0
+         generate_session_id/0,
+         cookie_opts/0
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -89,7 +90,7 @@ delete(Req) ->
             Mod = get_session_module(),
             Mod:delete_value(SessionId),
             Req1 = cowboy_req:set_resp_cookie(<<"session_id">>, SessionId, Req,
-                                              #{max_age => 0}),
+                                              (cookie_opts())#{max_age => 0}),
             {ok, Req1};
         _ ->
             %% Session not found
@@ -137,7 +138,11 @@ get_session_id(Req) ->
     end.
 
 generate_session_id() ->
-    SessionId =
-        << <<X:8/unsigned-integer>> ||
-            X <- [ rand:uniform(255) || _ <- lists:seq(0, 31) ] >>,
+    SessionId = crypto:strong_rand_bytes(32),
     {ok, base64:encode(SessionId)}.
+
+-spec cookie_opts() -> map().
+cookie_opts() ->
+    Defaults = #{http_only => true, secure => true, same_site => lax, path => <<"/">>},
+    Overrides = nova:get_env(session_cookie_opts, #{}),
+    maps:merge(Defaults, Overrides).
