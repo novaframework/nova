@@ -15,14 +15,26 @@
 -export([
     render_view/3,
     register_view/3,
-    finalize/1
+    finalize/1,
+    %% PubSub bridge
+    broadcast/2,
+    broadcast_from/3,
+    subscribe/1,
+    subscribe/2,
+    unsubscribe/1,
+    unsubscribe/2
 ]).
 
 %% Arizona modules are optional runtime dependencies
 -ignore_xref([{arizona_cowboy_request, new, 1},
               {arizona_view, call_mount_callback, 3},
-              {arizona_renderer, render_layout, 1}]).
--dialyzer({nowarn_function, render_view/3}).
+              {arizona_renderer, render_layout, 1},
+              {arizona_pubsub, broadcast, 2},
+              {arizona_pubsub, broadcast_from, 3},
+              {arizona_pubsub, join, 2},
+              {arizona_pubsub, leave, 2}]).
+-dialyzer({nowarn_function, [render_view/3, broadcast/2, broadcast_from/3,
+                             subscribe/1, subscribe/2, unsubscribe/1, unsubscribe/2]}).
 
 -include("../include/nova_router.hrl").
 -include_lib("kernel/include/logger.hrl").
@@ -77,6 +89,56 @@ render_view(ViewModule, MountArg, Req) ->
     View = arizona_view:call_mount_callback(ViewModule, MountArg, ArizonaReq),
     {Html, _RenderView} = arizona_renderer:render_layout(View),
     {status, 200, #{<<"content-type">> => <<"text/html; charset=utf-8">>}, Html}.
+
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Broadcast a message to all Arizona view subscribers of a topic.
+%% Views receive this in their `handle_event(Topic, Data, View)' callback.
+%%
+%% Example from a Nova controller:
+%% ```
+%% nova_arizona:broadcast(<<"user_updated">>, #{id => UserId}).
+%% '''
+%% @end
+%%--------------------------------------------------------------------
+-spec broadcast(Topic :: binary(), Data :: term()) -> ok.
+broadcast(Topic, Data) ->
+    arizona_pubsub:broadcast(Topic, Data).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Broadcast a message to all subscribers except the sender.
+%% @end
+%%--------------------------------------------------------------------
+-spec broadcast_from(From :: pid(), Topic :: binary(), Data :: term()) -> ok.
+broadcast_from(From, Topic, Data) ->
+    arizona_pubsub:broadcast_from(From, Topic, Data).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Subscribe the calling process to an Arizona PubSub topic.
+%% The process will receive `{pubsub_message, Topic, Data}' messages.
+%% @end
+%%--------------------------------------------------------------------
+-spec subscribe(Topic :: binary()) -> ok.
+subscribe(Topic) ->
+    arizona_pubsub:join(Topic, self()).
+
+%% @doc Subscribe a specific process to an Arizona PubSub topic.
+-spec subscribe(Topic :: binary(), Pid :: pid()) -> ok.
+subscribe(Topic, Pid) ->
+    arizona_pubsub:join(Topic, Pid).
+
+%% @doc Unsubscribe the calling process from an Arizona PubSub topic.
+-spec unsubscribe(Topic :: binary()) -> ok | not_joined.
+unsubscribe(Topic) ->
+    arizona_pubsub:leave(Topic, self()).
+
+%% @doc Unsubscribe a specific process from an Arizona PubSub topic.
+-spec unsubscribe(Topic :: binary(), Pid :: pid()) -> ok | not_joined.
+unsubscribe(Topic, Pid) ->
+    arizona_pubsub:leave(Topic, Pid).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%
