@@ -2,8 +2,6 @@
   <img src="https://raw.githubusercontent.com/novaframework/nova/master/priv/static/nova.png" alt="Nova" width="200">
 </p>
 
-<h1 align="center">Nova</h1>
-
 <p align="center">
   <strong>A web framework for the BEAM</strong><br>
   Build fault-tolerant, distributed web applications in Erlang, Elixir, or LFE.
