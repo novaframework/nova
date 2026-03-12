@@ -48,20 +48,23 @@ get_file(_Req) ->
 get_dir(#{extra_state := #{pathinfo := Pathinfo, static := Dir, options := Options}} = Req) ->
     %% This case will be invoked if a directory was set with wildcard - pathinfo will then
     %% contain the segments of the wildcard value
-    Filepath = get_filepath(Dir),
-    Filepath0 = lists:foldl(fun(F, Acc) -> filename:join(Acc, binary_to_list(F)) end, Filepath, Pathinfo),
-    case filelib:is_dir(Filepath0) of
-        false ->
-            %% Check if it's a file
-            case filelib:is_file(Filepath0) of
-                true ->
-                    %% It's a file
-                    get_file(Req#{extra_state => #{static => {file, Filepath0}, options => Options}});
-                false ->
-                    {status, 404}
-            end;
+    case lists:any(fun(Seg) -> Seg =:= <<"..">> orelse Seg =:= <<".">> end, Pathinfo) of
         true ->
-            get_dir(Req#{extra_state => #{static => {dir, Filepath0}, options => Options}})
+            {status, 400};
+        false ->
+            Filepath = get_filepath(Dir),
+            Filepath0 = lists:foldl(fun(F, Acc) -> filename:join(Acc, binary_to_list(F)) end, Filepath, Pathinfo),
+            case filelib:is_dir(Filepath0) of
+                false ->
+                    case filelib:is_file(Filepath0) of
+                        true ->
+                            get_file(Req#{extra_state => #{static => {file, Filepath0}, options => Options}});
+                        false ->
+                            {status, 404}
+                    end;
+                true ->
+                    get_dir(Req#{extra_state => #{static => {dir, Filepath0}, options => Options}})
+            end
     end;
 get_dir(#{path := Path, extra_state := #{static := Dir, options := Options}} = Req) ->
     Filepath = get_filepath(Dir),
