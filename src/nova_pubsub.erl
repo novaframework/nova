@@ -46,8 +46,13 @@
          join/2,
          leave/1,
          leave/2,
+         broadcast/2,
          broadcast/3,
          local_broadcast/3,
+         subscribe/1,
+         subscribe/2,
+         unsubscribe/1,
+         unsubscribe/2,
          get_members/1,
          get_local_members/1
         ]).
@@ -151,6 +156,60 @@ get_members(Channel) ->
 -spec get_local_members(Channel :: atom()) -> [pid()].
 get_local_members(Channel) ->
     pg:get_local_members(?SCOPE, Channel).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Broadcast to all subscribers of a binary topic.
+%% Sends {pubsub_message, Topic, Data} which Arizona views handle
+%% in their handle_event/3 callback.
+%% @end
+%%--------------------------------------------------------------------
+-spec broadcast(Topic :: binary(), Data :: term()) -> ok.
+broadcast(Topic, Data) when is_binary(Topic) ->
+    Members = pg:get_members(?SCOPE, Topic),
+    [Receiver ! {pubsub_message, Topic, Data} || Receiver <- Members],
+    ok.
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Subscribe the calling process to a binary topic on the shared scope.
+%% @end
+%%--------------------------------------------------------------------
+-spec subscribe(Topic :: binary()) -> ok.
+subscribe(Topic) when is_binary(Topic) ->
+    subscribe(Topic, self()).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Subscribe a process to a binary topic on the shared scope.
+%% @end
+%%--------------------------------------------------------------------
+-spec subscribe(Topic :: binary(), Pid :: pid()) -> ok.
+subscribe(Topic, Pid) when is_binary(Topic), is_pid(Pid) ->
+    pg:join(?SCOPE, Topic, Pid).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Unsubscribe the calling process from a binary topic.
+%% @end
+%%--------------------------------------------------------------------
+-spec unsubscribe(Topic :: binary()) -> ok | not_joined.
+unsubscribe(Topic) when is_binary(Topic) ->
+    unsubscribe(Topic, self()).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Unsubscribe a process from a binary topic.
+%% @end
+%%--------------------------------------------------------------------
+-spec unsubscribe(Topic :: binary(), Pid :: pid()) -> ok | not_joined.
+unsubscribe(Topic, Pid) when is_binary(Topic), is_pid(Pid) ->
+    pg:leave(?SCOPE, Topic, Pid).
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%
+%% INTERNAL FUNCTIONS %%
+%%%%%%%%%%%%%%%%%%%%%%%%
 
 create_envelope(Channel, Sender, Topic, Payload) ->
     #nova_pubsub{channel = Channel,

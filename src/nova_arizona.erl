@@ -16,25 +16,17 @@
     render_view/3,
     register_view/3,
     finalize/1,
-    %% PubSub bridge
-    broadcast/2,
-    broadcast_from/3,
-    subscribe/1,
-    subscribe/2,
-    unsubscribe/1,
-    unsubscribe/2
+    resolve_view/1
 ]).
 
 %% Arizona modules are optional runtime dependencies
 -ignore_xref([{arizona_cowboy_request, new, 1},
               {arizona_view, call_mount_callback, 3},
               {arizona_renderer, render_layout, 1},
-              {arizona_pubsub, broadcast, 2},
-              {arizona_pubsub, broadcast_from, 3},
-              {arizona_pubsub, join, 2},
-              {arizona_pubsub, leave, 2}]).
--dialyzer({nowarn_function, [render_view/3, broadcast/2, broadcast_from/3,
-                             subscribe/1, subscribe/2, unsubscribe/1, unsubscribe/2]}).
+              {arizona_pubsub, set_scope, 1},
+              {cowboy_router, execute, 2},
+              resolve_view/1]).
+-dialyzer({nowarn_function, [render_view/3, resolve_view/1, finalize/1]}).
 
 -include("../include/nova_router.hrl").
 -include_lib("kernel/include/logger.hrl").
@@ -59,7 +51,8 @@ register_view(Path, ViewModule, MountArg) ->
 %% If any liveview routes were registered:
 %%   1. Builds Arizona's Cowboy dispatch table (persistent_term) so
 %%      arizona_websocket can resolve views from ?path= query params
-%%   2. Auto-registers /live WebSocket endpoint for Arizona connections
+%%   2. Sets Arizona's pubsub scope to nova_scope
+%%   3. Auto-registers /live WebSocket endpoint for Arizona connections
 %%
 %% Returns the dispatch tree unchanged if no liveview routes exist.
 %% @end
@@ -72,6 +65,7 @@ finalize(Dispatch) ->
             Dispatch;
         _ ->
             setup_arizona_dispatch(Views),
+            arizona_pubsub:set_scope(nova_scope),
             setup_live_websocket(Dispatch)
     end.
 
@@ -90,55 +84,19 @@ render_view(ViewModule, MountArg, Req) ->
     {Html, _RenderView} = arizona_renderer:render_layout(View),
     {status, 200, #{<<"content-type">> => <<"text/html; charset=utf-8">>}, Html}.
 
-
 %%--------------------------------------------------------------------
 %% @doc
-%% Broadcast a message to all Arizona view subscribers of a topic.
-%% Views receive this in their `handle_event(Topic, Data, View)' callback.
-%%
-%% Example from a Nova controller:
-%% ```
-%% nova_arizona:broadcast(<<"user_updated">>, #{id => UserId}).
-%% '''
+%% Resolve a view module from the Arizona dispatch table.
+%% Used by the WebSocket handler to determine which view to mount.
 %% @end
 %%--------------------------------------------------------------------
--spec broadcast(Topic :: binary(), Data :: term()) -> ok.
-broadcast(Topic, Data) ->
-    arizona_pubsub:broadcast(Topic, Data).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Broadcast a message to all subscribers except the sender.
-%% @end
-%%--------------------------------------------------------------------
--spec broadcast_from(From :: pid(), Topic :: binary(), Data :: term()) -> ok.
-broadcast_from(From, Topic, Data) ->
-    arizona_pubsub:broadcast_from(From, Topic, Data).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Subscribe the calling process to an Arizona PubSub topic.
-%% The process will receive `{pubsub_message, Topic, Data}' messages.
-%% @end
-%%--------------------------------------------------------------------
--spec subscribe(Topic :: binary()) -> ok.
-subscribe(Topic) ->
-    arizona_pubsub:join(Topic, self()).
-
-%% @doc Subscribe a specific process to an Arizona PubSub topic.
--spec subscribe(Topic :: binary(), Pid :: pid()) -> ok.
-subscribe(Topic, Pid) ->
-    arizona_pubsub:join(Topic, Pid).
-
-%% @doc Unsubscribe the calling process from an Arizona PubSub topic.
--spec unsubscribe(Topic :: binary()) -> ok | not_joined.
-unsubscribe(Topic) ->
-    arizona_pubsub:leave(Topic, self()).
-
-%% @doc Unsubscribe a specific process from an Arizona PubSub topic.
--spec unsubscribe(Topic :: binary(), Pid :: pid()) -> ok | not_joined.
-unsubscribe(Topic, Pid) ->
-    arizona_pubsub:leave(Topic, Pid).
+-spec resolve_view(Req :: cowboy_req:req()) -> {view, module(), term(), list()}.
+resolve_view(Req) ->
+    {ok, _Req, Env} = cowboy_router:execute(
+        Req,
+        #{dispatch => {persistent_term, arizona_dispatch}}
+    ),
+    maps:get(handler_opts, Env).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%
@@ -163,7 +121,7 @@ setup_live_websocket(Dispatch) ->
     Value = #cowboy_handler_value{
         app = nova,
         handler = arizona_websocket,
-        arguments = #{},
+        arguments = #{view_resolver => fun nova_arizona:resolve_view/1},
         plugins = [],
         secure = false
     },
