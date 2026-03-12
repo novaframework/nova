@@ -63,10 +63,14 @@ plugins() ->
 -spec compile(Apps :: [atom() | {atom(), map()}]) -> host_tree().
 compile(Apps) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
+    %% Reset Arizona view accumulator before compilation
+    persistent_term:put(nova_arizona_views, []),
     Dispatch = compile(Apps, routing_tree:new(#{use_strict => UseStrict, convert_to_binary => true}), #{}),
+    %% Finalize Arizona integration (builds dispatch table, adds /live WS route)
+    Dispatch1 = nova_arizona:finalize(Dispatch),
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
-    StorageBackend:put(nova_dispatch, Dispatch),
-    Dispatch.
+    StorageBackend:put(nova_dispatch, Dispatch1),
+    Dispatch1.
 
 -spec execute(Req, Env :: cowboy_middleware:env()) -> {ok, Req, Env0} | {stop, Req}
                                                           when Req::cowboy_req:req(),
@@ -370,6 +374,27 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
                         router_file => maps:get(router_file, Options, undefined)}),
             parse_url(Host, Tl, T, Value, Tree)
     end;
+parse_url(Host,
+          [{Path, Mod, #{protocol := liveview} = Options} | Tl],
+          T = #{prefix := Prefix}, Value = #nova_handler_value{app = App}, Tree)
+  when is_atom(Mod) ->
+    MountArg = maps:get(mount_arg, Options, #{}),
+    RealPath = concat_strings(Prefix, Path),
+    Callback = fun(Req) -> nova_arizona:render_view(Mod, MountArg, Req) end,
+    Methods = maps:get(methods, Options, ['_']),
+    ExtraState = maps:get(extra_state, Options, undefined),
+    Value0 = Value#nova_handler_value{extra_state = ExtraState},
+    CompiledPaths =
+        lists:foldl(
+          fun(Method, Tree0) ->
+                  BinMethod = method_to_binary(Method),
+                  Value1 = Value0#nova_handler_value{callback = Callback},
+                  ?LOG_DEBUG(#{action => <<"Adding liveview route">>,
+                               route => RealPath, app => App, method => Method}),
+                  insert(Host, RealPath, BinMethod, Value1, Tree0)
+          end, Tree, Methods),
+    nova_arizona:register_view(RealPath, Mod, MountArg),
+    parse_url(Host, Tl, T, Value, CompiledPaths);
 parse_url(Host,
           [{Path, Mod, #{protocol := ws}} | Tl],
           T = #{prefix := Prefix}, #nova_handler_value{app = App, secure = Secure} = Value,
