@@ -270,6 +270,13 @@ handle_websocket({websocket, ControllerData}, Callback, Req) ->
 %% Example of a valid return value is {reply, Frame, State}
 %% @end
 %%-----------------------------------------------------------------
+handle_ws({reply, Frames, NewControllerData}, State = #{commands := Commands}) when is_list(Frames) ->
+    State#{controller_data => NewControllerData,
+           commands => Frames ++ Commands};
+handle_ws({reply, Frames, NewControllerData, hibernate}, State = #{commands := Commands}) when is_list(Frames) ->
+    State#{controller_data => NewControllerData,
+           commands => Frames ++ Commands,
+           hibernate => true};
 handle_ws({reply, Frame, NewControllerData}, State = #{commands := Commands}) ->
     State#{controller_data => NewControllerData,
            commands => [Frame|Commands]};

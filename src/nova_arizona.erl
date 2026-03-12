@@ -114,12 +114,15 @@ setup_arizona_dispatch(Views) ->
                  view_count => length(Views)}).
 
 %% Auto-register /live WebSocket endpoint for Arizona connections.
+%% Uses Nova's WS handler (nova_ws_handler) so that Arizona LiveView
+%% connections go through the Nova plugin pipeline.
 setup_live_websocket(Dispatch) ->
     LivePath = application:get_env(nova, arizona_live_path, "/live"),
     Value = #cowboy_handler_value{
         app = nova,
-        handler = arizona_nova_websocket,
-        arguments = #{view_resolver => fun nova_arizona:resolve_view/1},
+        handler = nova_ws_handler,
+        arguments = #{module => arizona_nova_websocket,
+                      controller_data => #{view_resolver => fun nova_arizona:resolve_view/1}},
         plugins = [],
         secure = false
     },
