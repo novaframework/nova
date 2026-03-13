@@ -2,7 +2,7 @@ name: Dependency Submission
 
 on:
   push:
-    branches: [main, master, feat/dependency-submission]
+    branches: [main, master]
 
 permissions:
   contents: write
