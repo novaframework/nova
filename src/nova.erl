@@ -5,6 +5,8 @@
 
 -module(nova).
 
+-include_lib("kernel/include/logger.hrl").
+
 -export([
          get_main_app/0,
          get_apps/0,
@@ -13,7 +15,8 @@
          set_env/2,
          use_stacktrace/1,
          format_stacktrace/1,
-         detect_language/0
+         detect_language/0,
+         graceful_shutdown/0
         ]).
 
 -type state() :: any().
@@ -127,6 +130,46 @@ format_stacktrace(Stacktrace) ->
 %% of the Elixir and LFE modules, and returns the language.
 %% @end
 %%--------------------------------------------------------------------
+-spec graceful_shutdown() -> ok.
+graceful_shutdown() ->
+    Delay = application:get_env(nova, shutdown_delay, 0),
+    case Delay > 0 of
+        true ->
+            ?LOG_NOTICE(#{msg => <<"Graceful shutdown started">>, delay_ms => Delay}),
+            timer:sleep(Delay);
+        false ->
+            ok
+    end,
+    ?LOG_NOTICE(#{msg => <<"Suspending listener">>}),
+    ranch:suspend_listener(nova_listener),
+    DrainTimeout = application:get_env(nova, shutdown_drain_timeout, 15000),
+    ?LOG_NOTICE(#{msg => <<"Draining connections">>, timeout_ms => DrainTimeout}),
+    drain_connections(DrainTimeout),
+    ?LOG_NOTICE(#{msg => <<"Stopping listener">>}),
+    cowboy:stop_listener(nova_listener),
+    ok.
+
+drain_connections(Timeout) ->
+    Deadline = erlang:monotonic_time(millisecond) + Timeout,
+    drain_loop(Deadline).
+
+drain_loop(Deadline) ->
+    case ranch:info(nova_listener) of
+        #{active_connections := 0} ->
+            ok;
+        #{active_connections := N} ->
+            Now = erlang:monotonic_time(millisecond),
+            case Now >= Deadline of
+                true ->
+                    ?LOG_WARNING(#{msg => <<"Drain timeout reached">>,
+                                   remaining_connections => N}),
+                    ok;
+                false ->
+                    timer:sleep(500),
+                    drain_loop(Deadline)
+            end
+    end.
+
 -spec detect_language() -> elixir | lfe | erlang.
 detect_language() ->
     case {code:which('Elixir.System'), code:which(lfe_eval)} of
