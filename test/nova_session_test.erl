@@ -85,6 +85,76 @@ nova_session_id_takes_priority_over_cookie_test() ->
     end.
 
 %%====================================================================
+%% Tests for cookie_opts/0
+%%====================================================================
+
+cookie_opts_returns_secure_defaults_test() ->
+    meck:new(nova, [passthrough]),
+    try
+        meck:expect(nova, get_env,
+                    fun(session_cookie_opts, #{}) -> #{} end),
+        Opts = nova_session:cookie_opts(),
+        ?assertEqual(true, maps:get(http_only, Opts)),
+        ?assertEqual(true, maps:get(secure, Opts)),
+        ?assertEqual(lax, maps:get(same_site, Opts)),
+        ?assertEqual(<<"/">>, maps:get(path, Opts))
+    after
+        meck:unload(nova)
+    end.
+
+cookie_opts_allows_overrides_test() ->
+    meck:new(nova, [passthrough]),
+    try
+        meck:expect(nova, get_env,
+                    fun(session_cookie_opts, #{}) ->
+                            #{same_site => strict, secure => false}
+                    end),
+        Opts = nova_session:cookie_opts(),
+        ?assertEqual(true, maps:get(http_only, Opts)),
+        ?assertEqual(false, maps:get(secure, Opts)),
+        ?assertEqual(strict, maps:get(same_site, Opts))
+    after
+        meck:unload(nova)
+    end.
+
+%%====================================================================
+%% Tests for rotate/1
+%%====================================================================
+
+rotate_generates_new_session_id_test() ->
+    setup_meck(),
+    try
+        OldSessionId = <<"old-session-id">>,
+        meck:expect(nova_session_ets, rotate_session,
+                    fun(Old, New) when Old =:= OldSessionId ->
+                            ?assert(is_binary(New)),
+                            ?assertNotEqual(OldSessionId, New),
+                            ok
+                    end),
+        meck:expect(cowboy_req, set_resp_cookie,
+                    fun(<<"session_id">>, NewId, Req, _Opts) when is_binary(NewId) ->
+                            Req#{resp_cookie_set => NewId}
+                    end),
+        Req = #{nova_session_id => OldSessionId},
+        {ok, Req1} = nova_session:rotate(Req),
+        ?assert(maps:is_key(nova_session_id, Req1)),
+        ?assertNotEqual(OldSessionId, maps:get(nova_session_id, Req1))
+    after
+        cleanup_meck()
+    end.
+
+rotate_returns_error_without_session_test() ->
+    setup_meck(),
+    try
+        meck:expect(cowboy_req, match_cookies,
+                    fun([{session_id, [], undefined}], _Req) -> #{session_id => undefined} end),
+        Req = #{},
+        ?assertEqual({error, no_session}, nova_session:rotate(Req))
+    after
+        cleanup_meck()
+    end.
+
+%%====================================================================
 %% Helpers
 %%====================================================================
 
@@ -92,7 +162,10 @@ setup_meck() ->
     meck:new(nova, [passthrough]),
     meck:new(cowboy_req, [passthrough]),
     meck:new(nova_session_ets, [passthrough]),
-    meck:expect(nova, get_env, fun(use_sessions, true) -> true end),
+    meck:expect(nova, get_env,
+                fun(use_sessions, true) -> true;
+                   (session_cookie_opts, #{}) -> #{}
+                end),
     application:set_env(nova, session_manager, nova_session_ets).
 
 cleanup_meck() ->
