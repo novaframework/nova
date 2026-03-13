@@ -32,7 +32,8 @@ with_header(Name, Value, Req = #{headers := Headers}) ->
 
 -spec with_json_body(map() | binary(), map()) -> map().
 with_json_body(JSON, Req) when is_map(JSON) ->
-    Body = iolist_to_binary(json:encode(JSON)),
+    JsonLib = nova:get_env(json_lib, json),
+    Body = iolist_to_binary(JsonLib:encode(JSON)),
     with_json_body(Body, Req);
 with_json_body(Body, Req) when is_binary(Body) ->
     Req1 = with_content_type(<<"application/json">>, Req),
