@@ -78,15 +78,16 @@ modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", 
     {stop, Req400, State};
 modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}, body := Body}, [{decode_json_body, true}|Tl], State) ->
     %% Decode the data
-    JsonLib = nova:get_env(json_lib, thoas),
-    case JsonLib:decode(Body) of
-        {ok, JSON} ->
-            modulate_state(Req#{json => JSON}, Tl, State);
-        Error ->
+    JsonLib = nova:get_env(json_lib, json),
+    try JsonLib:decode(Body) of
+        JSON ->
+            modulate_state(Req#{json => JSON}, Tl, State)
+    catch
+        error:Reason ->
             Req400 = cowboy_req:reply(400, Req),
             logger:warning(#{status_code => 400,
                              msg => "Failed to decode json.",
-                             error => Error}),
+                             error => Reason}),
             {stop, Req400, State}
     end;
 modulate_state(#{headers := #{<<"content-type">> := <<"application/x-www-form-urlencoded", _/binary>>}, body := Body} = Req,

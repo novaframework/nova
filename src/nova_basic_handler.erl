@@ -43,7 +43,7 @@
 handle_json({json, StatusCode, Headers, Req0, JSON}, Callback, _Req) ->
     handle_json({json, StatusCode, Headers, JSON}, Callback, Req0);
 handle_json({json, StatusCode, Headers, JSON}, _Callback, Req) ->
-    JsonLib = nova:get_env(json_lib, thoas),
+    JsonLib = nova:get_env(json_lib, json),
     EncodedJSON = JsonLib:encode(JSON),
     Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, Headers),
     Req0 = cowboy_req:set_resp_headers(Headers0, Req),
@@ -154,7 +154,7 @@ handle_status({status, Status, ExtraHeaders, JSON, Req0}, Callback, _Req) ->
     handle_status({status, Status, ExtraHeaders, JSON}, Callback, Req0);
 handle_status({status, Status, ExtraHeaders, JSON}, _Callback, Req) when is_map(JSON) ->
     %% We do not need to render a status page since we just return a JSON structure
-    JsonLib = nova:get_env(json_lib, thoas),
+    JsonLib = nova:get_env(json_lib, json),
     Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, ExtraHeaders),
     Req0 = cowboy_req:set_resp_headers(Headers0, Req),
     Req1 = Req0#{resp_status_code => Status},
