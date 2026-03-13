@@ -1,0 +1,33 @@
+name: Dependency Audit
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  audit:
+    name: Audit dependencies
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.0"
+          rebar3-version: "3.25.0"
+          version-type: strict
+
+      - name: Inject rebar3_audit plugin
+        run: |
+          echo '{project_plugins, [{rebar3_audit, {git, "https://github.com/Taure/rebar3_audit.git", {tag, "v0.1.0"}}}]}.' >> rebar.config
+
+      - name: Audit
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: rebar3 audit --token "${GITHUB_TOKEN}"
+
+      - name: Clean up
+        if: always()
+        run: git checkout rebar.config
