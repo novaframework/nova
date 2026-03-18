@@ -347,17 +347,15 @@ add_routes_invalid_throws_test_() ->
                      nova_router:add_routes(my_app, not_a_list))
     end}.
 
-%% NOTE: add_routes/2 has a bug — compile_paths requires router_file in Options
-%% but add_routes creates Options = #{} without it. This crashes with badkey.
-%% Skipping functional test until the bug is fixed.
-add_routes_crashes_without_router_file_test_() ->
+%% Regression: add_routes/2 used to crash with {badkey, router_file}
+%% but was fixed in PR #373. Verify it succeeds.
+add_routes_without_router_file_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         NewCallback = fun(_) -> {json, #{new => true}} end,
         Routes = [#{
             routes => [{"/new_route", NewCallback, #{methods => [get]}}]
         }],
-        ?assertError({badkey, router_file},
-                     nova_router:add_routes(new_app, [Routes]))
+        ?assertEqual(ok, nova_router:add_routes(new_app, [Routes]))
     end}.
 
 %%====================================================================
