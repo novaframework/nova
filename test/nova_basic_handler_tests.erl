@@ -168,3 +168,112 @@ get_view_name_no_controller_suffix_test() ->
 
 get_view_name_tuple_test() ->
     ?assertEqual(foo_dtl, nova_basic_handler:get_view_name({foo_controller, #{}})).
+
+%%====================================================================
+%% maybe_inject_csrf_token/2
+%%====================================================================
+
+csrf_token_list_test() ->
+    Req = #{csrf_token => <<"abc123">>},
+    Vars = [{key, value}],
+    Result = nova_basic_handler:maybe_inject_csrf_token(Vars, Req),
+    ?assertEqual([{csrf_token, <<"abc123">>}, {key, value}], Result).
+
+csrf_token_map_test() ->
+    Req = #{csrf_token => <<"xyz">>},
+    Vars = #{key => value},
+    Result = nova_basic_handler:maybe_inject_csrf_token(Vars, Req),
+    ?assertEqual(#{csrf_token => <<"xyz">>, key => value}, Result).
+
+csrf_token_missing_test() ->
+    Req = #{},
+    Vars = [{key, value}],
+    Result = nova_basic_handler:maybe_inject_csrf_token(Vars, Req),
+    ?assertEqual([{key, value}], Result).
+
+csrf_token_map_no_token_test() ->
+    Req = #{},
+    Vars = #{key => value},
+    Result = nova_basic_handler:maybe_inject_csrf_token(Vars, Req),
+    ?assertEqual(#{key => value}, Result).
+
+%%====================================================================
+%% handle_websocket/3
+%%====================================================================
+
+handle_websocket_success_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        meck:new(test_ws_ctrl, [non_strict, no_link]),
+        meck:expect(test_ws_ctrl, init, fun(CD) -> {ok, CD#{initialized => true}} end),
+        Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
+        Callback = fun test_ws_ctrl:handle/1,
+        {cowboy_websocket, Req1, _State} = nova_basic_handler:handle_websocket(
+            {websocket, #{data => test}}, Callback, Req),
+        ?assertEqual(#{data => test, initialized => true}, maps:get(controller_data, Req1)),
+        meck:unload(test_ws_ctrl)
+    end}.
+
+handle_websocket_error_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        meck:new(test_ws_ctrl2, [non_strict, no_link]),
+        meck:expect(test_ws_ctrl2, init, fun(_CD) -> {error, bad_init} end),
+        Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
+        Callback = fun test_ws_ctrl2:handle/1,
+        {ok, _Req1} = nova_basic_handler:handle_websocket(
+            {websocket, #{}}, Callback, Req),
+        meck:unload(test_ws_ctrl2)
+    end}.
+
+handle_websocket_req_passthrough_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        meck:new(test_ws_ctrl3, [non_strict, no_link]),
+        meck:expect(test_ws_ctrl3, init, fun(CD) -> {ok, CD} end),
+        Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
+        CustomReq = Req#{custom => yes},
+        Callback = fun test_ws_ctrl3:handle/1,
+        {cowboy_websocket, Req1, _State} = nova_basic_handler:handle_websocket(
+            {websocket, #{}, CustomReq}, Callback, Req),
+        ?assertEqual(yes, maps:get(custom, Req1)),
+        meck:unload(test_ws_ctrl3)
+    end}.
+
+%%====================================================================
+%% handle_status with just status code
+%%====================================================================
+
+handle_status_code_only_test_() ->
+    {setup, fun() ->
+        Prev = nova_test_helper:setup_nova_env(),
+        application:set_env(nova, dispatch_backend, persistent_term),
+        Tree = routing_tree:new(#{use_strict => false, convert_to_binary => true}),
+        persistent_term:put(nova_dispatch, Tree),
+        Prev
+    end,
+    fun(Prev) ->
+        persistent_term:erase(nova_dispatch),
+        nova_test_helper:cleanup_nova_env(Prev)
+    end,
+    fun() ->
+        Req = nova_test_helper:mock_req(<<"GET">>, <<"/">>),
+        {ok, Req1} = nova_basic_handler:handle_status({status, 204}, ?CALLBACK, Req),
+        ?assertEqual(204, maps:get(resp_status_code, Req1))
+    end}.
+
+handle_status_with_headers_test_() ->
+    {setup, fun() ->
+        Prev = nova_test_helper:setup_nova_env(),
+        application:set_env(nova, dispatch_backend, persistent_term),
+        Tree = routing_tree:new(#{use_strict => false, convert_to_binary => true}),
+        persistent_term:put(nova_dispatch, Tree),
+        Prev
+    end,
+    fun(Prev) ->
+        persistent_term:erase(nova_dispatch),
+        nova_test_helper:cleanup_nova_env(Prev)
+    end,
+    fun() ->
+        Req = nova_test_helper:mock_req(<<"GET">>, <<"/">>),
+        {ok, Req1} = nova_basic_handler:handle_status(
+            {status, 301, #{<<"location">> => <<"/new">>}}, ?CALLBACK, Req),
+        ?assertEqual(301, maps:get(resp_status_code, Req1))
+    end}.

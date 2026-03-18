@@ -316,4 +316,96 @@ newline_test() ->
         format(#{level => alert, msg => {string, "derp"}, meta => #{}}, ConfigCRLF)
     ).
 
+newline_types_test() ->
+    Base = #{level => alert, msg => {string, "x"}, meta => #{}},
+    %% nl
+    ?assertEqual(<<"\n">>, lists:last(format(Base, #{new_line => true, new_line_type => nl}))),
+    %% unix
+    ?assertEqual(<<"\n">>, lists:last(format(Base, #{new_line => true, new_line_type => unix}))),
+    %% crlf
+    ?assertEqual(<<"\r\n">>, lists:last(format(Base, #{new_line => true, new_line_type => crlf}))),
+    %% windows
+    ?assertEqual(<<"\r\n">>, lists:last(format(Base, #{new_line => true, new_line_type => windows}))),
+    %% cr
+    ?assertEqual(<<"\r">>, lists:last(format(Base, #{new_line => true, new_line_type => cr}))),
+    %% macos9
+    ?assertEqual(<<"\r">>, lists:last(format(Base, #{new_line => true, new_line_type => macos9}))),
+    %% default (no new_line_type specified)
+    ?assertEqual(<<"\n">>, lists:last(format(Base, #{new_line => true}))).
+
+no_newline_test() ->
+    Base = #{level => alert, msg => {string, "x"}, meta => #{}},
+    Result = format(Base, #{}),
+    ?assert(is_binary(Result)).
+
+jsonify_types_test() ->
+    %% atom
+    ?assertEqual(hello, jsonify(hello)),
+    %% binary
+    ?assertEqual(<<"bin">>, jsonify(<<"bin">>)),
+    %% integer
+    ?assertEqual(42, jsonify(42)),
+    %% float
+    ?assertEqual(3.14, jsonify(3.14)),
+    %% boolean
+    ?assertEqual(true, jsonify(true)),
+    ?assertEqual(false, jsonify(false)),
+    %% pid
+    ?assert(is_binary(jsonify(self()))),
+    %% function
+    ?assert(is_binary(jsonify(fun erlang:now/0))),
+    %% list (string)
+    ?assertEqual(<<"hello">>, jsonify("hello")),
+    %% list (non-string, falls through to io_lib:format)
+    ?assert(is_binary(jsonify([{a, b}]))),
+    %% MFA tuple
+    ?assertEqual(<<"lists:reverse/1">>, jsonify({lists, reverse, 1})),
+    %% arbitrary term
+    ?assert(is_binary(jsonify(make_ref()))).
+
+format_keyval_list_test() ->
+    Event = #{level => info, msg => {report, [{key, <<"val">>}]}, meta => #{}},
+    {ok, Decoded} = thoas:decode(format(Event, #{})),
+    ?assertEqual(<<"val">>, maps:get(<<"key">>, Decoded)).
+
+format_format_terms_test() ->
+    Event = #{level => info, msg => {"hello ~s", ["world"]}, meta => #{}},
+    {ok, Decoded} = thoas:decode(format(Event, #{})),
+    ?assertEqual(<<"hello world">>, maps:get(<<"text">>, Decoded)).
+
+format_error_logger_test() ->
+    Event = #{level => error,
+              msg => {report, #{format => "error: ~p", args => [bad], label => {error_logger, error}}},
+              meta => #{}},
+    {ok, Decoded} = thoas:decode(format(Event, #{})),
+    ?assert(maps:is_key(<<"text">>, Decoded)).
+
+nested_map_test() ->
+    Event = #{level => info, msg => {report, #{outer => #{inner => value}}}, meta => #{}},
+    {ok, Decoded} = thoas:decode(format(Event, #{})),
+    ?assertEqual(#{<<"inner">> => <<"value">>}, maps:get(<<"outer">>, Decoded)).
+
+list_of_maps_test() ->
+    Event = #{level => info, msg => {report, #{items => [#{a => 1}, #{b => 2}]}}, meta => #{}},
+    {ok, Decoded} = thoas:decode(format(Event, #{})),
+    ?assertEqual([#{<<"a">> => 1}, #{<<"b">> => 2}], maps:get(<<"items">>, Decoded)).
+
+system_time_to_iso8601_test() ->
+    Epoch = erlang:system_time(microsecond),
+    Result = system_time_to_iso8601(Epoch),
+    ?assert(is_binary(Result)),
+    ?assert(byte_size(Result) > 10).
+
+system_time_to_iso8601_nano_test() ->
+    Epoch = erlang:system_time(microsecond),
+    Result = system_time_to_iso8601_nano(Epoch),
+    ?assert(is_binary(Result)),
+    ?assert(byte_size(Result) > 10).
+
+format_port_test() ->
+    %% Ports are jsonified as binaries
+    Port = hd(erlang:ports()),
+    Result = jsonify(Port),
+    ?assert(is_binary(Result)).
+
 -endif.
