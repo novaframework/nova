@@ -87,7 +87,7 @@ server_error(#{crash_info := #{class := Class, reason := Reason}} = Req) ->
 
 
 format_stacktrace(not_enabled) ->
-    logger:warning("Stacktrace disabled. If you want to enable stacktraces call nova:stracktrace(true) or update your sys.config - Read more in the docs"),
+    logger:warning(<<"Stacktrace disabled. If you want to enable stacktraces call nova:stracktrace(true) or update your sys.config - Read more in the docs">>),
     [];
 format_stacktrace([]) -> [];
 format_stacktrace([{Mod, Func, Arity, TraceOpts}|Tl]) ->
@@ -103,7 +103,7 @@ format_stacktrace([{Mod, Func, Arity, TraceOpts}|Tl]) ->
                  line => Line},
     [Formated|format_stacktrace(Tl)];
 format_stacktrace([Hd|Tl]) ->
-    logger:warning("Could not format stacktrace line: ~p", [Hd]),
+    logger:warning(<<"Could not format stacktrace line: ~p">>, [Hd]),
     format_stacktrace(Tl).
 
 
@@ -113,7 +113,7 @@ format_arity(Arity) when is_function(Arity) -> <<"fun">>;
 format_arity(Arity) -> Arity.
 
 format_arity([], Acc) ->
-    logger:warning("Acc: ~p~n", [Acc]),
+    logger:warning(<<"Acc: ~p~n">>, [Acc]),
     Acc;
 format_arity([Head, Tail], Acc) ->
     Formated = format_arity(Head),

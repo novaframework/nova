@@ -76,10 +76,10 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
     Dispatch = StorageBackend:get(nova_dispatch),
     case routing_tree:lookup(Host, Path, Method, Dispatch) of
         {error, not_found} ->
-            logger:debug("Path ~p not found for ~p in ~p", [Path, Method, Host]),
+            logger:debug(<<"Path ~p not found for ~p in ~p">>, [Path, Method, Host]),
             render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
         {error, comparator_not_found, AllowedMethods} ->
-            logger:debug("Method not allowed: ~p for ~p. Allowed methods: ~p", [Method, Path, AllowedMethods]),
+            logger:debug(<<"Method not allowed: ~p for ~p. Allowed methods: ~p">>, [Method, Path, AllowedMethods]),
             %% Join the elements in AllowedMethods with a colon
             AllowHeader = iolist_to_binary(string:join([binary_to_list(M) || M <- AllowedMethods], ", ")),
             %% Set the 'allow'-header
@@ -253,8 +253,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
             false ->
                 false;
             {SMod, SFun} ->
-                ?LOG_DEPRECATED("v0.9.24", "The {Mod,Fun} format have been deprecated for "
-                                "the 'secure'-section of a route table. Use the new format for routes.", RouterFile),
+                ?LOG_DEPRECATED(<<"v0.9.24">>, <<"The {Mod,Fun} format have been deprecated for the 'secure'-section of a route table. Use the new format for routes.">>, RouterFile),
                 fun SMod:SFun/1;
             SCallback ->
                 SCallback
