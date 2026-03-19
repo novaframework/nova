@@ -186,9 +186,10 @@ handle_info(_Info, State) ->
 -spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
                 State :: term()) -> any().
 terminate(_Reason, #state{process_refs = Refs}) ->
-    %% Clean up the ports
     lists:foreach(fun(PortRef) ->
-                          erlang:port_close(PortRef)
+                          try erlang:port_close(PortRef)
+                          catch error:badarg -> ok
+                          end
                   end, Refs),
     ok.
 
