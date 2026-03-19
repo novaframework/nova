@@ -130,6 +130,8 @@ rotate(Req) ->
                 true ->
                     Mod:rotate_session(OldSessionId, NewSessionId);
                 false ->
+                    ?LOG_WARNING(#{msg => <<"Session backend does not implement rotate_session/2, data will not be migrated">>,
+                                   module => Mod}),
                     Mod:delete_value(OldSessionId)
             end,
             Req1 = cowboy_req:set_resp_cookie(<<"session_id">>, NewSessionId, Req,
