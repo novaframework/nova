@@ -113,7 +113,6 @@ format_arity(Arity) when is_function(Arity) -> <<"fun">>;
 format_arity(Arity) -> Arity.
 
 format_arity([], Acc) ->
-    logger:warning(<<"Acc: ~p~n">>, [Acc]),
     Acc;
 format_arity([Head, Tail], Acc) ->
     Formated = format_arity(Head),
