@@ -337,6 +337,8 @@ get_view_name(Mod) when is_atom(Mod) ->
     erlang:list_to_atom(StrName);
 get_view_name([$_, $c, $o, $n, $t, $r, $o, $l, $l, $e, $r]) ->
     "_dtl";
+get_view_name([]) ->
+    "_dtl";
 get_view_name([H|T]) ->
     [H|get_view_name(T)].
 

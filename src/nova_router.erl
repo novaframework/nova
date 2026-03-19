@@ -164,7 +164,7 @@ add_routes(App, [Routes|Tl]) when is_list(Routes) ->
                 CompiledApps
         end,
 
-    Options1 = Options#{app => App},
+    Options1 = Options#{app => App, router_file => undefined},
 
     {ok, Dispatch1, _Options2} = compile_paths(Routes, Dispatch, Options1),
 
