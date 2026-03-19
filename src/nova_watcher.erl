@@ -185,12 +185,9 @@ handle_info(_Info, State) ->
 %%--------------------------------------------------------------------
 -spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
                 State :: term()) -> any().
-terminate(_Reason, #state{process_refs = Refs}) ->
-    lists:foreach(fun(PortRef) ->
-                          try erlang:port_close(PortRef)
-                          catch error:badarg -> ok
-                          end
-                  end, Refs),
+terminate(_Reason, _State) ->
+    %% Ports opened with open_port/2 are linked to this process
+    %% and automatically closed when it exits.
     ok.
 
 %%--------------------------------------------------------------------
