@@ -287,6 +287,46 @@ parse_url(Host, [{StatusCode, Callback, Options}|Tl], T, Value, Tree) when is_in
                               insert(Host, StatusCode, Method, Value0, Tree0)
                       end, Tree, maps:get(methods, Options, ['_'])),
     parse_url(Host, Tl, T, Value, Res);
+parse_url(Host, [{RemotePath, {DepApp, LocalPath}}|Tl], T, Value, Tree) when is_list(RemotePath),
+                                                                                              is_atom(DepApp),
+                                                                                              is_list(LocalPath) ->
+    parse_url(Host, [{RemotePath, {DepApp, LocalPath}, #{}}|Tl], T, Value, Tree);
+parse_url(Host, [{RemotePath, {DepApp, LocalPath}, Options}|Tl], T = #{prefix := Prefix},
+          Value = #nova_handler_value{secure = Secure}, Tree) when is_list(RemotePath),
+                                                                   is_atom(DepApp),
+                                                                   is_list(LocalPath) ->
+    %% Static assets from a dependency's priv dir
+    PrivPath = filename:join(code:priv_dir(DepApp), LocalPath),
+    Payload =
+        case filelib:is_dir(PrivPath) of
+            true ->
+                {priv_dir, DepApp, LocalPath};
+            false ->
+                case filelib:is_file(PrivPath) of
+                    true ->
+                        {priv_file, DepApp, LocalPath};
+                    false ->
+                        ?LOG_WARNING(#{reason => <<"Could not find priv path for dependency">>,
+                                       app => DepApp,
+                                       local_path => LocalPath,
+                                       remote_path => RemotePath}),
+                        not_found
+                end
+        end,
+    TargetFun = case Payload of
+                    {priv_file, _, _} -> get_file;
+                    {priv_dir, _, _} -> get_dir;
+                    not_found -> get_dir
+                end,
+    Value0 = #nova_handler_value{
+                app = DepApp,
+                callback = erlang:make_fun(nova_file_controller, TargetFun, 1),
+                extra_state = #{static => Payload, options => Options},
+                plugins = Value#nova_handler_value.plugins,
+                secure = Secure
+               },
+    Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree),
+    parse_url(Host, Tl, T, Value, Tree0);
 parse_url(Host, [{RemotePath, LocalPath}|Tl], T, Value = #nova_handler_value{}, Tree) when is_list(RemotePath),
                                                                                            is_list(LocalPath) ->
     parse_url(Host, [{RemotePath, LocalPath, #{}}|Tl], T, Value, Tree);
