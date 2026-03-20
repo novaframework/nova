@@ -5,6 +5,8 @@
 
 -module(nova).
 
+-include_lib("kernel/include/logger.hrl").
+
 -export([
          get_main_app/0,
          get_apps/0,
