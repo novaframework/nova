@@ -150,7 +150,8 @@ start_cowboy(Configuration) ->
                 throw({error, no_nova_app_defined});
             App ->
                 ExtraApps = application:get_env(App, nova_apps, []),
-                nova_router:compile([nova|[App|ExtraApps]])
+                AllApps = resolve_nova_apps(ExtraApps, []),
+                nova_router:compile([nova|[App|AllApps]])
         end,
 
     CowboyOptions2 =
@@ -222,4 +223,22 @@ get_version(Application) ->
             erlang:list_to_binary(Version);
         false ->
             not_found
+    end.
+
+%% @doc Recursively resolve nested nova_apps.
+%% Each nova_app can declare its own nova_apps dependencies.
+%% Dependencies are resolved depth-first so child app routes
+%% are registered before the parent.
+-spec resolve_nova_apps([atom()], [atom()]) -> [atom()].
+resolve_nova_apps([], Acc) ->
+    lists:reverse(Acc);
+resolve_nova_apps([App | Rest], Acc) ->
+    case lists:member(App, Acc) of
+        true ->
+            %% Already resolved — skip to prevent cycles
+            resolve_nova_apps(Rest, Acc);
+        false ->
+            Nested = application:get_env(App, nova_apps, []),
+            Acc1 = resolve_nova_apps(Nested, [App | Acc]),
+            resolve_nova_apps(Rest, Acc1)
     end.
