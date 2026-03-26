@@ -150,8 +150,7 @@ start_cowboy(Configuration) ->
                 throw({error, no_nova_app_defined});
             App ->
                 ExtraApps = application:get_env(App, nova_apps, []),
-                AllApps = resolve_nova_apps(ExtraApps, []),
-                nova_router:compile([nova|[App|AllApps]])
+                nova_router:compile(resolve_nova_apps([nova, App | ExtraApps], []))
         end,
 
     CowboyOptions2 =
