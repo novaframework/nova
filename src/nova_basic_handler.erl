@@ -309,18 +309,24 @@ handle_view(View, Variables, Options, Req) ->
     {ok, Req2}.
 
 render_dtl(View, Variables, Options) ->
-    case code:is_loaded(View) of
-        false ->
-            case code:load_file(View) of
-                {error, Reason} ->
-                    %% Cast a warning since the module could not be found
-                    ?LOG_ERROR(#{msg => <<"Nova could not render template">>, template => View, reason => Reason}),
+    %% Erlang's code server will auto-load modules on first call
+    %% Try to render and catch cases where module or function doesn't exist
+    try View:render(Variables, Options) of
+        Result -> Result
+    catch
+        error:undef:Stacktrace ->
+            %% Check if the error is specifically from View:render/2
+            %% (arity 2 is the standard erlydtl render function signature)
+            case Stacktrace of
+                [{View, render, 2, _} | _] ->
+                    %% Module doesn't exist or render/2 not exported
+                    ?LOG_ERROR(#{msg => <<"Nova could not render template">>,
+                                 template => View, reason => module_not_found}),
                     throw({404, {template_not_found, View}});
                 _ ->
-                    View:render(Variables, Options)
-            end;
-        _ ->
-            View:render(Variables, Options)
+                    %% undef error from somewhere else, re-raise it
+                    erlang:raise(error, undef, Stacktrace)
+            end
     end.
 
 

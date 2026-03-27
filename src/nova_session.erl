@@ -114,7 +114,8 @@ delete(Req, Key) ->
 %%% Private functions
 %%%===================================================================
 get_session_module() ->
-    application:get_env(nova, session_manager, nova_session_ets).
+    %% Use cached value from persistent_term for better performance
+    persistent_term:get(nova_session_manager, nova_session_ets).
 
 get_session_id(Req) ->
     case nova:get_env(use_sessions, true) of
