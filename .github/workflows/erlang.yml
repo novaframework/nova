@@ -5,6 +5,9 @@ on:
     branches: [master]
   pull_request:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -12,8 +15,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: ['26.1', '27.1', '28.0']
-        rebar3: ['3.25.0']
+        otp: ['27.3', '28.3']
+        rebar3: ['3.26.0']
     steps:
     - uses: actions/checkout@v6
     - uses: erlef/setup-beam@v1
@@ -22,7 +25,7 @@ jobs:
         rebar3-version: ${{matrix.rebar3}}
         version-type: strict
     - name: Cache rebar3 deps and build
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           ~/.cache/rebar3
@@ -39,8 +42,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: ['26.1', '27.1', '28.0']
-        rebar3: ['3.25.0']
+        otp: ['27.3', '28.3']
+        rebar3: ['3.26.0']
     steps:
     - uses: actions/checkout@v6
     - uses: erlef/setup-beam@v1
@@ -49,7 +52,7 @@ jobs:
         rebar3-version: ${{matrix.rebar3}}
         version-type: strict
     - name: Cache rebar3 deps and build
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           ~/.cache/rebar3
@@ -65,8 +68,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: ['26.1', '27.1', '28.0']
-        rebar3: ['3.25.0']
+        otp: ['27.3', '28.3']
+        rebar3: ['3.26.0']
     steps:
     - uses: actions/checkout@v6
     - uses: erlef/setup-beam@v1
@@ -75,7 +78,7 @@ jobs:
         rebar3-version: ${{matrix.rebar3}}
         version-type: strict
     - name: Cache rebar3 deps and build
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           ~/.cache/rebar3
@@ -91,8 +94,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        otp: ['26.1', '27.1', '28.0']
-        rebar3: ['3.25.0']
+        otp: ['27.3', '28.3']
+        rebar3: ['3.26.0']
     steps:
     - uses: actions/checkout@v6
     - uses: erlef/setup-beam@v1
@@ -101,7 +104,7 @@ jobs:
         rebar3-version: ${{matrix.rebar3}}
         version-type: strict
     - name: Cache rebar3 deps and build
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           ~/.cache/rebar3

@@ -43,18 +43,18 @@ These parameters can be specified in your *main* application (Eg the one you've 
 
 | Key | Description | Value |
 |-----|-------------|-------|
-| `json_lib` | JSON lib to use. Read more in the subsection *Configure json lib* | `atom()` |
-| `watchers` | Watchers are external programs that will run together with Nova. Watchers are defined as list of tuples where the tuples is in format `{Command, ArgumentList}` (Like `[{my_app, "npm", ["run", "watch"], #{workdir => "priv/assets/js/my-app"}}]`) | `[{string(), string()}] | [{atom(), string(), map()}] | [{atom(), string(), list(), map()}]` |
+| `json_lib` | JSON lib to use. Defaults to the Erlang/OTP `json` module. Read more in the subsection *Configure json lib* | `atom()` |
+| `watchers` | Watchers are external programs that will run together with Nova. Watchers are defined as list of tuples where the tuples is in format `{Command, ArgumentList}` (Like `[{my_app, "npm", ["run", "watch"], #{workdir => "priv/assets/js/my-app"}}]`) | `[{string(), string()}] | [{atom(), string(), list(), map()}]` |
 
 
 
 ### Configure json_lib
 
-One can configure which json library to use for encoding/decoding json structures. The module defined for this should expose two different functions:
+By default Nova uses the Erlang/OTP `json` module (available since OTP 27). You can configure a custom JSON library for use with other BEAM languages (Gleam, LFE, etc.). The module must expose two functions:
 
-`encode(Structure) -> binary() | iolist()`
+`encode(Term) -> iodata()`
 
-`decode(JsonString) -> {ok, Structure}`
+`decode(Binary) -> Term` (raises on error)
 
 
 ## Handling errors in Nova
