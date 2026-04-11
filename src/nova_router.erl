@@ -288,19 +288,43 @@ compile_paths([], Dispatch, Options) -> {ok, Dispatch, Options};
 compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     App = maps:get(app, Options),
     RouterFile = maps:get(router_file, Options),
-    %% Fetch the global plugins
-    GlobalPlugins = application:get_env(nova, plugins, []),
-    Plugins = maps:get(plugins, RouteInfo, GlobalPlugins),
+
+    %% Fetch the global plugins - we need to check Options first to see what plugin-strategy we should use for this route:
+    Plugins =
+        case maps:get(plugin_strategy, Options, local_first) of
+            local_first ->
+                LocalPlugins = maps:get(plugins, RouteInfo, []),
+                GlobalPlugins = application:get_env(nova, plugins, []),
+                %% We need to make sure that the plugins are in the right order, so we use ukeysort to remove duplicates and keep the order of the first occurrence
+                lists:ukeysort(1, LocalPlugins ++ GlobalPlugins);
+            global_first ->
+                LocalPlugins = maps:get(plugins, RouteInfo, []),
+                GlobalPlugins = application:get_env(nova, plugins, []),
+                %% We need to make sure that the plugins are in the right order, so we use ukeysort to remove duplicates and keep the order of the first occurrence
+                lists:ukeysort(1, GlobalPlugins ++ LocalPlugins);
+            local_only ->
+                maps:get(plugins, RouteInfo, []);
+            global_only ->
+                application:get_env(nova, plugins, []);
+            {override, PluginList} when is_list(PluginList) ->
+                PluginList
+            end,
 
     Secure =
-        case maps:get(secure, Options, maps:get(security, RouteInfo, false)) of
+        case maps:get(override_secure, Options, false) of
             false ->
-                false;
-            {SMod, SFun} ->
-                ?LOG_DEPRECATED("v0.9.24", "The {Mod,Fun} format have been deprecated for "
-                                "the 'secure'-section of a route table. Use the new format for routes.", RouterFile),
-                fun SMod:SFun/1;
-            SCallback ->
+                case maps:get(secure, Options, maps:get(security, RouteInfo, false)) of
+                    false ->
+                        false;
+                    {SMod, SFun} ->
+                        ?LOG_DEPRECATED("v0.9.24", "The {Mod,Fun} format have been deprecated for "
+                                        "the 'secure'-section of a route table. Use the new format for routes.", RouterFile),
+                        fun SMod:SFun/1;
+                    SCallback when is_function(SCallback) ->
+                        SCallback
+                end;
+            %% We override the secure value for this route (app level) with the value provided in options
+            SCallback when is_function(SCallback) ->
                 SCallback
         end,
 

@@ -94,10 +94,6 @@
 %% API
 %%====================================================================
 
-%%--------------------------------------------------------------------
-%% Constructors
-%%--------------------------------------------------------------------
-
 -spec new() -> trie().
 new() ->
     new(#{}).
@@ -105,30 +101,6 @@ new() ->
 -spec new(map()) -> trie().
 new(Opts) when is_map(Opts) ->
     #{options => Opts, hosts => #{}}.
-
-%% Internal node constructor (per-host trees)
--spec new_node() -> trie_node().
-new_node() ->
-    new_node(#{}).
-
--spec new_node(map()) -> trie_node().
-new_node(Opts) when is_map(Opts) ->
-    #{children => #{}, terminal => #{}, options => Opts, plugins => #{pre_request => [],
-                                                                      post_request => []}}.
-
-%%--------------------------------------------------------------------
-%% Host helpers
-%%--------------------------------------------------------------------
-
--spec norm_host(host_in()) -> host_key().
-norm_host('_') ->
-    '_';
-norm_host(Host) when is_binary(Host) ->
-    Host;
-norm_host(Host) when is_list(Host) ->
-    list_to_binary(Host);
-norm_host(Host) when is_atom(Host) ->
-    list_to_binary(atom_to_list(Host)).
 
 %%--------------------------------------------------------------------
 %% Insert
@@ -371,6 +343,31 @@ routes(Trie) ->
       [],
       Hosts
      ).
+
+
+
+%%====================================================================
+%% Internal functions
+%%====================================================================
+-spec new_node() -> trie_node().
+new_node() ->
+    new_node(#{}).
+
+-spec new_node(map()) -> trie_node().
+new_node(Opts) when is_map(Opts) ->
+    #{children => #{}, terminal => #{}, options => Opts, plugins => #{pre_request => [],
+                                                                      post_request => []}}.
+
+-spec norm_host(host_in()) -> host_key().
+norm_host('_') ->
+    '_';
+norm_host(Host) when is_binary(Host) ->
+    Host;
+norm_host(Host) when is_list(Host) ->
+    list_to_binary(Host);
+norm_host(Host) when is_atom(Host) ->
+    list_to_binary(atom_to_list(Host)).
+
 
 gather_routes(Node, AccSegs, Host, Acc0) ->
     Term = maps:get(terminal, Node, #{}),

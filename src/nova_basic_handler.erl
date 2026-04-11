@@ -289,7 +289,7 @@ handle_ws(ok, State) ->
 %%%===================================================================
 
 handle_view(View, Variables, Options, Req) ->
-    {ok, HTML} = render_dtl(View, Variables, []),
+    {ok, HTML} = View:render(Variables, []),
     Headers =
         case maps:get(headers, Options, undefined) of
             undefined ->
@@ -302,22 +302,6 @@ handle_view(View, Variables, Options, Req) ->
     Req1 = cowboy_req:set_resp_body(HTML, Req0),
     Req2 = Req1#{resp_status_code => StatusCode},
     {ok, Req2}.
-
-render_dtl(View, Variables, Options) ->
-    case code:is_loaded(View) of
-        false ->
-            case code:load_file(View) of
-                {error, Reason} ->
-                    %% Cast a warning since the module could not be found
-                    ?LOG_ERROR(#{msg => <<"Nova could not render template">>, template => View, reason => Reason}),
-                    throw({404, {template_not_found, View}});
-                _ ->
-                    View:render(Variables, Options)
-            end;
-        _ ->
-            View:render(Variables, Options)
-    end.
-
 
 get_view_name({Mod, _Opts}) -> get_view_name(Mod);
 get_view_name(Mod) when is_atom(Mod) ->
