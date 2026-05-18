@@ -292,7 +292,7 @@ parse_url(Host, [{RemotePath, LocalPath}|Tl], T, Value = #nova_handler_value{}, 
 parse_url(Host, [{RemotePath, LocalPath, Options}|Tl], T = #{prefix := Prefix},
           Value = #nova_handler_value{app = App, secure = Secure}, Tree) when is_list(RemotePath), is_list(LocalPath) ->
     %% Static assets - check that the path exists
-    PrivPath = filename:join(code:priv_dir(App), LocalPath),
+    PrivPath = filename:join(code:priv_dir(App), string:trim(LocalPath, leading, "/")),
 
     Payload =
         case {filelib:is_dir(LocalPath), filelib:is_dir(PrivPath)} of
