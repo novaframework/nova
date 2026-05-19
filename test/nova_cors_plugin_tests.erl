@@ -11,8 +11,18 @@ pre_request_non_options_test() ->
     {ok, Req1, my_state} = nova_cors_plugin:pre_request(Req, #{}, Opts, my_state),
     Headers = maps:get(resp_headers, Req1),
     ?assertEqual(<<"*">>, maps:get(<<"Access-Control-Allow-Origin">>, Headers)),
-    ?assertEqual(<<"*">>, maps:get(<<"Access-Control-Allow-Headers">>, Headers)),
-    ?assertEqual(<<"*">>, maps:get(<<"Access-Control-Allow-Methods">>, Headers)).
+    ?assertEqual(<<"Content-Type, Authorization">>, maps:get(<<"Access-Control-Allow-Headers">>, Headers)),
+    ?assertEqual(<<"GET, POST, PUT, DELETE, OPTIONS">>, maps:get(<<"Access-Control-Allow-Methods">>, Headers)).
+
+pre_request_custom_headers_and_methods_test() ->
+    Req = nova_test_helper:mock_req(<<"GET">>, <<"/">>),
+    Opts = #{allow_origins => <<"https://example.com">>,
+             allow_headers => <<"X-Custom">>,
+             allow_methods => <<"GET, POST">>},
+    {ok, Req1, _} = nova_cors_plugin:pre_request(Req, #{}, Opts, state),
+    Headers = maps:get(resp_headers, Req1),
+    ?assertEqual(<<"X-Custom">>, maps:get(<<"Access-Control-Allow-Headers">>, Headers)),
+    ?assertEqual(<<"GET, POST">>, maps:get(<<"Access-Control-Allow-Methods">>, Headers)).
 
 pre_request_specific_origin_test() ->
     Req = nova_test_helper:mock_req(<<"POST">>, <<"/api">>),

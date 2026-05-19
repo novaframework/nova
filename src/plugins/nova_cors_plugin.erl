@@ -14,8 +14,8 @@
 %%--------------------------------------------------------------------
 -spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
                          {ok, Req0 :: cowboy_req:req(), NewState :: any()}.
-pre_request(Req, _Env, #{allow_origins := Origins}, State) ->
-    ReqWithOptions = add_cors_headers(Req, Origins),
+pre_request(Req, _Env, Options = #{allow_origins := Origins}, State) ->
+    ReqWithOptions = add_cors_headers(Req, Origins, Options),
     continue(ReqWithOptions, State).
 
 %%--------------------------------------------------------------------
@@ -47,7 +47,9 @@ plugin_info() ->
       authors => [<<"Nova team <info@novaframework.org">>],
       description => <<"Add CORS headers to request">>,
       options => [
-                  {allow_origins, <<"Specifies which origins to insert into Access-Control-Allow-Origin">>}
+                  {allow_origins, <<"Specifies which origins to insert into Access-Control-Allow-Origin">>},
+                  {allow_headers, <<"Comma-separated allowed headers (default: Content-Type, Authorization)">>},
+                  {allow_methods, <<"Comma-separated allowed methods (default: GET, POST, PUT, DELETE, OPTIONS)">>}
                  ]
      }.
 
@@ -61,10 +63,15 @@ continue(#{method := <<"OPTIONS">>} = Req, State) ->
 continue(Req, State) ->
     {ok, Req, State}.
 
-add_cors_headers(Req, Origins) ->
+-define(DEFAULT_HEADERS, <<"Content-Type, Authorization">>).
+-define(DEFAULT_METHODS, <<"GET, POST, PUT, DELETE, OPTIONS">>).
+
+add_cors_headers(Req, Origins, Options) ->
+    AllowHeaders = maps:get(allow_headers, Options, ?DEFAULT_HEADERS),
+    AllowMethods = maps:get(allow_methods, Options, ?DEFAULT_METHODS),
     OriginsReq = cowboy_req:set_resp_header(
         <<"Access-Control-Allow-Origin">>, Origins, Req),
     HeadersReq = cowboy_req:set_resp_header(
-        <<"Access-Control-Allow-Headers">>, <<"*">>, OriginsReq),
+        <<"Access-Control-Allow-Headers">>, AllowHeaders, OriginsReq),
     cowboy_req:set_resp_header(
-        <<"Access-Control-Allow-Methods">>, <<"*">>, HeadersReq).
+        <<"Access-Control-Allow-Methods">>, AllowMethods, HeadersReq).

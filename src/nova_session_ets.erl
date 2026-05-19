@@ -17,7 +17,8 @@
          get_value/2,
          set_value/3,
          delete_value/1,
-         delete_value/2
+         delete_value/2,
+         rotate_session/2
         ]).
 
 %% gen_server callbacks
@@ -27,6 +28,7 @@
 -define(SERVER, ?MODULE).
 -define(TABLE, nova_session_ets_entries).
 -define(CHANNEL, '__sessions').
+-define(CLEANUP_INTERVAL, 60000). %% 1 minute
 
 -include("../include/nova_pubsub.hrl").
 
@@ -65,6 +67,10 @@ delete_value(SessionId) ->
 delete_value(SessionId, Key) ->
     nova_pubsub:broadcast(?CHANNEL, "delete_value", {SessionId, Key}).
 
+-spec rotate_session(OldSessionId :: binary(), NewSessionId :: binary()) -> ok | {error, Reason :: term()}.
+rotate_session(OldSessionId, NewSessionId) ->
+    nova_pubsub:broadcast(?CHANNEL, "rotate_session", {OldSessionId, NewSessionId}).
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -84,6 +90,7 @@ init([]) ->
     process_flag(trap_exit, true),
     ets:new(?TABLE, [set, named_table]),
     nova_pubsub:join(?CHANNEL),
+    erlang:send_after(?CLEANUP_INTERVAL, self(), cleanup_expired),
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------
@@ -105,7 +112,25 @@ handle_call({get_value, SessionId, Key}, _From, State) ->
     case ets:lookup(?TABLE, SessionId) of
         [] ->
             {reply, {error, not_found}, State};
-        [{SessionId, Session}|_] ->
+        [{SessionId, Session, CreatedAt, _LastAccessed}] ->
+            Now = erlang:system_time(second),
+            case is_expired(CreatedAt, Now) of
+                true ->
+                    ets:delete(?TABLE, SessionId),
+                    {reply, {error, not_found}, State};
+                false ->
+                    ets:insert(?TABLE, {SessionId, Session, CreatedAt, Now}),
+                    case maps:get(Key, Session, undefined) of
+                        undefined ->
+                            {reply, {error, not_found}, State};
+                        Value ->
+                            {reply, {ok, Value}, State}
+                    end
+            end;
+        [{SessionId, Session}] ->
+            %% Legacy format — migrate to timestamped format
+            Now = erlang:system_time(second),
+            ets:insert(?TABLE, {SessionId, Session, Now, Now}),
             case maps:get(Key, Session, undefined) of
                 undefined ->
                     {reply, {error, not_found}, State};
@@ -143,23 +168,45 @@ handle_cast(_Request, State) ->
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: normal | term(), NewState :: term()}.
 handle_info(#nova_pubsub{topic = "set_value", payload = {SessionId, Key, Value}}, State) ->
+    Now = erlang:system_time(second),
     case ets:lookup(?TABLE, SessionId) of
         [] ->
-            ets:insert(?TABLE, {SessionId, #{Key => Value}});
-        [{_, Session}|_] ->
-            ets:insert(?TABLE, {SessionId, Session#{Key => Value}})
+            ets:insert(?TABLE, {SessionId, #{Key => Value}, Now, Now});
+        [{_, Session, CreatedAt, _}] ->
+            ets:insert(?TABLE, {SessionId, Session#{Key => Value}, CreatedAt, Now});
+        [{_, Session}] ->
+            ets:insert(?TABLE, {SessionId, Session#{Key => Value}, Now, Now})
     end,
     {noreply, State};
 handle_info(#nova_pubsub{topic = "delete_value", payload = {SessionId, Key}}, State) ->
     case ets:lookup(?TABLE, SessionId) of
         [] ->
             ok;
-        [{SessionId, Session}|_] ->
+        [{_, Session, CreatedAt, LastAccessed}] ->
+            ets:insert(?TABLE, {SessionId, maps:remove(Key, Session), CreatedAt, LastAccessed});
+        [{_, Session}] ->
             ets:insert(?TABLE, {SessionId, maps:remove(Key, Session)})
     end,
     {noreply, State};
 handle_info(#nova_pubsub{topic = "delete_value", payload = SessionId}, State) ->
     ets:delete(?TABLE, SessionId),
+    {noreply, State};
+handle_info(#nova_pubsub{topic = "rotate_session", payload = {OldSessionId, NewSessionId}}, State) ->
+    Now = erlang:system_time(second),
+    case ets:lookup(?TABLE, OldSessionId) of
+        [{_, Session, _, _}] ->
+            ets:delete(?TABLE, OldSessionId),
+            ets:insert(?TABLE, {NewSessionId, Session, Now, Now});
+        [{_, Session}] ->
+            ets:delete(?TABLE, OldSessionId),
+            ets:insert(?TABLE, {NewSessionId, Session, Now, Now});
+        [] ->
+            ets:insert(?TABLE, {NewSessionId, #{}, Now, Now})
+    end,
+    {noreply, State};
+handle_info(cleanup_expired, State) ->
+    cleanup_expired_sessions(),
+    erlang:send_after(?CLEANUP_INTERVAL, self(), cleanup_expired),
     {noreply, State};
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -207,3 +254,31 @@ format_status(Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+session_max_age() ->
+    nova:get_env(session_max_age, 86400). %% 24 hours default
+
+session_idle_timeout() ->
+    nova:get_env(session_idle_timeout, 3600). %% 1 hour default
+
+is_expired(CreatedAt, Now) ->
+    MaxAge = session_max_age(),
+    (Now - CreatedAt) > MaxAge.
+
+cleanup_expired_sessions() ->
+    Now = erlang:system_time(second),
+    MaxAge = session_max_age(),
+    IdleTimeout = session_idle_timeout(),
+    ets:foldl(fun({SessionId, _Data, CreatedAt, LastAccessed}, Acc) ->
+        Expired = (Now - CreatedAt) > MaxAge,
+        Idle = (IdleTimeout > 0) andalso ((Now - LastAccessed) > IdleTimeout),
+        case Expired orelse Idle of
+            true -> ets:delete(?TABLE, SessionId);
+            false -> ok
+        end,
+        Acc;
+    ({SessionId, _Data}, Acc) ->
+        %% Legacy format without timestamps — delete as we can't determine age
+        ets:delete(?TABLE, SessionId),
+        Acc
+    end, ok, ?TABLE).
