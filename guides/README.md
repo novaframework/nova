@@ -23,6 +23,7 @@ Here can you find the documentation for the Nova framework. Nova is under contst
 
 * [Handlers in Nova](handlers.md)
 * [Pubsub system](pubsub.md)
+* [Structured logging](logging.md)
 
 ### Releases
 

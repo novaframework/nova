@@ -1,13 +1,53 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% Originally derived from https://github.com/kivra/jsonformat.
-%%%
-%%% Custom formatter for the Erlang OTP logger application which outputs
-%%% single-line JSON formatted data. Supports several output schemas
-%%% (nova, ecs, otel, gcp, datadog), structured error extraction, redaction
-%%% and term-size caps.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 -module(nova_jsonlogger).
+-moduledoc """
+JSON formatter for the OTP `logger`.
+
+Renders every log record as a single line of JSON, optionally shaped to
+match a popular log schema. See `m:nova_jsonlogger#schemas` and the
+[Structured logging](guides/logging.md) guide for the full reference.
+
+## Usage
+
+Wire it as the formatter on a `logger` handler, typically in `sys.config`:
+
+```erlang
+{kernel, [
+  {logger, [
+    {handler, default, logger_std_h, #{
+      formatter => {nova_jsonlogger, #{schema => ecs, new_line => true}}
+    }}
+  ]}
+]}.
+```
+
+## Config
+
+```erlang
+#{
+  schema             => nova | ecs | otel | gcp | datadog, %% default: nova
+  new_line           => boolean(),                          %% default: false
+  new_line_type      => nl | crlf | cr | unix | windows,
+  key_mapping        => #{atom() => atom()},                %% post-schema rename
+  format_funs        => #{atom() => fun((_) -> _)},         %% post-rename transform
+  meta_with          => [atom()],                           %% allowlist meta keys
+  meta_without       => [atom()],                           %% denylist meta keys
+  redact             => [[atom() | binary()]],              %% paths to scrub
+  max_term_size      => non_neg_integer(),                  %% default: 8192 bytes
+  max_string_length  => non_neg_integer()                   %% default: 8192 bytes
+}
+```
+
+## Trace correlation
+
+When `trace_id` and `span_id` are present in process metadata, they are
+rendered under each schema's conventional key (`trace.id`/`span.id` for
+ECS, `TraceId`/`SpanId` for OTel, etc.). `opentelemetry_nova` populates
+these automatically inside each HTTP request.
+""".
 
 -export([
     format/2,
@@ -40,6 +80,12 @@
 -define(TRUNCATED_MARKER, <<"...[truncated]">>).
 
 %%%_* API ==============================================================
+-doc """
+Format one `t:logger:log_event/0` as a JSON line according to `Config`.
+
+Called by the OTP `logger` framework once it has matched a handler that
+declared `{nova_jsonlogger, Config}` as its formatter.
+""".
 -spec format(logger:log_event(), config()) -> unicode:chardata().
 format(
     #{msg := {report, #{format := Format, args := Args, label := {error_logger, _}}}} = Map, Config
@@ -62,10 +108,12 @@ format(Map = #{msg := {string, String}}, Config) ->
 format(Map = #{msg := {Format, Terms}}, Config) ->
     format(Map#{msg := {string, io_lib:format(Format, Terms)}}, Config).
 
+-doc "Convert `Epoch` (microseconds since the Unix epoch) to an RFC 3339 binary in UTC.".
 -spec system_time_to_iso8601(integer()) -> binary().
 system_time_to_iso8601(Epoch) ->
     system_time_to_iso8601(Epoch, microsecond).
 
+-doc "Convert `Epoch` (microseconds since the Unix epoch) to an RFC 3339 binary with nanosecond precision in UTC.".
 -spec system_time_to_iso8601_nano(integer()) -> binary().
 system_time_to_iso8601_nano(Epoch) ->
     system_time_to_iso8601(1000 * Epoch, nanosecond).
