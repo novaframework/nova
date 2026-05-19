@@ -392,7 +392,7 @@ gather_routes(Node, AccSegs, Host, Acc0) ->
 
 %% Methods
 check_jailed(Segs) ->
-    check_jailed(Segs, []).
+    lists:reverse(check_jailed(Segs, [])).
 
 check_jailed([], Acc) ->
     Acc;
@@ -404,8 +404,8 @@ check_jailed([<<"..">>|Tl], [_|Acc]) ->
             ok
     end,
     check_jailed(Tl, Acc);
-check_jailed([_|Tl], Acc) ->
-    check_jailed(Tl, Acc).
+check_jailed([Hd|Tl], Acc) ->
+    check_jailed(Tl, [Hd|Acc]).
 
 -spec norm_method(method_in()) -> method().
 norm_method(M) when is_binary(M) ->
