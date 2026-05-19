@@ -108,6 +108,7 @@ use_stacktrace(_) ->
 %% the module, function, arity, file, and line number of the
 %% function call.
 %% @end
+%%--------------------------------------------------------------------
 -spec format_stacktrace(Stacktrace :: [{M :: atom(), F :: atom(), A :: integer(), Info :: list()}])
                        -> [map()].
 format_stacktrace(Stacktrace) ->

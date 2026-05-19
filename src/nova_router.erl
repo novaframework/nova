@@ -1,7 +1,8 @@
 %%%-------------------------------------------------------------------
 %%% @author Niclas Axelsson <niclas@burbas.se>
 %%% @doc
-%%%
+%%% Router module for nova. This module is responsible for compiling routes, dispatching requests to the correct handler
+%%% and managing the routing table. It also exposes an API for modulating the routing table at runtime.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(nova_router).
@@ -88,15 +89,15 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
         {error, comparator_not_found, AllowedMethods} ->
             logger:debug("Method not allowed: ~p for ~p. Allowed methods: ~p", [Method, Path, AllowedMethods]),
             %% Join the elements in AllowedMethods with a colon
-            AllowHeader = iolist_to_binary(string:join([binary_to_list(M) || M <- AllowedMethods], ", ")),
+            AllowHeader = iolist_to_binary(string:join([unicode:characters_to_list(uri_string:unquote(M)) || M <- AllowedMethods], ", ")),
             %% Set the 'allow'-header
             Req1 = cowboy_req:set_resp_header(<<"allow">>, AllowHeader, Req),
             render_status_page('_', 405, #{error => "Method not allowed"}, Req1, Env);
         {ok, Bindings, #nova_handler_value{app = App, callback = Callback, secure = Secure, plugins = Plugins,
-                                           extra_state = ExtraState}} ->
+                                           extra = ExtraState}} ->
             {ok,
              Req#{plugins => Plugins,
-                  extra_state => ExtraState,
+                  extra => ExtraState,
                   bindings => Bindings},
              Env#{app => App,
                   callback => Callback,
@@ -105,10 +106,10 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
                  }
             };
         {ok, Bindings, #nova_handler_value{app = App, callback = Callback,
-                                           secure = Secure, plugins = Plugins, extra_state = ExtraState}, Pathinfo} ->
+                                           secure = Secure, plugins = Plugins, extra = ExtraState}, Pathinfo} ->
             {ok,
              Req#{plugins => Plugins,
-                  extra_state => ExtraState#{pathinfo => Pathinfo},
+                  extra => ExtraState#{pathinfo => Pathinfo},
                   bindings => Bindings},
              Env#{app => App,
                   callback => Callback,
@@ -252,17 +253,22 @@ compile([{App, Options}|Tl], Dispatch, GlobalOptions) ->
 compile([App|Tl], Dispatch, Options) ->
     %% Fetch the router-module for this application
     Router =
-        case nova:detect_language() of
-            erlang ->
-                %% Router will be app_router
-                erlang:list_to_atom(io_lib:format("~s_router", [App]));
-            elixir ->
-                %% We build the router as App.Router
-                erlang:list_to_atom(io_lib:format("~s.Router", [App]));
-            lfe ->
-                %% We will build the router as app_router here aswell, but might change in the future
-                erlang:list_to_atom(io_lib:format("~s_router", [App]))
+        %% The router can be explicitly defined in the application environment,
+        %% if not we will try to detect it based on the language used in the project
+        case application:get_env(App, router_module) of
+            {ok, RouterModule} ->
+                RouterModule;
+            undefined ->
+                case nova:detect_language() of
+                    elixir ->
+                        %% We build the router as App.Router
+                        erlang:list_to_atom(io_lib:format("~s.Router", [App]));
+                    _ ->
+                        %% All other languages are using the app_router convention
+                        erlang:list_to_atom(io_lib:format("~s_router", [App]))
+                end
         end,
+
     Env = nova:get_environment(),
     Routes = get_routes(Router, Env),
 
@@ -329,11 +335,13 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
         end,
 
     Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins),
-                                extra_state = maps:get(extra_state, RouteInfo, #{})},
+                                extra = maps:get(extra, RouteInfo, #{})},
 
-    Prefix = concat_strings(maps:get(prefix, Options, ""), maps:get(prefix, RouteInfo, "")),
+    Prefix = concat_strings(maps:get(prefix, Options, ""),
+                            maps:get(prefix, RouteInfo, "")),
     Host = maps:get(host, RouteInfo, '_'),
     SubApps = maps:get(apps, RouteInfo, []),
+
     %% We need to add this app info to nova-env
     NovaEnv = nova:get_env(apps, []),
     NovaEnv0 = [{App, #{prefix => Prefix}} | NovaEnv],
@@ -396,7 +404,7 @@ parse_url(Host, [{RemotePath, LocalPath, Options}|Tl], T = #{prefix := Prefix},
     Value0 = #nova_handler_value{
                 app = App,
                 callback = fun nova_file_controller:TargetFun/1,
-                extra_state = #{static => Payload, options => Options},
+                extra = #{static => Payload, options => Options},
                 plugins = Value#nova_handler_value.plugins,
                 secure = Secure
                },
@@ -418,8 +426,8 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
 
             Methods = maps:get(methods, Options, ['_']),
 
-            ExtraState = maps:get(extra_state, Options, undefined),
-            Value0 = Value#nova_handler_value{extra_state = ExtraState},
+            ExtraState = maps:get(extra, Options, undefined),
+            Value0 = Value#nova_handler_value{extra = ExtraState},
 
             CompiledPaths =
                 lists:foldl(
@@ -487,9 +495,9 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
             {ok, Bindings, #nova_handler_value{app = App,
                                                callback = Callback,
                                                secure = Secure,
-                                               extra_state = ExtraState}} ->
+                                               extra = ExtraState}} ->
                 {
-                 Req#{extra_state => ExtraState, bindings => Bindings, resp_status_code => StatusCode},
+                 Req#{extra => ExtraState, bindings => Bindings, resp_status_code => StatusCode},
                  Env#{app => App,
                       callback => Callback,
                       secure => Secure,
@@ -546,14 +554,24 @@ method_to_binary(patch) -> <<"PATCH">>;
 method_to_binary(_) -> '_'.
 
 concat_strings(Path1, Path2) when is_binary(Path1) ->
-    concat_strings(binary_to_list(Path1), Path2);
+    concat_strings(unicode:characters_to_list(uri_string:unquote(Path1)), Path2);
 concat_strings(Path1, Path2) when is_binary(Path2) ->
-    concat_strings(Path1, binary_to_list(Path2));
+    concat_strings(Path1, unicode:characters_to_list(uri_string:unquote(Path2)));
 concat_strings(_Path1, Path2) when is_integer(Path2) ->
     Path2;
 concat_strings(Path1, Path2) when is_list(Path1), is_list(Path2) ->
     string:concat(Path1, Path2).
 
+canonicalise([], Acc) ->
+    lists:reverse(Acc);
+canonicalise([".." | _], []) ->
+    unsafe;
+canonicalise([Seg | Rest], Acc) ->
+    canonicalise(Rest, [Seg | Acc]).
+
+%% ============================
+%% Callbacks for nova_router
+%% ===========================
 -spec routes(Env :: atom()) -> [map()].
 routes(_) ->
  [#{
@@ -563,6 +581,9 @@ routes(_) ->
               ]
    }].
 
+%% =============================
+%% Test cases
+%% ============================
 -ifdef(TEST).
 -compile(export_all). %% Export all functions for testing purpose
 -include_lib("eunit/include/eunit.hrl").

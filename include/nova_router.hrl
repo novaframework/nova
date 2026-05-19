@@ -6,7 +6,7 @@
                              callback :: function() | undefined,
                              plugins = [] :: list(),
                              secure = false :: false | {Mod :: atom(), Fun :: atom()},
-                             extra_state :: any()
+                             extra :: any()
                             }).
 
 -record(cowboy_handler_value, {

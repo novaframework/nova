@@ -242,7 +242,8 @@ lookup(Method0, HostIn, Path, Trie = #{hosts := Hosts}) ->
         HostTrie ->
             M    = norm_method(Method0),
             Segs = segs_for_match(Path),
-            case do_match(Segs, HostTrie, #{}) of
+            Jailed = check_jailed(Segs),
+            case do_match(Jailed, HostTrie, #{}) of
                 {ok, Node, Binds} ->
                     case method_payload(M, Node) of
                         {ok, Payload} -> {ok, Node, Payload, Binds};
@@ -390,6 +391,21 @@ gather_routes(Node, AccSegs, Host, Acc0) ->
      ).
 
 %% Methods
+check_jailed(Segs) ->
+    check_jailed(Segs, []).
+
+check_jailed([], Acc) ->
+    Acc;
+check_jailed([<<"..">>|Tl], [_|Acc]) ->
+    case Acc of
+        [] ->
+            logger:warning("Lookup path tries to escape jail. Ensuring jail boundary is respected.");
+        _  ->
+            ok
+    end,
+    check_jailed(Tl, Acc);
+check_jailed([_|Tl], Acc) ->
+    check_jailed(Tl, Acc).
 
 -spec norm_method(method_in()) -> method().
 norm_method(M) when is_binary(M) ->

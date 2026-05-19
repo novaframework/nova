@@ -43,7 +43,7 @@ These parameters can be specified in your *main* application (Eg the one you've 
 |-----|-------------|-------|
 | `json_lib` | JSON lib to use. Read more in the subsection *Configure json lib* | `atom()` |
 | `watchers` | Watchers are external programs that will run together with Nova. Watchers are defined as list of tuples where the tuples is in format `{Command, ArgumentList}` (Like `[{my_app, "npm", ["run", "watch"], #{workdir => "priv/assets/js/my-app"}}]`) | `[{string(), string()}] | [{atom(), string(), map()}] | [{atom(), string(), list(), map()}]` |
-
+| `router_module` | Module that contains the `routes/1` callback | `atom()` |
 
 
 ### Configure json_lib
