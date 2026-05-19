@@ -111,11 +111,9 @@ maybe_take_into(SrcKey, DestKey, Src, Dest) ->
     end.
 
 normalise_crash_report([Proc | _]) when is_list(Proc) ->
-    Initial = #{},
-    M1 = report_value(error_info, type_and_reason(), Proc, Initial),
+    M1 = report_value(error_info, type_and_reason(), Proc, #{}),
     M2 = report_value(registered_name, registered_name, Proc, M1),
-    M3 = report_value(pid, pid, Proc, M2),
-    M3;
+    report_value(pid, pid, Proc, M2);
 normalise_crash_report(_) ->
     #{}.
 
