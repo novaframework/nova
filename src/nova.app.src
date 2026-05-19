@@ -13,8 +13,7 @@
                  compiler,
                  erlydtl,
                  jhn_stdlib,
-                 routing_tree,
-                 thoas
+                 routing_tree
                 ]},
   {env,[]},
   {modules,[nova]},
