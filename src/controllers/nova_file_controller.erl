@@ -11,7 +11,7 @@ get_file(#{extra_state := #{static := File, options := Options}, headers := Head
     MimeType =
         case maps:get(mimetype, Options, undefined) of
             undefined ->
-                {T, V, _} = cow_mimetypes:web(erlang:list_to_binary(Filepath)),
+                {T, V, _} = cow_mimetypes:web(unicode:characters_to_binary(Filepath)),
                 <<T/binary, "/", V/binary>>;
             MType ->
                 MType
@@ -49,7 +49,7 @@ get_dir(#{extra_state := #{pathinfo := Pathinfo, static := Dir, options := Optio
     %% This case will be invoked if a directory was set with wildcard - pathinfo will then
     %% contain the segments of the wildcard value
     Filepath = get_filepath(Dir),
-    Filepath0 = lists:foldl(fun(F, Acc) -> filename:join(Acc, binary_to_list(F)) end, Filepath, Pathinfo),
+    Filepath0 = lists:foldl(fun(F, Acc) -> filename:join(Acc, unicode:characters_to_list(uri_string:unquote(F))) end, Filepath, Pathinfo),
     case filelib:is_dir(Filepath0) of
         false ->
             %% Check if it's a file
@@ -137,7 +137,7 @@ file_info(Filepath, Filename) ->
     case file:read_file_info(filename:join(Filepath, Filename)) of
         {ok, #file_info{type = Type, size = Size, mtime = LastModified}} ->
             #{type => Type, size => Size,
-              last_modified => LastModified, filename => Filename};
+              last_modified => LastModified, filename => unicode:characters_to_binary(Filename, utf8)};
         _ ->
             undefined
     end.

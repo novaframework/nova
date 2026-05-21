@@ -1,6 +1,8 @@
 <html>
   <head>
+    <meta charset="utf-8" />
     <title>Listing of {{path}}</title>
+
   </head>
 
   <body>
