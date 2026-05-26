@@ -77,6 +77,8 @@ these automatically inside each HTTP request.
 
 -export_type([config/0, schema/0, redact_path/0]).
 
+-include("../include/nova.hrl").
+
 -define(NEW_LINE, false).
 -define(DEFAULT_MAX_TERM_SIZE, 8192).
 -define(DEFAULT_MAX_STRING_LENGTH, 8192).
@@ -422,8 +424,7 @@ walk(Data, _, _) ->
     Data.
 
 encode(Data, Config) ->
-    JsonLib = nova:get_env(json_lib, thoas),
-    Json = JsonLib:encode(Data),
+    Json = ?JSONLIB:encode(Data),
     case new_line(Config) of
         true -> [Json, new_line_type(Config)];
         false -> Json

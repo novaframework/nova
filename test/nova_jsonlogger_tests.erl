@@ -1,15 +1,13 @@
 -module(nova_jsonlogger_tests).
 -include_lib("eunit/include/eunit.hrl").
+-include("../include/nova.hrl").
 
 -define(DEFAULT_MAX_TERM_SIZE, 8192).
 -define(DEFAULT_MAX_STRING_LENGTH, 8192).
 -define(TRUNCATED_MARKER, <<"...[truncated]">>).
 
 -define(assertJSONEqual(Expected, Actual),
-    (fun() ->
-        JsonLib = nova:get_env(json_lib, thoas),
-        ?assertEqual(JsonLib:decode(Expected), JsonLib:decode(Actual))
-    end)()
+    ?assertEqual(?JSONLIB:decode(Expected), ?JSONLIB:decode(Actual))
 ).
 
 format(Event, Config) ->
@@ -32,8 +30,7 @@ format_funs_test() ->
             level => fun(alert) -> info end
         }
     },
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, Decoded} = JsonLib:decode(
+    {ok, Decoded} = ?JSONLIB:decode(
         format(#{level => alert, msg => {string, "derp"}, meta => #{time => 1}}, Config1)
     ),
     ?assertEqual(<<"info">>, maps:get(<<"level">>, Decoded)),
@@ -72,8 +69,7 @@ list_format_test() ->
             meta => #{},
             msg => {report, #{report => [{hej, "hopp"}]}}
         },
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, Decoded} = JsonLib:decode(format(ErrorReport, #{})),
+    {ok, Decoded} = ?JSONLIB:decode(format(ErrorReport, #{})),
     ?assertEqual(<<"error">>, maps:get(<<"level">>, Decoded)),
     ReportBin = maps:get(<<"report">>, Decoded),
     ?assert(is_binary(ReportBin)).
@@ -84,14 +80,13 @@ meta_without_test() ->
         msg => {report, #{answer => 42}},
         meta => #{secret => xyz}
     },
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, D1} = JsonLib:decode(format(Error, #{})),
+    {ok, D1} = ?JSONLIB:decode(format(Error, #{})),
     ?assertEqual(42, maps:get(<<"answer">>, D1)),
     ?assertEqual(<<"info">>, maps:get(<<"level">>, D1)),
     ?assertEqual(<<"xyz">>, maps:get(<<"secret">>, D1)),
 
     Config2 = #{meta_without => [secret]},
-    {ok, D2} = JsonLib:decode(format(Error, Config2)),
+    {ok, D2} = ?JSONLIB:decode(format(Error, Config2)),
     ?assertNot(maps:is_key(<<"secret">>, D2)).
 
 meta_with_test() ->
@@ -101,8 +96,7 @@ meta_with_test() ->
         meta => #{secret => xyz}
     },
     Config = #{meta_with => [level]},
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, D} = JsonLib:decode(format(Error, Config)),
+    {ok, D} = ?JSONLIB:decode(format(Error, Config)),
     ?assertNot(maps:is_key(<<"secret">>, D)),
     ?assertEqual(<<"info">>, maps:get(<<"level">>, D)).
 
@@ -139,14 +133,12 @@ jsonify_types_test() ->
 
 format_keyval_list_test() ->
     Event = #{level => info, msg => {report, [{key, <<"val">>}]}, meta => #{}},
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, Decoded} = JsonLib:decode(format(Event, #{})),
+    {ok, Decoded} = ?JSONLIB:decode(format(Event, #{})),
     ?assertEqual(<<"val">>, maps:get(<<"key">>, Decoded)).
 
 format_format_terms_test() ->
     Event = #{level => info, msg => {"hello ~s", ["world"]}, meta => #{}},
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, Decoded} = JsonLib:decode(format(Event, #{})),
+    {ok, Decoded} = ?JSONLIB:decode(format(Event, #{})),
     ?assertEqual(<<"hello world">>, maps:get(<<"text">>, Decoded)).
 
 format_error_logger_test() ->
@@ -160,20 +152,17 @@ format_error_logger_test() ->
             }},
         meta => #{}
     },
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, Decoded} = JsonLib:decode(format(Event, #{})),
+    {ok, Decoded} = ?JSONLIB:decode(format(Event, #{})),
     ?assert(maps:is_key(<<"text">>, Decoded)).
 
 nested_map_test() ->
     Event = #{level => info, msg => {report, #{outer => #{inner => value}}}, meta => #{}},
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, Decoded} = JsonLib:decode(format(Event, #{})),
+    {ok, Decoded} = ?JSONLIB:decode(format(Event, #{})),
     ?assertEqual(#{<<"inner">> => <<"value">>}, maps:get(<<"outer">>, Decoded)).
 
 list_of_maps_test() ->
     Event = #{level => info, msg => {report, #{items => [#{a => 1}, #{b => 2}]}}, meta => #{}},
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, Decoded} = JsonLib:decode(format(Event, #{})),
+    {ok, Decoded} = ?JSONLIB:decode(format(Event, #{})),
     ?assertEqual([#{<<"a">> => 1}, #{<<"b">> => 2}], maps:get(<<"items">>, Decoded)).
 
 system_time_to_iso8601_test() ->
@@ -196,8 +185,7 @@ format_port_test() ->
 %%%--- Schema tests ----------------------------------------------------
 nova_schema_default_timestamp_test() ->
     Event = #{level => info, msg => {report, #{x => 1}}, meta => #{time => 1}},
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, Decoded} = JsonLib:decode(format(Event, #{})),
+    {ok, Decoded} = ?JSONLIB:decode(format(Event, #{})),
     Time = maps:get(<<"time">>, Decoded),
     ?assert(is_binary(Time)),
     ?assert(binary:match(Time, <<"T">>) =/= nomatch).
@@ -212,8 +200,7 @@ ecs_schema_test() ->
             span_id => <<"def">>
         }
     },
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, D} = JsonLib:decode(format(Event, #{schema => ecs})),
+    {ok, D} = ?JSONLIB:decode(format(Event, #{schema => ecs})),
     ?assertEqual(<<"info">>, maps:get(<<"log.level">>, D)),
     ?assert(maps:is_key(<<"@timestamp">>, D)),
     ?assertEqual(<<"hello">>, maps:get(<<"message">>, D)),
@@ -230,8 +217,7 @@ otel_schema_test() ->
             span_id => <<"def">>
         }
     },
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, D} = JsonLib:decode(format(Event, #{schema => otel})),
+    {ok, D} = ?JSONLIB:decode(format(Event, #{schema => otel})),
     ?assertEqual(<<"WARNING">>, maps:get(<<"SeverityText">>, D)),
     ?assertEqual(13, maps:get(<<"SeverityNumber">>, D)),
     ?assertEqual(<<"watch out">>, maps:get(<<"Body">>, D)),
@@ -245,8 +231,7 @@ gcp_schema_test() ->
         msg => {report, #{text => <<"bad">>}},
         meta => #{trace_id => <<"abc">>, span_id => <<"def">>}
     },
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, D} = JsonLib:decode(format(Event, #{schema => gcp})),
+    {ok, D} = ?JSONLIB:decode(format(Event, #{schema => gcp})),
     ?assertEqual(<<"ERROR">>, maps:get(<<"severity">>, D)),
     ?assertEqual(<<"bad">>, maps:get(<<"message">>, D)),
     ?assertEqual(<<"abc">>, maps:get(<<"logging.googleapis.com/trace">>, D)),
@@ -258,8 +243,7 @@ datadog_schema_test() ->
         msg => {report, #{text => <<"hi">>}},
         meta => #{trace_id => <<"abc">>, span_id => <<"def">>}
     },
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, D} = JsonLib:decode(format(Event, #{schema => datadog})),
+    {ok, D} = ?JSONLIB:decode(format(Event, #{schema => datadog})),
     ?assertEqual(<<"info">>, maps:get(<<"status">>, D)),
     ?assertEqual(<<"hi">>, maps:get(<<"message">>, D)),
     ?assertEqual(<<"abc">>, maps:get(<<"dd.trace_id">>, D)),
@@ -271,8 +255,7 @@ ecs_source_location_test() ->
         msg => {report, #{text => <<"hi">>}},
         meta => #{file => "foo.erl", line => 42, mfa => {mod, fun_, 1}}
     },
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, D} = JsonLib:decode(format(Event, #{schema => ecs})),
+    {ok, D} = ?JSONLIB:decode(format(Event, #{schema => ecs})),
     ?assertEqual(<<"foo.erl">>, maps:get(<<"log.origin.file.name">>, D)),
     ?assertEqual(42, maps:get(<<"log.origin.file.line">>, D)),
     ?assertEqual(<<"mod:fun_/1">>, maps:get(<<"log.origin.function">>, D)).
@@ -283,8 +266,7 @@ gcp_source_location_test() ->
         msg => {report, #{text => <<"hi">>}},
         meta => #{file => "foo.erl", line => 42, mfa => {mod, fun_, 1}}
     },
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, D} = JsonLib:decode(format(Event, #{schema => gcp})),
+    {ok, D} = ?JSONLIB:decode(format(Event, #{schema => gcp})),
     Loc = maps:get(<<"logging.googleapis.com/sourceLocation">>, D),
     ?assertEqual(<<"foo.erl">>, maps:get(<<"file">>, Loc)),
     ?assertEqual(42, maps:get(<<"line">>, Loc)).
@@ -310,8 +292,7 @@ extract_error_from_stacktrace_test() ->
             stacktrace => [{mymod, myfun, 2, [{file, "mymod.erl"}, {line, 17}]}]
         }
     },
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, D} = JsonLib:decode(format(Event, #{})),
+    {ok, D} = ?JSONLIB:decode(format(Event, #{})),
     Err = maps:get(<<"error">>, D),
     ?assertEqual(<<"error">>, maps:get(<<"type">>, Err)),
     ?assertEqual(<<"badarg">>, maps:get(<<"reason">>, Err)),
@@ -330,8 +311,7 @@ extract_error_ecs_test() ->
             stacktrace => [{mymod, myfun, 2, [{file, "mymod.erl"}, {line, 17}]}]
         }
     },
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, D} = JsonLib:decode(format(Event, #{schema => ecs})),
+    {ok, D} = ?JSONLIB:decode(format(Event, #{schema => ecs})),
     ?assertEqual(<<"error">>, maps:get(<<"error.type">>, D)),
     ?assertEqual(<<"badarg">>, maps:get(<<"error.message">>, D)),
     ?assert(is_list(maps:get(<<"error.stack_trace">>, D))).
@@ -346,8 +326,7 @@ extract_error_otel_test() ->
             stacktrace => [{m, f, 0, []}]
         }
     },
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, D} = JsonLib:decode(format(Event, #{schema => otel})),
+    {ok, D} = ?JSONLIB:decode(format(Event, #{schema => otel})),
     ?assertEqual(<<"exit">>, maps:get(<<"exception.type">>, D)),
     ?assertEqual(<<"normal">>, maps:get(<<"exception.message">>, D)),
     ?assert(is_list(maps:get(<<"exception.stacktrace">>, D))).
@@ -360,8 +339,7 @@ redact_top_level_test() ->
         meta => #{}
     },
     Config = #{redact => [[password]]},
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, D} = JsonLib:decode(format(Event, Config)),
+    {ok, D} = ?JSONLIB:decode(format(Event, Config)),
     ?assertEqual(<<"[REDACTED]">>, maps:get(<<"password">>, D)),
     ?assertEqual(<<"alice">>, maps:get(<<"user">>, D)).
 
@@ -377,8 +355,7 @@ redact_nested_test() ->
         meta => #{}
     },
     Config = #{redact => [[req, headers, authorization]]},
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, D} = JsonLib:decode(format(Event, Config)),
+    {ok, D} = ?JSONLIB:decode(format(Event, Config)),
     Headers = maps:get(<<"headers">>, maps:get(<<"req">>, D)),
     ?assertEqual(<<"[REDACTED]">>, maps:get(<<"authorization">>, Headers)),
     ?assertEqual(<<"x">>, maps:get(<<"host">>, Headers)).
@@ -386,8 +363,7 @@ redact_nested_test() ->
 redact_missing_path_test() ->
     Event = #{level => info, msg => {report, #{a => 1}}, meta => #{}},
     Config = #{redact => [[nope, nothing]]},
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, D} = JsonLib:decode(format(Event, Config)),
+    {ok, D} = ?JSONLIB:decode(format(Event, Config)),
     ?assertEqual(1, maps:get(<<"a">>, D)).
 
 %%%--- Size cap tests --------------------------------------------------
@@ -402,8 +378,7 @@ cap_term_in_pipeline_test() ->
     Huge = lists:duplicate(5000, {complex, term, here}),
     Event = #{level => info, msg => {report, #{blob => Huge}}, meta => #{}},
     Config = #{max_term_size => 200},
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, D} = JsonLib:decode(format(Event, Config)),
+    {ok, D} = ?JSONLIB:decode(format(Event, Config)),
     Blob = maps:get(<<"blob">>, D),
     ?assert(is_binary(Blob)),
     ?assert(byte_size(Blob) < 400).
@@ -412,7 +387,6 @@ cap_string_in_pipeline_test() ->
     Big = binary:copy(<<"a">>, 5000),
     Event = #{level => info, msg => {report, #{s => Big}}, meta => #{}},
     Config = #{max_string_length => 50},
-    JsonLib = nova:get_env(json_lib, thoas),
-    {ok, D} = JsonLib:decode(format(Event, Config)),
+    {ok, D} = ?JSONLIB:decode(format(Event, Config)),
     S = maps:get(<<"s">>, D),
     ?assert(byte_size(S) < 200).
