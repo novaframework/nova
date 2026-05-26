@@ -50,11 +50,11 @@ These parameters can be specified in your *main* application (Eg the one you've 
 
 ### Configure json_lib
 
-One can configure which json library to use for encoding/decoding json structures. The module defined for this should expose two different functions:
+Nova uses the OTP `json` module by default. You can override it by setting `json_lib` to any module that follows the same contract:
 
-`encode(Structure) -> binary() | iolist()`
+`encode(Structure) -> binary() | iodata()`
 
-`decode(JsonString) -> {ok, Structure}`
+`decode(Binary) -> Structure` (raises on invalid input)
 
 
 ## Handling errors in Nova

@@ -23,7 +23,7 @@ not_found(Req) ->
 	  lists:member(<<"text/html">>, AcceptList)} of
         {true, _} ->
             %% Render a json response
-            JsonLib = nova:get_env(json_lib, thoas),
+            JsonLib = nova:get_env(json_lib, json),
             Json = JsonLib:encode(#{message => "Resource not found"}),
             {status, 404, #{<<"content-type">> => <<"application/json">>}, Json};
 	{_, true} ->
@@ -47,7 +47,7 @@ server_error(#{crash_info := #{status_code := StatusCode} = CrashInfo} = Req) ->
         true ->
             case cowboy_req:header(<<"accept">>, Req) of
                 <<"application/json">> ->
-                    JsonLib = nova:get_env(json_lib, thoas),
+                    JsonLib = nova:get_env(json_lib, json),
                     Json = JsonLib:encode(Variables),
                     {status, StatusCode, #{<<"content-type">> => <<"application/json">>}, Json};
                 <<"text/html">> ->
@@ -72,7 +72,7 @@ server_error(#{crash_info := #{class := Class, reason := Reason}} = Req) ->
             %% We do show a proper error response
             case cowboy_req:header(<<"accept">>, Req) of
                 <<"application/json">> ->
-                    JsonLib = nova:get_env(json_lib, thoas),
+                    JsonLib = nova:get_env(json_lib, json),
                     Json = JsonLib:encode(Variables),
                     {status, 500, #{<<"content-type">> => <<"application/json">>}, Json};
                 <<"text/html">> ->
