@@ -41,12 +41,26 @@ Wire it as the formatter on a `logger` handler, typically in `sys.config`:
 }
 ```
 
+## Schema fields
+
+The schema layer recognises a fixed vocabulary of semantic fields and renders
+each under the chosen schema's conventional key: `time`, `level`, `text` (the
+message), `trace_id`, `span_id`, a structured `error`, and source location
+(`file`/`line`/`mfa`). A field is emitted only if present in the log record.
+
 ## Trace correlation
 
-When `trace_id` and `span_id` are present in process metadata, they are
-rendered under each schema's conventional key (`trace.id`/`span.id` for
-ECS, `TraceId`/`SpanId` for OTel, etc.). `opentelemetry_nova` populates
-these automatically inside each HTTP request.
+`nova_jsonlogger` does not generate trace context. If a log record's metadata
+carries `trace_id`/`span_id`, they are relocated to the schema's conventional
+keys (`trace.id`/`span.id` for ECS, `TraceId`/`SpanId` for OTel, and so on).
+Populate them upstream, either by:
+
+- calling `logger:update_process_metadata(#{trace_id => Id, span_id => Id})`
+  in your request handling, or
+- adding the optional `opentelemetry_nova` plugin, which writes the hex
+  trace/span ids into logger metadata per request.
+
+`nova_jsonlogger` itself has no OpenTelemetry dependency.
 """.
 
 -export([
@@ -163,32 +177,23 @@ maybe_take_into(SrcKey, DestKey, Src, Dest) ->
     end.
 
 normalise_crash_report([Proc | _]) when is_list(Proc) ->
-    M1 = report_value(error_info, type_and_reason(), Proc, #{}),
-    M2 = report_value(registered_name, registered_name, Proc, M1),
-    report_value(pid, pid, Proc, M2);
+    M0 = error_info(lists:keyfind(error_info, 1, Proc)),
+    M1 = take_into(registered_name, Proc, M0),
+    take_into(pid, Proc, M1);
 normalise_crash_report(_) ->
     #{}.
 
-report_value(Key, As, Proplist, Acc) ->
-    case lists:keyfind(Key, 1, Proplist) of
-        {Key, V} when is_function(As, 1) ->
-            maps:merge(Acc, As(V));
-        {Key, V} ->
-            Acc#{As => V};
-        false ->
-            Acc
-    end.
+error_info({error_info, {Class, Reason, Stack}}) ->
+    #{type => Class, reason => Reason, stacktrace => normalise_stacktrace(Stack)};
+error_info({error_info, Other}) ->
+    #{reason => Other};
+error_info(false) ->
+    #{}.
 
-type_and_reason() ->
-    fun
-        ({Class, Reason, Stack}) ->
-            #{
-                type => Class,
-                reason => Reason,
-                stacktrace => normalise_stacktrace(Stack)
-            };
-        (Other) ->
-            #{reason => Other}
+take_into(Key, Proplist, Acc) ->
+    case lists:keyfind(Key, 1, Proplist) of
+        {Key, V} -> Acc#{Key => V};
+        false -> Acc
     end.
 
 normalise_stacktrace(Stack) ->
@@ -239,6 +244,8 @@ redact_path(_, Data) ->
 
 %%% Schema rendering. Each schema applies a canonical transform from the
 %%% (msg + meta) map onto the schema's expected field names.
+%%% trace_id/span_id are read from the log record's metadata (see merge_meta).
+%%% This module never sets them; rename/3 is a no-op when they are absent.
 apply_schema(Data, Config) ->
     Schema = maps:get(schema, Config, nova),
     case Schema of

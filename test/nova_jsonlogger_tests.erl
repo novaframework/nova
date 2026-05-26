@@ -227,6 +227,26 @@ otel_schema_test() ->
     ?assertEqual(<<"def">>, maps:get(<<"SpanId">>, D)),
     ?assert(maps:is_key(<<"Timestamp">>, D)).
 
+trace_ids_come_from_metadata_test() ->
+    Event = #{
+        level => info,
+        msg => {report, #{text => <<"hi">>}},
+        meta => #{trace_id => <<"t-1">>, span_id => <<"s-1">>}
+    },
+    {ok, D} = (json_lib()):decode(format(Event, #{schema => ecs})),
+    ?assertEqual(<<"t-1">>, maps:get(<<"trace.id">>, D)),
+    ?assertEqual(<<"s-1">>, maps:get(<<"span.id">>, D)),
+    ?assertNot(maps:is_key(<<"trace_id">>, D)),
+    ?assertNot(maps:is_key(<<"span_id">>, D)).
+
+trace_ids_absent_not_invented_test() ->
+    Event = #{level => info, msg => {report, #{text => <<"hi">>}}, meta => #{}},
+    {ok, D} = (json_lib()):decode(format(Event, #{schema => ecs})),
+    ?assertNot(maps:is_key(<<"trace.id">>, D)),
+    ?assertNot(maps:is_key(<<"span.id">>, D)),
+    ?assertNot(maps:is_key(<<"trace_id">>, D)),
+    ?assertNot(maps:is_key(<<"span_id">>, D)).
+
 gcp_schema_test() ->
     Event = #{
         level => error,
@@ -302,6 +322,34 @@ extract_error_from_stacktrace_test() ->
     ?assertEqual(<<"mymod:myfun/2">>, maps:get(<<"mfa">>, Frame)),
     ?assertEqual(<<"mymod.erl">>, maps:get(<<"file">>, Frame)),
     ?assertEqual(17, maps:get(<<"line">>, Frame)).
+
+crash_report_test() ->
+    Proc = [
+        {pid, self()},
+        {registered_name, my_proc},
+        {error_info, {error, badarg, [{mymod, myfun, 2, [{file, "mymod.erl"}, {line, 17}]}]}}
+    ],
+    Event = #{
+        level => error,
+        msg => {report, #{}},
+        meta => #{crash_report => [Proc, []]}
+    },
+    {ok, D} = (json_lib()):decode(format(Event, #{})),
+    Err = maps:get(<<"error">>, D),
+    ?assertEqual(<<"error">>, maps:get(<<"type">>, Err)),
+    ?assertEqual(<<"badarg">>, maps:get(<<"reason">>, Err)),
+    ?assertEqual(<<"my_proc">>, maps:get(<<"registered_name">>, Err)),
+    ?assert(maps:is_key(<<"pid">>, Err)),
+    [Frame | _] = maps:get(<<"stacktrace">>, Err),
+    ?assertEqual(<<"mymod:myfun/2">>, maps:get(<<"mfa">>, Frame)).
+
+crash_report_non_tuple_error_info_test() ->
+    Proc = [{error_info, some_reason}],
+    Event = #{level => error, msg => {report, #{}}, meta => #{crash_report => [Proc, []]}},
+    {ok, D} = (json_lib()):decode(format(Event, #{})),
+    Err = maps:get(<<"error">>, D),
+    ?assertEqual(<<"some_reason">>, maps:get(<<"reason">>, Err)),
+    ?assertNot(maps:is_key(<<"type">>, Err)).
 
 extract_error_ecs_test() ->
     Event = #{
