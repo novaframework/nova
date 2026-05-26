@@ -49,19 +49,23 @@ get_dir(#{extra_state := #{pathinfo := Pathinfo, static := Dir, options := Optio
     %% This case will be invoked if a directory was set with wildcard - pathinfo will then
     %% contain the segments of the wildcard value
     Filepath = get_filepath(Dir),
-    Filepath0 = lists:foldl(fun(F, Acc) -> filename:join(Acc, binary_to_list(F)) end, Filepath, Pathinfo),
-    case filelib:is_dir(Filepath0) of
-        false ->
-            %% Check if it's a file
-            case filelib:is_file(Filepath0) of
-                true ->
-                    %% It's a file
-                    get_file(Req#{extra_state => #{static => {file, Filepath0}, options => Options}});
+    case safe_join(Filepath, Pathinfo) of
+        {error, unsafe} ->
+            {status, 403};
+        {ok, Filepath0} ->
+            case filelib:is_dir(Filepath0) of
                 false ->
-                    {status, 404}
-            end;
-        true ->
-            get_dir(Req#{extra_state => #{static => {dir, Filepath0}, options => Options}})
+                    %% Check if it's a file
+                    case filelib:is_file(Filepath0) of
+                        true ->
+                            %% It's a file
+                            get_file(Req#{extra_state => #{static => {file, Filepath0}, options => Options}});
+                        false ->
+                            {status, 404}
+                    end;
+                true ->
+                    get_dir(Req#{extra_state => #{static => {dir, Filepath0}, options => Options}})
+            end
     end;
 get_dir(#{path := Path, extra_state := #{static := Dir, options := Options}} = Req) ->
     Filepath = get_filepath(Dir),
@@ -141,3 +145,44 @@ file_info(Filepath, Filename) ->
         _ ->
             undefined
     end.
+
+%% Resolve user-supplied path segments under Root and reject any result that
+%% escapes Root (e.g. via "..", URL-encoded "..", or absolute segments).
+safe_join(Root, []) ->
+    {ok, Root};
+safe_join(Root, Segments) ->
+    case decode_segments(Segments, []) of
+        {error, unsafe} ->
+            {error, unsafe};
+        {ok, Decoded} ->
+            Relative = filename:join(Decoded),
+            case filename:pathtype(Relative) of
+                relative ->
+                    case canonicalise(filename:split(Relative), []) of
+                        unsafe -> {error, unsafe};
+                        [] -> {ok, Root};
+                        Parts -> {ok, filename:join([Root | Parts])}
+                    end;
+                _ ->
+                    {error, unsafe}
+            end
+    end.
+
+decode_segments([], Acc) ->
+    {ok, lists:reverse(Acc)};
+decode_segments([Seg | Rest], Acc) ->
+    case unicode:characters_to_list(uri_string:unquote(Seg)) of
+        Str when is_list(Str) -> decode_segments(Rest, [Str | Acc]);
+        _ -> {error, unsafe}
+    end.
+
+canonicalise([], Acc) ->
+    lists:reverse(Acc);
+canonicalise([".." | _], []) ->
+    unsafe;
+canonicalise([".." | Rest], [_ | Acc]) ->
+    canonicalise(Rest, Acc);
+canonicalise(["." | Rest], Acc) ->
+    canonicalise(Rest, Acc);
+canonicalise([Seg | Rest], Acc) ->
+    canonicalise(Rest, [Seg | Acc]).
