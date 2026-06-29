@@ -52,6 +52,13 @@
          get_local_members/1
         ]).
 
+-export_type([channel/0]).
+
+-type channel() :: atom() | binary().
+%% A pubsub channel. Backed by `pg', so any atom or binary works; binaries
+%% are useful for dynamic, per-entity channels (e.g. per-tenant) without
+%% growing the atom table.
+
 -define(SCOPE, nova_scope).
 
 -include("../include/nova_pubsub.hrl").
@@ -72,7 +79,7 @@ start() ->
 %% Joining a channel with the calling process. Always returns ok
 %% @end
 %%--------------------------------------------------------------------
--spec join(Channel :: atom()) -> ok.
+-spec join(Channel :: channel()) -> ok.
 join(Channel) ->
     join(Channel, self()).
 
@@ -82,7 +89,7 @@ join(Channel) ->
 %% calling process were not part of the channel.
 %% @end
 %%--------------------------------------------------------------------
--spec leave(Channel :: atom()) -> ok | not_joined.
+-spec leave(Channel :: channel()) -> ok | not_joined.
 leave(Channel) ->
     leave(Channel, self()).
 
@@ -92,7 +99,7 @@ leave(Channel) ->
 %% Same as join/1 but with a specified process.
 %% @end
 %%--------------------------------------------------------------------
--spec join(Channel :: atom(), Pid :: pid()) -> ok.
+-spec join(Channel :: channel(), Pid :: pid()) -> ok.
 join(Channel, Pid) when is_pid(Pid) ->
     pg:join(?SCOPE, Channel, Pid).
 
@@ -101,7 +108,7 @@ join(Channel, Pid) when is_pid(Pid) ->
 %% Same as leave/1 but with a specified process.
 %% @end
 %%--------------------------------------------------------------------
--spec leave(Channel :: atom(), Pid :: pid()) -> ok | not_joined.
+-spec leave(Channel :: channel(), Pid :: pid()) -> ok | not_joined.
 leave(Channel, Pid) ->
     pg:leave(?SCOPE, Channel, Pid).
 
@@ -111,7 +118,7 @@ leave(Channel, Pid) ->
 %% to differentiate messages within the same channel.
 %% @end
 %%--------------------------------------------------------------------
--spec broadcast(Channel :: atom(), Topic :: list() | binary(), Message :: any()) -> ok.
+-spec broadcast(Channel :: channel(), Topic :: list() | binary(), Message :: any()) -> ok.
 broadcast(Channel, Topic, Message) ->
     Members = get_members(Channel),
     Envelope = create_envelope(Channel, self(), Topic, Message),
@@ -125,7 +132,7 @@ broadcast(Channel, Topic, Message) ->
 %% node.
 %% @end
 %%--------------------------------------------------------------------
--spec local_broadcast(Channel :: atom(), Topic :: list() | binary(), Message :: any()) -> ok.
+-spec local_broadcast(Channel :: channel(), Topic :: list() | binary(), Message :: any()) -> ok.
 local_broadcast(Channel, Topic, Message) ->
     Members = get_local_members(Channel),
     Envelope = create_envelope(Channel, self(), Topic, Message),
@@ -138,7 +145,7 @@ local_broadcast(Channel, Topic, Message) ->
 %% Returns all members for a given channel
 %% @end
 %%--------------------------------------------------------------------
--spec get_members(Channel :: atom()) -> [pid()].
+-spec get_members(Channel :: channel()) -> [pid()].
 get_members(Channel) ->
     pg:get_members(?SCOPE, Channel).
 
@@ -148,7 +155,7 @@ get_members(Channel) ->
 %% same node.
 %% @end
 %%--------------------------------------------------------------------
--spec get_local_members(Channel :: atom()) -> [pid()].
+-spec get_local_members(Channel :: channel()) -> [pid()].
 get_local_members(Channel) ->
     pg:get_local_members(?SCOPE, Channel).
 
