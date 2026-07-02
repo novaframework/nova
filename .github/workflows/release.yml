@@ -3,6 +3,11 @@ name: Release
 on:
   push:
     branches: [master]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - LICENSE
+      - .gitignore
 
 permissions:
   contents: write
