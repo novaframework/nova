@@ -4,8 +4,11 @@ on:
   push:
     branches: [master]
     paths-ignore:
-      - '**/*.md'
+      - '**/*.md'       # README, AGENTS.md, CLAUDE.md, docs
       - 'docs/**'
+      - '.claude/**'    # repo-level agent config (Claude Code agents/commands/hooks)
+      - AGENTS.md
+      - CLAUDE.md
       - LICENSE
       - .gitignore
 
