@@ -268,14 +268,17 @@ handle_websocket({websocket, ControllerData}, Callback, Req) ->
 %% returned and the state. And the handler should return what cowboy expects.
 %%
 %% Example of a valid return value is {reply, Frame, State}
+%%
+%% The reply payload may be a single frame or a list of them, per
+%% nova_websocket:call_result/0.
 %% @end
 %%-----------------------------------------------------------------
-handle_ws({reply, Frame, NewControllerData}, State = #{commands := Commands}) ->
+handle_ws({reply, Frames, NewControllerData}, State = #{commands := Commands}) ->
     State#{controller_data => NewControllerData,
-           commands => [Frame|Commands]};
-handle_ws({reply, Frame, NewControllerData, hibernate}, State = #{commands := Commands}) ->
+           commands => prepend_frames(Frames, Commands)};
+handle_ws({reply, Frames, NewControllerData, hibernate}, State = #{commands := Commands}) ->
     State#{controller_data => NewControllerData,
-           commands => [Frame|Commands],
+           commands => prepend_frames(Frames, Commands),
            hibernate => true};
 handle_ws({ok, NewControllerData}, State) ->
     State#{controller_data => NewControllerData};
@@ -291,6 +294,19 @@ handle_ws(ok, State) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+%% nova_ws_handler passes `commands' to cowboy untouched, and cowboy treats
+%% every top-level element as one command - so a list-valued reply has to be
+%% spliced in, not consed as a single element. Consing it made the whole list
+%% arrive at cow_ws:frame/2 as if it were one frame, which is a function_clause
+%% that takes the connection process down with it.
+%%
+%% No cow_ws:frame() is itself a list (they are atoms and tuples), so is_list/1
+%% separates the two shapes unambiguously. An empty list contributes nothing.
+prepend_frames(Frames, Commands) when is_list(Frames) ->
+    Frames ++ Commands;
+prepend_frames(Frame, Commands) ->
+    [Frame|Commands].
 
 handle_view(View, Variables, Options, Req) ->
     Variables1 = maybe_inject_csrf_token(Variables, Req),
