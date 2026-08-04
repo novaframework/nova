@@ -85,7 +85,7 @@ merge_meta(Msg, Meta0, Config) ->
     maps:merge(Msg, Meta2).
 
 encode(Data, Config) ->
-    JsonLib = nova:get_env(json_lib, thoas),
+    JsonLib = nova:get_env(json_lib, json),
     Json = JsonLib:encode(Data),
     case new_line(Config) of
         true -> [Json, new_line_type(Config)];
@@ -162,7 +162,8 @@ meta_with(Meta, _ConfigNotPresent) ->
 -include_lib("eunit/include/eunit.hrl").
 
 -define(assertJSONEqual(Expected, Actual),
-    ?assertEqual(thoas:decode(Expected), thoas:decode(Actual))
+    ?assertEqual(json:decode(iolist_to_binary(Expected)),
+                 json:decode(iolist_to_binary(Actual)))
 ).
 
 format_test() ->
@@ -260,20 +261,20 @@ meta_without_test() ->
         meta => #{secret => xyz}
     },
     ?assertEqual(
-        {ok, #{
+        #{
             <<"answer">> => 42,
             <<"level">> => <<"info">>,
             <<"secret">> => <<"xyz">>
-        }},
-        thoas:decode(format(Error, #{}))
+        },
+        json:decode(iolist_to_binary(format(Error, #{})))
     ),
     Config2 = #{meta_without => [secret]},
     ?assertEqual(
-        {ok, #{
+        #{
             <<"answer">> => 42,
             <<"level">> => <<"info">>
-        }},
-        thoas:decode(format(Error, Config2))
+        },
+        json:decode(iolist_to_binary(format(Error, Config2)))
     ),
     ok.
 
@@ -284,59 +285,52 @@ meta_with_test() ->
         meta => #{secret => xyz}
     },
     ?assertEqual(
-        {ok, #{
+        #{
             <<"answer">> => 42,
             <<"level">> => <<"info">>,
             <<"secret">> => <<"xyz">>
-        }},
-        thoas:decode(format(Error, #{}))
+        },
+        json:decode(iolist_to_binary(format(Error, #{})))
     ),
     Config2 = #{meta_with => [level]},
     ?assertEqual(
-        {ok, #{
+        #{
             <<"answer">> => 42,
             <<"level">> => <<"info">>
-        }},
-        thoas:decode(format(Error, Config2))
+        },
+        json:decode(iolist_to_binary(format(Error, Config2)))
     ),
     ok.
 
 newline_test() ->
     ConfigDefault = #{new_line => true},
     ?assertEqual(
-        [<<"{\"level\":\"alert\",\"text\":\"derp\"}">>, <<"\n">>],
-        format(#{level => alert, msg => {string, "derp"}, meta => #{}}, ConfigDefault)
+        <<"{\"level\":\"alert\",\"text\":\"derp\"}\n">>,
+        iolist_to_binary(format(#{level => alert, msg => {string, "derp"}, meta => #{}}, ConfigDefault))
     ),
     ConfigCRLF = #{
         new_line_type => crlf,
         new_line => true
     },
     ?assertEqual(
-        [<<"{\"level\":\"alert\",\"text\":\"derp\"}">>, <<"\r\n">>],
-        format(#{level => alert, msg => {string, "derp"}, meta => #{}}, ConfigCRLF)
+        <<"{\"level\":\"alert\",\"text\":\"derp\"}\r\n">>,
+        iolist_to_binary(format(#{level => alert, msg => {string, "derp"}, meta => #{}}, ConfigCRLF))
     ).
 
 newline_types_test() ->
     Base = #{level => alert, msg => {string, "x"}, meta => #{}},
-    %% nl
     ?assertEqual(<<"\n">>, lists:last(format(Base, #{new_line => true, new_line_type => nl}))),
-    %% unix
     ?assertEqual(<<"\n">>, lists:last(format(Base, #{new_line => true, new_line_type => unix}))),
-    %% crlf
     ?assertEqual(<<"\r\n">>, lists:last(format(Base, #{new_line => true, new_line_type => crlf}))),
-    %% windows
     ?assertEqual(<<"\r\n">>, lists:last(format(Base, #{new_line => true, new_line_type => windows}))),
-    %% cr
     ?assertEqual(<<"\r">>, lists:last(format(Base, #{new_line => true, new_line_type => cr}))),
-    %% macos9
     ?assertEqual(<<"\r">>, lists:last(format(Base, #{new_line => true, new_line_type => macos9}))),
-    %% default (no new_line_type specified)
     ?assertEqual(<<"\n">>, lists:last(format(Base, #{new_line => true}))).
 
 no_newline_test() ->
     Base = #{level => alert, msg => {string, "x"}, meta => #{}},
     Result = format(Base, #{}),
-    ?assert(is_binary(Result)).
+    ?assert(is_binary(iolist_to_binary(Result))).
 
 jsonify_types_test() ->
     %% atom
@@ -365,29 +359,29 @@ jsonify_types_test() ->
 
 format_keyval_list_test() ->
     Event = #{level => info, msg => {report, [{key, <<"val">>}]}, meta => #{}},
-    {ok, Decoded} = thoas:decode(format(Event, #{})),
+    Decoded = json:decode(iolist_to_binary(format(Event, #{}))),
     ?assertEqual(<<"val">>, maps:get(<<"key">>, Decoded)).
 
 format_format_terms_test() ->
     Event = #{level => info, msg => {"hello ~s", ["world"]}, meta => #{}},
-    {ok, Decoded} = thoas:decode(format(Event, #{})),
+    Decoded = json:decode(iolist_to_binary(format(Event, #{}))),
     ?assertEqual(<<"hello world">>, maps:get(<<"text">>, Decoded)).
 
 format_error_logger_test() ->
     Event = #{level => error,
               msg => {report, #{format => "error: ~p", args => [bad], label => {error_logger, error}}},
               meta => #{}},
-    {ok, Decoded} = thoas:decode(format(Event, #{})),
+    Decoded = json:decode(iolist_to_binary(format(Event, #{}))),
     ?assert(maps:is_key(<<"text">>, Decoded)).
 
 nested_map_test() ->
     Event = #{level => info, msg => {report, #{outer => #{inner => value}}}, meta => #{}},
-    {ok, Decoded} = thoas:decode(format(Event, #{})),
+    Decoded = json:decode(iolist_to_binary(format(Event, #{}))),
     ?assertEqual(#{<<"inner">> => <<"value">>}, maps:get(<<"outer">>, Decoded)).
 
 list_of_maps_test() ->
     Event = #{level => info, msg => {report, #{items => [#{a => 1}, #{b => 2}]}}, meta => #{}},
-    {ok, Decoded} = thoas:decode(format(Event, #{})),
+    Decoded = json:decode(iolist_to_binary(format(Event, #{}))),
     ?assertEqual([#{<<"a">> => 1}, #{<<"b">> => 2}], maps:get(<<"items">>, Decoded)).
 
 system_time_to_iso8601_test() ->
