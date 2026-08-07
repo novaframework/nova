@@ -3,6 +3,14 @@ name: Release
 on:
   push:
     branches: [master]
+    paths-ignore:
+      - '**/*.md'       # README, AGENTS.md, CLAUDE.md, docs
+      - 'docs/**'
+      - '.claude/**'    # repo-level agent config (Claude Code agents/commands/hooks)
+      - AGENTS.md
+      - CLAUDE.md
+      - LICENSE
+      - .gitignore
 
 permissions:
   contents: write
