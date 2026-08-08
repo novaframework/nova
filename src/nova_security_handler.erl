@@ -41,7 +41,6 @@ execute(Req = #{host := Host}, Env = #{secure := Callback}) ->
     end.
 
 
-
 handle_response({true, AuthData}, Req, Env) ->
     case maps:get(cowboy_handler, Env, undefined) of
         nova_ws_handler ->
@@ -53,9 +52,9 @@ handle_response({true, AuthData}, Req, Env) ->
 handle_response(true, Req, Env) ->
     {ok, Req, Env};
 handle_response({false, Headers}, Req, Env) ->
-    handle_response({false, 401, Headers, false}, Req, Env);
+    handle_response({false, 401, Headers, <<>>}, Req, Env);
 handle_response({false, StatusCode, Headers}, Req, Env) ->
-    handle_response({false, StatusCode, Headers, false}, Req, Env);
+    handle_response({false, StatusCode, Headers, <<>>}, Req, Env);
 handle_response({false, StatusCode, Headers, Body}, Req = #{host := Host}, Env) ->
     {ok, Req1, _Env1} =
         case Body of

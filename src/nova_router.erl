@@ -358,6 +358,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
 parse_url(_Host, [], _Prefix, _Value, Tree) -> {ok, Tree};
 parse_url(Host, [{StatusCode, Callback, Options}|Tl], T, Value, Tree) when is_integer(StatusCode) andalso
                                                                            is_function(Callback) ->
+    %% Store this information in a separate table for easy retrieval when we need to execute the callback for this status code
     Value0 = Value#nova_handler_value{callback = Callback},
     Res = lists:foldl(fun(Method, Tree0) ->
                               insert(Host, StatusCode, Method, Value0, Tree0)

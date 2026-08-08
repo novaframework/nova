@@ -205,8 +205,10 @@ member(Method0, Path, Trie) ->
 -spec member(method_in(), host_in(), iodata(), trie()) -> boolean().
 member(Method0, HostIn, Path, Trie) ->
     case lookup(Method0, HostIn, Path, Trie) of
-        {ok, _Node, _Payload, _Binds} -> true;
-        error                         -> false
+        {ok, _Node, _Payload, _Binds} ->
+            true;
+        _ ->
+            false
     end.
 
 %%--------------------------------------------------------------------
@@ -221,7 +223,7 @@ member(Method0, HostIn, Path, Trie) ->
 %%--------------------------------------------------------------------
 
 -spec lookup(iodata(), trie()) ->
-          {ok, trie_node(), term(), #{binary() => binary()}} | error.
+          {ok, trie_node(), term(), #{binary() => binary()}} | error | {error, comparator_not_found, MethodsAllowed :: binary() | [binary()]}.
 lookup(Path, Trie) ->
     lookup(<<"ALL">>, '_', Path, Trie).
 
@@ -246,8 +248,10 @@ lookup(Method0, HostIn, Path, Trie = #{hosts := Hosts}) ->
             case do_match(Jailed, HostTrie, #{}) of
                 {ok, Node, Binds} ->
                     case method_payload(M, Node) of
-                        {ok, Payload} -> {ok, Node, Payload, Binds};
-                        error         -> error
+                        {ok, Payload, Segs} ->
+                            {ok, Node, Payload, Binds};
+                        Error ->
+                            Error
                     end;
                 _ ->
                     error
@@ -429,8 +433,10 @@ method_payload(M, #{terminal := Term}) ->
                     {ok, Payload};
                 error ->
                     case maps:to_list(Term) of
-                        []           -> error;
-                        [{_, P} | _] -> {ok, P}
+                        [] ->
+                            {error, comparator_not_found, Term};
+                        [{_, P} | _] ->
+                            {ok, P}
                     end
             end;
         _ ->
@@ -439,8 +445,10 @@ method_payload(M, #{terminal := Term}) ->
                     {ok, Payload};
                 error ->
                     case maps:find(<<"ALL">>, Term) of
-                        {ok, Payload} -> {ok, Payload};
-                        error         -> error
+                        {ok, Payload} ->
+                            {ok, Payload};
+                        error ->
+                            {error, comparator_not_found, Term}
                     end
             end
     end.
@@ -718,10 +726,12 @@ do_match([Seg | Rest], N, Binds0) ->
                         error -> error;
                         Ok    -> Ok
                     end;
-                error -> error
+                error ->
+                    error
             end,
     case Exact of
-        {ok, _, _} -> Exact;
+        {ok, _, _} ->
+            Exact;
         error ->
             %% 2) Wildcard fallback
             case find_wild_child(Cs) of
