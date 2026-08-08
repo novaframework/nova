@@ -23,6 +23,7 @@ nova_pubsub_test_() ->
       fun empty_channel_returns_empty/0,
       fun multiple_processes_same_channel/0,
       fun envelope_structure/0,
+      fun binary_channel_join_and_broadcast/0,
       fun start_returns_ok/0
      ]}.
 
@@ -109,6 +110,15 @@ envelope_structure() ->
     ?assertEqual("test_topic", Msg#nova_pubsub.topic),
     ?assertEqual(#{data => 42}, Msg#nova_pubsub.payload),
     nova_pubsub:leave(Channel).
+
+binary_channel_join_and_broadcast() ->
+    Channel = <<"tenant:", (integer_to_binary(erlang:unique_integer([positive])))/binary>>,
+    ?assertEqual(ok, nova_pubsub:join(Channel)),
+    ?assert(lists:member(self(), nova_pubsub:get_members(Channel))),
+    ?assertEqual(ok, nova_pubsub:broadcast(Channel, <<"t">>, payload)),
+    ?assertMatch(#nova_pubsub{channel = Channel, payload = payload}, recv()),
+    ?assertEqual(ok, nova_pubsub:leave(Channel)),
+    ?assertNot(lists:member(self(), nova_pubsub:get_members(Channel))).
 
 start_returns_ok() ->
     ?assertEqual(ok, nova_pubsub:start()).
