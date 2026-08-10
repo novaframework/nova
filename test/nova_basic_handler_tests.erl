@@ -136,6 +136,56 @@ handle_ws_reply_hibernate_test() ->
     ?assertEqual(true, maps:get(hibernate, Result)),
     ?assertEqual([{text, <<"b">>}, {text, <<"a">>}], maps:get(commands, Result)).
 
+%% nova_websocket:call_result/0 allows [cow_ws:frame()], and nova_ws_handler
+%% hands `commands' to cowboy untouched - cowboy reads that list left to right,
+%% one command per element. A list-valued reply must therefore be spliced in
+%% order. Consing it instead delivered the whole list to cow_ws:frame/2 as a
+%% single frame and killed the connection process with a function_clause.
+handle_ws_reply_frame_list_test() ->
+    State = #{controller_data => #{}, commands => []},
+    Result = nova_basic_handler:handle_ws(
+        {reply, [{text, <<"a">>}, {text, <<"b">>}], #{new => data}}, State),
+    ?assertEqual(#{new => data}, maps:get(controller_data, Result)),
+    ?assertEqual([{text, <<"a">>}, {text, <<"b">>}], maps:get(commands, Result)).
+
+%% Frame order is wire order, so the list may not be reversed on the way in.
+handle_ws_reply_frame_list_preserves_order_test() ->
+    Frames = [{text, <<"1">>}, {binary, <<"2">>}, {text, <<"3">>}],
+    State = #{controller_data => #{}, commands => []},
+    Result = nova_basic_handler:handle_ws({reply, Frames, #{}}, State),
+    ?assertEqual(Frames, maps:get(commands, Result)).
+
+handle_ws_reply_frame_list_keeps_earlier_commands_last_test() ->
+    State = #{controller_data => #{}, commands => [{text, <<"earlier">>}]},
+    Result = nova_basic_handler:handle_ws(
+        {reply, [{text, <<"a">>}, {text, <<"b">>}], #{}}, State),
+    ?assertEqual(
+        [{text, <<"a">>}, {text, <<"b">>}, {text, <<"earlier">>}],
+        maps:get(commands, Result)).
+
+handle_ws_reply_empty_frame_list_test() ->
+    State = #{controller_data => #{}, commands => [{text, <<"earlier">>}]},
+    Result = nova_basic_handler:handle_ws({reply, [], #{}}, State),
+    ?assertEqual([{text, <<"earlier">>}], maps:get(commands, Result)).
+
+handle_ws_reply_frame_list_hibernate_test() ->
+    State = #{controller_data => #{}, commands => []},
+    Result = nova_basic_handler:handle_ws(
+        {reply, [{text, <<"a">>}, {text, <<"b">>}], #{}, hibernate}, State),
+    ?assertEqual(true, maps:get(hibernate, Result)),
+    ?assertEqual([{text, <<"a">>}, {text, <<"b">>}], maps:get(commands, Result)).
+
+%% close/ping/pong are bare atoms rather than tuples; they must still be treated
+%% as one frame and not mistaken for anything list-shaped.
+handle_ws_reply_atom_frame_test() ->
+    State = #{controller_data => #{}, commands => []},
+    [
+        ?assertEqual(
+            [F],
+            maps:get(commands, nova_basic_handler:handle_ws({reply, F, #{}}, State)))
+     || F <- [close, ping, pong]
+    ].
+
 handle_ws_ok_test() ->
     State = #{controller_data => old, commands => []},
     Result = nova_basic_handler:handle_ws({ok, new_data}, State),

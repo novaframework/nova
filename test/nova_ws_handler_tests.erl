@@ -199,6 +199,43 @@ websocket_info_reply_test_() ->
         ?assertMatch({[{text, <<"pong">>}], _}, Result)
     end}.
 
+%% The commands list goes to cowboy untouched and it reads one command per
+%% element, so a controller replying with several frames must produce several
+%% elements. Previously the whole list became one element and reached
+%% cow_ws:frame/2 as a single frame, taking the connection process down.
+websocket_info_reply_frame_list_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        meck:expect(test_ws_mod, websocket_info, fun(_Msg, CD) ->
+            {reply, [{text, <<"a">>}, {text, <<"b">>}], CD}
+        end),
+        State = make_ws_state(),
+        Result = nova_ws_handler:websocket_info(ping, State),
+        ?assertMatch({[{text, <<"a">>}, {text, <<"b">>}], _}, Result)
+    end}.
+
+websocket_handle_reply_frame_list_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        meck:expect(test_ws_mod, websocket_handle, fun(_Frame, CD) ->
+            {reply, [{text, <<"a">>}, {binary, <<"b">>}], CD}
+        end),
+        State = make_ws_state(),
+        Result = nova_ws_handler:websocket_handle({text, <<"hi">>}, State),
+        ?assertMatch({[{text, <<"a">>}, {binary, <<"b">>}], _}, Result)
+    end}.
+
+%% Every element cowboy receives has to be something cow_ws:frame/2 accepts.
+%% Asserting that directly is what would have caught the original defect: the
+%% shape looked right in the handler's return value and only failed inside
+%% cowboy.
+websocket_info_reply_frame_list_is_encodable_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        meck:expect(test_ws_mod, websocket_info, fun(_Msg, CD) ->
+            {reply, [{text, <<"a">>}, {text, <<"b">>}], CD}
+        end),
+        {Commands, _State} = nova_ws_handler:websocket_info(ping, make_ws_state()),
+        [?assertMatch(<<_/binary>>, iolist_to_binary(cow_ws:frame(F, #{}))) || F <- Commands]
+    end}.
+
 %%====================================================================
 %% terminate/3
 %%====================================================================
