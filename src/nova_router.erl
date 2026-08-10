@@ -79,13 +79,13 @@ compiled_apps() ->
 
 -spec compiled_apps(DispatchKey :: dispatch_key()) -> [{App :: atom(), Prefix :: list()}].
 compiled_apps(DispatchKey) ->
-    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    StorageBackend = storage_backend(),
     StorageBackend:get(apps_key(DispatchKey), []).
 
 
 %% TODO! We need to implement a way to get and remove plugins for a path
 plugins() ->
-    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    StorageBackend = storage_backend(),
     StorageBackend:get(?NOVA_PLUGINS, []).
 
 -spec compile(Apps :: [atom() | {atom(), map()}]) -> nova_routing_trie:trie().
@@ -102,7 +102,7 @@ compile(Apps) ->
           nova_routing_trie:trie().
 compile(Apps, DispatchKey) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
-    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    StorageBackend = storage_backend(),
 
     StoredDispatch = StorageBackend:get(DispatchKey,
                                         nova_routing_trie:new(#{strict => UseStrict})),
@@ -115,7 +115,7 @@ compile(Apps, DispatchKey) ->
                                                           when Req::cowboy_req:req(),
                                                                Env0::cowboy_middleware:env().
 execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
-    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    StorageBackend = storage_backend(),
     Dispatch = StorageBackend:get(dispatch_key(Env)),
     case nova_routing_trie:find(Host, Path, Method, Dispatch) of
         {error, not_found} ->
@@ -179,7 +179,7 @@ lookup_url(Host, Path) ->
 -spec lookup_url(Host :: binary() | atom(), Path :: nova_routing_trie:path(),
                  Method :: nova_routing_trie:comparator()) -> lookup_result().
 lookup_url(Host, Path, Method) ->
-    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    StorageBackend = storage_backend(),
     Dispatch = StorageBackend:get(?NOVA_DISPATCH),
     lookup_url(Host, Path, Method, Dispatch).
 
@@ -237,7 +237,7 @@ add_routes(App, Routes, _DispatchKey) ->
     throw({error, {invalid_routes, App, Routes}}).
 
 insert_route_maps(App, Routes, DispatchKey) ->
-    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    StorageBackend = storage_backend(),
     Dispatch = StorageBackend:get(DispatchKey),
 
     %% Take out the prefix for the app and store it in the persistent store
@@ -278,7 +278,7 @@ remove_application(Application) ->
 %%--------------------------------------------------------------------
 -spec remove_application(Application :: atom(), DispatchKey :: dispatch_key()) -> ok.
 remove_application(Application, DispatchKey) when is_atom(Application) ->
-    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    StorageBackend = storage_backend(),
     Dispatch = StorageBackend:get(DispatchKey),
     {ok, Dispatch0} =
         nova_routing_trie:foldl(Dispatch,
@@ -309,7 +309,7 @@ route_app(_Route)                                                    -> undefine
 delete_dispatch(?NOVA_DISPATCH) ->
     ok;
 delete_dispatch(DispatchKey) ->
-    case application:get_env(nova, dispatch_backend, persistent_term) of
+    case storage_backend() of
         persistent_term ->
             persistent_term:erase(DispatchKey),
             persistent_term:erase(apps_key(DispatchKey)),
@@ -365,7 +365,7 @@ compile([App|Tl], Dispatch, Options) ->
     {ok, Dispatch1, _Options2} = compile_paths(Routes, Dispatch, Options1),
 
     %% Take out the prefix for the app and store it in the persistent store
-    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    StorageBackend = storage_backend(),
 
     CompiledApps = StorageBackend:get(apps_key(maps:get(dispatch_key, Options, ?NOVA_DISPATCH)), []),
 
@@ -555,7 +555,7 @@ render_status_page(StatusCode, Data, Req) ->
                          Req :: cowboy_req:req(),
                          Env :: map()) -> {ok, Req0 :: cowboy_req:req(), Env :: map()}.
 render_status_page(Host, StatusCode, Data, Req, Env) ->
-    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    StorageBackend = storage_backend(),
     Dispatch = StorageBackend:get(dispatch_key(Env)),
     {Req0, Env0} =
         case nova_routing_trie:find(Host, StatusCode, '_', Dispatch) of
@@ -583,6 +583,17 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
 
 insert_opts(T) ->
     maps:get(insert_opts, T, #{}).
+
+%% The module the dispatch table is stored in. Configurable, so it has to be
+%% narrowed to a module before it can be called.
+-spec storage_backend() -> module().
+storage_backend() ->
+    case application:get_env(nova, dispatch_backend, persistent_term) of
+        Backend when is_atom(Backend) -> Backend;
+        Other ->
+            ?LOG_ERROR(#{reason => <<"dispatch_backend must be a module">>, value => Other}),
+            persistent_term
+    end.
 
 %% The listener's dispatch key, defaulting to the one the bootstrap listener
 %% uses so an Env built before multi-listener support still resolves.
@@ -618,7 +629,7 @@ insert(Host, Path, Combinator, Value, Tree, Options) ->
 
 
 add_plugin(Plugin) ->
-    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    StorageBackend = storage_backend(),
     StoredPlugins = StorageBackend:get(?NOVA_PLUGINS, []),
     Plugins1 = lists:umerge([[Plugin], StoredPlugins]),
     case Plugins1 of

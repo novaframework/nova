@@ -11,7 +11,35 @@
 %%% and a case here.
 -module(nova_full_app_SUITE).
 
--compile([export_all, nowarn_export_all]).
+-export([all/0, groups/0, init_per_suite/1, end_per_suite/1]).
+
+-export([
+         root_route/1,
+         json_route/1,
+         single_binding/1,
+         multiple_bindings/1,
+         literal_beats_binding/1,
+         all_declared_methods/1,
+         any_method_route/1,
+         method_not_allowed/1,
+         redirect/1,
+         custom_status_code/1,
+         extra_state_reaches_controller/1,
+         host_scoped_route/1,
+         static_file_from_priv/1,
+         static_file_nested/1,
+         static_directory_index/1,
+         static_file_missing/1,
+         secure_route_rejects_anonymous/1,
+         secure_route_accepts_token/1,
+         auth_data_reaches_controller/1,
+         pre_and_post_request_plugins_run/1,
+         custom_not_found/1,
+         controller_crash_is_a_500/1,
+         websocket_echo/1,
+         sub_app_mounted_under_prefix/1,
+         add_and_remove_application/1
+        ]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").

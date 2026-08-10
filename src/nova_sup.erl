@@ -223,7 +223,7 @@ find_listener(Host, Port) ->
 setup_cowboy(Configuration) ->
     case start_cowboy(Configuration) of
         {ok, App, Host, Port} ->
-            Host0 = inet:ntoa(Host),
+            Host0 = format_host(Host),
             CowboyVersion = get_version(cowboy),
             NovaVersion = get_version(nova),
             UseStacktrace = application:get_env(nova, use_stacktrace, false),
@@ -410,6 +410,11 @@ bind_tls(Ref, Host, Port, Configuration, CowboyOptions) ->
             ?LOG_ERROR(#{msg => <<"Could not start cowboy with SSL">>, reason => Reason}),
             {error, Reason}
     end.
+
+%% The ip configuration key is an address tuple in practice, but ranch also
+%% accepts a hostname, which inet:ntoa/1 would crash on.
+format_host(Host) when is_tuple(Host) -> inet:ntoa(Host);
+format_host(Host)                     -> Host.
 
 get_version(Application) ->
     case lists:keyfind(Application, 1, application:loaded_applications()) of

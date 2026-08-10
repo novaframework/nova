@@ -6,7 +6,17 @@
 %%% application to an already-bound port, and tearing both back down.
 -module(nova_multi_listener_SUITE).
 
--compile([export_all, nowarn_export_all]).
+-export([all/0, init_per_suite/1, end_per_suite/1]).
+
+-export([
+         bootstrap_listener_is_registered/1,
+         second_application_gets_its_own_port/1,
+         listeners_do_not_serve_each_others_routes/1,
+         second_application_on_a_bound_port_shares_the_listener/1,
+         adding_a_started_application_again_is_an_error/1,
+         removing_an_application_stops_only_its_listener/1,
+         removing_an_unknown_application_is_an_error/1
+        ]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").

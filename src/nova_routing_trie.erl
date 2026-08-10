@@ -275,14 +275,31 @@ norm_options(Opts) ->
 -spec norm_host(host_in()) -> host_key().
 norm_host('_')                       -> '_';
 norm_host(Host) when is_binary(Host) -> Host;
-norm_host(Host) when is_list(Host)   -> unicode:characters_to_binary(Host);
+norm_host(Host) when is_list(Host)   -> to_binary(Host);
 norm_host(Host) when is_atom(Host)   -> atom_to_binary(Host, utf8).
 
 -spec norm_comparator(comparator_in()) -> comparator().
-norm_comparator('_')                    -> '_';
-norm_comparator(C) when is_binary(C)    -> string:uppercase(C);
-norm_comparator(C) when is_atom(C)      -> string:uppercase(atom_to_binary(C, utf8));
-norm_comparator(C) when is_list(C)      -> string:uppercase(unicode:characters_to_binary(C)).
+norm_comparator('_')                 -> '_';
+norm_comparator(C) when is_binary(C) -> upper(C);
+norm_comparator(C) when is_atom(C)   -> upper(atom_to_binary(C, utf8));
+norm_comparator(C) when is_list(C)   -> upper(to_binary(C)).
+
+%% unicode:characters_to_binary/1 answers with an error tuple rather than
+%% raising, and silently treating that as a segment would put an unroutable
+%% route in the table.
+-spec to_binary(unicode:chardata()) -> binary().
+to_binary(Data) ->
+    case unicode:characters_to_binary(Data) of
+        Binary when is_binary(Binary) -> Binary;
+        Error                         -> erlang:error({invalid_unicode, Error})
+    end.
+
+-spec upper(binary()) -> binary().
+upper(Binary) ->
+    case string:uppercase(Binary) of
+        Upper when is_binary(Upper) -> Upper;
+        Other                       -> to_binary(Other)
+    end.
 
 %%====================================================================
 %% Internal functions - path parsing
@@ -293,7 +310,7 @@ norm_comparator(C) when is_list(C)      -> string:uppercase(unicode:characters_t
 parse_path(StatusCode) when is_integer(StatusCode) ->
     [StatusCode];
 parse_path(Path) when is_list(Path) ->
-    parse_path(unicode:characters_to_binary(Path));
+    parse_path(to_binary(Path));
 parse_path(Path) when is_binary(Path) ->
     [?ROOT | to_keys(split(Path), [])];
 parse_path(Path) ->
@@ -320,7 +337,7 @@ parse_lookup_path(Path) when is_list(Path) ->
     case lists:all(fun erlang:is_integer/1, Path) of
         true ->
             %% A flat string.
-            parse_lookup_path(unicode:characters_to_binary(Path));
+            parse_lookup_path(to_binary(Path));
         false ->
             %% Already-split segments.
             Segments = [seg_to_binary(S) || S <- Path],
@@ -328,7 +345,7 @@ parse_lookup_path(Path) when is_list(Path) ->
     end.
 
 seg_to_binary(S) when is_binary(S) -> S;
-seg_to_binary(S) when is_list(S)   -> unicode:characters_to_binary(S);
+seg_to_binary(S) when is_list(S)   -> to_binary(S);
 seg_to_binary(S) when is_atom(S)   -> atom_to_binary(S, utf8).
 
 split(Path) ->

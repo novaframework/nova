@@ -73,8 +73,8 @@ If you use readiness probes, your health endpoint should reflect the application
 Nova implements graceful shutdown in `nova_app:prep_stop/1`, which is called by OTP before the supervision tree is terminated. The sequence is:
 
 1. **Delay** — Sleep for `shutdown_delay` milliseconds. During this time, the listener is still active and serving requests normally. This covers the load balancer propagation window.
-2. **Suspend** — Call `ranch:suspend_listener(nova_listener)` to stop accepting new TCP connections. Existing connections continue to be served.
+2. **Suspend** — Call `ranch:suspend_listener/1` on every listener Nova has started, so no new TCP connections are accepted. Existing connections continue to be served.
 3. **Drain** — Poll `ranch:info/1` every 500ms until active connections reach zero or `shutdown_drain_timeout` is exceeded.
-4. **Stop** — Call `cowboy:stop_listener(nova_listener)` to fully shut down the listener.
+4. **Stop** — Call `cowboy:stop_listener/1` on every listener to fully shut them down.
 
 After `prep_stop` returns, OTP proceeds with the normal supervision tree shutdown.
