@@ -8,12 +8,7 @@
 -behaviour(supervisor).
 
 %% API
--export([
-         start_link/0,
-         add_application/2,
-         remove_application/1,
-         get_started_applications/0
-        ]).
+-export([start_link/0]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -22,20 +17,9 @@
 -include("../include/nova.hrl").
 
 -define(SERVER, ?MODULE).
-
--define(NOVA_LISTENER, fun(LApp, LPort) -> list_to_atom(atom_to_list(LApp) ++ integer_to_list(LPort)) end).
+-define(NOVA_LISTENER, nova_listener).
 -define(NOVA_STD_PORT, 8080).
 -define(NOVA_STD_SSL_PORT, 8443).
--define(NOVA_SUP_TABLE, nova_sup_table).
--define(COWBOY_LISTENERS, cowboy_listeners).
-
-
--record(nova_server, {
-                      app :: atom(),
-                      host :: inet:ip_address(),
-                      port :: number(),
-                      listener :: ranch:ref()
-                     }).
 
 
 %%%===================================================================
@@ -52,55 +36,6 @@
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
-%%--------------------------------------------------------------------
-%% @doc
-%% Add a Nova application. This can either be on the same cowboy server that
-%% a previous application was started with, or a new one if the configuration
-%% ie port is different.
-%%
-%% @end
-%%--------------------------------------------------------------------
--spec add_application(App :: atom(), Configuration :: map()) -> {ok, App :: atom(),
-                                                                 Host :: inet:ip_address(), Port :: number()}
-              | {error, Reason :: any()}.
-add_application(App, Configuration) ->
-    setup_cowboy(App, Configuration).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Get all started Nova applications. This will return a list of
-%% #nova_server{} records that contains the application name, host, port
-%% and listener reference.
-%%
-%% @end
-%%--------------------------------------------------------------------
--spec get_started_applications() -> [#{app => atom(), host => inet:ip_address(), port => number()}].
-get_started_applications() ->
-    %% Fetch all started applications from the ETS table
-    Apps = ets:tab2list(?NOVA_SUP_TABLE),
-    [ #{app => App, host => Host, port => Port} ||
-        #nova_server{app = App, host = Host, port = Port} <- Apps ].
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Remove a Nova application. This will stop the cowboy listener so request
-%% to that application will not be handled anymore.
-%%
-%% @end
-%%--------------------------------------------------------------------
-remove_application(App) ->
-    case ets:lookup(?NOVA_SUP_TABLE, App) of
-        [] ->
-            ?LOG_ERROR(#{msg => <<"Application not found">>, app => App}),
-            {error, not_found};
-        [#nova_server{listener = Listener}] ->
-            ?LOG_NOTICE(#{msg => <<"Stopping cowboy listener">>, app => App, listener => Listener}),
-            cowboy:stop_listener(Listener),
-            ets:delete(?NOVA_SUP_TABLE, App),
-            %% Now we need to remove all routes associated with this listener
-            ok
-    end.
-
 %%%===================================================================
 %%% Supervisor callbacks
 %%%===================================================================
@@ -116,19 +51,18 @@ remove_application(App) ->
 %% @end
 %%--------------------------------------------------------------------
 init([]) ->
-    %% Initialize the ETS table for application state
-    ets:new(?NOVA_SUP_TABLE, [named_table, protected, set]),
-
     %% This is a bit ugly, but we need to do this anyhow(?)
     SupFlags = #{strategy => one_for_one,
                  intensity => 1,
                  period => 5},
 
-    %% Bootstrap the environment
     Environment = nova:get_environment(),
+
     nova_pubsub:start(),
 
     ?LOG_NOTICE(#{msg => <<"Starting nova">>, environment => Environment}),
+
+    Configuration = application:get_env(nova, cowboy_configuration, #{}),
 
     SessionManager = application:get_env(nova, session_manager, nova_session_ets),
 
@@ -137,13 +71,17 @@ init([]) ->
                  child(nova_plugin_manager, nova_plugin_manager),
                  child(nova_watcher, nova_watcher)
                 ],
+
+    %% try to ensure callback module is loaded first
+    ExportedFuns = SessionManager:module_info(exports),
+    
     Children =
-        case erlang:function_exported(SessionManager, start_link, 0) of
-            true -> [child(SessionManager, SessionManager) | Children0];
-            false -> Children0
+        case proplists:get_value(start_link, ExportedFuns) of
+            0 -> [child(SessionManager, SessionManager) | Children0];
+            _ -> Children0
         end,
 
-    setup_cowboy(),
+    setup_cowboy(Configuration),
 
 
     {ok, {SupFlags, Children}}.
@@ -165,17 +103,8 @@ child(Id, Type, Mod) ->
 child(Id, Mod) ->
     child(Id, worker, Mod).
 
-
-%%%-------------------------------------------------------------------
-%%% Nova Cowboy setup
-%%%-------------------------------------------------------------------
-setup_cowboy() ->
-    CowboyConfiguration = application:get_env(nova, cowboy_configuration, #{}),
-    BootstrapApp = application:get_env(nova, bootstrap_application, undefined),
-    setup_cowboy(BootstrapApp, CowboyConfiguration).
-
-setup_cowboy(BootstrapApp, Configuration) ->
-    case start_cowboy(BootstrapApp, Configuration) of
+setup_cowboy(Configuration) ->
+    case start_cowboy(Configuration) of
         {ok, App, Host, Port} ->
             Host0 = inet:ntoa(Host),
             CowboyVersion = get_version(cowboy),
@@ -189,110 +118,97 @@ setup_cowboy(BootstrapApp, Configuration) ->
             ?LOG_ERROR(#{msg => <<"Cowboy could not start">>, reason => Error})
     end.
 
-
--spec start_cowboy(BootstrapApp :: atom(), Configuration :: map()) ->
+-spec start_cowboy(Configuration :: map()) ->
           {ok, BootstrapApp :: atom(), Host :: string() | {integer(), integer(), integer(), integer()},
            Port :: integer()} | {error, Reason :: any()}.
-start_cowboy(BootstrapApp, Configuration) ->
-    %% Determine if we have an already started cowboy on the host/port configuration
+start_cowboy(Configuration) ->
+    Middlewares = [
+                   nova_router, %% Lookup routes
+                   nova_plugin_handler, %% Handle pre-request plugins
+                   nova_security_handler, %% Handle security
+                   nova_handler, %% Controller
+                   nova_plugin_handler %% Handle post-request plugins
+                  ],
+    StreamH = [nova_stream_h,
+               cowboy_compress_h,
+               cowboy_stream_h],
+    StreamHandlers = maps:get(stream_handlers, Configuration, StreamH),
+    MiddlewareHandlers = maps:get(middleware_handlers, Configuration, Middlewares),
+    Options = maps:get(options, Configuration, #{compress => true}),
+
+    %% Build the options map
+    CowboyOptions1 = Options#{middlewares => MiddlewareHandlers,
+                              stream_handlers => StreamHandlers},
+
+    BootstrapApp = application:get_env(nova, bootstrap_application, undefined),
+
+    %% Compile the routes
+    Dispatch =
+        case BootstrapApp of
+            undefined ->
+                ?LOG_ERROR(#{msg => <<"You need to define bootstrap_application option in configuration">>}),
+                throw({error, no_nova_app_defined});
+            App ->
+                ExtraApps = application:get_env(App, nova_apps, []),
+                nova_router:compile(resolve_nova_apps([nova, App | ExtraApps], []))
+        end,
+
+    CowboyOptions2 =
+        case application:get_env(nova, use_persistent_term, true) of
+            true ->
+                CowboyOptions1;
+            _ ->
+                CowboyOptions1#{env => #{dispatch => Dispatch}}
+        end,
+
     Host = maps:get(ip, Configuration, { 0, 0, 0, 0}),
-    Port = maps:get(port, Configuration, ?NOVA_STD_PORT),
 
-    Listeners = nova:get_env(?COWBOY_LISTENERS, []),
-    AlreadyStarted = lists:any(fun({X, Y}) -> X == Host andalso Y == Port end, Listeners),
-
-    %% If yes we only need to add things to the dispatch
-    case AlreadyStarted of
-        true ->
-            %% A cowboy listener is already running on this host/port configuration - just add to the
-            %% dispatch.
-            logger:info(#{msg => <<"There's already a Cowboy listener running with the host/port config. Adding routes to dispatch.">>, host => Host, port => Port}),
-            ok;
+    case maps:get(use_ssl, Configuration, false) of
+        false ->
+            Port = maps:get(port, Configuration, ?NOVA_STD_PORT),
+            case cowboy:start_clear(
+                   ?NOVA_LISTENER,
+                   [{port, Port},
+                    {ip, Host}],
+                   CowboyOptions2) of
+                {ok, _Pid} ->
+                    {ok, BootstrapApp, Host, Port};
+                Error ->
+                    Error
+            end;
         _ ->
-            %% Cowboy configuration
-            Middlewares = [
-                           nova_router, %% Lookup routes
-                           nova_plugin_handler, %% Handle pre-request plugins
-                           nova_security_handler, %% Handle security
-                           nova_handler, %% Controller
-                           nova_plugin_handler %% Handle post-request plugins
-                          ],
-            StreamH = [
-                       nova_stream_h,
-                       cowboy_compress_h,
-                       cowboy_stream_h
-                      ],
-
-            %% Good debug message in case someone wants to double check which config they are running with
-            logger:debug(#{msg => <<"Configure cowboy">>, stream_handlers => StreamH, middlewares => Middlewares}),
-
-            StreamHandlers = maps:get(stream_handlers, Configuration, StreamH),
-            MiddlewareHandlers = maps:get(middleware_handlers, Configuration, Middlewares),
-            Options = maps:get(options, Configuration, #{compress => true}),
-
-            %% Build the options map
-            CowboyOptions1 = Options#{middlewares => MiddlewareHandlers,
-                                      stream_handlers => StreamHandlers},
-
-            %% Compile the routes
-            Dispatch =
-                case BootstrapApp of
-                    undefined ->
-                        ?LOG_ERROR(#{msg => <<"You need to define bootstrap_application option in configuration">>}),
-                        throw({error, no_nova_app_defined});
-                    App ->
-                        ExtraApps = application:get_env(App, nova_apps, []),
-                        nova_router:compile([nova|[App|ExtraApps]])
-                end,
-
-            CowboyOptions2 =
-                case application:get_env(nova, use_persistent_term, true) of
-                    true ->
-                        CowboyOptions1;
-                    _ ->
-                        CowboyOptions1#{env => #{dispatch => Dispatch}}
-                end,
-
-            case maps:get(use_ssl, Configuration, false) of
-                false ->
-                    case cowboy:start_clear(
-                           ?NOVA_LISTENER(BootstrapApp, Port),
-                           [{port, Port},
-                            {ip, Host}],
-                           CowboyOptions2) of
-                        {ok, _Pid} ->
-                            nova:set_env(?COWBOY_LISTENERS, [{Host, Port}|Listeners]),
-                            ets:insert(?NOVA_SUP_TABLE, #nova_server{
-                                                           app = BootstrapApp,
-                                                           host = Host,
-                                                           port = Port,
-                                                           listener = ?NOVA_LISTENER(BootstrapApp, Port)
-                                                          }),
-                            {ok, BootstrapApp, Host, Port};
-                        Error ->
-                            Error
-                    end;
-                _ ->
-                    SSLPort = maps:get(ssl_port, Configuration, ?NOVA_STD_SSL_PORT),
+            case maps:get(ca_cert, Configuration, undefined) of
+                undefined ->
+                    Port = maps:get(ssl_port, Configuration, ?NOVA_STD_SSL_PORT),
                     SSLOptions = maps:get(ssl_options, Configuration, #{}),
-                    TransportOpts = maps:put(port, SSLPort, SSLOptions),
+                    TransportOpts = maps:put(port, Port, SSLOptions),
                     TransportOpts1 = maps:put(ip, Host, TransportOpts),
 
                     case cowboy:start_tls(
-                           ?NOVA_LISTENER(BootstrapApp, SSLPort),
-                           maps:to_list(TransportOpts1), CowboyOptions2) of
+                           ?NOVA_LISTENER, maps:to_list(TransportOpts1), CowboyOptions2) of
                         {ok, _Pid} ->
-                            ?LOG_NOTICE(#{msg => <<"Nova starting SSL">>, port => SSLPort}),
-                            ets:insert(?NOVA_SUP_TABLE, #nova_server{
-                                                           app = BootstrapApp,
-                                                           host = Host,
-                                                           port = SSLPort,
-                                                           listener = ?NOVA_LISTENER(BootstrapApp, SSLPort)
-                                                          }),
-                            nova:set_env(?COWBOY_LISTENERS, [{Host, SSLPort}|Listeners]),
-                            {ok, BootstrapApp, Host, SSLPort};
+                            ?LOG_NOTICE(#{msg => <<"Nova starting SSL">>, port => Port}),
+                            {ok, BootstrapApp, Host, Port};
                         Error ->
                             ?LOG_ERROR(#{msg => <<"Could not start cowboy with SSL">>, reason => Error}),
+                            Error
+                    end;
+                CACert ->
+                    Cert = maps:get(cert, Configuration),
+                    Port = maps:get(ssl_port, Configuration, ?NOVA_STD_SSL_PORT),
+                    ?LOG_DEPRECATED(<<"0.10.3">>, <<"Use of use_ssl is deprecated, use ssl instead">>),
+                    case cowboy:start_tls(
+                           ?NOVA_LISTENER, [
+                                            {port, Port},
+                                            {ip, Host},
+                                            {certfile, Cert},
+                                            {cacertfile, CACert}
+                                           ],
+                           CowboyOptions2) of
+                        {ok, _Pid} ->
+                            ?LOG_NOTICE(#{msg => <<"Nova starting SSL">>, port => Port}),
+                            {ok, BootstrapApp, Host, Port};
+                        Error ->
                             Error
                     end
             end
@@ -306,4 +222,22 @@ get_version(Application) ->
             erlang:list_to_binary(Version);
         false ->
             not_found
+    end.
+
+%% @doc Recursively resolve nested nova_apps.
+%% Each nova_app can declare its own nova_apps dependencies.
+%% Dependencies are resolved depth-first so child app routes
+%% are registered before the parent.
+-spec resolve_nova_apps([atom()], [atom()]) -> [atom()].
+resolve_nova_apps([], Acc) ->
+    lists:reverse(Acc);
+resolve_nova_apps([App | Rest], Acc) ->
+    case lists:member(App, Acc) of
+        true ->
+            %% Already resolved — skip to prevent cycles
+            resolve_nova_apps(Rest, Acc);
+        false ->
+            Nested = application:get_env(App, nova_apps, []),
+            Acc1 = resolve_nova_apps(Nested, [App | Acc]),
+            resolve_nova_apps(Rest, Acc1)
     end.

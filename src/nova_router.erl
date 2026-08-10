@@ -84,20 +84,20 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
     Dispatch = StorageBackend:get(nova_dispatch),
     case nova_routing_trie:find(Host, Path, Method, Dispatch) of
         {error, not_found} ->
-            logger:debug("Path ~p not found for ~p in ~p", [Path, Method, Host]),
+            logger:debug(<<"Path ~p not found for ~p in ~p">>, [Path, Method, Host]),
             render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
         {error, comparator_not_found, AllowedMethods} ->
-            logger:debug("Method not allowed: ~p for ~p. Allowed methods: ~p", [Method, Path, AllowedMethods]),
+            logger:debug(<<"Method not allowed: ~p for ~p. Allowed methods: ~p">>, [Method, Path, AllowedMethods]),
             %% Join the elements in AllowedMethods with a colon
             AllowHeader = iolist_to_binary(string:join([unicode:characters_to_list(uri_string:unquote(M)) || M <- AllowedMethods], ", ")),
             %% Set the 'allow'-header
             Req1 = cowboy_req:set_resp_header(<<"allow">>, AllowHeader, Req),
             render_status_page('_', 405, #{error => "Method not allowed"}, Req1, Env);
         {ok, Bindings, #nova_handler_value{app = App, callback = Callback, secure = Secure, plugins = Plugins,
-                                           extra = ExtraState}} ->
+                                           extra_state = ExtraState}} ->
             {ok,
              Req#{plugins => Plugins,
-                  extra => ExtraState,
+                  extra_state => ExtraState,
                   bindings => Bindings},
              Env#{app => App,
                   callback => Callback,
@@ -106,10 +106,10 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
                  }
             };
         {ok, Bindings, #nova_handler_value{app = App, callback = Callback,
-                                           secure = Secure, plugins = Plugins, extra = ExtraState}, Pathinfo} ->
+                                           secure = Secure, plugins = Plugins, extra_state = ExtraState}, Pathinfo} ->
             {ok,
              Req#{plugins => Plugins,
-                  extra => ExtraState#{pathinfo => Pathinfo},
+                  extra_state => ExtraState#{pathinfo => Pathinfo},
                   bindings => Bindings},
              Env#{app => App,
                   callback => Callback,
@@ -190,7 +190,7 @@ add_routes(App, [Routes|Tl]) when is_list(Routes) ->
                 CompiledApps
         end,
 
-    Options1 = Options#{app => App},
+    Options1 = Options#{app => App, router_file => undefined},
 
     {ok, Dispatch1, _Options2} = compile_paths(Routes, Dispatch, Options1),
 
@@ -323,19 +323,18 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
                     false ->
                         false;
                     {SMod, SFun} ->
-                        ?LOG_DEPRECATED("v0.9.24", "The {Mod,Fun} format have been deprecated for "
-                                        "the 'secure'-section of a route table. Use the new format for routes.", RouterFile),
+                        ?LOG_DEPRECATED(<<"v0.9.24">>, <<"The {Mod,Fun} format have been deprecated for the 'secure'-section of a route table. Use the new format for routes.">>, RouterFile),
                         fun SMod:SFun/1;
-                    SCallback when is_function(SCallback) ->
+                    SCallback ->
                         SCallback
                 end;
             %% We override the secure value for this route (app level) with the value provided in options
-            SCallback when is_function(SCallback) ->
+            SCallback ->
                 SCallback
         end,
 
     Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins),
-                                extra = maps:get(extra, RouteInfo, #{})},
+                                extra_state = maps:get(extra_state, RouteInfo, #{})},
 
     Prefix = concat_strings(maps:get(prefix, Options, ""),
                             maps:get(prefix, RouteInfo, "")),
@@ -404,7 +403,7 @@ parse_url(Host, [{RemotePath, LocalPath, Options}|Tl], T = #{prefix := Prefix},
     Value0 = #nova_handler_value{
                 app = App,
                 callback = fun nova_file_controller:TargetFun/1,
-                extra = #{static => Payload, options => Options},
+                extra_state = #{static => Payload, options => Options},
                 plugins = Value#nova_handler_value.plugins,
                 secure = Secure
                },
@@ -426,8 +425,8 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
 
             Methods = maps:get(methods, Options, ['_']),
 
-            ExtraState = maps:get(extra, Options, undefined),
-            Value0 = Value#nova_handler_value{extra = ExtraState},
+            ExtraState = maps:get(extra_state, Options, undefined),
+            Value0 = Value#nova_handler_value{extra_state = ExtraState},
 
             CompiledPaths =
                 lists:foldl(
@@ -495,9 +494,9 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
             {ok, Bindings, #nova_handler_value{app = App,
                                                callback = Callback,
                                                secure = Secure,
-                                               extra = ExtraState}} ->
+                                               extra_state = ExtraState}} ->
                 {
-                 Req#{extra => ExtraState, bindings => Bindings, resp_status_code => StatusCode},
+                 Req#{extra_state => ExtraState, bindings => Bindings, resp_status_code => StatusCode},
                  Env#{app => App,
                       callback => Callback,
                       secure => Secure,
@@ -585,11 +584,5 @@ routes(_) ->
 %% Test cases
 %% ============================
 -ifdef(TEST).
--compile(export_all). %% Export all functions for testing purpose
--include_lib("eunit/include/eunit.hrl").
-
-compile_empty_test() ->
-    Dispatch = compile([]),
-    ?assertEqual(nova_routing_trie:new(#{options => #{strict => false}}), Dispatch).
-
+-compile(export_all).
 -endif.

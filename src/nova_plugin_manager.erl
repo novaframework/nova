@@ -72,7 +72,10 @@ start_link() ->
 add_plugin({_Class, Module, _Opts}) ->
     add_plugin(Module);
 add_plugin(Module) when is_atom(Module) ->
-    #{title := Title, version := Version} = Module:plugin_info(),
+    #{title := Title, version := Version} =  case Module:plugin_info() of
+                                                {Title0, Version0, _, _, _} -> #{title => Title0, version => Version0};
+                                                PluginInfo -> PluginInfo
+                                             end,
     add_plugin(Module, Title, Version);
 add_plugin(Callback) when is_function(Callback) ->
     Info = erlang:fun_info(Callback),
@@ -84,7 +87,7 @@ add_plugin(Callback) when is_function(Callback) ->
 add_plugin(Module, Name, Version) ->
     case ets:lookup(?TABLE, Module) of
         [#plugin{}] ->
-            ?LOG_DEBUG("Plugin ~p already initialized.", [Module]),
+            ?LOG_DEBUG(<<"Plugin ~p already initialized.">>, [Module]),
             ok;
         [] ->
             gen_server:cast(?SERVER, {add_plugin, Module, Name, Version})
@@ -104,7 +107,7 @@ get_state(Module) when is_atom(Module) ->
         [#plugin{state = State}] ->
             {ok, State};
         _ ->
-            ?LOG_DEBUG("Plugin ~p not found. get_state/1 failed.", [Module]),
+            ?LOG_DEBUG(<<"Plugin ~p not found. get_state/1 failed.">>, [Module]),
             {error, not_found}
     end;
 get_state(Callback) when is_function(Callback) ->
@@ -128,7 +131,7 @@ set_state(Module, NewState) when is_atom(Module) ->
         [#plugin{} = P] ->
             gen_server:call(?SERVER, {set_state, Module, P, NewState});
         _ ->
-            ?LOG_DEBUG("Plugin ~p not found. set_state/2 failed.", [Module]),
+            ?LOG_DEBUG(<<"Plugin ~p not found. set_state/2 failed.">>, [Module]),
             {error, not_found}
     end;
 set_state(Callback, NewState) when is_function(Callback) ->
@@ -174,7 +177,7 @@ init([]) ->
           {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
           {stop, Reason :: term(), NewState :: term()}.
 handle_call({set_state, Module, P, NewState}, _From, State) ->
-    ?LOG_DEBUG("Set state for plugin ~p; NewState: ~p", [Module, NewState]),
+    ?LOG_DEBUG(<<"Set state for plugin ~p; NewState: ~p">>, [Module, NewState]),
     ets:insert(?TABLE, P#plugin{state = NewState}),
     {reply, ok, State};
 handle_call(_Request, _From, State) ->
@@ -196,10 +199,10 @@ handle_cast({add_plugin, Module, Name, Version}, State) ->
     PluginState =
         case erlang:function_exported(Module, init, 0) of
             true ->
-                ?LOG_INFO("Initializing plugin ~p", [Module]),
+                ?LOG_INFO(<<"Initializing plugin ~p">>, [Module]),
                 Module:init();
             _ ->
-                ?LOG_DEBUG("Plugin ~p has no init/0 function. Defaulting to empty map #{}", [Module]),
+                ?LOG_DEBUG(<<"Plugin ~p has no init/0 function. Defaulting to empty map #{}">>, [Module]),
                 #{}
         end,
     ets:insert(?TABLE, #plugin{module = Module, name = Name, version = Version, state = PluginState}),

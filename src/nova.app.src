@@ -13,11 +13,10 @@
                  compiler,
                  erlydtl,
                  jhn_stdlib,
-                 routing_tree,
                  thoas
                 ]},
   {env,[]},
   {modules,[nova]},
   {doc, "doc"},
-  {licenses,["Apache 2.0"]},
+  {licenses,["Apache-2.0"]},
   {links,[{"GitHub","https://github.com/novaframework/nova"}]}]}.
