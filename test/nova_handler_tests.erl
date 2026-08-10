@@ -10,7 +10,7 @@ setup() ->
     application:set_env(nova, dispatch_backend, persistent_term),
     application:set_env(nova, render_error_pages, false),
     %% Set up dispatch table for render_response/3
-    Tree = routing_tree:new(#{use_strict => false, convert_to_binary => true}),
+    Tree = nova_routing_trie:new(#{use_strict => false, convert_to_binary => true}),
     persistent_term:put(nova_dispatch, Tree),
     persistent_term:put(nova_use_stacktrace, false),
     %% Start nova_handlers gen_server (registers ETS table + default handlers)
