@@ -21,6 +21,8 @@
 -define(NOVA_STD_PORT, 8080).
 -define(NOVA_STD_SSL_PORT, 8443).
 
+-type nova_app() :: atom() | {atom(), map()}.
+
 
 %%%===================================================================
 %%% API functions
@@ -150,7 +152,10 @@ start_cowboy(Configuration) ->
                 throw({error, no_nova_app_defined});
             App ->
                 ExtraApps = application:get_env(App, nova_apps, []),
-                nova_router:compile(resolve_nova_apps([nova, App | ExtraApps], []))
+                %% nova is compiled last so that its own 404/500 routes act as
+                %% defaults. Routes are first-wins, so compiling nova first
+                %% made an application's own status-code routes unreachable.
+                nova_router:compile(resolve_nova_apps([App | ExtraApps] ++ [nova]))
         end,
 
     CowboyOptions2 =
@@ -227,17 +232,28 @@ get_version(Application) ->
 %% @doc Recursively resolve nested nova_apps.
 %% Each nova_app can declare its own nova_apps dependencies.
 %% Dependencies are resolved depth-first so child app routes
-%% are registered before the parent.
--spec resolve_nova_apps([atom()], [atom()]) -> [atom()].
-resolve_nova_apps([], Acc) ->
-    lists:reverse(Acc);
-resolve_nova_apps([App | Rest], Acc) ->
-    case lists:member(App, Acc) of
+%% are registered before the parent. An application already resolved is
+%% skipped, so a cycle terminates.
+-spec resolve_nova_apps([nova_app()]) -> [nova_app()].
+resolve_nova_apps(Apps) ->
+    {Resolved, _Seen} = resolve_nova_apps(Apps, [], []),
+    Resolved.
+
+-spec resolve_nova_apps([nova_app()], [nova_app()], [atom()]) -> {[nova_app()], [atom()]}.
+resolve_nova_apps([], Acc, Seen) ->
+    {lists:reverse(Acc), Seen};
+resolve_nova_apps([App | Rest], Acc, Seen) ->
+    Name = nova_app_name(App),
+    case lists:member(Name, Seen) of
         true ->
-            %% Already resolved — skip to prevent cycles
-            resolve_nova_apps(Rest, Acc);
+            resolve_nova_apps(Rest, Acc, Seen);
         false ->
-            Nested = application:get_env(App, nova_apps, []),
-            Acc1 = resolve_nova_apps(Nested, [App | Acc]),
-            resolve_nova_apps(Rest, Acc1)
+            Nested = application:get_env(Name, nova_apps, []),
+            {NestedApps, Seen0} = resolve_nova_apps(Nested, [], [Name | Seen]),
+            resolve_nova_apps(Rest, [App | lists:reverse(NestedApps)] ++ Acc, Seen0)
     end.
+
+%% A nova_app is either the application name or {Name, Options}.
+-spec nova_app_name(nova_app()) -> atom().
+nova_app_name({App, _Options}) -> App;
+nova_app_name(App)             -> App.
