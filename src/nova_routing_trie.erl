@@ -101,7 +101,7 @@
                       existing_methods := [comparator()]
                      }.
 
--export_type([trie/0, trie_node/0, route/0, bindings/0, comparator/0, conflict/0]).
+-export_type([trie/0, trie_node/0, route/0, path/0, bindings/0, comparator/0, conflict/0]).
 
 %%====================================================================
 %% API

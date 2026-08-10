@@ -41,7 +41,13 @@
 -include("../include/nova.hrl").
 
 -type bindings() :: #{binary() := binary()}.
--export_type([bindings/0]).
+
+-type lookup_result() :: {ok, bindings(), Value :: term()} |
+                         {ok, bindings(), Value :: term(), PathInfo :: [binary()]} |
+                         {error, not_found} |
+                         {error, comparator_not_found, AllowedMethods :: [binary()]}.
+
+-export_type([bindings/0, lookup_result/0]).
 
 %% This module is also exposing callbacks for routers
 -callback routes(Env :: atom()) -> Routes :: [map()].
@@ -70,7 +76,7 @@ compile(Apps) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
 
     StoredDispatch = StorageBackend:get(nova_dispatch,
-                                        nova_routing_trie:new(#{options => #{strict => UseStrict}})),
+                                        nova_routing_trie:new(#{strict => UseStrict})),
     Dispatch = compile(Apps, StoredDispatch, #{}),
     %% Write the updated dispatch to storage
     StorageBackend:put(nova_dispatch, Dispatch),
@@ -88,8 +94,7 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
             render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
         {error, comparator_not_found, AllowedMethods} ->
             logger:debug(<<"Method not allowed: ~p for ~p. Allowed methods: ~p">>, [Method, Path, AllowedMethods]),
-            %% Join the elements in AllowedMethods with a colon
-            AllowHeader = iolist_to_binary(string:join([unicode:characters_to_list(uri_string:unquote(M)) || M <- AllowedMethods], ", ")),
+            AllowHeader = iolist_to_binary(lists:join(<<", ">>, AllowedMethods)),
             %% Set the 'allow'-header
             Req1 = cowboy_req:set_resp_header(<<"allow">>, AllowHeader, Req),
             render_status_page('_', 405, #{error => "Method not allowed"}, Req1, Env);
@@ -129,24 +134,31 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
                  }
             };
         Error ->
-            ?LOG_ERROR(#{reason => <<"Unexpected return from nova_routing_trie:lookup/4">>,
+            ?LOG_ERROR(#{reason => <<"Unexpected return from nova_routing_trie:find/4">>,
                          return_object => Error}),
             render_status_page(Host, 404, #{error => Error}, Req, Env)
     end.
 
+-spec lookup_url(Path :: nova_routing_trie:path()) -> lookup_result().
 lookup_url(Path) ->
     lookup_url('_', Path).
 
+-spec lookup_url(Host :: binary() | atom(), Path :: nova_routing_trie:path()) -> lookup_result().
 lookup_url(Host, Path) ->
     lookup_url(Host, Path, '_').
 
+-spec lookup_url(Host :: binary() | atom(), Path :: nova_routing_trie:path(),
+                 Method :: nova_routing_trie:comparator()) -> lookup_result().
 lookup_url(Host, Path, Method) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     Dispatch = StorageBackend:get(nova_dispatch),
     lookup_url(Host, Path, Method, Dispatch).
 
+-spec lookup_url(Host :: binary() | atom(), Path :: nova_routing_trie:path(),
+                 Method :: nova_routing_trie:comparator(),
+                 Dispatch :: nova_routing_trie:trie()) -> lookup_result().
 lookup_url(Host, Path, Method, Dispatch) ->
-    nova_routing_trie:lookup(Host, Path, Method, Dispatch).
+    nova_routing_trie:find(Host, Path, Method, Dispatch).
 
 
 %%--------------------------------------------------------------------
@@ -160,11 +172,8 @@ lookup_url(Host, Path, Method, Dispatch) ->
 %%--------------------------------------------------------------------
 -spec add_routes(App :: atom()) -> ok.
 add_routes(App) ->
-    Router = erlang:list_to_atom(io_lib:format("~s_router", [App])),
     Env = nova:get_environment(),
-    %% Call the router
-    Routes = Router:routes(Env),
-    add_routes(App, Routes).
+    add_routes(App, get_routes(router_module(App), Env)).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -174,9 +183,22 @@ add_routes(App) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec add_routes(App :: atom(), Routes :: [map()] | map()) -> ok.
-add_routes(_App, []) -> ok;
+add_routes(_App, []) ->
+    ok;
+add_routes(App, Routes) when is_map(Routes) ->
+    add_routes(App, [Routes]);
 add_routes(App, [Routes|Tl]) when is_list(Routes) ->
-    Options = #{},
+    %% A list of route-lists, as produced by a router that returns several
+    %% groups. Each group is compiled on its own.
+    ok = insert_route_maps(App, Routes),
+    add_routes(App, Tl);
+add_routes(App, [RouteInfo|_Tl] = Routes) when is_map(RouteInfo) ->
+    insert_route_maps(App, Routes);
+add_routes(App, Routes) ->
+    ?LOG_ERROR(#{reason => <<"Invalid routes structure">>, app => App, routes => Routes}),
+    throw({error, {invalid_routes, App, Routes}}).
+
+insert_route_maps(App, Routes) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
     Dispatch = StorageBackend:get(nova_dispatch),
 
@@ -184,23 +206,20 @@ add_routes(App, [Routes|Tl]) when is_list(Routes) ->
     CompiledApps = StorageBackend:get(?NOVA_APPS, []),
     CompiledApps0 =
         case lists:keyfind(App, 1, CompiledApps) of
-            false ->
-                [{App, maps:get(prefix, Options, "/")}|CompiledApps];
-            _StoredApp ->
-                CompiledApps
+            false     -> [{App, "/"}|CompiledApps];
+            _StoredApp -> CompiledApps
         end,
 
-    Options1 = Options#{app => App, router_file => undefined},
+    %% Routes added at runtime replace any route already registered on the
+    %% same path and method, which is what the routing guide promises.
+    Options = #{app => App, router_file => undefined,
+                insert_opts => #{on_duplicate => overwrite}},
 
-    {ok, Dispatch1, _Options2} = compile_paths(Routes, Dispatch, Options1),
+    {ok, Dispatch1, _Options0} = compile_paths(Routes, Dispatch, Options),
 
     StorageBackend:put(?NOVA_APPS, CompiledApps0),
     StorageBackend:put(nova_dispatch, Dispatch1),
-
-    add_routes(App, Tl);
-add_routes(App, Routes) ->
-    ?LOG_ERROR(#{reason => <<"Invalid routes structure">>, app => App, routes => Routes}),
-    throw({error, {invalid_routes, App, Routes}}).
+    ok.
 
 
 %%--------------------------------------------------------------------
@@ -210,16 +229,23 @@ add_routes(App, Routes) ->
 %%--------------------------------------------------------------------
 -spec remove_application(Application :: atom()) -> ok.
 remove_application(Application) when is_atom(Application) ->
-    Dispatch = persistent_term:get(nova_dispatch),
-    %% Remove all routes for this application
+    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
+    Dispatch = StorageBackend:get(nova_dispatch),
     {ok, Dispatch0} =
         nova_routing_trie:foldl(Dispatch,
-                                fun(R) ->
-                                        [ X || X = {_Host, _Prefix, #nova_handler_value{app = App}} <- R,
-                                               App =/= Application ]
+                                fun(Routes) ->
+                                        [Route || Route <- Routes, route_app(Route) =/= Application]
                                 end),
-    persistent_term:put(nova_dispatch, Dispatch0),
+    StorageBackend:put(nova_dispatch, Dispatch0),
+    StorageBackend:put(?NOVA_APPS, lists:keydelete(Application, 1, StorageBackend:get(?NOVA_APPS, []))),
+    nova:set_env(apps, lists:keydelete(Application, 1, nova:get_env(apps, []))),
     ok.
+
+%% Both handler kinds carry the owning application, and dropping the cowboy
+%% one would silently strip every websocket route.
+route_app({_Host, _Path, _Method, #nova_handler_value{app = App}})   -> App;
+route_app({_Host, _Path, _Method, #cowboy_handler_value{app = App}}) -> App;
+route_app(_Route)                                                    -> undefined.
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%
@@ -248,26 +274,13 @@ apply_callback(Module, Function, Args) ->
 
 -spec compile(Apps :: [atom() | {atom(), map()}], Dispatch :: nova_routing_trie:trie(), Options :: map()) -> nova_routing_trie:trie().
 compile([], Dispatch, _Options) -> Dispatch;
-compile([{App, Options}|Tl], Dispatch, GlobalOptions) ->
-    compile([App|Tl], Dispatch, maps:merge(Options, GlobalOptions));
+compile([{App, AppOptions}|Tl], Dispatch, GlobalOptions) ->
+    %% Per-application options win over the global ones, and must not leak
+    %% into the applications compiled after this one.
+    Dispatch0 = compile([App], Dispatch, maps:merge(GlobalOptions, AppOptions)),
+    compile(Tl, Dispatch0, GlobalOptions);
 compile([App|Tl], Dispatch, Options) ->
-    %% Fetch the router-module for this application
-    Router =
-        %% The router can be explicitly defined in the application environment,
-        %% if not we will try to detect it based on the language used in the project
-        case application:get_env(App, router_module) of
-            {ok, RouterModule} ->
-                RouterModule;
-            undefined ->
-                case nova:detect_language() of
-                    elixir ->
-                        %% We build the router as App.Router
-                        erlang:list_to_atom(io_lib:format("~s.Router", [App]));
-                    _ ->
-                        %% All other languages are using the app_router convention
-                        erlang:list_to_atom(io_lib:format("~s_router", [App]))
-                end
-        end,
+    Router = router_module(App),
 
     Env = nova:get_environment(),
     Routes = get_routes(Router, Env),
@@ -277,60 +290,56 @@ compile([App|Tl], Dispatch, Options) ->
     RouterFile = proplists:get_value(source, CompileParameters),
     Options1 = Options#{app => App, router_file => RouterFile},
 
-    {ok, Dispatch1, Options2} = compile_paths(Routes, Dispatch, Options1),
+    {ok, Dispatch1, _Options2} = compile_paths(Routes, Dispatch, Options1),
 
     %% Take out the prefix for the app and store it in the persistent store
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
 
     CompiledApps = StorageBackend:get(?NOVA_APPS, []),
 
-    CompiledApps0 = [{App, maps:get(prefix, Options, "/")}|CompiledApps],
+    CompiledApps0 = lists:keystore(App, 1, CompiledApps, {App, maps:get(prefix, Options, "/")}),
 
     StorageBackend:put(?NOVA_APPS, CompiledApps0),
 
-    compile(Tl, Dispatch1, Options2).
+    compile(Tl, Dispatch1, Options).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% The router module for an application. Either configured explicitly with
+%% the `router_module' application environment key, or derived from the
+%% application name using the convention for the language in use.
+%% @end
+%%--------------------------------------------------------------------
+router_module(App) ->
+    case application:get_env(App, router_module) of
+        {ok, RouterModule} ->
+            RouterModule;
+        undefined ->
+            case nova:detect_language() of
+                elixir ->
+                    %% We build the router as App.Router
+                    erlang:list_to_atom(lists:flatten(io_lib:format("~s.Router", [App])));
+                _ ->
+                    %% All other languages are using the app_router convention
+                    erlang:list_to_atom(lists:flatten(io_lib:format("~s_router", [App])))
+            end
+    end.
 
 compile_paths([], Dispatch, Options) -> {ok, Dispatch, Options};
 compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     App = maps:get(app, Options),
     RouterFile = maps:get(router_file, Options),
 
-    %% Fetch the global plugins - we need to check Options first to see what plugin-strategy we should use for this route:
-    Plugins =
-        case maps:get(plugin_strategy, Options, local_first) of
-            local_first ->
-                LocalPlugins = maps:get(plugins, RouteInfo, []),
-                GlobalPlugins = application:get_env(nova, plugins, []),
-                %% We need to make sure that the plugins are in the right order, so we use ukeysort to remove duplicates and keep the order of the first occurrence
-                lists:ukeysort(1, LocalPlugins ++ GlobalPlugins);
-            global_first ->
-                LocalPlugins = maps:get(plugins, RouteInfo, []),
-                GlobalPlugins = application:get_env(nova, plugins, []),
-                %% We need to make sure that the plugins are in the right order, so we use ukeysort to remove duplicates and keep the order of the first occurrence
-                lists:ukeysort(1, GlobalPlugins ++ LocalPlugins);
-            local_only ->
-                maps:get(plugins, RouteInfo, []);
-            global_only ->
-                application:get_env(nova, plugins, []);
-            {override, PluginList} when is_list(PluginList) ->
-                PluginList
-            end,
+    Plugins = resolve_plugins(maps:get(plugin_strategy, Options, local_or_global), RouteInfo, RouterFile),
 
     Secure =
         case maps:get(override_secure, Options, false) of
             false ->
-                case maps:get(secure, Options, maps:get(security, RouteInfo, false)) of
-                    false ->
-                        false;
-                    {SMod, SFun} ->
-                        ?LOG_DEPRECATED(<<"v0.9.24">>, <<"The {Mod,Fun} format have been deprecated for the 'secure'-section of a route table. Use the new format for routes.">>, RouterFile),
-                        fun SMod:SFun/1;
-                    SCallback ->
-                        SCallback
-                end;
-            %% We override the secure value for this route (app level) with the value provided in options
-            SCallback ->
-                SCallback
+                normalize_secure(maps:get(secure, Options, maps:get(security, RouteInfo, false)), RouterFile);
+            %% The including application overrides the security callback the
+            %% sub-application declared for itself.
+            Override ->
+                normalize_secure(Override, RouterFile)
         end,
 
     Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins),
@@ -343,11 +352,13 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
 
     %% We need to add this app info to nova-env
     NovaEnv = nova:get_env(apps, []),
-    NovaEnv0 = [{App, #{prefix => Prefix}} | NovaEnv],
+    NovaEnv0 = lists:keystore(App, 1, NovaEnv, {App, #{prefix => Prefix}}),
     nova:set_env(apps, NovaEnv0),
 
-    {ok, Dispatch1} = parse_url(Host, maps:get(routes, RouteInfo, []), #{prefix => Prefix,
-                                                                         router_file => maps:get(router_file, Options)},
+    {ok, Dispatch1} = parse_url(Host, maps:get(routes, RouteInfo, []),
+                                #{prefix => Prefix,
+                                  router_file => maps:get(router_file, Options),
+                                  insert_opts => maps:get(insert_opts, Options, #{})},
                                 Value, Dispatch),
 
     Dispatch2 = compile(SubApps, Dispatch1, Options#{value => Value, prefix => Prefix}),
@@ -358,9 +369,8 @@ parse_url(_Host, [], _Prefix, _Value, Tree) -> {ok, Tree};
 parse_url(Host, [{StatusCode, Callback, Options}|Tl], T, Value, Tree) when is_integer(StatusCode) andalso
                                                                            is_function(Callback) ->
     Value0 = Value#nova_handler_value{callback = Callback},
-    Res = lists:foldl(fun(Method, Tree0) ->
-                              insert(Host, StatusCode, Method, Value0, Tree0)
-                      end, Tree, maps:get(methods, Options, ['_'])),
+    Res = insert_methods(maps:get(methods, Options, ['_']), Host, StatusCode, Value0, Tree,
+                         insert_opts(T), fun(M) -> M end),
     parse_url(Host, Tl, T, Value, Res);
 parse_url(Host, [{RemotePath, LocalPath}|Tl], T, Value = #nova_handler_value{}, Tree) when is_list(RemotePath),
                                                                                            is_list(LocalPath) ->
@@ -407,7 +417,7 @@ parse_url(Host, [{RemotePath, LocalPath, Options}|Tl], T = #{prefix := Prefix},
                 plugins = Value#nova_handler_value.plugins,
                 secure = Secure
                },
-    Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree),
+    Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree, insert_opts(T)),
     parse_url(Host, Tl, T, Value, Tree0);
 parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], T, Value = #nova_handler_value{app = _App, secure = _Secure}, Tree) ->
     RouterFile = maps:get(router_file, T, undefined),
@@ -428,17 +438,11 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
             ExtraState = maps:get(extra_state, Options, undefined),
             Value0 = Value#nova_handler_value{extra_state = ExtraState},
 
-            CompiledPaths =
-                lists:foldl(
-                  fun(Method, Tree0) ->
-                          BinMethod = method_to_binary(Method),
-                          Value1 = Value0#nova_handler_value{
-                                     callback = Callback
-                                    },
-                          ?LOG_DEBUG(#{action => <<"Adding route">>, route => RealPath, app => App, method => Method,
-                                       router_file => maps:get(router_file, Options, undefined)}),
-                          insert(Host, RealPath, BinMethod, Value1, Tree0)
-                  end, Tree, Methods),
+            Value1 = Value0#nova_handler_value{callback = Callback},
+            ?LOG_DEBUG(#{action => <<"Adding route">>, route => RealPath, app => App, methods => Methods,
+                         router_file => maps:get(router_file, Options, undefined)}),
+            CompiledPaths = insert_methods(Methods, Host, RealPath, Value1, Tree, insert_opts(T),
+                                           fun method_to_binary/1),
             parse_url(Host, Tl, T, Value, CompiledPaths);
         OtherProtocol ->
             ?LOG_ERROR(#{reason => <<"Unknown protocol">>, protocol => OtherProtocol,
@@ -459,7 +463,7 @@ parse_url(Host,
     ?LOG_DEBUG(#{action => <<"Adding route">>, protocol => <<"ws">>, route => Path, app => App,
                  router_file => maps:get(router_file, T, undefined)}),
     RealPath = concat_strings(Prefix, Path),
-    CompiledPaths = insert(Host, RealPath, '_', Value0, Tree),
+    CompiledPaths = insert(Host, RealPath, '_', Value0, Tree, insert_opts(T)),
     parse_url(Host, Tl, T, Value, CompiledPaths).
 
 
@@ -507,9 +511,23 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
     {ok, Req0#{resp_status_code => StatusCode}, Env0}.
 
 
-insert(Host, Path, Combinator, Value, Tree) ->
-    try nova_routing_trie:insert(Host, Path, Combinator, Value, Tree) of
-        Tree0 -> Tree0
+insert_opts(T) ->
+    maps:get(insert_opts, T, #{}).
+
+insert_methods([], _Host, _Path, _Value, Tree, _Options, _ToComparator) ->
+    Tree;
+insert_methods([Method|Tl], Host, Path, Value, Tree, Options, ToComparator) ->
+    Tree0 = insert(Host, Path, ToComparator(Method), Value, Tree, Options),
+    insert_methods(Tl, Host, Path, Value, Tree0, Options, ToComparator).
+
+insert(Host, Path, Combinator, Value, Tree, Options) ->
+    try nova_routing_trie:insert(Host, Path, Combinator, Value, Tree, Options) of
+        {ok, Tree0} ->
+            Tree0;
+        {error, conflict, Conflict} ->
+            ?LOG_ERROR(#{reason => <<"Conflicting route">>, route => Path, combinator => Combinator,
+                         conflict => Conflict}),
+            throw({error, {route_conflict, Conflict}})
     catch
         throw:Exception ->
             ?LOG_ERROR(#{reason => <<"Error when inserting route">>, route => Path, combinator => Combinator}),
@@ -530,6 +548,67 @@ add_plugin(Plugin) ->
         _ ->
             StorageBackend:put(?NOVA_PLUGINS, Plugins1)
     end.
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Work out which plugins apply to a route entry.
+%%
+%% `local_or_global' is the default and is how Nova has always behaved: a
+%% route entry that declares `plugins' uses exactly those, otherwise it uses
+%% the globally configured ones. The merging strategies exist for the cases
+%% where you want both, and dedupe on `{Type, Module}' keeping the first
+%% occurrence, so ordering within a phase is preserved.
+%% @end
+%%--------------------------------------------------------------------
+normalize_secure(false, _RouterFile) ->
+    false;
+normalize_secure(true, RouterFile) ->
+    ?LOG_ERROR(#{reason => <<"'secure' must be false, a fun/1 or {Mod, Fun}. Ignoring 'true'.">>,
+                 router_file => RouterFile}),
+    false;
+normalize_secure({SMod, SFun}, RouterFile) when is_atom(SMod), is_atom(SFun) ->
+    ?LOG_DEPRECATED(<<"v0.9.24">>, <<"The {Mod,Fun} format have been deprecated for the 'secure'-section of a route table. Use the new format for routes.">>, RouterFile),
+    fun SMod:SFun/1;
+normalize_secure(SCallback, _RouterFile) ->
+    SCallback.
+
+resolve_plugins(local_or_global, RouteInfo, _RouterFile) ->
+    maps:get(plugins, RouteInfo, global_plugins());
+resolve_plugins(local_first, RouteInfo, _RouterFile) ->
+    dedupe_plugins(local_plugins(RouteInfo) ++ global_plugins());
+resolve_plugins(global_first, RouteInfo, _RouterFile) ->
+    dedupe_plugins(global_plugins() ++ local_plugins(RouteInfo));
+resolve_plugins(local_only, RouteInfo, _RouterFile) ->
+    local_plugins(RouteInfo);
+resolve_plugins(global_only, _RouteInfo, _RouterFile) ->
+    global_plugins();
+resolve_plugins({override, PluginList}, _RouteInfo, _RouterFile) when is_list(PluginList) ->
+    PluginList;
+resolve_plugins(Strategy, RouteInfo, RouterFile) ->
+    ?LOG_ERROR(#{reason => <<"Unknown plugin_strategy, falling back to local_or_global">>,
+                 plugin_strategy => Strategy, router_file => RouterFile}),
+    resolve_plugins(local_or_global, RouteInfo, RouterFile).
+
+local_plugins(RouteInfo) ->
+    maps:get(plugins, RouteInfo, []).
+
+global_plugins() ->
+    application:get_env(nova, plugins, []).
+
+dedupe_plugins(Plugins) ->
+    dedupe_plugins(Plugins, [], []).
+
+dedupe_plugins([], _Seen, Acc) ->
+    lists:reverse(Acc);
+dedupe_plugins([Plugin|Tl], Seen, Acc) ->
+    Key = plugin_key(Plugin),
+    case lists:member(Key, Seen) of
+        true  -> dedupe_plugins(Tl, Seen, Acc);
+        false -> dedupe_plugins(Tl, [Key|Seen], [Plugin|Acc])
+    end.
+
+plugin_key({Type, PluginName, _Options}) -> {Type, PluginName};
+plugin_key(Plugin)                       -> Plugin.
 
 normalize_plugins(Plugins) ->
     NormalizedPlugins = normalize_plugins(Plugins, []),
@@ -560,13 +639,6 @@ concat_strings(_Path1, Path2) when is_integer(Path2) ->
     Path2;
 concat_strings(Path1, Path2) when is_list(Path1), is_list(Path2) ->
     string:concat(Path1, Path2).
-
-canonicalise([], Acc) ->
-    lists:reverse(Acc);
-canonicalise([".." | _], []) ->
-    unsafe;
-canonicalise([Seg | Rest], Acc) ->
-    canonicalise(Rest, [Seg | Acc]).
 
 %% ============================
 %% Callbacks for nova_router
