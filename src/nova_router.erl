@@ -369,6 +369,26 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
                         router_file => maps:get(router_file, Options, undefined)}),
             parse_url(Host, Tl, T, Value, Tree)
     end;
+parse_url(Host, [{Path, Handler, Options = #{protocol := cowboy}}|Tl], T = #{prefix := Prefix},
+          Value = #nova_handler_value{app = App, secure = Secure}, Tree) when is_atom(Handler) ->
+    %% Plain cowboy handler (eg cowboy_rest, cowboy_loop or a basic
+    %% cowboy_handler). The handler module is invoked with Handler:init/2
+    %% and any sub-protocol upgrade it returns is honored by nova_handler.
+    Value0 = #cowboy_handler_value{
+                app = App,
+                handler = Handler,
+                arguments = maps:get(arguments, Options, #{}),
+                plugins = Value#nova_handler_value.plugins,
+                secure = Secure},
+    ?LOG_DEBUG(#{action => <<"Adding route">>, protocol => <<"cowboy">>, route => Path, app => App,
+                 router_file => maps:get(router_file, T, undefined)}),
+    RealPath = concat_strings(Prefix, Path),
+    CompiledPaths =
+        lists:foldl(
+          fun(Method, Tree0) ->
+                  insert(Host, RealPath, method_to_binary(Method), Value0, Tree0)
+          end, Tree, maps:get(methods, Options, ['_'])),
+    parse_url(Host, Tl, T, Value, CompiledPaths);
 parse_url(Host,
           [{Path, Mod, #{protocol := ws}} | Tl],
           T = #{prefix := Prefix}, #nova_handler_value{app = App, secure = Secure} = Value,
