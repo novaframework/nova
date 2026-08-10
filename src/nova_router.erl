@@ -16,6 +16,7 @@
 %% API
 -export([
          compile/1,
+         compile/2,
          lookup_url/1,
          lookup_url/2,
          lookup_url/3,
@@ -29,11 +30,15 @@
          %% Fetch information about the routing table
          plugins/0,
          compiled_apps/0,
+         compiled_apps/1,
 
          %% Modulates the routes-table
          add_routes/1,
          add_routes/2,
-         remove_application/1
+         add_routes/3,
+         remove_application/1,
+         remove_application/2,
+         delete_dispatch/1
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -58,11 +63,24 @@
 
 -define(NOVA_APPS, nova_apps).
 -define(NOVA_PLUGINS, nova_plugins).
+-define(NOVA_DISPATCH, nova_dispatch).
+
+%% Each Cowboy listener owns a routing table, addressed by a dispatch key.
+%% Listeners started by nova_sup:add_application/2 get their own, so two
+%% listeners on different ports do not serve each other's routes. The default
+%% listener uses nova_dispatch, which is also what every existing caller and
+%% every stored dispatch table already uses.
+-type dispatch_key() :: term().
+-export_type([dispatch_key/0]).
 
 -spec compiled_apps() -> [{App :: atom(), Prefix :: list()}].
 compiled_apps() ->
+    compiled_apps(?NOVA_DISPATCH).
+
+-spec compiled_apps(DispatchKey :: dispatch_key()) -> [{App :: atom(), Prefix :: list()}].
+compiled_apps(DispatchKey) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
-    StorageBackend:get(?NOVA_APPS, []).
+    StorageBackend:get(apps_key(DispatchKey), []).
 
 
 %% TODO! We need to implement a way to get and remove plugins for a path
@@ -72,14 +90,25 @@ plugins() ->
 
 -spec compile(Apps :: [atom() | {atom(), map()}]) -> nova_routing_trie:trie().
 compile(Apps) ->
+    compile(Apps, ?NOVA_DISPATCH).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Compile the given applications into the routing table addressed by
+%% `DispatchKey', merging into whatever is already stored there.
+%% @end
+%%--------------------------------------------------------------------
+-spec compile(Apps :: [atom() | {atom(), map()}], DispatchKey :: dispatch_key()) ->
+          nova_routing_trie:trie().
+compile(Apps, DispatchKey) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
 
-    StoredDispatch = StorageBackend:get(nova_dispatch,
+    StoredDispatch = StorageBackend:get(DispatchKey,
                                         nova_routing_trie:new(#{strict => UseStrict})),
-    Dispatch = compile(Apps, StoredDispatch, #{}),
+    Dispatch = compile(Apps, StoredDispatch, #{dispatch_key => DispatchKey}),
     %% Write the updated dispatch to storage
-    StorageBackend:put(nova_dispatch, Dispatch),
+    StorageBackend:put(DispatchKey, Dispatch),
     Dispatch.
 
 -spec execute(Req, Env :: cowboy_middleware:env()) -> {ok, Req, Env0} | {stop, Req}
@@ -87,7 +116,7 @@ compile(Apps) ->
                                                                Env0::cowboy_middleware:env().
 execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
-    Dispatch = StorageBackend:get(nova_dispatch),
+    Dispatch = StorageBackend:get(dispatch_key(Env)),
     case nova_routing_trie:find(Host, Path, Method, Dispatch) of
         {error, not_found} ->
             logger:debug(<<"Path ~p not found for ~p in ~p">>, [Path, Method, Host]),
@@ -151,7 +180,7 @@ lookup_url(Host, Path) ->
                  Method :: nova_routing_trie:comparator()) -> lookup_result().
 lookup_url(Host, Path, Method) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
-    Dispatch = StorageBackend:get(nova_dispatch),
+    Dispatch = StorageBackend:get(?NOVA_DISPATCH),
     lookup_url(Host, Path, Method, Dispatch).
 
 -spec lookup_url(Host :: binary() | atom(), Path :: nova_routing_trie:path(),
@@ -183,42 +212,52 @@ add_routes(App) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec add_routes(App :: atom(), Routes :: [map()] | map()) -> ok.
-add_routes(_App, []) ->
+add_routes(App, Routes) ->
+    add_routes(App, Routes, ?NOVA_DISPATCH).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% As add_routes/2, but against the routing table addressed by `DispatchKey'.
+%% @end
+%%--------------------------------------------------------------------
+-spec add_routes(App :: atom(), Routes :: [map()] | map(), DispatchKey :: dispatch_key()) -> ok.
+add_routes(_App, [], _DispatchKey) ->
     ok;
-add_routes(App, Routes) when is_map(Routes) ->
-    add_routes(App, [Routes]);
-add_routes(App, [Routes|Tl]) when is_list(Routes) ->
+add_routes(App, Routes, DispatchKey) when is_map(Routes) ->
+    add_routes(App, [Routes], DispatchKey);
+add_routes(App, [Routes|Tl], DispatchKey) when is_list(Routes) ->
     %% A list of route-lists, as produced by a router that returns several
     %% groups. Each group is compiled on its own.
-    ok = insert_route_maps(App, Routes),
-    add_routes(App, Tl);
-add_routes(App, [RouteInfo|_Tl] = Routes) when is_map(RouteInfo) ->
-    insert_route_maps(App, Routes);
-add_routes(App, Routes) ->
+    ok = insert_route_maps(App, Routes, DispatchKey),
+    add_routes(App, Tl, DispatchKey);
+add_routes(App, [RouteInfo|_Tl] = Routes, DispatchKey) when is_map(RouteInfo) ->
+    insert_route_maps(App, Routes, DispatchKey);
+add_routes(App, Routes, _DispatchKey) ->
     ?LOG_ERROR(#{reason => <<"Invalid routes structure">>, app => App, routes => Routes}),
     throw({error, {invalid_routes, App, Routes}}).
 
-insert_route_maps(App, Routes) ->
+insert_route_maps(App, Routes, DispatchKey) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
-    Dispatch = StorageBackend:get(nova_dispatch),
+    Dispatch = StorageBackend:get(DispatchKey),
 
     %% Take out the prefix for the app and store it in the persistent store
-    CompiledApps = StorageBackend:get(?NOVA_APPS, []),
+    AppsKey = apps_key(DispatchKey),
+    CompiledApps = StorageBackend:get(AppsKey, []),
     CompiledApps0 =
         case lists:keyfind(App, 1, CompiledApps) of
-            false     -> [{App, "/"}|CompiledApps];
+            false      -> CompiledApps ++ [{App, "/"}];
             _StoredApp -> CompiledApps
         end,
 
     %% Routes added at runtime replace any route already registered on the
     %% same path and method, which is what the routing guide promises.
-    Options = #{app => App, router_file => undefined,
+    Options = #{app => App, router_file => undefined, dispatch_key => DispatchKey,
                 insert_opts => #{on_duplicate => overwrite}},
 
     {ok, Dispatch1, _Options0} = compile_paths(Routes, Dispatch, Options),
 
-    StorageBackend:put(?NOVA_APPS, CompiledApps0),
-    StorageBackend:put(nova_dispatch, Dispatch1),
+    StorageBackend:put(AppsKey, CompiledApps0),
+    StorageBackend:put(DispatchKey, Dispatch1),
     ok.
 
 
@@ -228,16 +267,27 @@ insert_route_maps(App, Routes) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec remove_application(Application :: atom()) -> ok.
-remove_application(Application) when is_atom(Application) ->
+remove_application(Application) ->
+    remove_application(Application, ?NOVA_DISPATCH).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% As remove_application/1, but against the routing table addressed by
+%% `DispatchKey'.
+%% @end
+%%--------------------------------------------------------------------
+-spec remove_application(Application :: atom(), DispatchKey :: dispatch_key()) -> ok.
+remove_application(Application, DispatchKey) when is_atom(Application) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
-    Dispatch = StorageBackend:get(nova_dispatch),
+    Dispatch = StorageBackend:get(DispatchKey),
     {ok, Dispatch0} =
         nova_routing_trie:foldl(Dispatch,
                                 fun(Routes) ->
                                         [Route || Route <- Routes, route_app(Route) =/= Application]
                                 end),
-    StorageBackend:put(nova_dispatch, Dispatch0),
-    StorageBackend:put(?NOVA_APPS, lists:keydelete(Application, 1, StorageBackend:get(?NOVA_APPS, []))),
+    AppsKey = apps_key(DispatchKey),
+    StorageBackend:put(DispatchKey, Dispatch0),
+    StorageBackend:put(AppsKey, lists:keydelete(Application, 1, StorageBackend:get(AppsKey, []))),
     nova:set_env(apps, lists:keydelete(Application, 1, nova:get_env(apps, []))),
     ok.
 
@@ -247,6 +297,28 @@ route_app({_Host, _Path, _Method, #nova_handler_value{app = App}})   -> App;
 route_app({_Host, _Path, _Method, #cowboy_handler_value{app = App}}) -> App;
 route_app(_Route)                                                    -> undefined.
 
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Forget a routing table entirely. Called when the listener that owned it is
+%% stopped, so its routes and compiled-application list do not outlive it.
+%% The default table belongs to the bootstrap listener and is never deleted.
+%% @end
+%%--------------------------------------------------------------------
+-spec delete_dispatch(DispatchKey :: dispatch_key()) -> ok.
+delete_dispatch(?NOVA_DISPATCH) ->
+    ok;
+delete_dispatch(DispatchKey) ->
+    case application:get_env(nova, dispatch_backend, persistent_term) of
+        persistent_term ->
+            persistent_term:erase(DispatchKey),
+            persistent_term:erase(apps_key(DispatchKey)),
+            ok;
+        _Backend ->
+            %% A custom backend has no erase in its contract; leave it to
+            %% decide its own lifecycle.
+            ok
+    end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%
 %% INTERNAL FUNCTIONS %%
@@ -295,11 +367,11 @@ compile([App|Tl], Dispatch, Options) ->
     %% Take out the prefix for the app and store it in the persistent store
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
 
-    CompiledApps = StorageBackend:get(?NOVA_APPS, []),
+    CompiledApps = StorageBackend:get(apps_key(maps:get(dispatch_key, Options, ?NOVA_DISPATCH)), []),
 
     CompiledApps0 = lists:keystore(App, 1, CompiledApps, {App, maps:get(prefix, Options, "/")}),
 
-    StorageBackend:put(?NOVA_APPS, CompiledApps0),
+    StorageBackend:put(apps_key(maps:get(dispatch_key, Options, ?NOVA_DISPATCH)), CompiledApps0),
 
     compile(Tl, Dispatch1, Options).
 
@@ -475,9 +547,7 @@ render_status_page(StatusCode, Req) ->
 -spec render_status_page(StatusCode :: integer(), Data :: map(), Req :: cowboy_req:req()) ->
                                 {ok, Req0 :: cowboy_req:req(), Env :: map()}.
 render_status_page(StatusCode, Data, Req) ->
-    StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
-    Dispatch = StorageBackend:get(nova_dispatch),
-    render_status_page('_', StatusCode, Data, Req, #{dispatch => Dispatch}).
+    render_status_page('_', StatusCode, Data, Req, #{}).
 
 -spec render_status_page(Host :: binary() | atom(),
                          StatusCode :: integer(),
@@ -486,7 +556,7 @@ render_status_page(StatusCode, Data, Req) ->
                          Env :: map()) -> {ok, Req0 :: cowboy_req:req(), Env :: map()}.
 render_status_page(Host, StatusCode, Data, Req, Env) ->
     StorageBackend = application:get_env(nova, dispatch_backend, persistent_term),
-    Dispatch = StorageBackend:get(nova_dispatch),
+    Dispatch = StorageBackend:get(dispatch_key(Env)),
     {Req0, Env0} =
         case nova_routing_trie:find(Host, StatusCode, '_', Dispatch) of
             {error, _} ->
@@ -513,6 +583,15 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
 
 insert_opts(T) ->
     maps:get(insert_opts, T, #{}).
+
+%% The listener's dispatch key, defaulting to the one the bootstrap listener
+%% uses so an Env built before multi-listener support still resolves.
+dispatch_key(Env) ->
+    maps:get(nova_dispatch_key, Env, ?NOVA_DISPATCH).
+
+%% Each dispatch table keeps its own list of compiled applications.
+apps_key(?NOVA_DISPATCH)  -> ?NOVA_APPS;
+apps_key(DispatchKey)     -> {?NOVA_APPS, DispatchKey}.
 
 insert_methods([], _Host, _Path, _Value, Tree, _Options, _ToComparator) ->
     Tree;
