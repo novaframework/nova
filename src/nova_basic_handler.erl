@@ -254,6 +254,10 @@ handle_websocket({websocket, ControllerData}, Callback, Req) ->
     case Module:init(ControllerData) of
         {ok, NewControllerData} ->
             {cowboy_websocket, Req#{controller_data => NewControllerData}, #{}};
+        %% We also support status tuples
+        StatusTuple when is_tuple(StatusTuple), element(1, StatusTuple) =:= status ->
+            {ok, HandlerMod} = nova_handlers:get_handler(status),
+            HandlerMod(StatusTuple, Callback, Req);
         Error ->
             ?LOG_ERROR(#{msg => <<"Handler returned unsupported result">>, handler => Module, return_obj => Error}),
             %% Render 500
