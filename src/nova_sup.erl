@@ -13,6 +13,10 @@
 %% Supervisor callbacks
 -export([init/1]).
 
+-ifdef(TEST).
+-export([listener_child_spec/1, clear_child_spec/3, tls_child_spec/3]).
+-endif.
+
 -include_lib("kernel/include/logger.hrl").
 -include("../include/nova.hrl").
 
@@ -81,10 +85,13 @@ init([]) ->
             _ -> Children0
         end,
 
-    setup_cowboy(Configuration),
+    UseStacktrace = application:get_env(nova, use_stacktrace, false),
+    persistent_term:put(nova_use_stacktrace, UseStacktrace),
 
-
-    {ok, {SupFlags, Children}}.
+    %% The cowboy/ranch listener is a supervised child rather than a side
+    %% effect, so a failed bind (e.g. eaddrinuse) fails init/1 and surfaces
+    %% through application:start/1 instead of being logged and ignored.
+    {ok, {SupFlags, Children ++ cowboy_childspecs(Configuration)}}.
 
 %%%===================================================================
 %%% Internal functions
@@ -103,25 +110,18 @@ child(Id, Type, Mod) ->
 child(Id, Mod) ->
     child(Id, worker, Mod).
 
-setup_cowboy(Configuration) ->
-    case start_cowboy(Configuration) of
-        {ok, App, Host, Port} ->
-            Host0 = inet:ntoa(Host),
-            CowboyVersion = get_version(cowboy),
-            NovaVersion = get_version(nova),
-            UseStacktrace = application:get_env(nova, use_stacktrace, false),
-            persistent_term:put(nova_use_stacktrace, UseStacktrace),
-            ?LOG_NOTICE(#{msg => <<"Nova is running">>,
-                          url => unicode:characters_to_binary(io_lib:format("http://~s:~B", [Host0, Port])),
-                          cowboy_version => CowboyVersion, nova_version => NovaVersion, app => App});
-        {error, Error} ->
-            ?LOG_ERROR(#{msg => <<"Cowboy could not start">>, reason => Error})
-    end.
+cowboy_childspecs(Configuration) ->
+    {ChildSpec, App, Host, Port} = listener_child_spec(Configuration),
+    Host0 = inet:ntoa(Host),
+    ?LOG_NOTICE(#{msg => <<"Nova is running">>,
+                  url => unicode:characters_to_binary(io_lib:format("http://~s:~B", [Host0, Port])),
+                  cowboy_version => get_version(cowboy), nova_version => get_version(nova), app => App}),
+    [ChildSpec].
 
--spec start_cowboy(Configuration :: map()) ->
-          {ok, BootstrapApp :: atom(), Host :: string() | {integer(), integer(), integer(), integer()},
-           Port :: integer()} | {error, Reason :: any()}.
-start_cowboy(Configuration) ->
+-spec listener_child_spec(Configuration :: map()) ->
+          {supervisor:child_spec(), BootstrapApp :: atom(),
+           Host :: string() | {integer(), integer(), integer(), integer()}, Port :: integer()}.
+listener_child_spec(Configuration) ->
     Middlewares = [
                    nova_router, %% Lookup routes
                    nova_plugin_handler, %% Handle pre-request plugins
@@ -166,16 +166,8 @@ start_cowboy(Configuration) ->
     case maps:get(use_ssl, Configuration, false) of
         false ->
             Port = maps:get(port, Configuration, ?NOVA_STD_PORT),
-            case cowboy:start_clear(
-                   ?NOVA_LISTENER,
-                   [{port, Port},
-                    {ip, Host}],
-                   CowboyOptions2) of
-                {ok, _Pid} ->
-                    {ok, BootstrapApp, Host, Port};
-                Error ->
-                    Error
-            end;
+            ChildSpec = clear_child_spec(?NOVA_LISTENER, [{port, Port}, {ip, Host}], CowboyOptions2),
+            {ChildSpec, BootstrapApp, Host, Port};
         _ ->
             case maps:get(ca_cert, Configuration, undefined) of
                 undefined ->
@@ -183,36 +175,56 @@ start_cowboy(Configuration) ->
                     SSLOptions = maps:get(ssl_options, Configuration, #{}),
                     TransportOpts = maps:put(port, Port, SSLOptions),
                     TransportOpts1 = maps:put(ip, Host, TransportOpts),
-
-                    case cowboy:start_tls(
-                           ?NOVA_LISTENER, maps:to_list(TransportOpts1), CowboyOptions2) of
-                        {ok, _Pid} ->
-                            ?LOG_NOTICE(#{msg => <<"Nova starting SSL">>, port => Port}),
-                            {ok, BootstrapApp, Host, Port};
-                        Error ->
-                            ?LOG_ERROR(#{msg => <<"Could not start cowboy with SSL">>, reason => Error}),
-                            Error
-                    end;
+                    ?LOG_NOTICE(#{msg => <<"Nova starting SSL">>, port => Port}),
+                    ChildSpec = tls_child_spec(?NOVA_LISTENER, maps:to_list(TransportOpts1), CowboyOptions2),
+                    {ChildSpec, BootstrapApp, Host, Port};
                 CACert ->
                     Cert = maps:get(cert, Configuration),
                     Port = maps:get(ssl_port, Configuration, ?NOVA_STD_SSL_PORT),
                     ?LOG_DEPRECATED(<<"0.10.3">>, <<"Use of use_ssl is deprecated, use ssl instead">>),
-                    case cowboy:start_tls(
-                           ?NOVA_LISTENER, [
-                                            {port, Port},
-                                            {ip, Host},
-                                            {certfile, Cert},
-                                            {cacertfile, CACert}
-                                           ],
-                           CowboyOptions2) of
-                        {ok, _Pid} ->
-                            ?LOG_NOTICE(#{msg => <<"Nova starting SSL">>, port => Port}),
-                            {ok, BootstrapApp, Host, Port};
-                        Error ->
-                            Error
-                    end
+                    ?LOG_NOTICE(#{msg => <<"Nova starting SSL">>, port => Port}),
+                    ChildSpec = tls_child_spec(?NOVA_LISTENER,
+                                               [{port, Port}, {ip, Host},
+                                                {certfile, Cert}, {cacertfile, CACert}],
+                                               CowboyOptions2),
+                    {ChildSpec, BootstrapApp, Host, Port}
             end
     end.
+
+%% These mirror cowboy:start_clear/3 and cowboy:start_tls/3 (cowboy 2.15) but
+%% yield a supervisor:child_spec/0 via ranch:child_spec/5 so the listener lives
+%% in nova's supervision tree instead of being started as a side effect. Keep
+%% the option transforms in listener_opts/2 in sync if the cowboy pin changes.
+clear_child_spec(Ref, TransOpts0, ProtoOpts0) ->
+    {TransOpts, ProtoOpts} = listener_opts(TransOpts0, ProtoOpts0),
+    ranch:child_spec(Ref, ranch_tcp, TransOpts, cowboy_clear, ProtoOpts).
+
+tls_child_spec(Ref, TransOpts0, ProtoOpts0) ->
+    {TransOpts, ProtoOpts} = listener_opts(TransOpts0, ProtoOpts0),
+    ranch:child_spec(Ref, ranch_ssl, TransOpts, cowboy_tls, ProtoOpts).
+
+listener_opts(TransOpts0, ProtoOpts0) ->
+    TransOpts1 = ranch:normalize_opts(TransOpts0),
+    {TransOpts2, DynamicBuffer} = ensure_dynamic_buffer(TransOpts1, ProtoOpts0),
+    {TransOpts, ConnectionType} = ensure_connection_type(TransOpts2),
+    {TransOpts, ProtoOpts0#{connection_type => ConnectionType, dynamic_buffer => DynamicBuffer}}.
+
+ensure_connection_type(TransOpts = #{connection_type := ConnectionType}) ->
+    {TransOpts, ConnectionType};
+ensure_connection_type(TransOpts) ->
+    {TransOpts#{connection_type => supervisor}, supervisor}.
+
+ensure_dynamic_buffer(TransOpts, #{dynamic_buffer := DynamicBuffer}) ->
+    {TransOpts, DynamicBuffer};
+ensure_dynamic_buffer(TransOpts = #{socket_opts := SocketOpts}, _) ->
+    case proplists:get_value(buffer, SocketOpts, undefined) of
+        undefined ->
+            {TransOpts#{socket_opts => [{buffer, 512} | SocketOpts]}, {512, 131072}};
+        _ ->
+            {TransOpts, false}
+    end;
+ensure_dynamic_buffer(TransOpts, _) ->
+    {TransOpts, false}.
 
 
 
