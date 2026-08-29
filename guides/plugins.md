@@ -106,7 +106,7 @@ Nova has a couple of plugins for some general purposes.
 |------|-----------|----|
 |nova_correlation_plugin|This plugin will add a correlation id to header response but also add `#{correlation_id => CorrelationID}` to the request obj that is passed to the controller.|[nova_correlation_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_correlation_plugin.erl)|
 |nova_cors_plugin|This plugin will handle cors and add the cors headers into the request.|[nova_cors_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_cors_plugin.erl)|
-|nova_request_plugin|This plugin will handle incomming data like qs, form urlencoded and json|[nova_request_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_request_plugin.erl)|
+|nova_request_plugin|This plugin will handle incomming data like qs, form urlencoded, multipart and json|[nova_request_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_request_plugin.erl)|
 
 
 ### Nova correlation
@@ -143,6 +143,7 @@ This plugins handle incoming data and can transform them to erlang maps dependin
 ```erlang
 {pre_request; nova_correlation_plugin, #{decode_json_body => true,
                                          read_urlencoded_body => true,
+                                         read_multipart_body => true,
                                          parse_qs => true|list}}
 ```
 
@@ -151,4 +152,56 @@ This plugins handle incoming data and can transform them to erlang maps dependin
 |------|-----------|----|
 |decode_json_body|If header is application/json it will decode the body.| `Req#{json => Map}`|
 |read_urlencoded_body|If header is application/x-www-form-urlencoded it will decode it.| `Req#{params => Map}`|
+|read_multipart_body|If header is multipart/form-data it will read all the parts.|`Req#{params => Map, files => List}`|
 |parse_qs| If the path have qs in it we will get them.|`Req#{parsed_qs => Map or List}`|
+
+#### File uploads
+
+`read_multipart_body` reads a `multipart/form-data` body in one go. Regular form
+fields end up in `params` and every part that carries a filename ends up in
+`files`:
+
+```erlang
+{pre_request, nova_request_plugin, #{read_multipart_body => true}}
+```
+
+```erlang
+-module(upload_controller).
+-export([upload/1]).
+
+upload(#{params := #{<<"title">> := Title}, files := Files}) ->
+    [ok = file:write_file(<<"/tmp/", Filename/binary>>, Body)
+     || #{filename := Filename, body := Body} <- Files],
+    {json, 200, #{}, #{title => Title, uploaded => length(Files)}}.
+```
+
+Each entry in `files` is a map with the keys `name` (the form field), `filename`,
+`content_type` and `body`.
+
+Parts are kept in memory, so the size of a single part is capped at 8 MB. Pass a
+map instead of `true` to change that - a part above the limit gets a `413` reply
+and the controller is never called:
+
+```erlang
+{pre_request, nova_request_plugin, #{read_multipart_body => #{max_file_size => 20000000}}}
+```
+
+Without the `read_multipart_body` option the plugin leaves a `multipart/form-data`
+body untouched even when `decode_json_body` is set, so a controller can stream the
+parts itself with [cowboy_req:read_part/1](https://ninenines.eu/docs/en/cowboy/2.13/manual/cowboy_req.read_part/)
+and hand the updated request back through a four element return tuple:
+
+```erlang
+upload(Req) ->
+    {Files, Req1} = read_parts(Req, []),
+    {json, 200, #{}, Req1, #{uploaded => length(Files)}}.
+
+read_parts(Req0, Acc) ->
+    case cowboy_req:read_part(Req0) of
+        {ok, Headers, Req1} ->
+            {ok, Body, Req2} = cowboy_req:read_part_body(Req1),
+            read_parts(Req2, [{cow_multipart:form_data(Headers), Body}|Acc]);
+        {done, Req1} ->
+            {lists:reverse(Acc), Req1}
+    end.
+```

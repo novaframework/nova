@@ -97,6 +97,10 @@ Same as the medium interface but with an additional field for specifying a body.
 
 Sends a file using sendfile. This uses cowboys sendfile functionality and more information about it can be found in the [cowboy manual on sendfile](https://ninenines.eu/docs/en/cowboy/2.9/guide/resp/#_sending_files)
 
+### File uploads
+
+Incoming files are handled by the *request plugin* and not by a return keyword. Enable `read_multipart_body` and the uploaded files are in the request under `files`. See [file uploads](plugins.md#file-uploads).
+
 ### Redirecting user
 
 *Keyword*: `redirect`
