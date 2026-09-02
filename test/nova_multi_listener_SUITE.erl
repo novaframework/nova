@@ -13,6 +13,9 @@
          second_application_gets_its_own_port/1,
          listeners_do_not_serve_each_others_routes/1,
          second_application_on_a_bound_port_shares_the_listener/1,
+         an_explicit_host_is_part_of_the_listener_identity/1,
+         an_explicit_host_does_not_match_the_wildcard_listener/1,
+         a_failed_bind_leaves_no_routing_table/1,
          adding_a_started_application_again_is_an_error/1,
          removing_an_application_stops_only_its_listener/1,
          removing_an_unknown_application_is_an_error/1
@@ -27,6 +30,9 @@ all() ->
      second_application_gets_its_own_port,
      listeners_do_not_serve_each_others_routes,
      second_application_on_a_bound_port_shares_the_listener,
+     an_explicit_host_is_part_of_the_listener_identity,
+     an_explicit_host_does_not_match_the_wildcard_listener,
+     a_failed_bind_leaves_no_routing_table,
      adding_a_started_application_again_is_an_error,
      removing_an_application_stops_only_its_listener,
      removing_an_unknown_application_is_an_error
@@ -107,6 +113,63 @@ second_application_on_a_bound_port_shares_the_listener(Config) ->
     ?assertEqual(Before, length(nova_sup:listeners())),
     {404, _} = get(BootstrapPort, "/hello"),
     {200, _} = get(BootstrapPort, "/json").
+
+%% Listeners key on {Host, Port}, so an explicit host is part of a
+%% listener's identity: registered, found and removed under that key.
+an_explicit_host_is_part_of_the_listener_identity(_Config) ->
+    Port = free_port(),
+    Host = {127, 0, 0, 1},
+    Before = length(nova_sup:listeners()),
+    {ok, nova_test_sub_app, Host, Port} =
+        nova_sup:add_application(nova_test_sub_app, #{ip => Host, port => Port}),
+    try
+        ?assertEqual(Before + 1, length(nova_sup:listeners())),
+        {200, _} = get(Port, "/hello"),
+        ?assertMatch([#{host := Host, port := Port}],
+                     [S || S = #{app := nova_test_sub_app} <- nova_sup:get_started_applications()]),
+        ?assertEqual({error, {already_started, nova_test_sub_app}},
+                     nova_sup:add_application(nova_test_sub_app, #{ip => Host, port => Port}))
+    after
+        nova_sup:remove_application(nova_test_sub_app)
+    end,
+    ?assertEqual(Before, length(nova_sup:listeners())),
+    ?assertEqual({error, econnrefused}, connect(Port)).
+
+%% The bootstrap listener is bound on the wildcard host, so the same port
+%% with an explicit host is a different key and must not attach to it.
+%% Whether the second bind then succeeds is up to the OS, so the assertion
+%% is that the bootstrap listener's applications are untouched.
+an_explicit_host_does_not_match_the_wildcard_listener(Config) ->
+    BootstrapPort = ?config(port, Config),
+    Result = nova_sup:add_application(nova_test_sub_app,
+                                      #{ip => {127, 0, 0, 1}, port => BootstrapPort}),
+    try
+        ?assertEqual([nova_test_app],
+                     [A || #{app := A, listener := nova_listener}
+                               <- nova_sup:get_started_applications()])
+    after
+        case Result of
+            {ok, _, _, _} -> nova_sup:remove_application(nova_test_sub_app);
+            {error, _}    -> ok
+        end
+    end,
+    {200, _} = get(BootstrapPort, "/json").
+
+%% A listener that fails to bind must not leave its routing table behind.
+a_failed_bind_leaves_no_routing_table(_Config) ->
+    {ok, Socket} = gen_tcp:listen(0, [{ip, {127, 0, 0, 1}}]),
+    {ok, Port} = inet:port(Socket),
+    DispatchKey = {nova_dispatch, nova_test_sub_app, Port},
+    try
+        ?assertMatch({error, _},
+                     nova_sup:add_application(nova_test_sub_app,
+                                              #{ip => {127, 0, 0, 1}, port => Port})),
+        ?assertEqual([], nova_router:compiled_apps(DispatchKey)),
+        ?assertEqual([], [A || #{app := A} <- nova_sup:get_started_applications(),
+                               A =:= nova_test_sub_app])
+    after
+        gen_tcp:close(Socket)
+    end.
 
 adding_a_started_application_again_is_an_error(Config) ->
     BootstrapPort = ?config(port, Config),

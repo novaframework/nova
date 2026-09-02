@@ -40,11 +40,12 @@
 
 -type nova_app() :: atom() | {atom(), map()}.
 
+%% Keyed on bind: one listener per {Host, Port} is the invariant
+%% add_application/2 relies on, so that pair is the table key.
 -record(nova_listener, {
+                        bind :: {inet:ip_address() | string(), inet:port_number()},
                         ref :: ranch:ref(),
                         apps = [] :: [atom()],
-                        host :: inet:ip_address() | string(),
-                        port :: inet:port_number(),
                         dispatch_key :: nova_router:dispatch_key(),
                         tls = false :: boolean()
                        }).
@@ -114,7 +115,7 @@ remove_application(App) ->
                                        listener := ranch:ref()}].
 get_started_applications() ->
     [#{app => App, host => Host, port => Port, listener => Ref}
-     || #nova_listener{ref = Ref, apps = Apps, host = Host, port = Port} <- all_listeners(),
+     || #nova_listener{ref = Ref, apps = Apps, bind = {Host, Port}} <- all_listeners(),
         App <- Apps].
 
 %%--------------------------------------------------------------------
@@ -203,7 +204,7 @@ ensure_listener_table() ->
     case ets:whereis(?NOVA_LISTENERS_TABLE) of
         undefined ->
             ets:new(?NOVA_LISTENERS_TABLE,
-                    [named_table, public, set, {keypos, #nova_listener.ref}]);
+                    [named_table, public, set, {keypos, #nova_listener.bind}]);
         _Tid ->
             ?NOVA_LISTENERS_TABLE
     end.
@@ -215,9 +216,14 @@ all_listeners() ->
     end.
 
 find_listener(Host, Port) ->
-    case [L || L = #nova_listener{host = H, port = P} <- all_listeners(), H =:= Host, P =:= Port] of
-        [Listener | _] -> {ok, Listener};
-        []             -> error
+    case ets:whereis(?NOVA_LISTENERS_TABLE) of
+        undefined ->
+            error;
+        Tid ->
+            case ets:lookup(Tid, {Host, Port}) of
+                [Listener] -> {ok, Listener};
+                []         -> error
+            end
     end.
 
 setup_cowboy(Configuration) ->
@@ -257,15 +263,17 @@ start_cowboy(Configuration) ->
     Host = maps:get(ip, Configuration, {0, 0, 0, 0}),
     Port = effective_port(Configuration),
 
-    CowboyOptions = cowboy_options(Configuration, nova_dispatch, Dispatch),
+    %% The bootstrap listener serves the default table: the compile/1 above
+    %% and every keyless nova_router caller already address it.
+    DispatchKey = nova_dispatch,
+    CowboyOptions = cowboy_options(Configuration, DispatchKey, Dispatch),
 
     case bind(?NOVA_LISTENER, Host, Port, Configuration, CowboyOptions) of
         {ok, Tls} ->
-            register_listener(#nova_listener{ref = ?NOVA_LISTENER,
+            register_listener(#nova_listener{bind = {Host, Port},
+                                             ref = ?NOVA_LISTENER,
                                              apps = [BootstrapApp],
-                                             host = Host,
-                                             port = Port,
-                                             dispatch_key = nova_dispatch,
+                                             dispatch_key = DispatchKey,
                                              tls = Tls}),
             {ok, BootstrapApp, Host, Port};
         {error, Reason} ->
@@ -284,23 +292,23 @@ start_listener(App, Host, Port, Configuration) ->
     CowboyOptions = cowboy_options(Configuration, DispatchKey, Dispatch),
     case bind(Ref, Host, Port, Configuration, CowboyOptions) of
         {ok, Tls} ->
-            register_listener(#nova_listener{ref = Ref,
+            register_listener(#nova_listener{bind = {Host, Port},
+                                             ref = Ref,
                                              apps = [App],
-                                             host = Host,
-                                             port = Port,
                                              dispatch_key = DispatchKey,
                                              tls = Tls}),
             ?LOG_NOTICE(#{msg => <<"Started Nova application on a new listener">>,
                           app => App, port => Port, listener => Ref}),
             {ok, App, Host, Port};
         {error, Reason} ->
+            ok = nova_router:delete_dispatch(DispatchKey),
             ?LOG_ERROR(#{msg => <<"Could not start listener for application">>,
                          app => App, port => Port, reason => Reason}),
             {error, Reason}
     end.
 
-attach_application(App, Listener = #nova_listener{ref = Ref, apps = Apps, host = Host,
-                                                  port = Port, dispatch_key = DispatchKey}) ->
+attach_application(App, Listener = #nova_listener{ref = Ref, apps = Apps, bind = {Host, Port},
+                                                  dispatch_key = DispatchKey}) ->
     case lists:member(App, Apps) of
         true ->
             {error, {already_started, App}};
@@ -313,7 +321,8 @@ attach_application(App, Listener = #nova_listener{ref = Ref, apps = Apps, host =
             {ok, App, Host, Port}
     end.
 
-detach_application(App, #nova_listener{ref = Ref, apps = Apps, dispatch_key = DispatchKey} = Listener) ->
+detach_application(App, #nova_listener{ref = Ref, bind = Bind, apps = Apps,
+                                       dispatch_key = DispatchKey} = Listener) ->
     ok = nova_router:remove_application(App, DispatchKey),
     case lists:delete(App, Apps) of
         [] ->
@@ -325,7 +334,7 @@ detach_application(App, #nova_listener{ref = Ref, apps = Apps, dispatch_key = Di
                     ?LOG_ERROR(#{msg => <<"Could not stop cowboy listener">>,
                                  listener => Ref, reason => Reason})
             end,
-            ets:delete(?NOVA_LISTENERS_TABLE, Ref),
+            ets:delete(?NOVA_LISTENERS_TABLE, Bind),
             ok = nova_router:delete_dispatch(DispatchKey),
             ok;
         Remaining ->
