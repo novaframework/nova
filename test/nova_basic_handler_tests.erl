@@ -295,7 +295,7 @@ handle_status_code_only_test_() ->
     {setup, fun() ->
         Prev = nova_test_helper:setup_nova_env(),
         application:set_env(nova, dispatch_backend, persistent_term),
-        Tree = routing_tree:new(#{use_strict => false, convert_to_binary => true}),
+        Tree = nova_routing_trie:new(#{use_strict => false, convert_to_binary => true}),
         persistent_term:put(nova_dispatch, Tree),
         Prev
     end,
@@ -313,7 +313,7 @@ handle_status_with_headers_test_() ->
     {setup, fun() ->
         Prev = nova_test_helper:setup_nova_env(),
         application:set_env(nova, dispatch_backend, persistent_term),
-        Tree = routing_tree:new(#{use_strict => false, convert_to_binary => true}),
+        Tree = nova_routing_trie:new(#{use_strict => false, convert_to_binary => true}),
         persistent_term:put(nova_dispatch, Tree),
         Prev
     end,

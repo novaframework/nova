@@ -7,7 +7,7 @@
 setup() ->
     Prev = nova_test_helper:setup_nova_env(),
     application:set_env(nova, dispatch_backend, persistent_term),
-    Tree = routing_tree:new(#{use_strict => false, convert_to_binary => true}),
+    Tree = nova_routing_trie:new(#{use_strict => false, convert_to_binary => true}),
     persistent_term:put(nova_dispatch, Tree),
     persistent_term:put(nova_plugins, []),
     persistent_term:put(nova_use_stacktrace, false),

@@ -149,13 +149,16 @@ get_handler(Handle) ->
 init([]) ->
     process_flag(trap_exit, true),
     ets:new(?HANDLERS_TABLE, [named_table, set, protected]),
-    register_handler(json, fun nova_basic_handler:handle_json/3),
-    register_handler(ok, fun nova_basic_handler:handle_ok/3),
-    register_handler(status, fun nova_basic_handler:handle_status/3),
-    register_handler(redirect, fun nova_basic_handler:handle_redirect/3),
-    register_handler(sendfile, fun nova_basic_handler:handle_sendfile/3),
-    register_handler(ws, fun nova_basic_handler:handle_ws/2),
-    register_handler(view, fun nova_basic_handler:handle_view/3),
+    %% Inserted directly rather than cast to ourselves: register_handler/2 is
+    %% asynchronous, so the defaults would not be guaranteed to exist when
+    %% start_link/0 returns.
+    ets:insert(?HANDLERS_TABLE, [{json, fun nova_basic_handler:handle_json/3},
+                                 {ok, fun nova_basic_handler:handle_ok/3},
+                                 {status, fun nova_basic_handler:handle_status/3},
+                                 {redirect, fun nova_basic_handler:handle_redirect/3},
+                                 {sendfile, fun nova_basic_handler:handle_sendfile/3},
+                                 {ws, fun nova_basic_handler:handle_ws/2},
+                                 {view, fun nova_basic_handler:handle_view/3}]),
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------
