@@ -1,0 +1,9 @@
+{application, nova_test_app,
+ [{description, "Full-feature Nova application used to test the framework end to end"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {applications, [kernel, stdlib, nova]},
+  {env, [{nova_apps, [{nova_test_sub_app, #{prefix => "/sub"}}]}]},
+  {modules, []},
+  {licenses, ["Apache-2.0"]}
+ ]}.
