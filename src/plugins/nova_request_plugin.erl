@@ -127,8 +127,19 @@ read_request_body(Req, Options) ->
             end
     end.
 
-is_multipart(#{headers := #{<<"content-type">> := <<"multipart/form-data", _/binary>>}}) -> true;
-is_multipart(_Req) -> false.
+%% Case-insensitive per RFC 9110 8.3.1, delegated to Cowboy's own parser
+%% rather than a raw prefix match - a raw match misses `Multipart/Form-Data'
+%% and friends, and when that happens with decode_json_body set the body
+%% falls through to read_body/2 instead, which has no size cap at all
+%% (unlike the max_file_size-bounded multipart path), so this is a DoS gap,
+%% not just a compatibility one.
+is_multipart(Req) ->
+    try cowboy_req:parse_header(<<"content-type">>, Req) of
+        {<<"multipart">>, <<"form-data">>, _Params} -> true;
+        _ -> false
+    catch
+        _:_ -> false
+    end.
 
 multipart_options([]) -> false;
 multipart_options([{read_multipart_body, true}|_Tl]) -> #{};
