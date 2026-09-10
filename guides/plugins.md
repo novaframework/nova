@@ -106,7 +106,8 @@ Nova has a couple of plugins for some general purposes.
 |------|-----------|----|
 |nova_correlation_plugin|This plugin will add a correlation id to header response but also add `#{correlation_id => CorrelationID}` to the request obj that is passed to the controller.|[nova_correlation_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_correlation_plugin.erl)|
 |nova_cors_plugin|This plugin will handle cors and add the cors headers into the request.|[nova_cors_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_cors_plugin.erl)|
-|nova_request_plugin|This plugin will handle incomming data like qs, form urlencoded, multipart and json|[nova_request_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_request_plugin.erl)|
+|nova_multipart_plugin|This plugin reads `multipart/form-data` bodies and streams uploaded files to a handler.|[nova_multipart_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_multipart_plugin.erl)|
+|nova_request_plugin|This plugin will handle incomming data like qs, form urlencoded and json. Multipart bodies are left to `nova_multipart_plugin`.|[nova_request_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_request_plugin.erl)|
 
 
 ### Nova correlation
@@ -143,7 +144,6 @@ This plugins handle incoming data and can transform them to erlang maps dependin
 ```erlang
 {pre_request; nova_correlation_plugin, #{decode_json_body => true,
                                          read_urlencoded_body => true,
-                                         read_multipart_body => true,
                                          parse_qs => true|list}}
 ```
 
@@ -152,17 +152,16 @@ This plugins handle incoming data and can transform them to erlang maps dependin
 |------|-----------|----|
 |decode_json_body|If header is application/json it will decode the body.| `Req#{json => Map}`|
 |read_urlencoded_body|If header is application/x-www-form-urlencoded it will decode it.| `Req#{params => Map}`|
-|read_multipart_body|If header is multipart/form-data it will read all the parts.|`Req#{params => Map, files => List}`|
 |parse_qs| If the path have qs in it we will get them.|`Req#{parsed_qs => Map or List}`|
 
-#### File uploads
+### Nova multipart
 
-`read_multipart_body` reads a `multipart/form-data` body in one go. Regular form
-fields end up in `params` and every part that carries a filename ends up in
-`files`:
+`nova_request_plugin` never buffers a `multipart/form-data` body. Add
+`nova_multipart_plugin` to the route instead and give it a handler that
+receives every file part chunk by chunk:
 
 ```erlang
-{pre_request, nova_request_plugin, #{read_multipart_body => true}}
+{pre_request, nova_multipart_plugin, #{handler => {nova_multipart_file_handler, #{dir => <<"/var/uploads">>}}}}
 ```
 
 ```erlang
@@ -170,26 +169,47 @@ fields end up in `params` and every part that carries a filename ends up in
 -export([upload/1]).
 
 upload(#{params := #{<<"title">> := Title}, files := Files}) ->
-    [ok = file:write_file(<<"/tmp/", Filename/binary>>, Body)
-     || #{filename := Filename, body := Body} <- Files],
-    {json, 200, #{}, #{title => Title, uploaded => length(Files)}}.
+    Paths = [Path || #{result := #{path := Path}} <- Files],
+    {json, 200, #{}, #{title => Title, uploaded => Paths}}.
 ```
 
-Each entry in `files` is a map with the keys `name` (the form field), `filename`,
-`content_type` and `body`.
+Regular form fields end up in `params`. Every part with a filename ends up in
+`files` as a map with `name`, `filename`, `content_type` and `result`, where
+`result` is what the handler returned. On a non-multipart request `files` is
+`[]` and `params` is left alone.
 
-Parts are kept in memory, so the size of a single part is capped at 8 MB. Pass a
-map instead of `true` to change that - a part above the limit gets a `413` reply
-and the controller is never called:
+Two handlers ship with Nova:
 
-```erlang
-{pre_request, nova_request_plugin, #{read_multipart_body => #{max_file_size => 20000000}}}
-```
+|Handler|Result|
+|-------|------|
+|`nova_multipart_file_handler`|Streams the part to a random name under `dir` and returns `#{path => Path}`.|
+|`nova_multipart_memory_handler`|Keeps the part in memory and returns `#{body => Binary}`. For small attachments only.|
 
-Without the `read_multipart_body` option the plugin leaves a `multipart/form-data`
-body untouched even when `decode_json_body` is set, so a controller can stream the
-parts itself with [cowboy_req:read_part/1](https://ninenines.eu/docs/en/cowboy/2.13/manual/cowboy_req.read_part/)
-and hand the updated request back through a four element return tuple:
+Write your own by implementing the `nova_multipart_handler` behaviour
+(`init/2`, `handle_data/2`, `handle_end/1`, `handle_abort/2`). `filename`,
+`content_type` and `name` are all client controlled: never build a filesystem
+path from `filename`, and never echo `content_type` back as a response header.
+
+A part without a filename is a regular field no matter how large it is, and is
+bounded by `max_field_size`. When a form is protected by `nova_csrf_plugin`,
+`nova_multipart_plugin` must run before it so the token is in `params`.
+
+|Option|Description|
+|------|-----------|
+|handler|Required. `{Mod, InitArgs}` implementing `nova_multipart_handler`.|
+|max_parts|Reply 413 after this many parts (default 32).|
+|max_part_size|Reply 413 past this many bytes in a single file part (default 8 000 000).|
+|max_field_size|Reply 413 past this many bytes in a single non-file field (default 65 536).|
+|max_total_size|Reply 413 past this many bytes across all parts (default 64 000 000).|
+|read_timeout|Reply 408 if the whole body is not read within this many ms (default 60 000).|
+
+A malformed part gets a 400 and a handler error a 500. In every case the
+controller is never called and the handler's `handle_abort/2` has run.
+
+To read the parts yourself, leave `nova_multipart_plugin` off the route and use
+[cowboy_req:read_part/1](https://ninenines.eu/docs/en/cowboy/2.13/manual/cowboy_req.read_part/)
+from the controller, handing the updated request back through a five element
+return tuple:
 
 ```erlang
 upload(Req) ->
@@ -205,60 +225,3 @@ read_parts(Req0, Acc) ->
             {lists:reverse(Acc), Req1}
     end.
 ```
-
-#### Streaming large uploads with `nova_multipart_plugin`
-
-`read_multipart_body` keeps a whole part in memory (bounded by `max_file_size`),
-which is fine for small attachments but wasteful for large files. For those,
-`nova_multipart_plugin` streams each file part to a `nova_multipart_handler`
-one chunk at a time, so a chunk's memory is released as soon as the handler
-has consumed it:
-
-```erlang
-{pre_request, nova_multipart_plugin, #{handler => {nova_multipart_file_handler, #{dir => <<"/var/uploads">>}}}}
-```
-
-```erlang
--module(upload_controller).
--export([upload/1]).
-
-upload(#{params := #{<<"title">> := Title}, files := Files}) ->
-    %% each File's `result` is whatever the handler returned from
-    %% handle_end/1 - for nova_multipart_file_handler, #{path => Path}
-    {json, 200, #{}, #{title => Title, uploaded => length(Files)}}.
-```
-
-Write a handler by implementing the `nova_multipart_handler` behaviour
-(`init/2`, `handle_data/2`, `handle_end/1`, `handle_abort/2`) - see
-`nova_multipart_file_handler` for a disk-writing reference implementation.
-Every field in a part's info - `filename`, `content_type` and the form field
-`name` - is client-controlled, not just `filename`:
-
-* **Never derive a filesystem path from `filename`** - using it directly is a
-  path-traversal bug; generate the on-disk name yourself, as the reference
-  handler does.
-* **Never treat `content_type` as trustworthy** - don't use it to pick a
-  code path, and don't echo it back verbatim as a response `Content-Type`
-  header (a stored `text/html` content type reflected back is a stored-XSS
-  vector).
-
-A part without a `filename=` parameter is classified as a regular field, not
-a file - regardless of how large it actually is. It's bounded separately, by
-`max_field_size`, so an attacker can't dodge the streaming path (and its
-larger size limits) just by omitting `filename=` from an otherwise identical
-part.
-
-Configure exactly one of `read_multipart_body` or `nova_multipart_plugin` per
-request - the body is a one-shot stream, so both plugins can never run in the
-same `pre_request` chain. On a non-multipart request `nova_multipart_plugin`
-leaves `Req` untouched, so it never clobbers `params` a preceding plugin
-already set.
-
-|Option|Description|
-|------|-----------|
-|handler|Required. `{Mod, InitArgs}` implementing `nova_multipart_handler`.|
-|max_parts|Reply 413 after this many parts (default 32).|
-|max_part_size|Reply 413 past this many bytes in a single file part (default 8 000 000).|
-|max_field_size|Reply 413 past this many bytes in a single non-file field (default 65 536).|
-|max_total_size|Reply 413 past this many bytes across all parts (default 64 000 000).|
-|read_timeout|Reply 408 if the whole multipart body isn't read within this many ms (default 60 000).|

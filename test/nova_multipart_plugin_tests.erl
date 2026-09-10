@@ -3,7 +3,7 @@
 
 plugin_info_test() ->
     Info = nova_multipart_plugin:plugin_info(),
-    ?assertEqual(<<"Nova multipart streaming plugin">>, maps:get(title, Info)),
+    ?assertEqual(<<"Nova multipart plugin">>, maps:get(title, Info)),
     ?assert(is_list(maps:get(options, Info))).
 
 deadline_expired_test() ->
@@ -15,10 +15,32 @@ non_multipart_req_test() ->
     Req = nova_test_helper:mock_req(<<"POST">>, <<"/upload">>),
     Req0 = nova_test_helper:with_content_type(<<"application/json">>, Req),
     Options = #{handler => {nova_multipart_test_handler, #{owner => self()}}},
-    %% must be a no-op: no params/files added, and nothing already on Req
-    %% (e.g. params from an earlier plugin) gets clobbered
     {ok, Req1, state} = nova_multipart_plugin:pre_request(Req0, env, Options, state),
-    ?assertEqual(Req0, Req1).
+    ?assertEqual(Req0#{files => []}, Req1).
+
+missing_boundary_test_() ->
+    {setup,
+     fun() -> meck:new(cowboy_req, [passthrough]),
+              meck:expect(cowboy_req, reply, fun(Status, Req) -> Req#{replied => Status} end) end,
+     fun(_) -> meck:unload(cowboy_req) end,
+     fun() ->
+         Req = nova_test_helper:mock_req(<<"POST">>, <<"/upload">>),
+         Req0 = nova_test_helper:with_content_type(<<"multipart/form-data">>, Req),
+         Options = #{handler => {nova_multipart_test_handler, #{owner => self()}}},
+         {stop, Req1, state} = nova_multipart_plugin:pre_request(Req0, env, Options, state),
+         ?assertEqual(400, maps:get(replied, Req1))
+     end}.
+
+misconfigured_handler_test_() ->
+    {setup,
+     fun() -> meck:new(cowboy_req, [passthrough]),
+              meck:expect(cowboy_req, reply, fun(Status, Req) -> Req#{replied => Status} end) end,
+     fun(_) -> meck:unload(cowboy_req) end,
+     [fun() ->
+          Req = nova_test_helper:mock_req(<<"POST">>, <<"/upload">>),
+          {stop, Req1, state} = nova_multipart_plugin:pre_request(Req, env, Options, state),
+          ?assertEqual(500, maps:get(replied, Req1))
+      end || Options <- [#{}, #{handler => nova_multipart_test_handler}, #{handler => {"mod", #{}}}]]}.
 
 non_multipart_req_preserves_existing_params_test() ->
     Req = nova_test_helper:mock_req(<<"POST">>, <<"/upload">>),
@@ -52,8 +74,9 @@ multipart_req() ->
              <<"multipart/form-data; boundary=----abc">>, Req),
     Req0#{has_body => true}.
 
-%% Parts is a list of {Headers, Body} where Body is a binary or a list of
-%% binaries to be delivered as {more, ...} chunks off cowboy_req:read_part_body/2.
+%% Parts is a list of {Headers, Body}. Body is a binary or a list of chunks
+%% delivered as {more, ...}; a chunk or Headers of {raise, Class, Reason}
+%% raises the way cowboy_req does on a stalled or malformed read.
 mock_cowboy_req(Parts) ->
     meck:new(cowboy_req, [passthrough]),
     Pid = spawn(fun() -> part_server(Parts) end),
@@ -61,17 +84,15 @@ mock_cowboy_req(Parts) ->
                 fun(Req) ->
                     case call(Pid, next_part) of
                         done -> {done, Req};
+                        {part, {raise, Class, Reason}} -> erlang:Class(Reason);
                         {part, Headers} -> {ok, Headers, Req}
                     end
                 end),
     meck:expect(cowboy_req, read_part_body,
                 fun(Req, _Opts) ->
-                    %% mirrors cowboy_req:read_part_body/2's own behaviour on
-                    %% a stalled/oversize/malformed read: it exits rather
-                    %% than returning an {error, _} tuple.
                     case call(Pid, next_chunk) of
-                        {last, {raise, Reason}} -> exit(Reason);
-                        {more, {raise, Reason}} -> exit(Reason);
+                        {last, {raise, Class, Reason}} -> erlang:Class(Reason);
+                        {more, {raise, Class, Reason}} -> erlang:Class(Reason);
                         {last, Data} -> {ok, Data, Req};
                         {more, Data} -> {more, Data, Req}
                     end
@@ -119,10 +140,7 @@ file_part(Name, Filename, ContentType) ->
           <<"form-data; name=\"", Name/binary, "\"; filename=\"", Filename/binary, "\"">>,
       <<"content-type">> => ContentType}.
 
-%% OptionsFun receives the *instantiator's* self() - eunit runs a fixture's
-%% generator body (this whole test_/0 function) in a different process than
-%% the deferred fun() it returns, so capturing self() outside OptionsFun
-%% would hand the handler a pid nothing ever receives on.
+%% OptionsFun gets the self() of the process eunit runs the test in.
 multipart_test_(Parts, OptionsFun, Assertions) ->
     {setup,
      fun() -> mock_cowboy_req(Parts) end,
@@ -147,8 +165,6 @@ multipart_reads_fields_and_files_test_() ->
           ?assertEqual(<<"logo.png">>, maps:get(filename, File)),
           ?assertEqual(<<"image/png">>, maps:get(content_type, File)),
           ?assertEqual(#{body => <<"binarydata">>}, maps:get(result, File)),
-          %% handler saw the part metadata before any chunk arrived, and the
-          %% client-supplied filename never touched a filesystem path here.
           ?assertEqual({handler_init, #{name => <<"upload">>,
                                         filename => <<"logo.png">>,
                                         content_type => <<"image/png">>}},
@@ -184,7 +200,6 @@ multipart_max_part_size_test_() ->
       fun({stop, Req, state}) ->
           ?assertEqual(413, maps:get(replied, Req)),
           ?assertMatch({handler_init, _}, receive_one()),
-          %% the handler must be told to clean up its partial state
           ?assertEqual({handler_abort, too_large}, receive_one())
       end).
 
@@ -214,6 +229,15 @@ multipart_handler_rejects_init_test_() ->
           ?assertEqual(400, maps:get(replied, Req))
       end).
 
+multipart_handler_init_error_test_() ->
+    Parts = [{file_part(<<"upload">>, <<"x">>, <<"application/octet-stream">>), <<"data">>}],
+    multipart_test_(
+      Parts,
+      fun(Owner) -> #{handler => {nova_multipart_test_handler, #{owner => Owner, error_init => enospc}}} end,
+      fun({stop, Req, state}) ->
+          ?assertEqual(500, maps:get(replied, Req))
+      end).
+
 multipart_handler_rejects_chunk_test_() ->
     Parts = [{file_part(<<"upload">>, <<"x">>, <<"application/octet-stream">>), <<"data">>}],
     multipart_test_(
@@ -225,10 +249,6 @@ multipart_handler_rejects_chunk_test_() ->
           ?assertEqual({handler_abort, chunk_rejected}, receive_one())
       end).
 
-%% A field with no `filename=' is classified {data, _} and streamed to
-%% `params' instead of the handler - it must still be bounded, by
-%% max_field_size, or an attacker skips the streaming path entirely just by
-%% omitting filename= on an otherwise-identical part.
 multipart_field_bounded_by_max_field_size_test_() ->
     Parts = [{data_part(<<"title">>), <<"way too much text">>}],
     multipart_test_(
@@ -238,9 +258,6 @@ multipart_field_bounded_by_max_field_size_test_() ->
           ?assertEqual(413, maps:get(replied, Req))
       end).
 
-%% handle_end/1 returning {error, _} must still trigger cleanup via
-%% handle_abort/2 - a handler that spools to disk/S3 in handle_data and only
-%% commits in handle_end would otherwise leak the partial resource.
 multipart_handle_end_error_triggers_abort_test_() ->
     Parts = [{file_part(<<"upload">>, <<"x">>, <<"application/octet-stream">>), <<"data">>}],
     multipart_test_(
@@ -252,9 +269,6 @@ multipart_handle_end_error_triggers_abort_test_() ->
           ?assertEqual({handler_abort, disk_full}, receive_one())
       end).
 
-%% A handler that raises instead of returning {error, _} must not crash
-%% pre_request/4 (which would skip handle_abort/2 entirely) and must not
-%% leak its exception/stacktrace to the client.
 multipart_handler_raise_is_contained_test_() ->
     Parts = [{file_part(<<"upload">>, <<"x">>, <<"application/octet-stream">>), <<"data">>}],
     multipart_test_(
@@ -266,13 +280,20 @@ multipart_handler_raise_is_contained_test_() ->
           ?assertEqual({handler_abort, handler_crashed}, receive_one())
       end).
 
-%% cowboy_req:read_part_body/2 doesn't return an {error, _} tuple on a
-%% stalled read - it exit/1s straight out of the call. That must still
-%% trigger handle_abort/2 for the handler's open resource, not unwind past
-%% it uncaught.
+multipart_handler_bad_return_is_contained_test_() ->
+    Parts = [{file_part(<<"upload">>, <<"x">>, <<"application/octet-stream">>), <<"data">>}],
+    multipart_test_(
+      Parts,
+      fun(Owner) -> #{handler => {nova_multipart_test_handler, #{owner => Owner, bad_return_data => true}}} end,
+      fun({stop, Req, state}) ->
+          ?assertEqual(500, maps:get(replied, Req)),
+          ?assertMatch({handler_init, _}, receive_one()),
+          ?assertEqual({handler_abort, handler_crashed}, receive_one())
+      end).
+
 multipart_cowboy_exit_mid_file_triggers_abort_test_() ->
     Parts = [{file_part(<<"upload">>, <<"big.bin">>, <<"application/octet-stream">>),
-              [<<"partial">>, {raise, timeout}]}],
+              [<<"partial">>, {raise, exit, timeout}]}],
     multipart_test_(
       Parts, fun(Owner) -> #{handler => {nova_multipart_test_handler, handler_opts(Owner)}} end,
       fun({stop, Req, state}) ->
@@ -282,11 +303,29 @@ multipart_cowboy_exit_mid_file_triggers_abort_test_() ->
       end).
 
 multipart_cowboy_exit_mid_field_test_() ->
-    Parts = [{data_part(<<"title">>), [<<"partial">>, {raise, timeout}]}],
+    Parts = [{data_part(<<"title">>), [<<"partial">>, {raise, exit, timeout}]}],
     multipart_test_(
       Parts, fun(Owner) -> #{handler => {nova_multipart_test_handler, handler_opts(Owner)}} end,
       fun({stop, Req, state}) ->
           ?assertEqual(408, maps:get(replied, Req))
+      end).
+
+%% cowboy_req:read_part/1 raises error:badmatch on duplicate part headers.
+multipart_cowboy_error_on_duplicate_headers_test_() ->
+    Parts = [{{raise, error, {badmatch, false}}, <<>>}],
+    multipart_test_(
+      Parts, fun(Owner) -> #{handler => {nova_multipart_test_handler, handler_opts(Owner)}} end,
+      fun({stop, Req, state}) ->
+          ?assertEqual(400, maps:get(replied, Req))
+      end).
+
+multipart_memory_handler_test_() ->
+    Parts = [{file_part(<<"upload">>, <<"logo.png">>, <<"image/png">>), [<<"bin">>, <<"ary">>]}],
+    multipart_test_(
+      Parts, fun(_Owner) -> #{handler => {nova_multipart_memory_handler, #{}}} end,
+      fun({ok, Req, state}) ->
+          [File] = maps:get(files, Req),
+          ?assertEqual(#{body => <<"binary">>}, maps:get(result, File))
       end).
 
 receive_one() ->

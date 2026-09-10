@@ -99,7 +99,7 @@ Sends a file using sendfile. This uses cowboys sendfile functionality and more i
 
 ### File uploads
 
-Incoming files are handled by the *request plugin* and not by a return keyword. Enable `read_multipart_body` and the uploaded files are in the request under `files`. See [file uploads](plugins.md#file-uploads).
+Incoming files are handled by `nova_multipart_plugin` and not by a return keyword. See [Nova multipart](plugins.md#nova-multipart).
 
 ### Redirecting user
 

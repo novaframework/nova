@@ -1,28 +1,14 @@
 %%%-------------------------------------------------------------------
 %%% @doc
-%%% Streams a `multipart/form-data' body to a user-supplied
-%%% `nova_multipart_handler', part by part and chunk by chunk, instead of
-%%% buffering it in memory the way `nova_request_plugin's `read_multipart_body'
-%%% option does. Meant for large or many-file uploads where holding the whole
-%%% body (or even one whole part) in memory is the thing to avoid.
+%%% Reads a `multipart/form-data' body and streams every file part to a
+%%% `nova_multipart_handler', chunk by chunk. Regular fields are collected
+%%% under `params' and file parts under `files', each as
+%%% `#{name, filename, content_type, result}' where `result' is whatever the
+%%% handler returned from `handle_end/1'.
 %%%
-%%% Every part is routed by whether Cowboy classifies it as `{file, ...}'
-%%% (a `content-disposition' with a `filename=' parameter) or `{data, ...}'.
-%%% A client fully controls that choice, so a "regular field" is not
-%%% inherently small - it is still bounded, by `max_field_size', to stop an
-%%% attacker from omitting `filename=' to route an upload through the
-%%% buffered `params' path instead of the streaming handler.
-%%%
-%%% Configure with exactly one of `nova_request_plugin's `read_multipart_body'
-%%% or this plugin in a request's `pre_request' chain, never both - the
-%%% request body is a one-shot stream and a second attempt to read it fails
-%%% (surfaced by Cowboy, not swallowed here), which nova turns into a 500 via
-%%% the normal plugin-error path.
-%%%
-%%% On a non-multipart request this plugin leaves `Req' untouched (no
-%%% `params'/`files' keys added) rather than forcing them to empty, so it
-%%% never clobbers a `params' map a preceding plugin (e.g.
-%%% `nova_request_plugin's `read_urlencoded_body') already put there.
+%%% Multipart fields win over `params' set by an earlier plugin, and a
+%%% repeated field name keeps the last value. On a non-multipart request the
+%%% plugin sets `files' to `[]' and leaves everything else alone.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(nova_multipart_plugin).
@@ -41,25 +27,17 @@
 -define(CHUNK_PERIOD, 15000).
 -define(LABEL_MAX_LEN, 64).
 
-%%--------------------------------------------------------------------
-%% @doc
-%% Pre-request callback. Options:
-%%   handler => {Mod, InitArgs}            (required, nova_multipart_handler)
-%%   max_parts => pos_integer()            (default 32)
-%%   max_part_size => pos_integer()        (default 8 000 000 bytes)
-%%   max_field_size => pos_integer()       (default 65 536 bytes)
-%%   max_total_size => pos_integer()       (default 64 000 000 bytes)
-%%   read_timeout => pos_integer()         (default 60 000 ms, whole request)
-%% @end
-%%--------------------------------------------------------------------
 -spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
           {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
           {stop, Req0 :: cowboy_req:req(), NewState :: any()}.
-pre_request(Req, _Env, #{handler := {Mod, InitArgs}} = Options, State) ->
-    case is_multipart(Req) of
-        false ->
-            {ok, Req, State};
-        true ->
+pre_request(Req, _Env, #{handler := {Mod, InitArgs}} = Options, State) when is_atom(Mod) ->
+    case content_type(Req) of
+        other ->
+            {ok, Req#{files => []}, State};
+        {multipart, no_boundary} ->
+            warn(400, <<"multipart/form-data without a boundary parameter.">>, #{}),
+            {stop, cowboy_req:reply(400, Req), State};
+        multipart ->
             Limits = limits(Options),
             Deadline = erlang:monotonic_time(millisecond) + maps:get(read_timeout, Limits),
             case stream_parts(Req, Mod, InitArgs, Limits, Deadline, 0, 0, #{}, []) of
@@ -69,23 +47,17 @@ pre_request(Req, _Env, #{handler := {Mod, InitArgs}} = Options, State) ->
                 {stop, Req0} ->
                     {stop, Req0, State}
             end
-    end.
+    end;
+pre_request(Req, _Env, Options, State) ->
+    ?LOG_ERROR(#{msg => <<"nova_multipart_plugin needs handler => {Mod, InitArgs}.">>,
+                 options => Options}),
+    {stop, cowboy_req:reply(500, Req), State}.
 
-%%--------------------------------------------------------------------
-%% @doc
-%% Post-request callback
-%% @end
-%%--------------------------------------------------------------------
 -spec post_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
           {ok, Req0 :: cowboy_req:req(), NewState :: any()}.
 post_request(Req, _Env, _Options, State) ->
     {ok, Req, State}.
 
-%%--------------------------------------------------------------------
-%% @doc
-%% nova_plugin callback. Returns information about the plugin.
-%% @end
-%%--------------------------------------------------------------------
 -spec plugin_info() -> #{title := binary(),
                          version := binary(),
                          url := binary(),
@@ -93,18 +65,18 @@ post_request(Req, _Env, _Options, State) ->
                          description := binary(),
                          options := [{Key :: atom(), OptionDescription :: binary()}]}.
 plugin_info() ->
-    #{title => <<"Nova multipart streaming plugin">>,
+    #{title => <<"Nova multipart plugin">>,
       version => <<"0.1.0">>,
       url => <<"https://github.com/novaframework/nova">>,
       authors => [<<"Nova team <info@novaframework.org">>],
-      description => <<"Streams multipart/form-data file parts to a user-supplied handler instead of buffering them in memory.">>,
+      description => <<"Reads multipart/form-data bodies. Fields go under `params`, files are streamed to a nova_multipart_handler and listed under `files`.">>,
       options => [
-                  {handler, <<"Required. {Mod, InitArgs} implementing nova_multipart_handler">>},
-                  {max_parts, <<"Abort with 413 after this many parts (default 32)">>},
-                  {max_part_size, <<"Abort a file part with 413 past this many bytes (default 8 000 000)">>},
-                  {max_field_size, <<"Abort a non-file field with 413 past this many bytes (default 65 536)">>},
-                  {max_total_size, <<"Abort the whole request with 413 past this many bytes across all parts (default 64 000 000)">>},
-                  {read_timeout, <<"Abort with 408 if the whole multipart body isn't read within this many ms (default 60 000)">>}
+                  {handler, <<"Required. {Mod, InitArgs} implementing nova_multipart_handler. nova_multipart_file_handler spools to disk, nova_multipart_memory_handler buffers in memory">>},
+                  {max_parts, <<"Reply 413 after this many parts (default 32)">>},
+                  {max_part_size, <<"Reply 413 past this many bytes in one file part (default 8 000 000)">>},
+                  {max_field_size, <<"Reply 413 past this many bytes in one non-file field (default 65 536)">>},
+                  {max_total_size, <<"Reply 413 past this many bytes across all parts (default 64 000 000)">>},
+                  {read_timeout, <<"Reply 408 if the body is not fully read within this many ms (default 60 000). Checked between chunks, so a stalled read can overrun by up to 15 s">>}
                  ]
      }.
 
@@ -112,21 +84,22 @@ plugin_info() ->
 %% Private functions
 %%%%%%%%%%%%%%%%%%%%%%
 
-%% Case-insensitive per RFC 9110 8.3.1 and delegated to Cowboy's own parser
-%% rather than a raw prefix match, so this can't be walked around by a
-%% client sending `Multipart/Form-Data' or `MULTIPART/FORM-DATA'. A
-%% boundary-less `multipart/form-data' is treated as not-multipart (400 via
-%% the normal urlencoded/json path) instead of letting Cowboy's own
-%% read_part/1 exit with a 500 later.
-is_multipart(Req) ->
+content_type(Req) ->
     try cowboy_req:parse_header(<<"content-type">>, Req) of
         {<<"multipart">>, <<"form-data">>, Params} ->
-            lists:keymember(<<"boundary">>, 1, Params);
+            case has_boundary(Params) of
+                true -> multipart;
+                false -> {multipart, no_boundary}
+            end;
         _ ->
-            false
+            other
     catch
-        _:_ -> false
+        _:_ -> other
     end.
+
+has_boundary([{<<"boundary">>, _}|_]) -> true;
+has_boundary([_|Tl]) -> has_boundary(Tl);
+has_boundary(_) -> false.
 
 limits(Options) ->
     #{max_parts => maps:get(max_parts, Options, ?DEFAULT_MAX_PARTS),
@@ -169,8 +142,9 @@ read_next_part(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Param
                                    #{name => FieldName, filename => Filename, content_type => ContentType})
             end;
         {error, Reason, Req0} ->
-            warn(error_status(Reason), <<"Cowboy raised while reading multipart headers.">>, #{error => safe_label(Reason)}),
-            {stop, cowboy_req:reply(error_status(Reason), Req0)}
+            Status = error_status(Reason),
+            warn(Status, <<"Failed to read multipart headers.">>, #{error => safe_label(Reason)}),
+            {stop, cowboy_req:reply(Status, Req0)}
     end.
 
 read_field(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params, Files, FieldName) ->
@@ -194,9 +168,10 @@ read_field(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params, F
             warn(408, <<"Multipart field read deadline exceeded.">>, #{field => safe_label(FieldName)}),
             {stop, cowboy_req:reply(408, Req0)};
         {error, Reason, Req0} ->
-            warn(error_status(Reason), <<"Cowboy raised while reading a multipart field.">>,
+            Status = error_status(Reason),
+            warn(Status, <<"Failed to read a multipart field.">>,
                  #{field => safe_label(FieldName), error => safe_label(Reason)}),
-            {stop, cowboy_req:reply(error_status(Reason), Req0)}
+            {stop, cowboy_req:reply(Status, Req0)}
     end.
 
 read_bounded_body(Req, MaxSize, Deadline, Acc) ->
@@ -232,9 +207,12 @@ read_file_part(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Param
                 {aborted, Status, Req0} ->
                     {stop, cowboy_req:reply(Status, Req0)}
             end;
-        {error, Reason} ->
+        {reject, Reason} ->
             warn(400, <<"Handler rejected part.">>, #{error => safe_label(Reason)}),
-            {stop, cowboy_req:reply(400, Req)}
+            {stop, cowboy_req:reply(400, Req)};
+        {error, Reason} ->
+            warn(500, <<"Handler failed to init.">>, #{error => safe_label(Reason)}),
+            {stop, cowboy_req:reply(500, Req)}
     end.
 
 stream_part_body(Req, Mod, HandlerState, Limits, Deadline, PartSize, TotalSize) ->
@@ -249,10 +227,10 @@ stream_part_body(Req, Mod, HandlerState, Limits, Deadline, PartSize, TotalSize) 
                 {ok, Data, Req0} ->
                     consume_chunk(Data, Req0, Mod, HandlerState, Limits, Deadline, PartSize, TotalSize, done);
                 {error, Reason, Req0} ->
-                    warn(error_status(Reason), <<"Cowboy raised while streaming a multipart file.">>,
-                         #{error => safe_label(Reason)}),
+                    Status = error_status(Reason),
+                    warn(Status, <<"Failed to read a multipart file part.">>, #{error => safe_label(Reason)}),
                     safe_abort(Mod, Reason, HandlerState),
-                    {aborted, error_status(Reason), Req0}
+                    {aborted, Status, Req0}
             end
     end.
 
@@ -261,18 +239,15 @@ consume_chunk(Data, Req, Mod, HandlerState, Limits, Deadline, PartSize0, TotalSi
     TotalSize = TotalSize0 + byte_size(Data),
     case PartSize > maps:get(max_part_size, Limits) orelse TotalSize > maps:get(max_total_size, Limits) of
         true ->
-            warn(413, <<"Multipart part exceeded a size limit mid-stream.">>, #{}),
+            warn(413, <<"Multipart part exceeded a size limit.">>, #{}),
             safe_abort(Mod, too_large, HandlerState),
             {aborted, 413, Req};
         false ->
             case safe_call(Mod, handle_data, [Data, HandlerState]) of
+                {ok, HandlerState0} when More =:= more ->
+                    stream_part_body(Req, Mod, HandlerState0, Limits, Deadline, PartSize, TotalSize);
                 {ok, HandlerState0} ->
-                    case More of
-                        more ->
-                            stream_part_body(Req, Mod, HandlerState0, Limits, Deadline, PartSize, TotalSize);
-                        done ->
-                            finish_part(Req, Mod, HandlerState0, TotalSize)
-                    end;
+                    finish_part(Req, Mod, HandlerState0, TotalSize);
                 {error, Reason} ->
                     warn(500, <<"Multipart handler rejected a chunk.">>, #{error => safe_label(Reason)}),
                     safe_abort(Mod, Reason, HandlerState),
@@ -290,66 +265,59 @@ finish_part(Req, Mod, HandlerState, TotalSize) ->
             {aborted, 500, Req}
     end.
 
-%% cowboy_req:read_part/1 and read_part_body/2 don't return an error tuple
-%% on a stalled/oversize/malformed read - they `exit/1` straight out of the
-%% call (see cowboy_req:read_body/2's `after Timeout -> exit(timeout) end`,
-%% reached from stream_multipart/3). Cowboy's own `period` (15s here) is
-%% shorter than our `read_timeout' (60s default), so that exit is the
-%% common way a stalled client actually ends a read - not our own deadline
-%% check - and left uncaught it would unwind straight past whichever
-%% handler resource (e.g. an open file descriptor) is live at the time,
-%% skipping handle_abort/2 entirely. Translate it into the same
-%% {error, Reason, Req} shape our own bounds already use, so every caller
-%% goes through one cleanup path regardless of who detected the problem.
+%% cowboy_req:read_part/1 and read_part_body/2 exit on a stalled or malformed
+%% read, and raise error:badmatch on duplicate part headers. Both are turned
+%% into {error, Reason, Req} so every caller cleans up through one path.
 safe_read_part(Req) ->
-    try cowboy_req:read_part(Req) of
-        Result -> Result
+    try cowboy_req:read_part(Req)
     catch
-        exit:Reason -> {error, Reason, Req}
+        exit:Reason -> {error, Reason, Req};
+        error:Reason -> {error, Reason, Req}
     end.
 
 safe_read_part_body(Req, Opts) ->
-    try cowboy_req:read_part_body(Req, Opts) of
-        Result -> Result
+    try cowboy_req:read_part_body(Req, Opts)
     catch
-        exit:Reason -> {error, Reason, Req}
+        exit:Reason -> {error, Reason, Req};
+        error:Reason -> {error, Reason, Req}
     end.
 
 error_status(timeout) -> 408;
 error_status({request_error, timeout, _}) -> 408;
 error_status({request_error, payload_too_large, _}) -> 413;
 error_status({request_error, {multipart, _}, _}) -> 400;
-error_status(_) -> 400.
+error_status({badmatch, _}) -> 400;
+error_status(_) -> 500.
 
-%% Every nova_multipart_handler callback runs through here: a handler that
-%% raises instead of returning {error, _} must not crash pre_request/4 (that
-%% would skip handle_abort/2 for whichever callback raised) and must not
-%% have its stacktrace - which can carry up to a chunk's worth of the
-%% client's own uploaded bytes as call arguments - reach the client. The
-%% full exception is logged server-side only; callers only ever see the
-%% opaque handler_crashed reason.
+%% A handler that raises or returns something other than {ok, _} | {error, _}
+%% must not unwind past the abort path. The exception stays in the log; the
+%% caller only sees handler_crashed.
 safe_call(Mod, Fun, Args) ->
-    try erlang:apply(Mod, Fun, Args) of
-        {ok, _} = Ok -> Ok;
-        {error, _} = Error -> Error
-    catch
-        Class:Reason:Stacktrace ->
-            ?LOG_ERROR(#{msg => <<"nova_multipart_handler callback raised.">>,
-                        mod => Mod, fun_name => Fun, class => Class,
-                        error => Reason, stacktrace => Stacktrace}),
+    Result = try erlang:apply(Mod, Fun, Args)
+             catch
+                 Class:Reason:Stacktrace ->
+                     ?LOG_ERROR(#{msg => <<"nova_multipart_handler callback raised.">>,
+                                  mod => Mod, fun_name => Fun, class => Class,
+                                  error => Reason, stacktrace => Stacktrace}),
+                     {error, handler_crashed}
+             end,
+    case Result of
+        {ok, _} -> Result;
+        {reject, _} when Fun =:= init -> Result;
+        {error, _} -> Result;
+        Other ->
+            ?LOG_ERROR(#{msg => <<"nova_multipart_handler callback returned an invalid value.">>,
+                         mod => Mod, fun_name => Fun, value => Other}),
             {error, handler_crashed}
     end.
 
-%% handle_abort/2 runs on an already-failing path - never let a broken
-%% handler mask the original error with a crash of its own.
 safe_abort(Mod, Reason, HandlerState) ->
     try
         Mod:handle_abort(Reason, HandlerState)
     catch
         Class:AbortReason ->
             ?LOG_WARNING(#{msg => <<"nova_multipart_handler:handle_abort/2 raised.">>,
-                           class => Class, error => AbortReason}),
-            ok
+                           class => Class, error => AbortReason})
     end,
     ok.
 
@@ -363,9 +331,8 @@ part_info(Headers) ->
 warn(Status, Msg, Extra) ->
     ?LOG_WARNING(maps:merge(#{status_code => Status, msg => Msg}, Extra)).
 
-%% Client-controlled text (a field name, a handler error reason) heading
-%% into a log line: truncate and strip control characters so it can't forge
-%% extra report lines or carry invalid UTF-8 into the log encoder.
+%% Client-controlled text heading into a log line: truncated and stripped of
+%% control characters.
 safe_label(Value) ->
     Bin = to_binary_label(Value),
     Truncated = binary:part(Bin, 0, min(byte_size(Bin), ?LABEL_MAX_LEN)),
