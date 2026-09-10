@@ -1,10 +1,6 @@
 -module(nova_request_plugin).
 -behaviour(nova_plugin).
 
--include_lib("kernel/include/logger.hrl").
-
--define(DEFAULT_MAX_FILE_SIZE, 8000000).
-
 -export([
          pre_request/4,
          post_request/4,
@@ -21,13 +17,7 @@
                          {stop, Req0 :: cowboy_req:req(), NewState :: any()}.
 pre_request(Req, _Env, Options, State) ->
     ListOptions = maps:to_list(Options),
-    %% Read the body and put it into the Req object
-    case read_request_body(Req, ListOptions) of
-        {ok, BodyReq} ->
-            modulate_state(BodyReq, ListOptions, State);
-        {stop, Req0} ->
-            {stop, Req0, State}
-    end.
+    modulate_state(read_request_body(Req, ListOptions), ListOptions, State).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -59,8 +49,7 @@ plugin_info() ->
       description => <<"This plugin modulates the body of a request.">>,
       options => [
                   {decode_json_body, <<"Decodes the body as JSON and puts it under `json`">>},
-                  {read_urlencoded_body, <<"Used to parse body as query-string and put them in state under `qs` key">>},
-                  {read_multipart_body, <<"Reads a `multipart/form-data` body and puts the regular fields under `params` and the uploaded files under `files`. Takes either `true` or a map of options where `max_file_size` caps the size of a single part">>}
+                  {read_urlencoded_body, <<"Used to parse body as query-string and put them in state under `qs` key">>}
                  ]
      }.
 
@@ -109,103 +98,20 @@ modulate_state(Req, [{parse_qs, Type}|T1], State) ->
 modulate_state(Req, [_|Tl], State) ->
     modulate_state(Req, Tl, State).
 
+%% A multipart body is never buffered here; nova_multipart_plugin or the
+%% controller reads the parts from the stream.
 read_request_body(Req, Options) ->
-    case is_multipart(Req) of
-        true ->
-            case multipart_options(Options) of
-                false ->
-                    %% Leave the body untouched so the controller can stream
-                    %% the parts itself through cowboy_req:read_part/1.
-                    {ok, Req#{body => <<>>}};
-                MultipartOptions ->
-                    read_multipart_body(Req#{body => <<>>}, MultipartOptions)
-            end;
-        false ->
-            case should_read_body(Options) andalso cowboy_req:has_body(Req) of
-                true -> {ok, read_body(Req, <<>>)};
-                false -> {ok, Req#{body => <<>>}}
-            end
+    case not is_multipart(Req) andalso should_read_body(Options) andalso cowboy_req:has_body(Req) of
+        true -> read_body(Req, <<>>);
+        false -> Req#{body => <<>>}
     end.
 
-%% Case-insensitive per RFC 9110 8.3.1, delegated to Cowboy's own parser
-%% rather than a raw prefix match - a raw match misses `Multipart/Form-Data'
-%% and friends, and when that happens with decode_json_body set the body
-%% falls through to read_body/2 instead, which has no size cap at all
-%% (unlike the max_file_size-bounded multipart path), so this is a DoS gap,
-%% not just a compatibility one.
 is_multipart(Req) ->
     try cowboy_req:parse_header(<<"content-type">>, Req) of
         {<<"multipart">>, <<"form-data">>, _Params} -> true;
         _ -> false
     catch
         _:_ -> false
-    end.
-
-multipart_options([]) -> false;
-multipart_options([{read_multipart_body, true}|_Tl]) -> #{};
-multipart_options([{read_multipart_body, Options}|_Tl]) when is_map(Options) -> Options;
-multipart_options([_|Tl]) -> multipart_options(Tl).
-
-read_multipart_body(Req, Options) ->
-    MaxFileSize = maps:get(max_file_size, Options, ?DEFAULT_MAX_FILE_SIZE),
-    read_parts(Req, MaxFileSize, #{}, []).
-
-read_parts(Req, MaxFileSize, Params, Files) ->
-    case cowboy_req:read_part(Req) of
-        {done, Req0} ->
-            {ok, Req0#{params => Params, files => lists:reverse(Files)}};
-        {ok, Headers, Req0} ->
-            case part_info(Headers) of
-                error ->
-                    ?LOG_WARNING(#{status_code => 400,
-                                   msg => <<"Failed to read multipart body.">>,
-                                   error => <<"Malformed content-disposition in part.">>}),
-                    {stop, cowboy_req:reply(400, Req0)};
-                PartInfo ->
-                    case read_part_body(Req0, MaxFileSize, <<>>) of
-                        {ok, Body, Req1} ->
-                            {Params0, Files0} = add_part(PartInfo, Body, Params, Files),
-                            read_parts(Req1, MaxFileSize, Params0, Files0);
-                        {too_large, Req1} ->
-                            ?LOG_WARNING(#{status_code => 413,
-                                           msg => <<"Failed to read multipart body.">>,
-                                           error => <<"Part exceeded max_file_size.">>,
-                                           max_file_size => MaxFileSize}),
-                            {stop, cowboy_req:reply(413, Req1)}
-                    end
-            end
-    end.
-
-part_info(Headers) ->
-    try
-        cow_multipart:form_data(Headers)
-    catch
-        _:_ -> error
-    end.
-
-add_part({data, FieldName}, Body, Params, Files) ->
-    {Params#{FieldName => Body}, Files};
-add_part({file, FieldName, Filename, ContentType}, Body, Params, Files) ->
-    File = #{name => FieldName,
-             filename => Filename,
-             content_type => ContentType,
-             body => Body},
-    {Params, [File|Files]}.
-
-read_part_body(Req, MaxFileSize, Acc) ->
-    case cowboy_req:read_part_body(Req) of
-        {ok, Data, Req0} ->
-            Body = <<Acc/binary, Data/binary>>,
-            case byte_size(Body) > MaxFileSize of
-                true -> {too_large, Req0};
-                false -> {ok, Body, Req0}
-            end;
-        {more, Data, Req0} ->
-            Body = <<Acc/binary, Data/binary>>,
-            case byte_size(Body) > MaxFileSize of
-                true -> {too_large, Req0};
-                false -> read_part_body(Req0, MaxFileSize, Body)
-            end
     end.
 
 read_body(Req, Acc) ->

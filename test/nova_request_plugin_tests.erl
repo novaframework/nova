@@ -123,129 +123,14 @@ plugin_info_test() ->
     ?assert(is_list(maps:get(options, Info))).
 
 %%====================================================================
-%% multipart/form-data
+%% multipart/form-data is never buffered here
 %%====================================================================
 
-multipart_req() ->
+multipart_req(ContentType) ->
     Req = nova_test_helper:mock_req(<<"POST">>, <<"/upload">>),
-    Req0 = nova_test_helper:with_content_type(
-             <<"multipart/form-data; boundary=----abc">>, Req),
+    Req0 = nova_test_helper:with_content_type(ContentType, Req),
     Req0#{has_body => true}.
 
-%% Script cowboy_req so the part-reading loop can be tested without a socket.
-%% Parts is a list of {Headers, Body} where Body is either a binary or a list
-%% of binaries to be delivered as {more, ...} chunks.
-mock_cowboy_req(Parts) ->
-    meck:new(cowboy_req, [passthrough]),
-    Pid = spawn(fun() -> part_server(Parts) end),
-    meck:expect(cowboy_req, read_part,
-                fun(Req) ->
-                    case call(Pid, next_part) of
-                        done -> {done, Req};
-                        {part, Headers} -> {ok, Headers, Req}
-                    end
-                end),
-    meck:expect(cowboy_req, read_part_body,
-                fun(Req) ->
-                    case call(Pid, next_chunk) of
-                        {last, Data} -> {ok, Data, Req};
-                        {more, Data} -> {more, Data, Req}
-                    end
-                end),
-    meck:expect(cowboy_req, reply, fun(Status, Req) -> Req#{replied => Status} end).
-
-call(Pid, Msg) ->
-    Pid ! {self(), Msg},
-    receive {Pid, Reply} -> Reply end.
-
-part_server(Parts) ->
-    part_server(Parts, []).
-
-part_server(Parts, Chunks) ->
-    receive
-        {From, next_part} ->
-            case Parts of
-                [] ->
-                    From ! {self(), done},
-                    part_server([], []);
-                [{Headers, Body}|Tl] ->
-                    From ! {self(), {part, Headers}},
-                    part_server(Tl, chunks(Body))
-            end;
-        {From, next_chunk} ->
-            case Chunks of
-                [Last] ->
-                    From ! {self(), {last, Last}},
-                    part_server(Parts, []);
-                [Hd|Tl] ->
-                    From ! {self(), {more, Hd}},
-                    part_server(Parts, Tl)
-            end
-    end.
-
-chunks(Body) when is_binary(Body) -> [Body];
-chunks(Body) when is_list(Body) -> Body.
-
-data_part(Name) ->
-    #{<<"content-disposition">> =>
-          <<"form-data; name=\"", Name/binary, "\"">>}.
-
-file_part(Name, Filename, ContentType) ->
-    #{<<"content-disposition">> =>
-          <<"form-data; name=\"", Name/binary, "\"; filename=\"", Filename/binary, "\"">>,
-      <<"content-type">> => ContentType}.
-
-multipart_test_(Parts, Options, Assertions) ->
-    {setup,
-     fun() -> mock_cowboy_req(Parts) end,
-     fun(_) -> meck:unload(cowboy_req) end,
-     fun() ->
-         Result = nova_request_plugin:pre_request(multipart_req(), env, Options, state),
-         Assertions(Result)
-     end}.
-
-multipart_reads_fields_and_files_test_() ->
-    Parts = [{data_part(<<"title">>), <<"a picture">>},
-             {file_part(<<"upload">>, <<"logo.png">>, <<"image/png">>), <<"binarydata">>}],
-    multipart_test_(
-      Parts, #{read_multipart_body => true},
-      fun({ok, Req, state}) ->
-          ?assertEqual(#{<<"title">> => <<"a picture">>}, maps:get(params, Req)),
-          ?assertEqual([#{name => <<"upload">>,
-                          filename => <<"logo.png">>,
-                          content_type => <<"image/png">>,
-                          body => <<"binarydata">>}], maps:get(files, Req)),
-          ?assertEqual(<<>>, maps:get(body, Req))
-      end).
-
-multipart_joins_chunked_part_test_() ->
-    Parts = [{file_part(<<"upload">>, <<"big.bin">>, <<"application/octet-stream">>),
-              [<<"one">>, <<"two">>, <<"three">>]}],
-    multipart_test_(
-      Parts, #{read_multipart_body => true},
-      fun({ok, Req, state}) ->
-          [File] = maps:get(files, Req),
-          ?assertEqual(<<"onetwothree">>, maps:get(body, File))
-      end).
-
-multipart_too_large_test_() ->
-    Parts = [{file_part(<<"upload">>, <<"big.bin">>, <<"application/octet-stream">>),
-              <<"way too much data">>}],
-    multipart_test_(
-      Parts, #{read_multipart_body => #{max_file_size => 4}},
-      fun({stop, Req, state}) ->
-          ?assertEqual(413, maps:get(replied, Req))
-      end).
-
-multipart_malformed_part_test_() ->
-    Parts = [{#{<<"content-type">> => <<"text/plain">>}, <<"no disposition">>}],
-    multipart_test_(
-      Parts, #{read_multipart_body => true},
-      fun({stop, Req, state}) ->
-          ?assertEqual(400, maps:get(replied, Req))
-      end).
-
-%% Without the option the body must be left for the controller to stream.
 multipart_body_not_drained_test_() ->
     {setup,
      fun() ->
@@ -255,9 +140,15 @@ multipart_body_not_drained_test_() ->
                      fun(_Req) -> erlang:error(body_should_not_be_read) end)
      end,
      fun(_) -> meck:unload(cowboy_req) end,
-     fun() ->
-         {ok, Req, state} = nova_request_plugin:pre_request(
-                              multipart_req(), env, #{decode_json_body => true}, state),
-         ?assertEqual(<<>>, maps:get(body, Req)),
-         ?assertNot(maps:is_key(files, Req))
-     end}.
+     [fun() ->
+          Req0 = multipart_req(<<"multipart/form-data; boundary=----abc">>),
+          {ok, Req, state} = nova_request_plugin:pre_request(
+                               Req0, env, #{decode_json_body => true, read_urlencoded_body => true}, state),
+          ?assertEqual(<<>>, maps:get(body, Req)),
+          ?assertNot(maps:is_key(files, Req))
+      end,
+      fun() ->
+          Req0 = multipart_req(<<"Multipart/Form-Data; boundary=----abc">>),
+          {ok, Req, state} = nova_request_plugin:pre_request(Req0, env, #{decode_json_body => true}, state),
+          ?assertEqual(<<>>, maps:get(body, Req))
+      end]}.
