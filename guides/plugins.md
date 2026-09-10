@@ -157,12 +157,22 @@ This plugins handle incoming data and can transform them to erlang maps dependin
 ### Nova multipart
 
 `nova_request_plugin` never buffers a `multipart/form-data` body. Add
-`nova_multipart_plugin` to the route instead and give it a handler that
-receives every file part chunk by chunk:
+`nova_multipart_plugin` to the routes that take uploads and give it a handler
+that receives every file part chunk by chunk:
 
 ```erlang
-{pre_request, nova_multipart_plugin, #{handler => {nova_multipart_file_handler, #{dir => <<"/var/uploads">>}}}}
+#{prefix => "/files",
+  plugins => [
+    {pre_request, nova_multipart_plugin, #{handler => {nova_multipart_file_handler, #{dir => <<"/var/uploads">>}}}}
+  ],
+  routes => [
+    {"/upload", fun upload_controller:upload/1, #{methods => [post]}}
+  ]
+}
 ```
+
+The same tuple works in the global `plugins` list in `sys.config` when every
+route may take an upload.
 
 ```erlang
 -module(upload_controller).
@@ -176,14 +186,15 @@ upload(#{params := #{<<"title">> := Title}, files := Files}) ->
 Regular form fields end up in `params`. Every part with a filename ends up in
 `files` as a map with `name`, `filename`, `content_type` and `result`, where
 `result` is what the handler returned. On a non-multipart request `files` is
-`[]` and `params` is left alone.
+`[]` and `params` is `#{}` unless another plugin set it, so the controller
+above answers a JSON request with an empty upload list rather than a 500.
 
 Two handlers ship with Nova:
 
 |Handler|Result|
 |-------|------|
 |`nova_multipart_file_handler`|Streams the part to a random name under `dir` and returns `#{path => Path}`. Pass `extensions => [<<"png">>, <<"jpg">>]` to keep a listed extension from the client filename, lowercased, on the stored name; any other extension is dropped, never rejected. No list means no extension.|
-|`nova_multipart_memory_handler`|Keeps the part in memory and returns `#{body => Binary}`. For small attachments only.|
+|`nova_multipart_memory_handler`|Keeps the part in memory and returns `#{body => Binary}`. Takes no init args: `{nova_multipart_memory_handler, #{}}`. For small attachments only.|
 
 Write your own by implementing the `nova_multipart_handler` behaviour
 (`init/2`, `handle_data/2`, `handle_end/1`, `handle_abort/2`). `filename`,

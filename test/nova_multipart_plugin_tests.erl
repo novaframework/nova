@@ -16,7 +16,7 @@ non_multipart_req_test() ->
     Req0 = nova_test_helper:with_content_type(<<"application/json">>, Req),
     Options = #{handler => {nova_multipart_test_handler, #{owner => self()}}},
     {ok, Req1, state} = nova_multipart_plugin:pre_request(Req0, env, Options, state),
-    ?assertEqual(Req0#{files => []}, Req1).
+    ?assertEqual(Req0#{params => #{}, files => []}, Req1).
 
 missing_boundary_test_() ->
     {setup,

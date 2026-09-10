@@ -8,7 +8,9 @@
 %%%
 %%% Multipart fields win over `params' set by an earlier plugin, and a
 %%% repeated field name keeps the last value. On a non-multipart request the
-%%% plugin sets `files' to `[]' and leaves everything else alone.
+%%% plugin sets `files' to `[]' and `params' to `#{}' unless an earlier
+%%% plugin already set it, so a controller can match both keys on every
+%%% request that reaches it.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(nova_multipart_plugin).
@@ -33,7 +35,7 @@
 pre_request(Req, _Env, #{handler := {Mod, InitArgs}} = Options, State) when is_atom(Mod) ->
     case content_type(Req) of
         other ->
-            {ok, Req#{files => []}, State};
+            {ok, Req#{params => maps:get(params, Req, #{}), files => []}, State};
         {multipart, no_boundary} ->
             warn(400, <<"multipart/form-data without a boundary parameter.">>, #{}),
             {stop, cowboy_req:reply(400, Req), State};
