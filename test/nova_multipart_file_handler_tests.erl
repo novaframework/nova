@@ -58,3 +58,81 @@ concurrent_parts_never_collide_test_() ->
              ?assertNotEqual(P1, P2)
          end
      end}.
+
+no_extension_by_default_test_() ->
+    {setup, fun setup/0, fun teardown/1,
+     fun(Dir) ->
+         fun() ->
+             {ok, #{path := Path}} = store(Dir, <<"photo.png">>, #{dir => Dir}),
+             ?assertEqual(<<>>, iolist_to_binary(filename:extension(Path)))
+         end
+     end}.
+
+allowlisted_extension_kept_and_lowercased_test_() ->
+    {setup, fun setup/0, fun teardown/1,
+     fun(Dir) ->
+         fun() ->
+             Args = #{dir => Dir, extensions => [<<"png">>, <<"jpg">>]},
+             {ok, #{path := Path}} = store(Dir, <<"Photo.PNG">>, Args),
+             ?assertEqual(<<".png">>, iolist_to_binary(filename:extension(Path))),
+             ?assertEqual({ok, <<"data">>}, file:read_file(Path)),
+             {ok, Remaining} = file:list_dir(Dir),
+             ?assertEqual(1, length(Remaining))
+         end
+     end}.
+
+non_listed_extension_dropped_test_() ->
+    {setup, fun setup/0, fun teardown/1,
+     fun(Dir) ->
+         fun() ->
+             Args = #{dir => Dir, extensions => [<<"png">>]},
+             {ok, #{path := Path}} = store(Dir, <<"page.html">>, Args),
+             ?assertEqual(<<>>, iolist_to_binary(filename:extension(Path)))
+         end
+     end}.
+
+traversal_filename_contributes_only_extension_test_() ->
+    {setup, fun setup/0, fun teardown/1,
+     fun(Dir) ->
+         fun() ->
+             Args = #{dir => Dir, extensions => [<<"png">>]},
+             {ok, #{path := Path}} = store(Dir, <<"../../../etc/x.png">>, Args),
+             ?assertEqual(iolist_to_binary(Dir), iolist_to_binary(filename:dirname(Path))),
+             ?assertEqual(<<".png">>, iolist_to_binary(filename:extension(Path)))
+         end
+     end}.
+
+extension_with_bad_chars_dropped_test_() ->
+    {setup, fun setup/0, fun teardown/1,
+     fun(Dir) ->
+         fun() ->
+             Args = #{dir => Dir, extensions => [<<"p g">>, <<"p/g">>, <<"png">>]},
+             {ok, #{path := P1}} = store(Dir, <<"a.p g">>, Args),
+             {ok, #{path := P2}} = store(Dir, <<"a.p/g">>, Args),
+             {ok, #{path := P3}} = store(Dir, <<"a.">>, Args),
+             {ok, #{path := P4}} = store(Dir, <<"a">>, Args),
+             [?assertEqual(<<>>, iolist_to_binary(filename:extension(P))) || P <- [P1, P2, P3, P4]],
+             [?assertEqual(iolist_to_binary(Dir), iolist_to_binary(filename:dirname(P))) || P <- [P1, P2, P3, P4]]
+         end
+     end}.
+
+abort_deletes_partial_file_with_extension_test_() ->
+    {setup, fun setup/0, fun teardown/1,
+     fun(Dir) ->
+         fun() ->
+             Args = #{dir => Dir, extensions => [<<"png">>]},
+             PartInfo = #{name => <<"upload">>, filename => <<"x.png">>, content_type => <<"image/png">>},
+             {ok, State} = nova_multipart_file_handler:init(PartInfo, Args),
+             {ok, [Tmp]} = file:list_dir(Dir),
+             ?assertEqual(".part", filename:extension(Tmp)),
+             ?assertEqual(".png", filename:extension(filename:rootname(Tmp))),
+             ok = nova_multipart_file_handler:handle_abort(too_large, State),
+             ?assertEqual({ok, []}, file:list_dir(Dir))
+         end
+     end}.
+
+store(Dir, Filename, Args) ->
+    PartInfo = #{name => <<"upload">>, filename => Filename, content_type => <<"application/octet-stream">>},
+    {ok, State} = nova_multipart_file_handler:init(PartInfo, Args#{dir => Dir}),
+    {ok, State1} = nova_multipart_file_handler:handle_data(<<"data">>, State),
+    nova_multipart_file_handler:handle_end(State1).

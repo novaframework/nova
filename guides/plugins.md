@@ -182,13 +182,16 @@ Two handlers ship with Nova:
 
 |Handler|Result|
 |-------|------|
-|`nova_multipart_file_handler`|Streams the part to a random name under `dir` and returns `#{path => Path}`.|
+|`nova_multipart_file_handler`|Streams the part to a random name under `dir` and returns `#{path => Path}`. Pass `extensions => [<<"png">>, <<"jpg">>]` to keep a listed extension from the client filename, lowercased, on the stored name; any other extension is dropped, never rejected. No list means no extension.|
 |`nova_multipart_memory_handler`|Keeps the part in memory and returns `#{body => Binary}`. For small attachments only.|
 
 Write your own by implementing the `nova_multipart_handler` behaviour
 (`init/2`, `handle_data/2`, `handle_end/1`, `handle_abort/2`). `filename`,
 `content_type` and `name` are all client controlled: never build a filesystem
 path from `filename`, and never echo `content_type` back as a response header.
+The `extensions` allowlist exists because `dir` may be served by a web server,
+where a stored `.html` or `.svg` is stored XSS. An extension says nothing about
+the bytes; check those in the controller if the type matters.
 
 A part without a filename is a regular field no matter how large it is, and is
 bounded by `max_field_size`. When a form is protected by `nova_csrf_plugin`,
