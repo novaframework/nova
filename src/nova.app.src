@@ -8,6 +8,7 @@
                  kernel,
                  stdlib,
                  sasl,
+                 crypto,
                  ranch,
                  cowboy,
                  compiler,
