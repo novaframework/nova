@@ -28,6 +28,12 @@ init_per_suite(Config) ->
 
 end_per_suite(_Config) ->
     application:stop(nova),
+    %% delete_dispatch/1 deliberately never clears the default nova_dispatch
+    %% table (it belongs to the bootstrap listener for the life of the
+    %% node), so a stale route here would otherwise leak into whichever
+    %% suite boots nova next.
+    catch persistent_term:erase(nova_dispatch),
+    catch persistent_term:erase(nova_apps),
     ok.
 
 %% Sanity check - ordinary nova routes are unaffected.

@@ -535,11 +535,9 @@ parse_url(Host, [{Path, Handler, Options = #{protocol := cowboy}}|Tl], T = #{pre
     ?LOG_DEBUG(#{action => <<"Adding route">>, protocol => <<"cowboy">>, route => Path, app => App,
                  router_file => maps:get(router_file, T, undefined)}),
     RealPath = concat_strings(Prefix, Path),
-    CompiledPaths =
-        lists:foldl(
-          fun(Method, Tree0) ->
-                  insert(Host, RealPath, method_to_binary(Method), Value0, Tree0)
-          end, Tree, maps:get(methods, Options, ['_'])),
+    Methods = maps:get(methods, Options, ['_']),
+    CompiledPaths = insert_methods(Methods, Host, RealPath, Value0, Tree, insert_opts(T),
+                                   fun method_to_binary/1),
     parse_url(Host, Tl, T, Value, CompiledPaths);
 parse_url(Host,
           [{Path, Mod, #{protocol := ws}} | Tl],
