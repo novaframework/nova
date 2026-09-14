@@ -9,7 +9,7 @@ setup() ->
     Prev = nova_test_helper:setup_nova_env(),
     application:set_env(nova, dispatch_backend, persistent_term),
     %% Build a dispatch table with test routes
-    Tree0 = routing_tree:new(#{use_strict => false, convert_to_binary => true}),
+    Tree0 = nova_routing_trie:new(#{strict => false}),
     Callback = fun(_Req) -> {json, #{ok => true}} end,
     Value = #nova_handler_value{
         app = test_app,
@@ -18,14 +18,14 @@ setup() ->
         plugins = [{pre_request, [{fun nova_request_plugin:pre_request/4, #{}}]}],
         extra_state = #{test => true}
     },
-    Tree1 = routing_tree:insert('_', "/users", <<"GET">>, Value, Tree0),
-    Tree2 = routing_tree:insert('_', "/users", <<"POST">>, Value#nova_handler_value{
+    {ok, Tree1} = nova_routing_trie:insert('_', "/users", <<"GET">>, Value, Tree0),
+    {ok, Tree2} = nova_routing_trie:insert('_', "/users", <<"POST">>, Value#nova_handler_value{
         callback = fun(_Req) -> {json, 201, #{}, #{created => true}} end
     }, Tree1),
     %% Route with path params
-    Tree3 = routing_tree:insert('_', "/users/:id", <<"GET">>, Value, Tree2),
+    {ok, Tree3} = nova_routing_trie:insert('_', "/users/:id", <<"GET">>, Value, Tree2),
     %% Pathinfo/wildcard route
-    Tree4 = routing_tree:insert('_', "/static/[...]", '_',
+    {ok, Tree4} = nova_routing_trie:insert('_', "/static/[...]", '_',
         Value#nova_handler_value{
             callback = fun nova_file_controller:get_dir/1,
             extra_state = #{static => {priv_dir, test_app, "static"}}
@@ -38,7 +38,7 @@ setup() ->
         plugins = [{pre_request, []}],
         secure = false
     },
-    Tree5 = routing_tree:insert('_', "/ws", '_', CowboyValue, Tree4),
+    {ok, Tree5} = nova_routing_trie:insert('_', "/ws", '_', CowboyValue, Tree4),
     %% Status code route (custom 404)
     ErrorCallback = fun(_Req) -> {status, 404, #{}, <<"Custom not found">>} end,
     ErrorValue = #nova_handler_value{
@@ -48,7 +48,7 @@ setup() ->
         plugins = [],
         extra_state = #{}
     },
-    Tree6 = routing_tree:insert('_', 404, '_', ErrorValue, Tree5),
+    {ok, Tree6} = nova_routing_trie:insert('_', 404, '_', ErrorValue, Tree5),
     persistent_term:put(nova_dispatch, Tree6),
     persistent_term:put(nova_apps, [{test_app, "/"}]),
     persistent_term:put(nova_plugins, []),
@@ -397,10 +397,10 @@ add_plugin_duplicate_test_() ->
 
 insert_valid_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        Tree = routing_tree:new(#{use_strict => false, convert_to_binary => true}),
+        Tree = nova_routing_trie:new(#{strict => false}),
         Value = #nova_handler_value{app = test_app, callback = fun(_) -> ok end},
-        Tree1 = nova_router:insert('_', "/test", <<"GET">>, Value, Tree),
-        {ok, _, V} = routing_tree:lookup('_', <<"/test">>, <<"GET">>, Tree1),
+        Tree1 = nova_router:insert('_', "/test", <<"GET">>, Value, Tree, #{}),
+        {ok, _, V} = nova_routing_trie:find('_', <<"/test">>, <<"GET">>, Tree1),
         ?assertMatch(#nova_handler_value{app = test_app}, V)
     end}.
 

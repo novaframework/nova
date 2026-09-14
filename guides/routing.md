@@ -229,22 +229,95 @@ It's possible to configure a small set of endpoints with a specific plugin. This
 In the example above we have enabled the *pre-request*-plugin `nova_json_schemas` for all routes under the `/admin` prefix. This will cause all requests to be validated against the JSON schema defined in the `nova_json_schemas` plugin.
 You can also include *post-request*-plugins in the same way.
 
+By default a route entry that declares `plugins` uses exactly those, and one
+that does not uses the plugins configured globally. Set `plugin_strategy` on
+the entry to combine them instead:
+
+| Value | Plugins used |
+|---|---|
+| `local_or_global` | The entry's own plugins if it declares any, otherwise the global ones. This is the default. |
+| `local_first` | The entry's own plugins, then the global ones. |
+| `global_first` | The global plugins, then the entry's own. |
+| `local_only` | Only the entry's own plugins. An entry with none gets none. |
+| `global_only` | Only the global plugins. |
+| `{override, List}` | Exactly `List`. |
+
+When both sets are combined, a plugin appearing in both is kept once, at its
+first position, so ordering within a phase is preserved.
+
+### Overriding security for an included application
+
+When you include another Nova application, you may want to put your own
+security callback in front of its routes rather than the one it declares for
+itself. Set `override_secure` in the options for that application:
+
+```erlang
+{nova_apps, [{another_nova_app, #{prefix => "/admin",
+                                  override_secure => fun my_security:check/1}}]}
+```
+
+It takes the same values as `secure`: `false` for no override, a `fun/1`, or
+the deprecated `{Module, Function}`.
+
+
+## Route precedence
+
+More than one route can match a request. Nova resolves that the same way every
+time, at each path segment in turn:
+
+1. A literal segment.
+2. A binding, `:name`. When several bindings sit at the same depth they are
+   tried in name order.
+3. A `[...]` catch-all.
+
+Matching backtracks, so a route is only skipped if nothing below it can match.
+`/users/new` and `/users/:id` can therefore both be declared: `/users/new`
+serves the literal path and `/users/:id` serves everything else.
+
+Once a path matches, the method is resolved. An exact method wins over a route
+declared with `'_'`. If the path matches but the method does not, Nova answers
+`405` with an `allow` header listing the methods that path does accept.
+
+If two routes declare the same path *and* the same method, the first one
+registered wins and the second is logged and ignored. Set
+`use_strict_routing` to `true` in the `nova` application environment to make
+Nova refuse to start on a conflict instead, which also reports overlapping
+literal and binding routes.
 
 ## Adding routes programatically
 
-You can also add routes programatically by calling `nova_router:add_route/2`. This is useful if you want to add routes dynamically. The spec for it is:
+You can also add routes programatically by calling `nova_router:add_routes/2`. This is useful if you want to add routes dynamically. The spec for it is:
 
 ```erlang
-%% nova_router:add_route/2 specification
--spec add_route(App :: atom(), Routes :: map() | [map()]) -> ok.
+%% nova_router:add_routes/2 specification
+-spec add_routes(App :: atom(), Routes :: map() | [map()]) -> ok.
 ```
 
 First argument is the application you want to add the route to. The second argument is the route or a list of routes you want to add - it uses the same structure as in the regular routers.
 
 ```erlang
-nova_router:add_route(my_app, #{prefix => "/admin", routes => [{"/", fun my_controller:main/1, #{methods => [get]}}]}).
+nova_router:add_routes(my_app, #{prefix => "/admin", routes => [{"/", fun my_controller:main/1, #{methods => [get]}}]}).
 ```
 
 This will add the routes defined in the second argument to the `my_app` application.
 
-**Note**: If a route already exists it will be overwritten.
+**Note**: If a route already exists it will be overwritten. This is the one
+place where a later route wins; routes compiled at startup keep the first.
+
+If the application has a router module you can leave the routes out and let
+Nova call it for you:
+
+```erlang
+nova_router:add_routes(my_app).
+```
+
+To take an application's routes back out again:
+
+```erlang
+nova_router:remove_application(my_app).
+```
+
+Both work on the routing table of the default listener. If you started the
+application on its own listener with `nova_sup:add_application/2`, use
+`nova_sup:remove_application/1` instead, which also stops the listener once
+nothing is left on it. See the [multi-app guide](multi-app.md).

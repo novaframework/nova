@@ -13,18 +13,11 @@
 %% @end
 %%--------------------------------------------------------------------
 -spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
-                         {ok, Req0 :: cowboy_req:req(), NewState :: any()}.
+                         {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
+                         {stop, Req0 :: cowboy_req:req(), NewState :: any()}.
 pre_request(Req, _Env, Options, State) ->
     ListOptions = maps:to_list(Options),
-    %% Read the body and put it into the Req object
-    BodyReq = case should_read_body(ListOptions) andalso
-                  cowboy_req:has_body(Req) of
-                  true ->
-                      read_body(Req, <<>>);
-                  false ->
-                      Req#{body => <<>>}
-              end,
-    modulate_state(BodyReq, ListOptions, State).
+    modulate_state(read_request_body(Req, ListOptions), ListOptions, State).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -104,6 +97,22 @@ modulate_state(Req, [{parse_qs, Type}|T1], State) ->
     end;
 modulate_state(Req, [_|Tl], State) ->
     modulate_state(Req, Tl, State).
+
+%% A multipart body is never buffered here; nova_multipart_plugin or the
+%% controller reads the parts from the stream.
+read_request_body(Req, Options) ->
+    case not is_multipart(Req) andalso should_read_body(Options) andalso cowboy_req:has_body(Req) of
+        true -> read_body(Req, <<>>);
+        false -> Req#{body => <<>>}
+    end.
+
+is_multipart(Req) ->
+    try cowboy_req:parse_header(<<"content-type">>, Req) of
+        {<<"multipart">>, <<"form-data">>, _Params} -> true;
+        _ -> false
+    catch
+        _:_ -> false
+    end.
 
 read_body(Req, Acc) ->
     case cowboy_req:read_body(Req) of

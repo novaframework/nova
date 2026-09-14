@@ -1,0 +1,9 @@
+{application, nova_test_sub_app,
+ [{description, "Nova application mounted under a prefix by nova_test_app"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {applications, [kernel, stdlib, nova]},
+  {env, []},
+  {modules, []},
+  {licenses, ["Apache-2.0"]}
+ ]}.

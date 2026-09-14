@@ -59,6 +59,39 @@ jobs:
           ${{runner.os}}-rebar3-${{matrix.otp}}-${{matrix.rebar3}}-
     - name: Run eunit
       run: rebar3 eunit
+  ct:
+    needs: [build]
+    runs-on: ubuntu-24.04
+    name: CT Erlang/OTP ${{matrix.otp}} / rebar3 ${{matrix.rebar3}}
+    strategy:
+      fail-fast: false
+      matrix:
+        otp: ['27.3.4.11', '28.5', '29.0']
+        rebar3: ['3.25.0']
+    steps:
+    - uses: actions/checkout@v6
+    - uses: erlef/setup-beam@v1
+      with:
+        otp-version: ${{matrix.otp}}
+        rebar3-version: ${{matrix.rebar3}}
+        version-type: strict
+    - name: Cache rebar3 deps and build
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/rebar3
+          _build
+        key: ${{runner.os}}-rebar3-${{matrix.otp}}-${{matrix.rebar3}}-${{hashFiles('rebar.lock')}}
+        restore-keys: |
+          ${{runner.os}}-rebar3-${{matrix.otp}}-${{matrix.rebar3}}-
+    - name: Run common test
+      run: rebar3 ct
+    - name: Upload CT logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ct-logs-${{matrix.otp}}
+        path: _build/test/logs
   dialyzer:
     runs-on: ubuntu-24.04
     name: Dialyzer Erlang/OTP ${{matrix.otp}} / rebar3 ${{matrix.rebar3}}

@@ -40,24 +40,41 @@ graceful_shutdown() ->
         false ->
             ok
     end,
-    ?LOG_NOTICE(#{msg => <<"Suspending listener">>}),
-    ranch:suspend_listener(nova_listener),
+    Listeners = nova_sup:listeners(),
+    ?LOG_NOTICE(#{msg => <<"Suspending listeners">>, listeners => Listeners}),
+    [suspend(Listener) || Listener <- Listeners],
     DrainTimeout = application:get_env(nova, shutdown_drain_timeout, 15000),
     ?LOG_NOTICE(#{msg => <<"Draining connections">>, timeout_ms => DrainTimeout}),
-    drain_connections(DrainTimeout),
-    ?LOG_NOTICE(#{msg => <<"Stopping listener">>}),
-    cowboy:stop_listener(nova_listener),
+    drain_connections(Listeners, DrainTimeout),
+    ?LOG_NOTICE(#{msg => <<"Stopping listeners">>}),
+    [cowboy:stop_listener(Listener) || Listener <- Listeners],
     ok.
 
-drain_connections(Timeout) ->
-    Deadline = erlang:monotonic_time(millisecond) + Timeout,
-    drain_loop(Deadline).
+%% A listener can already be gone if the application was removed at runtime,
+%% so neither suspending nor inspecting it may bring the shutdown down.
+suspend(Listener) ->
+    try ranch:suspend_listener(Listener) of
+        _Result -> ok
+    catch
+        _Class:_Reason -> ok
+    end.
 
-drain_loop(Deadline) ->
-    case ranch:info(nova_listener) of
-        #{active_connections := 0} ->
+active_connections(Listener) ->
+    try ranch:info(Listener) of
+        #{active_connections := N} -> N
+    catch
+        _Class:_Reason -> 0
+    end.
+
+drain_connections(Listeners, Timeout) ->
+    Deadline = erlang:monotonic_time(millisecond) + Timeout,
+    drain_loop(Listeners, Deadline).
+
+drain_loop(Listeners, Deadline) ->
+    case lists:sum([active_connections(Listener) || Listener <- Listeners]) of
+        0 ->
             ok;
-        #{active_connections := N} ->
+        N ->
             Now = erlang:monotonic_time(millisecond),
             case Now >= Deadline of
                 true ->
@@ -66,6 +83,6 @@ drain_loop(Deadline) ->
                     ok;
                 false ->
                     timer:sleep(500),
-                    drain_loop(Deadline)
+                    drain_loop(Listeners, Deadline)
             end
     end.
