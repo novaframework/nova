@@ -74,7 +74,7 @@ register_custom_handler_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         CustomFun = fun(_RetObj, _Callback, _Req) -> {ok, #{}} end,
         nova_handlers:register_handler(custom, CustomFun),
-        timer:sleep(50),
+        _ = sys:get_state(nova_handlers),
         {ok, Handler} = nova_handlers:get_handler(custom),
         ?assertEqual(CustomFun, Handler)
     end}.
@@ -84,10 +84,10 @@ register_duplicate_handler_test_() ->
         Fun1 = fun(_RetObj, _Callback, _Req) -> {ok, #{a => 1}} end,
         Fun2 = fun(_RetObj, _Callback, _Req) -> {ok, #{b => 2}} end,
         nova_handlers:register_handler(dup_test, Fun1),
-        timer:sleep(50),
+        _ = sys:get_state(nova_handlers),
         %% Second registration should be rejected (already exists)
         nova_handlers:register_handler(dup_test, Fun2),
-        timer:sleep(50),
+        _ = sys:get_state(nova_handlers),
         {ok, Handler} = nova_handlers:get_handler(dup_test),
         ?assertEqual(Fun1, Handler)
     end}.
@@ -95,7 +95,7 @@ register_duplicate_handler_test_() ->
 register_mfa_handler_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         nova_handlers:register_handler(mfa_test, {lists, reverse}),
-        timer:sleep(50),
+        _ = sys:get_state(nova_handlers),
         {ok, Handler} = nova_handlers:get_handler(mfa_test),
         ?assert(is_function(Handler))
     end}.
@@ -108,7 +108,7 @@ unregister_handler_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         CustomFun = fun(_RetObj, _Callback, _Req) -> ok end,
         nova_handlers:register_handler(to_remove, CustomFun),
-        timer:sleep(50),
+        _ = sys:get_state(nova_handlers),
         ?assertMatch({ok, _}, nova_handlers:get_handler(to_remove)),
         ok = nova_handlers:unregister_handler(to_remove),
         ?assertEqual({error, not_found}, nova_handlers:get_handler(to_remove))

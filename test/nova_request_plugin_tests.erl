@@ -121,3 +121,34 @@ plugin_info_test() ->
     Info = nova_request_plugin:plugin_info(),
     ?assertEqual(<<"Nova body plugin">>, maps:get(title, Info)),
     ?assert(is_list(maps:get(options, Info))).
+
+%%====================================================================
+%% multipart/form-data is never buffered here
+%%====================================================================
+
+multipart_req(ContentType) ->
+    Req = nova_test_helper:mock_req(<<"POST">>, <<"/upload">>),
+    Req0 = nova_test_helper:with_content_type(ContentType, Req),
+    Req0#{has_body => true}.
+
+multipart_body_not_drained_test_() ->
+    {setup,
+     fun() ->
+         meck:new(cowboy_req, [passthrough]),
+         meck:expect(cowboy_req, has_body, fun(_Req) -> true end),
+         meck:expect(cowboy_req, read_body,
+                     fun(_Req) -> erlang:error(body_should_not_be_read) end)
+     end,
+     fun(_) -> meck:unload(cowboy_req) end,
+     [fun() ->
+          Req0 = multipart_req(<<"multipart/form-data; boundary=----abc">>),
+          {ok, Req, state} = nova_request_plugin:pre_request(
+                               Req0, env, #{decode_json_body => true, read_urlencoded_body => true}, state),
+          ?assertEqual(<<>>, maps:get(body, Req)),
+          ?assertNot(maps:is_key(files, Req))
+      end,
+      fun() ->
+          Req0 = multipart_req(<<"Multipart/Form-Data; boundary=----abc">>),
+          {ok, Req, state} = nova_request_plugin:pre_request(Req0, env, #{decode_json_body => true}, state),
+          ?assertEqual(<<>>, maps:get(body, Req))
+      end]}.

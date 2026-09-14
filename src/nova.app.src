@@ -8,12 +8,12 @@
                  kernel,
                  stdlib,
                  sasl,
+                 crypto,
                  ranch,
                  cowboy,
                  compiler,
                  erlydtl,
                  jhn_stdlib,
-                 routing_tree,
                  thoas
                 ]},
   {env,[]},
