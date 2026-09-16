@@ -1,4 +1,5 @@
 -module(nova_security_handler).
+-moduledoc false.
 -behaviour(cowboy_middleware).
 
 -export([

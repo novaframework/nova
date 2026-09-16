@@ -1,12 +1,9 @@
 %%%-------------------------------------------------------------------
-%%% @author Niclas Axelsson <niclas@burbas.se>
-%%% @copyright (C) 2019, Niclas Axelsson
-%%% @doc
-%%%
-%%% @end
+%%% Copyright (C) 2019, Niclas Axelsson
 %%% Created :  8 Dec 2019 by Niclas Axelsson <niclas@burbas.se>
 %%%-------------------------------------------------------------------
 -module(nova_session_ets).
+-moduledoc false.
 
 -behaviour(gen_server).
 -behaviour(nova_session).
@@ -37,10 +34,7 @@
 %%%===================================================================
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Starts the server
-%% @end
-%%--------------------------------------------------------------------
+-doc "Starts the server".
 -spec start_link() -> {ok, Pid :: pid()} |
                       {error, Error :: {already_started, pid()}} |
                       {error, Error :: term()} |
@@ -70,11 +64,8 @@ delete_value(SessionId, Key) ->
 %%%===================================================================
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Initializes the server
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec init(Args :: term()) -> {ok, State :: term()} |
                               {ok, State :: term(), Timeout :: timeout()} |
                               {ok, State :: term(), hibernate} |
@@ -87,11 +78,8 @@ init([]) ->
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Handling call messages
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec handle_call(Request :: term(), From :: {pid(), term()}, State :: term()) ->
                          {reply, Reply :: term(), NewState :: term()} |
                          {reply, Reply :: term(), NewState :: term(), Timeout :: timeout()} |
@@ -118,11 +106,8 @@ handle_call(_Request, _From, State) ->
     {reply, Reply, State}.
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Handling cast messages
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec handle_cast(Request :: term(), State :: term()) ->
                          {noreply, NewState :: term()} |
                          {noreply, NewState :: term(), Timeout :: timeout()} |
@@ -132,11 +117,8 @@ handle_cast(_Request, State) ->
     {noreply, State}.
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Handling all non call/cast messages
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec handle_info(Info :: timeout() | term(), State :: term()) ->
                          {noreply, NewState :: term()} |
                          {noreply, NewState :: term(), Timeout :: timeout()} |
@@ -165,25 +147,19 @@ handle_info(_Info, State) ->
     {noreply, State}.
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% This function is called by a gen_server when it is about to
 %% terminate. It should be the opposite of Module:init/1 and do any
 %% necessary cleaning up. When it returns, the gen_server terminates
 %% with Reason. The return value is ignored.
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
                 State :: term()) -> any().
 terminate(_Reason, _State) ->
     ok.
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Convert process state when code is changed
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec code_change(OldVsn :: term() | {down, term()},
                   State :: term(),
                   Extra :: term()) -> {ok, NewState :: term()} |
@@ -192,13 +168,10 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% This function is called for changing the form and appearance
 %% of gen_server status when it is returned from sys:get_status/1,2
 %% or when it appears in termination error logs.
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec format_status(Status) -> NewStatus when Status :: #{'log'=>[any()], 'message'=>_, 'reason'=>_, 'state'=>_},
                                               NewStatus :: #{'log'=>[any()], 'message'=>_, 'reason'=>_, 'state'=>_}.
 format_status(Status) ->

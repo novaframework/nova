@@ -1,4 +1,5 @@
 -module(nova_file_controller).
+-moduledoc false.
 -export([
          get_file/1,
          get_dir/1

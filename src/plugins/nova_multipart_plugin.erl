@@ -1,19 +1,10 @@
 %%%-------------------------------------------------------------------
-%%% @doc
-%%% Reads a `multipart/form-data' body and streams every file part to a
-%%% `nova_multipart_handler', chunk by chunk. Regular fields are collected
-%%% under `params' and file parts under `files', each as
-%%% `#{name, filename, content_type, result}' where `result' is whatever the
-%%% handler returned from `handle_end/1'.
-%%%
-%%% Multipart fields win over `params' set by an earlier plugin, and a
-%%% repeated field name keeps the last value. On a non-multipart request the
-%%% plugin sets `files' to `[]' and `params' to `#{}' unless an earlier
-%%% plugin already set it, so a controller can match both keys on every
-%%% request that reaches it.
-%%% @end
-%%%-------------------------------------------------------------------
 -module(nova_multipart_plugin).
+-moduledoc """
+Reads a `multipart/form-data` body and streams every file part to a `nova_multipart_handler`, chunk by chunk. Regular fields are collected under `params` and file parts under `files`, each as `#{name, filename, content_type, result}` where `result` is whatever the handler returned from `handle_end/1`.
+
+Multipart fields win over `params` set by an earlier plugin, and a repeated field name keeps the last value. On a non-multipart request the plugin sets `files` to `[]` and `params` to `#{}` unless an earlier plugin already set it, so a controller can match both keys on every request that reaches it.
+""".
 -behaviour(nova_plugin).
 
 -include_lib("kernel/include/logger.hrl").
