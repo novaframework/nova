@@ -1,13 +1,10 @@
 %%%-------------------------------------------------------------------
-%%% @doc
-%%% `nova_multipart_handler' that keeps a file part in memory. Bounded by
-%%% the plugin's `max_part_size' and `max_total_size', so use it for small
-%%% attachments only.
-%%%
-%%% Result: `#{body => Binary}'.
-%%% @end
-%%%-------------------------------------------------------------------
 -module(nova_multipart_memory_handler).
+-moduledoc """
+`nova_multipart_handler` that keeps a file part in memory. Bounded by the plugin's `max_part_size` and `max_total_size`, so use it for small attachments only.
+
+Result: `#{body => Binary}`.
+""".
 -behaviour(nova_multipart_handler).
 
 -export([init/2, handle_data/2, handle_end/1, handle_abort/2]).

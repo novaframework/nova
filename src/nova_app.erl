@@ -1,10 +1,6 @@
 %%%-------------------------------------------------------------------
-%% @doc
-%% Nova application behaviour callback (Not used)
-%% @end
-%%%-------------------------------------------------------------------
-
 -module(nova_app).
+-moduledoc "Nova application behaviour callback".
 
 -behaviour(application).
 

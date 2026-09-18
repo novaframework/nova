@@ -1,41 +1,27 @@
 %%%-------------------------------------------------------------------
-%%% @author Niclas Axelsson <niclas@burbas.se>
-%%% @copyright (C) 2020, Niclas Axelsson
-%%% @doc
-%%% This module is responsible for all the different return types a controller have. <i>Nova</i> is constructed
-%%% in such way that it's really easy to extend it by using <i>handlers</i>. A handler is basically a module consisting
-%%% of a function of arity 4. We will show an example of this.
-%%%
-%%% If you implement the following module:
-%%%
-%%% -module(my_handler).
-%%% -export([init/0,
-%%%          handle_console]).
-%%%
-%%% init() ->
-%%%    nova_handlers:register_handler(console, {my_handler, handle_console}).
-%%%
-%%% handle_console({console, Format, Args}, {Module, Function}, State) ->
-%%%    io:format("~n=====================~n", []).
-%%%    io:format("~p:~p was called.~n", []),
-%%%    io:format("State: ~p~n", [State]),
-%%%    io:format(Format, Args),
-%%%    io:format("~n=====================~n", []),
-%%%    {ok, 200, #{}, EmptyBinary}.
-%%%
-%%% The init/0 should be invoked from your applications <i>supervisor</i> and will register the module
-%%% my_handler as handler of the return type {console, Format, Args}. This means that you
-%%% can return this tuple in a controller which invokes my_handler:handle_console/4.
-%%%
-%%% <b>A handler can return two different types</b>
-%%%
-%%% {ok, StatusCode, Headers, Body} - This will return a proper reply to the requester.
-%%%
-%%% {error, Reason} - This will render a 500 page to the user.
-%%% @end
+%%% Copyright (C) 2020, Niclas Axelsson
 %%% Created : 12 Feb 2020 by Niclas Axelsson <niclas@burbas.se>
 %%%-------------------------------------------------------------------
 -module(nova_handlers).
+-moduledoc """
+This module is responsible for all the different return types a controller have. *Nova* is constructed in such way that it's really easy to extend it by using *handlers*. A handler is basically a module consisting of a function of arity 4. We will show an example of this.
+
+If you implement the following module:
+
+\-module(my_handler). -export(\[init/0, handle_console]).
+
+init() -> nova_handlers:register_handler(console, \{my_handler, handle_console\}).
+
+handle_console(\{console, Format, Args\}, \{Module, Function\}, State) -> io:format("~n=====================~n", []). io:format("~p:~p was called.~n", []), io:format("State: ~p~n", \[State]), io:format(Format, Args), io:format("~n=====================~n", []), \{ok, 200, #\{\}, EmptyBinary\}.
+
+The init/0 should be invoked from your applications *supervisor* and will register the module my_handler as handler of the return type \{console, Format, Args\}. This means that you can return this tuple in a controller which invokes my_handler:handle_console/4.
+
+__A handler can return two different types__
+
+\{ok, StatusCode, Headers, Body\} - This will return a proper reply to the requester.
+
+\{error, Reason\} - This will render a 500 page to the user.
+""".
 
 -behaviour(gen_server).
 
@@ -82,11 +68,8 @@
 %%%===================================================================
 
 %%--------------------------------------------------------------------
-%% @doc
 %% Starts the server
-%% @hidden
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec start_link() -> {ok, Pid :: pid()} |
                       {error, Error :: {already_started, pid()}} |
                       {error, Error :: term()} |
@@ -96,31 +79,20 @@ start_link() ->
 
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Registers a new handler. This can then be used in a nova controller
-%% by returning a tuple where the first element is the name of the handler.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Registers a new handler. This can then be used in a nova controller by returning a tuple where the first element is the name of the handler.".
 -spec register_handler(Handle :: atom(), Callback :: handler_callback()) ->
                               ok | {error, Reason :: atom()}.
 register_handler(Handle, Callback) ->
     gen_server:cast(?SERVER, {register_handler, Handle, Callback}).
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Unregisters a handler and makes it unavailable for all controllers.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Unregisters a handler and makes it unavailable for all controllers.".
 -spec unregister_handler(Handle :: atom()) -> ok.
 unregister_handler(Handle) ->
     gen_server:call(?SERVER, {unregister_handler, Handle}).
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Fetches the handler identified with 'Handle' and returns the callback
-%% function for it.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Fetches the handler identified with 'Handle' and returns the callback function for it.".
 -spec get_handler(Handle :: atom()) -> {ok, Callback :: handler_callback()} |
                                        {error, not_found}.
 get_handler(Handle) ->
@@ -136,11 +108,8 @@ get_handler(Handle) ->
 %%%===================================================================
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Initializes the server
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec init(Args :: term()) -> {ok, State :: term()} |
                               {ok, State :: term(), Timeout :: timeout()} |
                               {ok, State :: term(), hibernate} |
@@ -162,11 +131,8 @@ init([]) ->
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Handling call messages
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec handle_call(Request :: term(), From :: {pid(), term()}, State :: term()) ->
                          {reply, Reply :: term(), NewState :: term()} |
                          {reply, Reply :: term(), NewState :: term(), Timeout :: timeout()} |
@@ -186,11 +152,8 @@ handle_call(_Request, _From, State) ->
     {reply, Reply, State}.
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Handling cast messages
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec handle_cast(Request :: term(), State :: term()) ->
                          {noreply, NewState :: term()} |
                          {noreply, NewState :: term(), Timeout :: timeout()} |
@@ -215,11 +178,8 @@ handle_cast(_Request, State) ->
     {noreply, State}.
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Handling all non call/cast messages
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec handle_info(Info :: timeout() | term(), State :: term()) ->
                          {noreply, NewState :: term()} |
                          {noreply, NewState :: term(), Timeout :: timeout()} |
@@ -229,25 +189,19 @@ handle_info(_Info, State) ->
     {noreply, State}.
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% This function is called by a gen_server when it is about to
 %% terminate. It should be the opposite of Module:init/1 and do any
 %% necessary cleaning up. When it returns, the gen_server terminates
 %% with Reason. The return value is ignored.
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
                 State :: term()) -> any().
 terminate(_Reason, _State) ->
     ok.
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Convert process state when code is changed
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec code_change(OldVsn :: term() | {down, term()},
                   State :: term(),
                   Extra :: term()) -> {ok, NewState :: term()} |
@@ -256,13 +210,10 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% This function is called for changing the form and appearance
 %% of gen_server status when it is returned from sys:get_status/1,2
 %% or when it appears in termination error logs.
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec format_status(Status) -> NewStatus when Status :: #{'log'=>[any()], 'message'=>_, 'reason'=>_, 'state'=>_},
                                               NewStatus :: #{'log'=>[any()], 'message'=>_, 'reason'=>_, 'state'=>_}.
 format_status(Status) ->

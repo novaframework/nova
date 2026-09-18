@@ -1,17 +1,15 @@
-%%% @doc
-%%% Nova Controller behaviour definition
-%%% @end
-
 -module(nova_controller).
+-moduledoc "Nova Controller behaviour definition".
 
 -export([routes/2]).
 
 -optional_callbacks([routes/2]).
 
-%% @doc Returns the routes defined in the module, if any
+-doc "Returns the routes defined in the module, if any.".
 -callback routes(Env :: atom(), Opts :: map()) -> Routes :: [map()].
 
 
+-doc "Returns the routes defined in the module, if any".
 -spec routes(module() | {module(), map()}, Env :: atom()) -> Routes :: [map()].
 routes({Module, Opts}, Env) when is_map(Opts) ->
     routes(Module, Env, Opts);

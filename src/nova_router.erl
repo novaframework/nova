@@ -1,11 +1,8 @@
 %%%-------------------------------------------------------------------
-%%% @author Niclas Axelsson <niclas@burbas.se>
-%%% @doc
-%%% Router module for nova. This module is responsible for compiling routes, dispatching requests to the correct handler
-%%% and managing the routing table. It also exposes an API for modulating the routing table at runtime.
-%%% @end
+%%% Author: Niclas Axelsson <niclas@burbas.se>
 %%%-------------------------------------------------------------------
 -module(nova_router).
+-moduledoc "Router module for nova. This module is responsible for compiling routes, dispatching requests to the correct handler and managing the routing table. It also exposes an API for modulating the routing table at runtime.".
 -behaviour(cowboy_middleware).
 
 %% Cowboy middleware-callbacks
@@ -93,11 +90,7 @@ compile(Apps) ->
     compile(Apps, ?NOVA_DISPATCH).
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Compile the given applications into the routing table addressed by
-%% `DispatchKey', merging into whatever is already stored there.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Compile the given applications into the routing table addressed by `DispatchKey`, merging into whatever is already stored there.".
 -spec compile(Apps :: [atom() | {atom(), map()}], DispatchKey :: dispatch_key()) ->
           nova_routing_trie:trie().
 compile(Apps, DispatchKey) ->
@@ -191,35 +184,20 @@ lookup_url(Host, Path, Method, Dispatch) ->
 
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Works the same way as add_routes/2 but with the exception that you
-%% don't need to provide the routes explicitly. When using this it's
-%% expected that there's a routing-module associated with the application.
-%% Eg. for the application 'test' the corresponding router would then be
-%% 'test_router'. Read more about routers in the official documentation.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Works the same way as add_routes/2 but with the exception that you don't need to provide the routes explicitly. When using this it's expected that there's a routing-module associated with the application. Eg. for the application 'test' the corresponding router would then be 'test_router'. Read more about routers in the official documentation.".
 -spec add_routes(App :: atom()) -> ok.
 add_routes(App) ->
     Env = nova:get_environment(),
     add_routes(App, get_routes(router_module(App), Env)).
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Add routes to the dispatch-table for the given app. The routes
-%% can be either a list of maps or a map. It use the same structure as
-%% the routes-callback in the router-module.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Add routes to the dispatch-table for the given app. The routes can be either a list of maps or a map. It use the same structure as the routes-callback in the router-module.".
 -spec add_routes(App :: atom(), Routes :: [map()] | map()) -> ok.
 add_routes(App, Routes) ->
     add_routes(App, Routes, ?NOVA_DISPATCH).
 
 %%--------------------------------------------------------------------
-%% @doc
-%% As add_routes/2, but against the routing table addressed by `DispatchKey'.
-%% @end
-%%--------------------------------------------------------------------
+-doc "As add_routes/2, but against the routing table addressed by `DispatchKey`.".
 -spec add_routes(App :: atom(), Routes :: [map()] | map(), DispatchKey :: dispatch_key()) -> ok.
 add_routes(_App, [], _DispatchKey) ->
     ok;
@@ -262,20 +240,13 @@ insert_route_maps(App, Routes, DispatchKey) ->
 
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Remove all routes associated with the given application.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Remove all routes associated with the given application.".
 -spec remove_application(Application :: atom()) -> ok.
 remove_application(Application) ->
     remove_application(Application, ?NOVA_DISPATCH).
 
 %%--------------------------------------------------------------------
-%% @doc
-%% As remove_application/1, but against the routing table addressed by
-%% `DispatchKey'.
-%% @end
-%%--------------------------------------------------------------------
+-doc "As remove_application/1, but against the routing table addressed by `DispatchKey`.".
 -spec remove_application(Application :: atom(), DispatchKey :: dispatch_key()) -> ok.
 remove_application(Application, DispatchKey) when is_atom(Application) ->
     StorageBackend = storage_backend(),
@@ -299,12 +270,7 @@ route_app(_Route)                                                    -> undefine
 
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Forget a routing table entirely. Called when the listener that owned it is
-%% stopped, so its routes and compiled-application list do not outlive it.
-%% The default table belongs to the bootstrap listener and is never deleted.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Forget a routing table entirely. Called when the listener that owned it is stopped, so its routes and compiled-application list do not outlive it. The default table belongs to the bootstrap listener and is never deleted.".
 -spec delete_dispatch(DispatchKey :: dispatch_key()) -> ok.
 delete_dispatch(?NOVA_DISPATCH) ->
     ok;
@@ -376,12 +342,7 @@ compile([App|Tl], Dispatch, Options) ->
     compile(Tl, Dispatch1, Options).
 
 %%--------------------------------------------------------------------
-%% @doc
-%% The router module for an application. Either configured explicitly with
-%% the `router_module' application environment key, or derived from the
-%% application name using the convention for the language in use.
-%% @end
-%%--------------------------------------------------------------------
+-doc "The router module for an application. Either configured explicitly with the `router_module` application environment key, or derived from the application name using the convention for the language in use.".
 router_module(App) ->
     case application:get_env(App, router_module) of
         {ok, RouterModule} ->
@@ -640,16 +601,11 @@ add_plugin(Plugin) ->
     end.
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Work out which plugins apply to a route entry.
-%%
-%% `local_or_global' is the default and is how Nova has always behaved: a
-%% route entry that declares `plugins' uses exactly those, otherwise it uses
-%% the globally configured ones. The merging strategies exist for the cases
-%% where you want both, and dedupe on `{Type, Module}' keeping the first
-%% occurrence, so ordering within a phase is preserved.
-%% @end
-%%--------------------------------------------------------------------
+-doc """
+Work out which plugins apply to a route entry.
+
+`local_or_global` is the default and is how Nova has always behaved: a route entry that declares `plugins` uses exactly those, otherwise it uses the globally configured ones. The merging strategies exist for the cases where you want both, and dedupe on `{Type, Module}` keeping the first occurrence, so ordering within a phase is preserved.
+""".
 normalize_secure(false, _RouterFile) ->
     false;
 normalize_secure(true, RouterFile) ->

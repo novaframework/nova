@@ -1,9 +1,7 @@
-%%% @author Niclas Axelsson <niclas@burbas.se>
-%%% @doc
-%%% Callback controller for handling websockets
-%%% @end
+%%% Author: Niclas Axelsson <niclas@burbas.se>
 
 -module(nova_ws_handler).
+-moduledoc "Callback controller for handling websockets".
 
 -export([
          init/2,

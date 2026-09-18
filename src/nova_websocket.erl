@@ -1,4 +1,5 @@
 -module(nova_websocket).
+-moduledoc false.
 
 -type call_result() :: {ok, State :: map()} |
                        {ok, State :: map(), hibernate} |
