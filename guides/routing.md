@@ -86,6 +86,27 @@ As you saw in the initial example in the [Basic components](#basic-components) s
 >
 > One needs to define `protocol => ws` in the options-map in order to enable websocket communications.
 
+### Native cowboy handlers ###
+
+```
+{Route :: list(), Handler :: atom(), Options :: map()}
+```
+
+By defining `protocol => cowboy` in the options-map, the handler module is invoked
+directly with `Handler:init/2` the same way cowboy itself would do it. This means that
+plain cowboy handlers, as well as handlers using cowboy's sub-protocols such as
+`cowboy_rest` and `cowboy_loop`, can be routed through nova without any wrapping -
+while still passing through nova's plugin- and security-handling.
+
+The arguments given to `Handler:init/2` can be set with the `arguments`-option
+(defaults to `#{}`), and the route can be restricted with the `methods`-option
+just like regular routes.
+
+Example:
+```erlang
+{"/my-rest-api", my_rest_handler, #{protocol => cowboy}},
+{"/long-poll", my_loop_handler, #{protocol => cowboy, arguments => #{timeout => 30000}}}
+```
 
 ### Static files
 
