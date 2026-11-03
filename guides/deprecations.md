@@ -54,3 +54,19 @@ of `{Module, Function}` in Nova.
 - **`nova_router:lookup_url/1,2,3`** keep their return shapes, including
   `{error, comparator_not_found, AllowedMethods}` for a path that exists but
   does not accept the method.
+
+### Sessions
+
+- **The session cookie is issued lazily.** Nova used to set a `session_id`
+  cookie on every response to a client without one. It is now only sent with
+  the response of a request that writes to the session (or calls `renew/1` or
+  `delete/1`), and carries `Path=/; HttpOnly; SameSite=Lax`, plus `Secure` over
+  HTTPS. As before, `nova_session_id` is only in the request for a client that
+  sent no cookie; use `nova_session` rather than reading it, since that id only
+  reaches the client once the session is written.
+
+- **Presented ids the backend does not know are replaced**, for backends that
+  implement `session_exists/1` (`nova_session_ets` does). Sessions held by
+  another node, for example during a rolling deploy, are among them.
+
+- Use `nova_session:renew/1` at sign-in.

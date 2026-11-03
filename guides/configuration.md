@@ -39,6 +39,17 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 | `shutdown_delay` | Milliseconds to wait before suspending the listener during shutdown. Useful for letting load balancers drain traffic. See the [Graceful shutdown](graceful-shutdown.md) guide. | `integer()` | `0` |
 | `shutdown_drain_timeout` | Maximum milliseconds to wait for active connections to finish during shutdown. See the [Graceful shutdown](graceful-shutdown.md) guide. | `integer()` | `15000` |
 
+### Where Nova reads a setting
+
+`json_lib` and `use_sessions` are read from the bootstrap application's environment first, then from the `nova` environment, then the default. A value set in your own application always wins:
+
+```erlang
+[{nova, [{bootstrap_application, my_app}]},
+ {my_app, [{json_lib, json}, {use_sessions, true}]}].
+```
+
+The other keys in the table above are only read from `nova`.
+
 ## Application parameters
 
 These parameters can be specified in your *main* application (Eg the one you've specified in the `bootstrap`-section).

@@ -62,7 +62,7 @@ This function deletes the whole session and clears the `session_id` cookie. The 
 -spec renew(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()}.
 ```
 
-Moves the client to a new, empty session: the old session's data is deleted and the response carries a new `session_id` cookie. Call it whenever the privilege level of the client changes, at sign-in, sign-out and password change, so a session id that was planted or observed before that point stops working (session fixation). Use the returned request for the `set/3` calls that follow.
+Moves the client to a new, empty session: the old session's data is deleted and the response carries a new `session_id` cookie. Call it whenever the privilege level of the client changes, at sign-in, sign-out and password change. Calling it at sign-in is the defence against session fixation: a session id that was planted or observed before that point stops working. Use the returned request for the `set/3` calls that follow.
 
 ```erlang
 login(Req) ->
@@ -71,13 +71,15 @@ login(Req) ->
     {redirect, "/"}.
 ```
 
-The cookie is written by `nova_stream_h`, so it reaches the client even when the controller does not return `Req1`.
+The cookie is written by `nova_stream_h`, so it reaches the client even when the controller does not return `Req1`. This works for changes made by the process serving the request, which is where controllers, plugins, security functions and `nova_websocket:init/1` run (a session written in `init/1` gets its cookie on the `101` response). A process spawned with the request can still read and write session data, but no cookie is sent for what it does.
+
+A `stream_handlers` configuration without `nova_stream_h` keeps storing session data, but `renew/1`, `delete/1` and new sessions never reach the client's cookie, and presented ids are used without the check described below.
 
 ## The session cookie
 
 The session id is a random 256-bit value from `crypto:strong_rand_bytes/1`, sent in the `session_id` cookie. `nova_stream_h` issues the cookie with the response of the first request that writes to the session, so visitors who never store anything get no cookie and their responses stay cacheable.
 
-An id the client presents that the backend does not know (never issued, deleted or expired) is ignored and a new one is used, so a client cannot choose its own session id.
+An id the client presents that the backend does not know (never issued, deleted or expired) is ignored and a new one is used, so a client cannot simply choose its own session id. This is defence in depth; `renew/1` at sign-in is what protects against fixation. The check runs in the request process the first time the request uses the session, not in the connection process.
 
 The cookie is sent with `Path=/`, `HttpOnly` and `SameSite=Lax`, and with `Secure` when the request came in over HTTPS. Behind a proxy that terminates TLS, Nova sees plain HTTP, so set `secure` yourself:
 
@@ -92,9 +94,11 @@ The cookie is sent with `Path=/`, `HttpOnly` and `SameSite=Lax`, and with `Secur
 
 `session_max_age` (seconds) limits how long a session lives from the moment it was created, whatever happens in between. It sets `Max-Age` on the cookie, and the default `nova_session_ets` backend drops the session once it has passed. Without it sessions live until they are deleted or the node restarts.
 
+The default `nova_session_ets` backend keeps sessions in memory, replicated to the nodes connected at the time of the write. They do not survive a restart, and a node that joins later does not have the sessions written before it joined. Because unknown ids are replaced, a client that reaches such a node (during a rolling deploy, or behind a load balancer without sticky sessions) gets a fresh, empty session and is signed out. Use a shared backend when sessions have to outlive a node.
+
 ## Enabling Sessions
 
-Sessions are enabled by default in Nova, but if you need to disable them, you can do so by setting the `use_sessions` configuration option to `false` in the `nova` application. This will disable sessions for the entire site. (Older releases only read the key from the bootstrap application's environment; that still works when the `nova` key is not set.)
+Sessions are enabled by default in Nova, but if you need to disable them, you can do so by setting the `use_sessions` configuration option to `false`. This will disable sessions for the entire site. Like `json_lib`, it is read from your bootstrap application's environment first and then from `nova`'s (see the [configuration guide](configuration.md)).
 
 It's also possible to set the backend for the session data. By default, the session data is stored in an *ETS* table in the Erlang VM but it's quite easy to implement a custom backend.
 
@@ -102,7 +106,9 @@ It's also possible to set the backend for the session data. By default, the sess
 
 You can implement your own backend by creating a module that implements the `nova_session` behaviour. This behaviour has four functions that need to be implemented: `get_value/2`, `set_value/3`, `delete_value/1` and `delete_value/2`.
 
-Implement the optional `session_exists/1` too. Nova calls it for the session id a client presents and replaces ids it returns `false` for. A backend without it accepts any id a client sends, which leaves it open to session fixation.
+Implement the optional `session_exists/1` too. Nova calls it for the session id a client presents and replaces ids it returns `false` for. It is called on every `get/2`, `set/3` and `delete` of a request that presented a cookie, so keep it as cheap as a key lookup. A backend without it accepts any id a client sends.
+
+`set_value/3` should return `ok` or `{error, Reason}`. Anything other than an error counts as a successful write.
 
 Optionally you can also implement `start_link/0`, which will start a process under nova's supervisor for handling infrastructure of your handler, if it is necessary. For example, in default `nova_session_ets` module it starts a `gen_server` for managing underlying *ETS* table.
 
