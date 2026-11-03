@@ -192,10 +192,14 @@ read_body(Req, MaxLength, Deadline, Acc) ->
             end
     end.
 
+-spec time_left(integer() | infinity) -> non_neg_integer() | infinity.
 time_left(infinity) ->
     infinity;
 time_left(Deadline) ->
-    max(0, Deadline - erlang:monotonic_time(millisecond)).
+    case Deadline - erlang:monotonic_time(millisecond) of
+        Left when Left > 0 -> Left;
+        _ -> 0
+    end.
 
 should_read_body([]) -> false;
 should_read_body([{decode_json_body, true}|_Tl]) -> true;

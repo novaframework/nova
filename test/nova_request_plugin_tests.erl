@@ -283,8 +283,8 @@ body_length_test_() ->
 trickle_setup() ->
     meck:new(cowboy_req, [passthrough, no_link]),
     meck:expect(cowboy_req, read_body,
-                fun(Req, #{period := Period}) ->
-                        timer:sleep(min(Period, 50)),
+                fun(Req, #{period := _}) ->
+                        timer:sleep(50),
                         {more, ~" ", Req}
                 end).
 
