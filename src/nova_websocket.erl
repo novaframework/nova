@@ -1,5 +1,46 @@
 -module(nova_websocket).
--moduledoc false.
+-moduledoc """
+Behaviour for websocket controllers. Route to one with `protocol => ws`:
+
+```erlang
+{"/ws", my_ws_controller, #{protocol => ws}}
+```
+
+`init/1` runs in the request process before the upgrade. It gets the
+controller data (with `req` set to the upgrade request, and `auth_data` when
+the route's security function returned `{true, AuthData}`) and returns
+`{ok, State}` to accept the connection. Anything else answers the upgrade
+request with a 500.
+
+After the upgrade, `websocket_init/1`, `websocket_handle/2` and
+`websocket_info/2` return one of:
+
+- `{ok, State}`, `{ok, State, hibernate}`
+- `{reply, Frame | [Frame], State}`, `{reply, Frame | [Frame], State, hibernate}`
+- `{stop, State}`, which closes the connection
+
+`terminate/3` is called with the reason, the partial request and the state
+when the connection goes away.
+
+```erlang
+-module(my_ws_controller).
+-behaviour(nova_websocket).
+-export([init/1, websocket_handle/2, websocket_info/2]).
+
+init(ControllerData) ->
+    {ok, ControllerData}.
+
+websocket_handle({text, ~"ping"}, State) ->
+    {reply, {text, ~"pong"}, State};
+websocket_handle(_Frame, State) ->
+    {ok, State}.
+
+websocket_info({broadcast, Text}, State) ->
+    {reply, {text, Text}, State};
+websocket_info(_Msg, State) ->
+    {ok, State}.
+```
+""".
 
 -type call_result() :: {ok, State :: map()} |
                        {ok, State :: map(), hibernate} |

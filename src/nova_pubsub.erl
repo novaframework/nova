@@ -2,19 +2,35 @@
 %%% Created :  8 Apr 2022 by Niclas Axelsson <niclas@burbas.se>
 -module(nova_pubsub).
 -moduledoc """
-Pubsub system for Nova. It uses the pg/pg2 module.
+Pubsub system for Nova, built on OTP's `pg` module (in the `nova_scope` scope).
 
-Pubsub subsystem is started with Nova and does not need any additional configuration. It uses the pg/pg2 module depending on the version of OTP. It provides a simple way of distributing messages to a large set of receivers and exposes a simple set of functions for doing that.
+Pubsub subsystem is started with Nova and does not need any additional configuration. It provides a simple way of distributing messages to a large set of receivers, on this node or across a cluster, and exposes a simple set of functions for doing that.
 
-A simple example of how to use pubsub in a ping/pong inspired game engine:
+Members receive a `#nova_pubsub{}` record (from `nova_pubsub.hrl`) with the channel, sender, topic and payload. A simple example of how to use pubsub in a ping/pong inspired game engine:
 
-\-module(test_module). -export(\[player1/0, player2/0, start_game/0]).
+```erlang
+-module(test_module).
+-export([player/3]).
 
-player1() -> spawn(fun() -> nova_pubsub:join(game_of_pong), game_loop(1, "pong", "ping").
+-include_lib("nova/include/nova_pubsub.hrl").
+-include_lib("kernel/include/logger.hrl").
 
-player2() -> spawn(fun() -> nova_pubsub:join(game_of_pong), game_loop(2, "ping", "pong").
+player(Name, Expected, Smash) ->
+    spawn(fun() ->
+                  ok = nova_pubsub:join(game_of_pong),
+                  game_loop(Name, Expected, Smash)
+          end).
 
-game_loop(Player, ExpectedMessage, Smash) -> receive ExpectedMessage -> io:format("Player ~d received ~s and returning ~s~n", \[Player, ExpectedMessage, Smash]), nova_pubsub:broadcast(game_of_pong, "match1", Smash), game_loop(Player, ExpectedMessage, Smash); _ -> game_loop(Player, ExpectedMessage, Smash) end.
+game_loop(Name, Expected, Smash) ->
+    receive
+        #nova_pubsub{topic = "match1", payload = Expected} ->
+            ?LOG_INFO(#{player => Name, received => Expected, returning => Smash}),
+            nova_pubsub:broadcast(game_of_pong, "match1", Smash),
+            game_loop(Name, Expected, Smash);
+        _ ->
+            game_loop(Name, Expected, Smash)
+    end.
+```
 """.
 -export([
          start/0,

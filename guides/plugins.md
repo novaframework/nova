@@ -39,12 +39,32 @@ plugin_info() ->
 
 This plugin injects a UUID into the headers.
 
+## Return values
+
+`pre_request/4` and `post_request/4` return one of:
+
+| Return | Effect |
+|--------|--------|
+| `{ok, Req, State}` | Carry on with the next plugin. |
+| `{ok, Reply, Req, State}` | Set the reply's status, headers and body on `Req` and carry on. |
+| `{break, Req, State}` | Skip the remaining plugins of this phase. The request carries on to the security function and the controller (or, for `post_request`, ends). |
+| `{break, Reply, Req, State}` | As `break`, with the reply set on `Req`. |
+| `{stop, Req, State}` or `{stop, Req}` | End the request here. The plugin has replied itself, for example with `cowboy_req:reply/4`. |
+| `{stop, Reply, Req, State}` | End the request and send `Reply`. |
+| `{error, Reason}` | End the request with the 500 status page. |
+
+`Reply` is `{reply, Body}`, `{reply, Status, Body}` or `{reply, Status, Headers, Body}`.
+
+Once a `pre_request` plugin stops the request or the security function refuses it, the controller and the `post_request` plugins do not run. Keep access logging and similar work that has to see every request in a stream handler or in a `pre_request` plugin.
+
+The state a plugin returns is stored per plugin module, not per request, and is shared by every request. Nova only writes it when it changed. Keep per-request data in `Req`.
+
 
 ## Optional callbacks
 
 There's two optional callbacks for a plugin that can be used for storing a global long-lived state. This can be useful if you want to keep track of something like a `pid` or similar.
 The first callback is `init/0` and the second is `stop/1`. `init/0` is called when the plugin is loaded and `stop/1` is called when the plugin is unloaded (Usually when the nova-application is started/stopped).
-Following example shows how we spawn a process and returns the pid in a map - this map will become our new state. When the plugin is stopped, `stop/1` will get invoked and we will send a stop message to the pid.
+Following example shows how we spawn a process and returns the pid in a map - this map will become our new state. When the plugin is stopped, `stop/1` will get invoked with the plugin's state and we will send a stop message to the pid. (Older releases called a `stop/0` instead; it is still called when `stop/1` is not exported.)
 
 ```erlang
 init() ->
@@ -75,7 +95,6 @@ decode our message so that we can process it. To do that we need to add `decode_
          {cowboy_configuration, #{
                                   port => 8080
                                  }},
-         {dev_mode, true},
          {bootstrap_application, chatapp},
          {plugins, [
                     {pre_request, nova_request_plugin, #{parse_bindings => true,
@@ -115,7 +134,7 @@ Nova has a couple of plugins for some general purposes.
 This plugin will generate a uuid v4 and set it as a response header as `X-Correlation-ID` if nothing is configuered.
 
 ```erlang
-{pre_request; nova_correlation_plugin, #{request_correlation_header => CorrelationHeader,
+{pre_request, nova_correlation_plugin, #{request_correlation_header => CorrelationHeader,
                                          logger_metadata_key => LoggerMetaDataKey}}
 ```
 
@@ -126,26 +145,33 @@ This plugin will generate a uuid v4 and set it as a response header as `X-Correl
 
 ### Nova cors
 
-This plugins will make it so that if we get method OPTIONS it will just return back the CORS headers. In this case you don't need a controller to handle it and the plugin stops after this.
-For other methods it will add the CORS headers to the request.
+This plugin answers every `OPTIONS` request itself with a `204` and the CORS headers, so you don't need a controller for preflights. For other methods it adds the CORS headers to the response.
 
 ```erlang
-{pre_request; nova_cors_plugin, #{allow_origins => <<"*">>}}
+{pre_request, nova_cors_plugin, #{allow_origins => [<<"https://app.example.com">>,
+                                                    <<"https://admin.example.com">>]}}
 ```
+
+With a list (or a single origin), the request's `Origin` is echoed back in `access-control-allow-origin` only when it is on the list, and every response carries `vary: origin` so caches keep the answers apart. `<<"*">>` allows any origin.
 
 |Option|Description|
 |------|-----------|
-|allow_origins|Specifies which origins to insert into Access-Control-Allow-Origin|
+|allow_origins|Required. `<<"*">>`, an origin, or a list of origins.|
+|allow_headers|Request headers a preflight allows, as a binary or a list. Defaults to the headers the preflight asks for in `access-control-request-headers`; a literal `*` would not cover `authorization`.|
+|allow_methods|Methods a preflight allows, as a binary or a list. Defaults to `<<"*">>`.|
+|max_age|Seconds a browser may cache the preflight answer.|
 
 ### Nova request
 
 This plugins handle incoming data and can transform them to erlang maps depending on what the options are.
 
 ```erlang
-{pre_request; nova_correlation_plugin, #{decode_json_body => true,
-                                         read_urlencoded_body => true,
-                                         parse_qs => true|list}}
+{pre_request, nova_request_plugin, #{decode_json_body => true,
+                                     read_urlencoded_body => true,
+                                     parse_qs => true|list}}
 ```
+
+An empty or malformed JSON body is answered with a bare `400` (no body, no status page).
 
 
 |Option|Description|Req|
@@ -211,7 +237,7 @@ bounded by `max_field_size`. When a form is protected by `nova_csrf_plugin`,
 |Option|Description|
 |------|-----------|
 |handler|Required. `{Mod, InitArgs}` implementing `nova_multipart_handler`.|
-|max_parts|Reply 413 after this many parts (default 32).|
+|max_parts|Reply 413 when the body has more than this many parts (default 32).|
 |max_part_size|Reply 413 past this many bytes in a single file part (default 8 000 000).|
 |max_field_size|Reply 413 past this many bytes in a single non-file field (default 65 536).|
 |max_total_size|Reply 413 past this many bytes across all parts (default 64 000 000).|

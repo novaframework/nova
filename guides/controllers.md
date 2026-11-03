@@ -31,6 +31,10 @@ Converts the map (Second element in the resulting tuple) and sends it to the req
 
 Same as the simple interface but with two additional elements for specifying HTTP-status code and additional headers.
 
+*Spec*: `{json, StatusCode :: integer(), Headers :: map(), JSON :: map() | list(), Req :: cowboy_req:req()}`
+
+Same as above but also hands back the request, for example after setting a cookie on it. The older order with the request before the JSON is still accepted.
+
 ### HTML templates (Using Erlydtl)
 
 *Nova* renders templates using ErlyDTL ([https://github.com/erlydtl/erlydtl](https://github.com/erlydtl/erlydtl) which uses the *django template language* to express logic. To get a better overview for the functionality that comes with dtl check their [documentation page](https://django.readthedocs.io/en/1.6.x/ref/templates/builtins.html)
@@ -65,7 +69,7 @@ Same as the simple interface but where you can define some options. Currently th
 
 *Example*: `{status, 200}`
 
-Returns a HTTP-code to the requester with an empty body.
+Returns a HTTP-code to the requester with an empty body. It does not render the status-code route registered for that code (see [Routing](routing.md)); call your error controller yourself, or return a body with one of the interfaces below, when the client should get one.
 
 #### Medium interface
 
