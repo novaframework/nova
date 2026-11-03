@@ -94,7 +94,7 @@ One can also define static files to be served by nova. This is done by adding a 
 *Note*! The notation `[...]` can be used as a wildcard (Zero or many occurences) in the url-section.
 Valid options is;
 
-- `mimetype` - which mimetype the file should be served as. If not defined nova will try to guess the mimetype based on the file extension.
+- `mimetype` - which mimetype the file should be served as. If not defined nova will try to guess the mimetype based on the file extension. XML, XHTML, compressed SVG (`.svgz`) and other `+xml` types are served as `application/octet-stream` unless set here, since a browser would run scripts in them on your origin. Static files are sent with `x-content-type-options: nosniff`.
 - `index_files` - a list of filenames that can be used as an index. This is relevant if a directory is served.
 - `list_dir` - Set to true if allowing the requester to list the content of a directory (if such is served)
 

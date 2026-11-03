@@ -40,6 +40,8 @@
          plugin_stop_two_tuple_replies/1,
          plugin_error_is_a_500/1,
          static_file_content_type/1,
+         static_file_is_nosniff/1,
+         static_document_types_are_octet_stream/1,
          custom_not_found/1,
          controller_crash_is_a_500/1,
          repeated_accept_headers_are_cheap/1,
@@ -83,6 +85,8 @@ groups() ->
                                  static_file_from_priv,
                                  static_file_nested,
                                  static_file_content_type,
+                                 static_file_is_nosniff,
+                                 static_document_types_are_octet_stream,
                                  static_directory_index,
                                  static_file_missing
                                 ]},
@@ -222,6 +226,19 @@ static_file_from_priv(Config) ->
 static_file_content_type(Config) ->
     {200, Headers, _Body} = get(Config, "/assets/hello.txt"),
     ?assertEqual(~"text/plain", header(~"content-type", Headers)).
+
+static_file_is_nosniff(Config) ->
+    {200, Headers, _} = get(Config, "/assets/hello.txt"),
+    ?assertEqual(~"nosniff", header(~"x-content-type-options", Headers)),
+    {206, RangeHeaders, ~"hello"} = get(Config, "/assets/hello.txt", [{"range", "bytes=0-4"}]),
+    ?assertEqual(~"nosniff", header(~"x-content-type-options", RangeHeaders)).
+
+%% Served as a document these would run scripts on the application's origin.
+static_document_types_are_octet_stream(Config) ->
+    [begin
+         {200, Headers, _} = get(Config, "/assets/" ++ File),
+         ?assertEqual(~"application/octet-stream", header(~"content-type", Headers))
+     end || File <- ["page.xhtml", "feed.xml", "image.svgz"]].
 
 static_file_nested(Config) ->
     {200, _Headers, Body} = get(Config, "/assets/nested/deep.txt"),

@@ -24,7 +24,7 @@ get_file(#{extra_state := #{static := File, options := Options}, headers := Head
     case maps:get(<<"range">>, Headers, undefined) of
         undefined ->
             %% No range header, return full file
-            {sendfile, 200, #{}, {0, Size, Filepath}, MimeType};
+            {sendfile, 200, #{~"x-content-type-options" => ~"nosniff"}, {0, Size, Filepath}, MimeType};
 
         <<"bytes=", RangeSpec/binary>> ->
             %% Handle Range Request
@@ -34,7 +34,8 @@ get_file(#{extra_state := #{static := File, options := Options}, headers := Head
                     RespHeaders = #{<<"content-range">> => <<"bytes ", (integer_to_binary(Start))/binary, "-",
                                                              (integer_to_binary(End))/binary, "/",
                                                              (integer_to_binary(Size))/binary>>,
-                                    <<"content-length">> => integer_to_binary(Length)},
+                                    <<"content-length">> => integer_to_binary(Length),
+                                    ~"x-content-type-options" => ~"nosniff"},
                     {sendfile, 206, RespHeaders, {Start, Length, Filepath}, MimeType};
                 _ ->
                     %% Invalid range request
@@ -142,11 +143,24 @@ file_info(Filepath, Filename) ->
             undefined
     end.
 
-%% cow_mimetypes:web/1 only knows a handful of types (no .txt, .json, .xml,
-%% .woff2 or .webp), so fall back to the full table before octet-stream.
+%% cow_mimetypes:web/1 only knows a handful of types (no .txt, .json, .woff2
+%% or .webp), so fall back to the full table before octet-stream. Types a
+%% browser renders as a document and runs scripts in (XML, XHTML, compressed
+%% SVG and the other +xml types) stay octet-stream unless the route sets a
+%% mimetype.
 mimetype(Path) ->
     {T, V, _} = case cow_mimetypes:web(Path) of
-                    {~"application", ~"octet-stream", _} -> cow_mimetypes:all(Path);
+                    {~"application", ~"octet-stream", _} = Default -> fallback(cow_mimetypes:all(Path), Default);
                     Type -> Type
                 end,
     <<T/binary, "/", V/binary>>.
+
+fallback({_, SubType, _} = Type, Default) ->
+    case document_type(SubType) of
+        true -> Default;
+        false -> Type
+    end.
+
+document_type(~"xml") -> true;
+document_type(~"html") -> true;
+document_type(SubType) -> binary:longest_common_suffix([SubType, ~"+xml"]) =:= 4.
