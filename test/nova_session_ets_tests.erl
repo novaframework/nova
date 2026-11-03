@@ -49,9 +49,55 @@ nova_session_ets_test_() ->
       fun unknown_cast_is_noreply/0,
       fun unknown_info_is_noreply/0,
       fun format_status_passthrough/0,
-      fun code_change_passthrough/0,
-      fun terminate_returns_ok/0
+      fun code_change_converts_old_rows/0,
+      fun terminate_returns_ok/0,
+      fun write_is_visible_without_sync/0,
+      fun session_exists_after_write/0,
+      fun session_exists_false_after_delete/0
      ]}.
+
+expiry_test_() ->
+    {foreach,
+     fun() -> application:set_env(nova, session_max_age, 1), setup() end,
+     fun(Pid) -> cleanup(Pid), application:unset_env(nova, session_max_age) end,
+     [
+      fun session_expires_after_max_age/0,
+      fun update_does_not_extend_max_age/0
+     ]}.
+
+%% A request that follows the response must find what it stored.
+write_is_visible_without_sync() ->
+    ok = nova_session_ets:set_value(~"s", ~"k", ~"v"),
+    ?assertEqual({ok, ~"v"}, nova_session_ets:get_value(~"s", ~"k")),
+    ?assert(nova_session_ets:session_exists(~"s")).
+
+session_exists_after_write() ->
+    ?assertNot(nova_session_ets:session_exists(~"never-issued")),
+    ok = nova_session_ets:set_value(~"issued", ~"k", ~"v"),
+    ?assert(nova_session_ets:session_exists(~"issued")).
+
+session_exists_false_after_delete() ->
+    ok = nova_session_ets:set_value(~"gone", ~"k", ~"v"),
+    ok = nova_session_ets:delete_value(~"gone"),
+    ?assertNot(nova_session_ets:session_exists(~"gone")).
+
+session_expires_after_max_age() ->
+    ok = nova_session_ets:set_value(~"old", ~"k", ~"v"),
+    ?assert(nova_session_ets:session_exists(~"old")),
+    timer:sleep(1100),
+    ?assertNot(nova_session_ets:session_exists(~"old")),
+    ?assertEqual({error, not_found}, nova_session_ets:get_value(~"old", ~"k")),
+    Pid = whereis(nova_session_ets),
+    Pid ! sweep,
+    sync(),
+    ?assertEqual([], ets:lookup(nova_session_ets_entries, ~"old")).
+
+update_does_not_extend_max_age() ->
+    ok = nova_session_ets:set_value(~"abs", ~"k", ~"v"),
+    timer:sleep(400),
+    ok = nova_session_ets:set_value(~"abs", ~"k2", ~"v2"),
+    timer:sleep(800),
+    ?assertNot(nova_session_ets:session_exists(~"abs")).
 
 %%====================================================================
 %% Tests
@@ -141,8 +187,18 @@ format_status_passthrough() ->
     Status = #{state => test, log => [], message => undefined, reason => undefined},
     ?assertEqual(Status, nova_session_ets:format_status(Status)).
 
-code_change_passthrough() ->
-    ?assertEqual({ok, mystate}, nova_session_ets:code_change("1.0", mystate, [])).
+%% Older releases stored {SessionId, Data}; a hot upgrade converts the rows.
+code_change_converts_old_rows() ->
+    Pid = nova_session_ets,
+    sys:replace_state(Pid, fun(State) ->
+                                   ets:insert(nova_session_ets_entries, {~"old-row", #{~"k" => ~"v"}}),
+                                   State
+                           end),
+    ok = sys:suspend(Pid),
+    ok = sys:change_code(Pid, nova_session_ets, "1.0", []),
+    ok = sys:resume(Pid),
+    ?assertEqual({ok, ~"v"}, nova_session_ets:get_value(~"old-row", ~"k")),
+    ?assert(nova_session_ets:session_exists(~"old-row")).
 
 terminate_returns_ok() ->
     ?assertEqual(ok, nova_session_ets:terminate(normal, #{})).

@@ -31,18 +31,16 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
         {Mod, Req2, State, Opts} ->
             Mod:upgrade(Req2, Env, Handler, State, Opts)
     catch
-        Class:Reason:Stacktrace when UseStacktrace == true ->
+        Class:Reason0:Stacktrace when UseStacktrace == true ->
+            Reason = nova_redact:term(Reason0),
             FormattedStacktrace = nova:format_stacktrace(Stacktrace),
-            Payload = #{status_code => 404,
-                        stacktrace => FormattedStacktrace,
-                        class => Class,
-                        reason => Reason},
+            Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 404,
+                                                              stacktrace => FormattedStacktrace}),
             ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class, reason => Reason, stacktrace => FormattedStacktrace}),
             render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 404);
-        Class:Reason ->
-            Payload = #{status_code => 404,
-                        class => Class,
-                        reason => Reason},
+        Class:Reason0 ->
+            Reason = nova_redact:term(Reason0),
+            Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 404}),
             ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class, reason => Reason}),
             render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 404)
     end;
@@ -59,30 +57,28 @@ execute(Req, Env = #{callback := Callback}) ->
             %% This makes it so that we don't need to fetch the stacktrace
             ?LOG_ERROR(#{msg => <<"Controller threw an exception">>,
                          class => Class,
-                         reason => Reason}),
-            render_response(Req#{crash_info => Reason}, Env, Status);
-        Class:Reason:Stacktrace when UseStacktrace == true ->
+                         reason => nova_redact:term(Reason)}),
+            render_response(Req#{crash_info => nova_redact:term(Reason)}, Env, Status);
+        Class:Reason0:Stacktrace when UseStacktrace == true ->
+            Reason = nova_redact:term(Reason0),
             FormattedStacktrace = nova:format_stacktrace(Stacktrace),
             ?LOG_ERROR(#{msg => <<"Controller crashed">>,
                          class => Class,
                          reason => Reason,
                          stacktrace => FormattedStacktrace}),
-            terminate(Reason, Req, Callback),
+            terminate(Reason0, Req, Callback),
             %% Build the payload object
-            Payload = #{status_code => 500,
-                        stacktrace => FormattedStacktrace,
-                        class => Class,
-                        reason => Reason},
+            Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 500,
+                                                              stacktrace => FormattedStacktrace}),
             render_response(Req#{crash_info => Payload}, Env, 500);
-        Class:Reason ->
+        Class:Reason0 ->
+            Reason = nova_redact:term(Reason0),
             ?LOG_ERROR(#{msg => <<"Controller crashed">>,
                          class => Class,
                          reason => Reason}),
-            terminate(Reason, Req, Callback),
+            terminate(Reason0, Req, Callback),
             %% Build the payload object
-            Payload = #{status_code => 500,
-                        class => Class,
-                        reason => Reason},
+            Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 500}),
             render_response(Req#{crash_info => Payload}, Env, 500)
     end.
 
@@ -113,7 +109,7 @@ execute_fallback(Callback, Req, Response, Env) ->
                         stacktrace => [{nova_handler, execute_fallback, 4}],
                         title => <<"Controller returned unsupported data">>,
                         extra_msg => list_to_binary(io_lib:format("Controller returned unsupported data: ~p",
-                                                                  [Response]))},
+                                                                  [nova_redact:term(Response)]))},
             render_response(Req#{crash_info => Payload}, Env, 500);
         [FallbackModule] ->
             case function_exported(FallbackModule, resolve, 2) of
@@ -145,7 +141,7 @@ call_handler(Callback, Req, RetObj, Env, IsFallbackController) ->
                     {module, Module} = erlang:fun_info(Callback, module),
                     {name, Function} = erlang:fun_info(Callback, name),
                     ?LOG_ERROR(#{msg => <<"Controller returned unsupported result">>, controller => Module,
-                                 function => Function, return => RetObj}),
+                                 function => Function, return => nova_redact:term(RetObj)}),
                     Payload = #{status_code => 500,
                                 status => <<"Controller returned unsupported result">>,
                                 title => <<"Error in controller">>,
