@@ -159,7 +159,7 @@ invalid_cookie_name_at_runtime_drops_the_cookie(Config) ->
                                 [{"authorization", "Bearer AUTH_SECRET"}]},
                           [{timeout, 5000}], [{body_format, binary}]),
         ?assertEqual(200, Status),
-        ?assertEqual([], [V || {N, V} <- Headers, string:lowercase(N) =:= "set-cookie"]),
+        ?assertEqual([], set_cookies(Headers)),
         timer:sleep(200),
         Logs = logged(),
         ?assertMatch([#{cookie := ~"app:sid"}],
@@ -195,6 +195,9 @@ get(Config, Path, SessionId) ->
         httpc:request(get, {?config(base, Config) ++ Path, Headers},
                       [{autoredirect, false}], [{body_format, binary}]),
     {Status, RespHeaders, Body}.
+
+set_cookies(Headers) ->
+    [Value || {Name, Value} <- Headers, string:lowercase(Name) =:= "set-cookie"].
 
 session_cookies(Headers) ->
     [Value || {Name, Value = "session_id=" ++ _} <- Headers, string:lowercase(Name) =:= "set-cookie"].
