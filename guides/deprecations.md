@@ -46,6 +46,11 @@ of `{Module, Function}` in Nova.
   router replaces Nova's default error page. Previously Nova's was registered
   first and yours was silently ignored.
 
+- **`nova:format_stacktrace/1` always returns an integer `arity`.** A frame
+  that carries its argument list (the first frame of a `function_clause`)
+  used to be returned with the arguments in `arity`; it now gets their count,
+  so request data never reaches a log or an error page through it.
+
 - **Plugins.** A route entry that declares `plugins` uses exactly those, and one
   that does not uses the globally configured ones - unchanged. The new
   `plugin_strategy` option lets you combine both; see the
