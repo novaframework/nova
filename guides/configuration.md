@@ -50,11 +50,19 @@ These parameters can be specified in your *main* application (Eg the one you've 
 
 ### Configure json_lib
 
-One can configure which json library to use for encoding/decoding json structures. The module defined for this should expose two different functions:
+One can configure which json library to use for encoding/decoding json structures. The default is `thoas`. Set `json_lib` in your bootstrap application's environment; Nova also reads it from the `nova` environment when the bootstrap application does not set it.
+
+```erlang
+{my_app, [{json_lib, json}]}
+```
+
+The module defined for this should expose two different functions:
 
 `encode(Structure) -> binary() | iolist()`
 
-`decode(JsonString) -> {ok, Structure}`
+`decode(JsonString) -> {ok, Structure} | {error, Reason} | Structure`
+
+`decode/1` may return `{ok, Structure}` (like `thoas`) or the structure itself and raise on bad input (like OTP's `json` module), so `{json_lib, json}` works without an adapter.
 
 
 ## Handling errors in Nova
@@ -67,5 +75,7 @@ By defauly Nova outputs a lot of information, including the stacktrace. This mig
 ```
 
 This will exclude stacktrace from the error page.
+
+The details of a crash (the message describing what went wrong and the stacktrace) are only part of the error page, HTML or JSON, while `nova`'s `environment` is `dev`, which is also what an unset `environment` means. In any other environment the page only has its title and a generic message.
 
 *Note* Nova is aware about which `accept`-headers the request is sent with and will respond with the correct content-type. If the request is sent with `application/json` Nova will respond with a JSON-structure instead of a HTML-page.

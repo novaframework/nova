@@ -30,12 +30,26 @@
          static_file_nested/1,
          static_directory_index/1,
          static_file_missing/1,
+         static_dot_segments_stay_inside_the_root/1,
          secure_route_rejects_anonymous/1,
          secure_route_accepts_token/1,
          auth_data_reaches_controller/1,
          pre_and_post_request_plugins_run/1,
+         plugin_break_redirect_skips_controller/1,
+         plugin_break_status_skips_controller/1,
+         plugin_break_unknown_reply_is_a_500/1,
+         plugin_stop_two_tuple_replies/1,
+         plugin_error_is_a_500/1,
+         request_body_limit/1,
+         request_body_read_timeout/1,
+         request_body_timeout_closes_connection/1,
+         request_body_limit_closes_connection/1,
+         static_file_content_type/1,
+         static_file_is_nosniff/1,
+         static_document_types_are_octet_stream/1,
          custom_not_found/1,
          controller_crash_is_a_500/1,
+         repeated_accept_headers_are_cheap/1,
          websocket_echo/1,
          sub_app_mounted_under_prefix/1,
          add_and_remove_application/1
@@ -75,8 +89,12 @@ groups() ->
      {static_files, [parallel], [
                                  static_file_from_priv,
                                  static_file_nested,
+                                 static_file_content_type,
+                                 static_file_is_nosniff,
+                                 static_document_types_are_octet_stream,
                                  static_directory_index,
-                                 static_file_missing
+                                 static_file_missing,
+                                 static_dot_segments_stay_inside_the_root
                                 ]},
      {security, [parallel], [
                              secure_route_rejects_anonymous,
@@ -84,11 +102,21 @@ groups() ->
                              auth_data_reaches_controller
                             ]},
      {plugins, [], [
-                    pre_and_post_request_plugins_run
+                    pre_and_post_request_plugins_run,
+                    plugin_break_redirect_skips_controller,
+                    plugin_break_status_skips_controller,
+                    plugin_break_unknown_reply_is_a_500,
+                    plugin_stop_two_tuple_replies,
+                    plugin_error_is_a_500,
+                    request_body_limit,
+                    request_body_read_timeout,
+                    request_body_timeout_closes_connection,
+                    request_body_limit_closes_connection
                    ]},
      {errors, [parallel], [
                            custom_not_found,
-                           controller_crash_is_a_500
+                           controller_crash_is_a_500,
+                           repeated_accept_headers_are_cheap
                           ]},
      {websocket, [], [
                       websocket_echo
@@ -204,6 +232,24 @@ static_file_from_priv(Config) ->
     {200, _Headers, Body} = get(Config, "/assets/hello.txt"),
     ?assertEqual(<<"hello from priv\n">>, Body).
 
+%% cow_mimetypes:web/1 has no .txt entry; it used to go out as octet-stream.
+static_file_content_type(Config) ->
+    {200, Headers, _Body} = get(Config, "/assets/hello.txt"),
+    ?assertEqual(~"text/plain", header(~"content-type", Headers)).
+
+static_file_is_nosniff(Config) ->
+    {200, Headers, _} = get(Config, "/assets/hello.txt"),
+    ?assertEqual(~"nosniff", header(~"x-content-type-options", Headers)),
+    {206, RangeHeaders, ~"hello"} = get(Config, "/assets/hello.txt", [{"range", "bytes=0-4"}]),
+    ?assertEqual(~"nosniff", header(~"x-content-type-options", RangeHeaders)).
+
+%% Served as a document these would run scripts on the application's origin.
+static_document_types_are_octet_stream(Config) ->
+    [begin
+         {200, Headers, _} = get(Config, "/assets/" ++ File),
+         ?assertEqual(~"application/octet-stream", header(~"content-type", Headers))
+     end || File <- ["page.xhtml", "feed.xml", "image.svgz"]].
+
 static_file_nested(Config) ->
     {200, _Headers, Body} = get(Config, "/assets/nested/deep.txt"),
     ?assertEqual(<<"nested file\n">>, Body).
@@ -214,6 +260,39 @@ static_directory_index(Config) ->
 
 static_file_missing(Config) ->
     {404, _Headers, _Body} = get(Config, "/assets/does-not-exist.txt").
+
+%% HTTP clients normalise dot segments, so these go over a raw socket.
+%% priv/outside_assets.txt sits one level above the assets route's root.
+static_dot_segments_stay_inside_the_root(Config) ->
+    Paths = ["/assets/../outside_assets.txt",
+             "/assets/nested/../../outside_assets.txt",
+             "/assets/./../outside_assets.txt",
+             "/assets//../outside_assets.txt",
+             "/assets/%2e%2e/outside_assets.txt",
+             "/assets/%2E%2E/outside_assets.txt",
+             "/assets/..%2foutside_assets.txt",
+             "/assets/%252e%252e/outside_assets.txt",
+             "/assets/..%00/outside_assets.txt",
+             "http://localhost/assets/../outside_assets.txt"],
+    [?assertEqual(nomatch, binary:match(raw_get(Config, Path), ~"outside-assets-sentinel"), Path)
+     || Path <- Paths],
+    ?assertMatch(<<"HTTP/1.1 200", _/binary>>, raw_get(Config, "/assets/../../assets/hello.txt")).
+
+raw_get(Config, Path) ->
+    Port = ?config(port, Config),
+    {ok, Socket} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, raw}]),
+    ok = gen_tcp:send(Socket, ["GET ", Path, " HTTP/1.1\r\n",
+                               "Host: localhost:", integer_to_list(Port), "\r\n",
+                               "Connection: close\r\n\r\n"]),
+    Response = recv_all(Socket, []),
+    gen_tcp:close(Socket),
+    Response.
+
+recv_all(Socket, Acc) ->
+    case gen_tcp:recv(Socket, 0, 5000) of
+        {ok, Data} -> recv_all(Socket, [Acc, Data]);
+        {error, closed} -> iolist_to_binary(Acc)
+    end.
 
 %%====================================================================
 %% Security
@@ -237,7 +316,7 @@ auth_data_reaches_controller(Config) ->
 %% pre_request can still touch the response; post_request runs after
 %% nova_handler has replied, so it is observed through the plugin's counter.
 pre_and_post_request_plugins_run(Config) ->
-    Counters = persistent_term:get(nova_test_app_plugin),
+    Counters = plugin_counters(),
     PreBefore = counters:get(Counters, 1),
     PostBefore = counters:get(Counters, 2),
 
@@ -246,6 +325,138 @@ pre_and_post_request_plugins_run(Config) ->
 
     ?assert(counters:get(Counters, 1) > PreBefore),
     ?assert(counters:get(Counters, 2) > PostBefore).
+
+%% {break, ...} is a deprecated alias of stop: it must never let the request
+%% through to the controller (nova_oidcc answers anonymous users this way).
+plugin_break_redirect_skips_controller(Config) ->
+    {302, Headers, Body} = get(Config, "/plugin-break-redirect/"),
+    ?assertEqual(~"/login", header(~"location", Headers)),
+    ?assertEqual(undefined, header(~"x-nova-pre-request", Headers)),
+    ?assertEqual(<<>>, Body).
+
+plugin_break_status_skips_controller(Config) ->
+    {401, _Headers, Body} = get(Config, "/plugin-break-status/"),
+    ?assertEqual(<<>>, Body).
+
+plugin_break_unknown_reply_is_a_500(Config) ->
+    {500, _Headers, Body} = get(Config, "/plugin-break-unknown/"),
+    ?assertEqual(nomatch, binary:match(Body, ~"\"from\"")).
+
+plugin_stop_two_tuple_replies(Config) ->
+    {429, _Headers, Body} = get(Config, "/plugin-stop/"),
+    ?assertEqual(~"slow down", Body).
+
+%% The 500 page runs through the post_request phase; the pre_request plugins
+%% must not run a second time on the way.
+plugin_error_is_a_500(Config) ->
+    Counters = plugin_counters(),
+    PreBefore = counters:get(Counters, 1),
+    {500, _Headers, _Body} = get(Config, "/plugin-error/"),
+    ?assertEqual(PreBefore + 1, counters:get(Counters, 1)).
+
+-spec plugin_counters() -> counters:counters_ref().
+plugin_counters() ->
+    stored(nova_test_app_plugin).
+
+%% persistent_term holds any term; the suite knows what it stored.
+-spec stored(atom()) -> dynamic().
+stored(Key) ->
+    persistent_term:get(Key).
+
+%% The route allows 64 bytes. A longer body gets a 413 without the rest
+%% being waited for: the chunked request never sends its last chunk.
+request_body_limit(Config) ->
+    Body = <<"{\"a\":\"", (binary:copy(~"x", 56))/binary, "\"}">>,
+    ?assertEqual(64, byte_size(Body)),
+    Created = raw_post(Config, "/body-limit/", Body),
+    ?assertMatch(<<"HTTP/1.1 201", _/binary>>, Created),
+    ?assertMatch({_, 64}, binary:match(Created, Body)),
+    ?assertMatch(<<"HTTP/1.1 413", _/binary>>, raw_post(Config, "/body-limit/", <<Body/binary, " ">>)),
+    Port = ?config(port, Config),
+    {ok, Socket} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, raw}]),
+    ok = gen_tcp:send(Socket, ["POST /body-limit/ HTTP/1.1\r\n",
+                               "Host: localhost:", integer_to_list(Port), "\r\n",
+                               "Content-Type: application/json\r\n",
+                               "Transfer-Encoding: chunked\r\n\r\n",
+                               "41\r\n", Body, " \r\n"]),
+    {ok, Response} = gen_tcp:recv(Socket, 0, 5000),
+    gen_tcp:close(Socket),
+    ?assertMatch(<<"HTTP/1.1 413", _/binary>>, Response).
+
+%% The route allows 300 ms for the body. A chunked body that trickles in one
+%% byte at a time gets a 408 at the deadline.
+request_body_read_timeout(Config) ->
+    Port = ?config(port, Config),
+    {ok, Socket} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, raw}]),
+    ok = gen_tcp:send(Socket, [~"POST /body-timeout/ HTTP/1.1\r\n",
+                               ~"Host: localhost:", integer_to_binary(Port), ~"\r\n",
+                               ~"Content-Type: application/json\r\n",
+                               ~"Transfer-Encoding: chunked\r\n\r\n"]),
+    Trickle = spawn_link(fun() -> trickle(Socket, 40) end),
+    T0 = erlang:monotonic_time(millisecond),
+    {ok, Response} = gen_tcp:recv(Socket, 0, 3000),
+    Elapsed = erlang:monotonic_time(millisecond) - T0,
+    unlink(Trickle),
+    exit(Trickle, kill),
+    gen_tcp:close(Socket),
+    ?assertMatch(<<"HTTP/1.1 408", _/binary>>, Response),
+    ?assert(Elapsed < 2000).
+
+%% The unread rest of a Content-Length body would be the start of the next
+%% request, so the 408 and the 413 close the connection.
+request_body_timeout_closes_connection(Config) ->
+    Socket = send_post_headers(Config, ~"/body-timeout/", ~"Content-Length: 1000\r\n"),
+    Trickle = spawn_link(fun() -> trickle_bytes(Socket, 40) end),
+    {ok, Response} = gen_tcp:recv(Socket, 0, 3000),
+    Next = gen_tcp:recv(Socket, 0, 2000),
+    unlink(Trickle),
+    exit(Trickle, kill),
+    gen_tcp:close(Socket),
+    ?assertMatch(<<"HTTP/1.1 408", _/binary>>, Response),
+    ?assertEqual({error, closed}, Next).
+
+request_body_limit_closes_connection(Config) ->
+    Socket = send_post_headers(Config, ~"/body-limit/", ~"Content-Length: 1000\r\n"),
+    {ok, Response} = gen_tcp:recv(Socket, 0, 3000),
+    Next = gen_tcp:recv(Socket, 0, 2000),
+    gen_tcp:close(Socket),
+    ?assertMatch(<<"HTTP/1.1 413", _/binary>>, Response),
+    ?assertEqual({error, closed}, Next).
+
+send_post_headers(Config, Path, Header) ->
+    Port = ?config(port, Config),
+    {ok, Socket} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, raw}]),
+    ok = gen_tcp:send(Socket, [~"POST ", Path, ~" HTTP/1.1\r\n",
+                               ~"Host: localhost:", integer_to_binary(Port), ~"\r\n",
+                               ~"Content-Type: application/json\r\n",
+                               Header, ~"\r\n"]),
+    Socket.
+
+trickle_bytes(_Socket, 0) ->
+    ok;
+trickle_bytes(Socket, N) ->
+    _ = gen_tcp:send(Socket, ~" "),
+    timer:sleep(50),
+    trickle_bytes(Socket, N - 1).
+
+trickle(_Socket, 0) ->
+    ok;
+trickle(Socket, N) ->
+    _ = gen_tcp:send(Socket, ~"1\r\n \r\n"),
+    timer:sleep(50),
+    trickle(Socket, N - 1).
+
+raw_post(Config, Path, Body) ->
+    Port = ?config(port, Config),
+    {ok, Socket} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, raw}]),
+    ok = gen_tcp:send(Socket, ["POST ", Path, " HTTP/1.1\r\n",
+                               "Host: localhost:", integer_to_list(Port), "\r\n",
+                               "Content-Type: application/json\r\n",
+                               "Content-Length: ", integer_to_list(byte_size(Body)), "\r\n",
+                               "Connection: close\r\n\r\n", Body]),
+    Response = recv_all(Socket, []),
+    gen_tcp:close(Socket),
+    Response.
 
 %%====================================================================
 %% Errors
@@ -257,6 +468,27 @@ custom_not_found(Config) ->
 
 controller_crash_is_a_500(Config) ->
     {500, _Headers, _Body} = get(Config, "/crash").
+
+%% Cowboy joins repeated accept headers into one value, which the default
+%% error page parses. 98 headers plus Host and Connection hit Cowboy's default
+%% max_headers of 100. The app overrides the 404 page, so this uses the 500 one.
+%% The first request warms up the error page so only the parse is timed.
+repeated_accept_headers_are_cheap(Config) ->
+    Port = ?config(port, Config),
+    {500, _, _} = get(Config, "/crash"),
+    {ok, Socket} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, raw}]),
+    Accept = iolist_to_binary([~"Accept: ", binary:copy(~",", 4000), ~"\r\n"]),
+    Request = [~"GET /crash HTTP/1.1\r\n",
+               ~"Host: localhost:", integer_to_binary(Port), ~"\r\n",
+               binary:copy(Accept, 98),
+               ~"Connection: close\r\n\r\n"],
+    {Micros, {ok, Response}} = timer:tc(fun() ->
+                                                ok = gen_tcp:send(Socket, Request),
+                                                gen_tcp:recv(Socket, 0, 10000)
+                                        end),
+    gen_tcp:close(Socket),
+    ?assertMatch(<<"HTTP/1.1 500", _/binary>>, Response),
+    ?assert(Micros < 1000000).
 
 %%====================================================================
 %% WebSocket

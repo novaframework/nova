@@ -39,12 +39,44 @@ plugin_info() ->
 
 This plugin injects a UUID into the headers.
 
+## Return values
+
+`pre_request/4` and `post_request/4` return one of:
+
+| Return | Effect |
+|--------|--------|
+| `{ok, Req, State}` | Carry on with the next plugin. |
+| `{ok, Reply, Req, State}` | Set the reply's status, headers and body on `Req` and carry on. Only `{reply, ...}` is accepted here; see below. |
+| `{stop, Req, State}` | End the request here. The plugin has replied itself, for example with `cowboy_req:reply/4`. |
+| `{stop, Req}` | Deprecated form of `{stop, Req, State}` that keeps the plugin's state, removed in 1.0. |
+| `{stop, Reply, Req, State}` | End the request and send `Reply`. |
+| `{break, Req, State}`, `{break, Reply, Req, State}` | Deprecated aliases of the matching `stop` returns, removed in 1.0. They log a warning, once per plugin module. |
+| `{error, Reason}` | End the request with the 500 status page. |
+
+`Reply` is one of `{reply, Body}`, `{reply, Status, Body}`, `{reply, Status, Headers, Body}`, `{redirect, Url}`, `{status, Status}` or `{status, Status, Headers}`. `Headers` is a map or a list of `{Name, Value}` pairs. `{status, ...}` sends the bare status without rendering a status-code route. Any other reply renders the 500 status page.
+
+With `ok` the controller still runs and answers, so a redirect or a bare status set there would be overwritten. `{ok, {redirect, ...}, Req, State}` and `{ok, {status, ...}, Req, State}` therefore render the 500 status page and log that `stop` is needed. To send them, return `{stop, Reply, Req, State}`:
+
+```erlang
+pre_request(Req, _Env, _Options, State) ->
+    case nova_session:get(Req, <<"user_id">>) of
+        {ok, _} -> {ok, Req, State};
+        {error, _} -> {stop, {redirect, "/login"}, Req, State}
+    end.
+```
+
+Once a `pre_request` plugin stops the request or the security function refuses it, the controller and the `post_request` plugins do not run. Keep access logging and similar work that has to see every request in a stream handler or in a `pre_request` plugin.
+
+The state a plugin returns is stored per plugin module, not per request, and is shared by every request. Nova only writes it when it changed, and concurrent requests overwrite each other's writes: the last writer wins. Keep per-request data in `Req`, and keep shared data that has to add up (counters, rate-limit buckets) in `ets` or `counters`.
+
+Websocket handlers run their plugins through `nova_ws_handler`, which has its own contract. See the `nova_websocket` documentation.
+
 
 ## Optional callbacks
 
 There's two optional callbacks for a plugin that can be used for storing a global long-lived state. This can be useful if you want to keep track of something like a `pid` or similar.
 The first callback is `init/0` and the second is `stop/1`. `init/0` is called when the plugin is loaded and `stop/1` is called when the plugin is unloaded (Usually when the nova-application is started/stopped).
-Following example shows how we spawn a process and returns the pid in a map - this map will become our new state. When the plugin is stopped, `stop/1` will get invoked and we will send a stop message to the pid.
+Following example shows how we spawn a process and returns the pid in a map - this map will become our new state. When the plugin is stopped, `stop/1` will get invoked with the plugin's state and we will send a stop message to the pid. (Older releases called a `stop/0` instead; it is still called when `stop/1` is not exported.)
 
 ```erlang
 init() ->
@@ -75,7 +107,6 @@ decode our message so that we can process it. To do that we need to add `decode_
          {cowboy_configuration, #{
                                   port => 8080
                                  }},
-         {dev_mode, true},
          {bootstrap_application, chatapp},
          {plugins, [
                     {pre_request, nova_request_plugin, #{parse_bindings => true,
@@ -115,7 +146,7 @@ Nova has a couple of plugins for some general purposes.
 This plugin will generate a uuid v4 and set it as a response header as `X-Correlation-ID` if nothing is configuered.
 
 ```erlang
-{pre_request; nova_correlation_plugin, #{request_correlation_header => CorrelationHeader,
+{pre_request, nova_correlation_plugin, #{request_correlation_header => CorrelationHeader,
                                          logger_metadata_key => LoggerMetaDataKey}}
 ```
 
@@ -126,33 +157,72 @@ This plugin will generate a uuid v4 and set it as a response header as `X-Correl
 
 ### Nova cors
 
-This plugins will make it so that if we get method OPTIONS it will just return back the CORS headers. In this case you don't need a controller to handle it and the plugin stops after this.
-For other methods it will add the CORS headers to the request.
+This plugin answers CORS preflights (an `OPTIONS` request with both `Origin` and `Access-Control-Request-Method`) itself with a `204` and the CORS headers, so you don't need a controller for them. Any other request, including a plain `OPTIONS`, goes on to the application with the CORS headers added to the response.
 
 ```erlang
-{pre_request; nova_cors_plugin, #{allow_origins => <<"*">>}}
+{pre_request, nova_cors_plugin, #{allow_origins => [<<"https://app.example.com">>,
+                                                    <<"https://admin.example.com">>]}}
 ```
+
+With a list (or a single origin), the request's `Origin` is echoed back in `access-control-allow-origin` only when it is on the list, and every response carries `vary: origin` (added to any `vary` value already set) so caches keep the answers apart. `<<"*">>` allows any origin.
+
+By default a preflight is told that every header it asks for is allowed. That is only safe because `access-control-allow-origin` is sent to allowed origins alone: list the origins you trust, and set `allow_headers` explicitly when you use `<<"*">>`.
 
 |Option|Description|
 |------|-----------|
-|allow_origins|Specifies which origins to insert into Access-Control-Allow-Origin|
+|allow_origins|Required. `<<"*">>`, an origin, or a list of origins.|
+|allow_headers|Request headers a preflight allows, as a binary or a list. Defaults to the headers the preflight asks for in `access-control-request-headers`; a literal `*` would not cover `authorization`.|
+|allow_methods|Methods a preflight allows, as a binary or a list. Defaults to `<<"*">>`.|
+|max_age|Seconds a browser may cache the preflight answer.|
 
 ### Nova request
 
 This plugins handle incoming data and can transform them to erlang maps depending on what the options are.
 
 ```erlang
-{pre_request; nova_correlation_plugin, #{decode_json_body => true,
-                                         read_urlencoded_body => true,
-                                         parse_qs => true|list}}
+{pre_request, nova_request_plugin, #{decode_json_body => true,
+                                     read_urlencoded_body => true,
+                                     parse_qs => true|list}}
 ```
 
+An empty or malformed JSON body is answered with a bare `400` (no body, no status page).
+
+The body is read only when `decode_json_body` or `read_urlencoded_body` is set,
+and at most `max_body_length` bytes of it (default `1000000`, 1 MB). A body
+whose `Content-Length` is over the limit gets a `413` before any of it is
+read; a chunked body gets one as soon as it passes the limit. Decoded JSON
+takes several times the size of its text in memory, and this happens before
+your controller or security callback runs, so raise the limit only on the
+routes that need it, for example
+`{pre_request, nova_request_plugin, #{decode_json_body => true, max_body_length => 10000000}}`
+in that route group's `plugins`. `max_body_length => infinity` reads bodies of
+any size.
+
+Reading the body also has a deadline, `body_read_timeout` (default `60000`
+milliseconds). A body that has not fully arrived by then, such as one sent a
+byte at a time, gets a `408`. `infinity` turns the deadline off. Both the
+`413` and the `408` have no body and close the connection, since the rest of
+the request body is still on it.
+
+`max_body_length` takes a non-negative integer and `body_read_timeout` a
+positive one, or `infinity`. Any other value, including a `body_read_timeout`
+of `0`, is replaced by the default, with one warning per value.
+
+`decode_json_body` decodes `application/json` and any `application` type with
+the `+json` suffix (RFC 6839), such as `application/vnd.api+json` or
+`application/merge-patch+json`. The match ignores case and parameters such as
+`charset`. Types that only start with `application/json`, such as
+`application/json-seq`, are not decoded: decode them in the controller from the
+request body, or with a plugin of your own. `read_urlencoded_body` needs
+`application/x-www-form-urlencoded`.
 
 |Option|Description|Req|
 |------|-----------|----|
 |decode_json_body|If header is application/json it will decode the body.| `Req#{json => Map}`|
 |read_urlencoded_body|If header is application/x-www-form-urlencoded it will decode it.| `Req#{params => Map}`|
 |parse_qs| If the path have qs in it we will get them.|`Req#{parsed_qs => Map or List}`|
+|max_body_length|Bytes of body read for `decode_json_body` and `read_urlencoded_body`, or `infinity`. Default `1000000`. A longer body gets a `413`.| |
+|body_read_timeout|Milliseconds allowed for reading that body (at least `1`), or `infinity`. Default `60000`. A slower body gets a `408`.| |
 
 ### Nova multipart
 
@@ -211,7 +281,7 @@ bounded by `max_field_size`. When a form is protected by `nova_csrf_plugin`,
 |Option|Description|
 |------|-----------|
 |handler|Required. `{Mod, InitArgs}` implementing `nova_multipart_handler`.|
-|max_parts|Reply 413 after this many parts (default 32).|
+|max_parts|Reply 413 when the body has more than this many parts (default 32).|
 |max_part_size|Reply 413 past this many bytes in a single file part (default 8 000 000).|
 |max_field_size|Reply 413 past this many bytes in a single non-file field (default 65 536).|
 |max_total_size|Reply 413 past this many bytes across all parts (default 64 000 000).|

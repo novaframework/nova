@@ -191,6 +191,16 @@ multipart_max_parts_test_() ->
           ?assertEqual(413, maps:get(replied, Req))
       end).
 
+%% max_parts is a limit, not one less than it.
+multipart_exactly_max_parts_test_() ->
+    Parts = [{data_part(~"a"), ~"1"}, {data_part(~"b"), ~"2"}],
+    multipart_test_(
+      Parts,
+      fun(Owner) -> #{handler => {nova_multipart_test_handler, handler_opts(Owner)}, max_parts => 2} end,
+      fun({ok, Req, state}) ->
+          ?assertEqual(#{~"a" => ~"1", ~"b" => ~"2"}, maps:get(params, Req))
+      end).
+
 multipart_max_part_size_test_() ->
     Parts = [{file_part(<<"upload">>, <<"big.bin">>, <<"application/octet-stream">>),
               [<<"aaaa">>, <<"bbbb">>]}],

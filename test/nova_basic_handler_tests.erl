@@ -5,6 +5,32 @@
 -define(CLEANUP, fun(Prev) -> nova_test_helper:cleanup_nova_env(Prev) end).
 -define(CALLBACK, fun dummy_mod:dummy_fun/1).
 
+%% Logger handler callback: forwards reports to the process that added it.
+-export([log/2]).
+
+log(#{msg := {report, Report}}, #{config := #{test_pid := Pid}}) ->
+    Pid ! {logged, Report},
+    ok;
+log(_Event, _Config) ->
+    ok.
+
+all_logged() ->
+    receive
+        {logged, Report} -> [{report, Report} | all_logged()]
+    after 50 ->
+            []
+    end.
+
+json_order_warnings() ->
+    receive
+        {logged, #{msg := <<"{json, Status, Headers, Req, JSON}", _/binary>>} = Report} ->
+            [Report | json_order_warnings()];
+        {logged, _} ->
+            json_order_warnings()
+    after 0 ->
+            []
+    end.
+
 %%====================================================================
 %% handle_json/3
 %%====================================================================
@@ -42,6 +68,55 @@ handle_json_req_passthrough_test_() ->
             {json, 200, #{}, CustomReq, #{data => 1}}, ?CALLBACK, Req),
         ?assertEqual(true, maps:get(custom_field, Req1))
     end}.
+
+%% The order the -doc and -spec give: JSON first, then the request.
+handle_json_documented_order_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Req = nova_test_helper:mock_req(~"GET", ~"/"),
+        CustomReq = Req#{custom_field => true},
+        {ok, Req1} = nova_basic_handler:handle_json({json, 201, #{}, #{data => 1}, CustomReq}, ?CALLBACK, Req),
+        ?assertEqual(true, maps:get(custom_field, Req1)),
+        ?assertEqual(201, maps:get(resp_status_code, Req1)),
+        ?assertEqual(#{~"data" => 1}, decoded_body(Req1))
+    end}.
+
+%% A request built in a test may lack pid; the documented order is the default.
+handle_json_documented_order_without_pid_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Req = maps:remove(pid, nova_test_helper:mock_req(~"GET", ~"/")),
+        {ok, Req1} = nova_basic_handler:handle_json({json, 200, #{}, #{data => 1}, Req#{custom_field => true}},
+                                                    ?CALLBACK, Req),
+        ?assertEqual(true, maps:get(custom_field, Req1)),
+        ?assertEqual(#{~"data" => 1}, decoded_body(Req1))
+    end}.
+
+handle_json_old_order_warns_once_test_() ->
+    {setup,
+     fun() ->
+         persistent_term:erase({nova_basic_handler, json_order_warned, dummy_mod}),
+         nova_test_helper:setup_nova_env()
+     end,
+     fun(Prev) ->
+         logger:remove_handler(?MODULE),
+         persistent_term:erase({nova_basic_handler, json_order_warned, dummy_mod}),
+         nova_test_helper:cleanup_nova_env(Prev)
+     end,
+     fun() ->
+         ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
+         Req = nova_test_helper:mock_req(~"GET", ~"/"),
+         [{ok, _} = nova_basic_handler:handle_json({json, 200, #{}, Req, #{data => N}}, ?CALLBACK, Req)
+          || N <- [1, 2, 3]],
+         ?assertMatch([#{controller := dummy_mod}], json_order_warnings())
+     end}.
+
+location_test() ->
+    ?assertEqual(~"/login", nova_basic_handler:location(~"/login")),
+    ?assertEqual(~"/söka", nova_basic_handler:location("/söka")),
+    ?assertEqual(error, nova_basic_handler:location([16#D800])),
+    ?assertEqual(~"/a\tb", nova_basic_handler:location(~"/a\tb")),
+    [?assertEqual(error, nova_basic_handler:location(Bad))
+     || Bad <- [<<"/a", 0, "b">>, ~"/a\r\nset-cookie: x=1", ~"/a\nb", <<"/x", 255>>, <<"/a", 127>>,
+                "/a\r\nset-cookie: x=1", [$/, 0]]].
 
 %%====================================================================
 %% handle_status/3
@@ -90,6 +165,31 @@ handle_redirect_list_route_test() ->
     {ok, Req1} = nova_basic_handler:handle_redirect({redirect, "/home"}, ?CALLBACK, Req),
     ?assertEqual(302, maps:get(resp_status_code, Req1)),
     ?assertEqual(<<"/home">>, maps:get(<<"location">>, maps:get(resp_headers, Req1))).
+
+%% A location Cowboy cannot send is a 500 from nova_handler, logged without
+%% the query string.
+handle_redirect_invalid_location_test_() ->
+    {setup,
+     fun() -> ok end,
+     fun(_) -> logger:remove_handler(?MODULE) end,
+     fun() ->
+         ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
+         Req = nova_test_helper:mock_req(~"GET", ~"/"),
+         [begin
+              ?assertThrow({500, #{status_code := 500, reason := invalid_redirect_location}},
+                           nova_basic_handler:handle_redirect({redirect, Route}, ?CALLBACK, Req)),
+              Reports = [R || {report, R} <- all_logged()],
+              ?assertMatch([#{msg := ~"Controller redirected to an invalid location", controller := dummy_mod}],
+                           Reports),
+              ?assertNot(has_text(Reports, ~"TOKEN"))
+          end || Route <- [~"/a\r\nb?t=TOKEN", <<"/x", 255, "?t=TOKEN">>, [$/, 16#110000], "/a\x{100}\r?t=TOKEN"]]
+     end}.
+
+loggable_location_test() ->
+    ?assertEqual(~"https://host/a", nova_basic_handler:loggable_location(~"https://user:pass@host/a?t=1#f")),
+    ?assertEqual(~"//host/x", nova_basic_handler:loggable_location(~"//user@host/x")),
+    ?assertEqual(~"/a@b/c", nova_basic_handler:loggable_location(~"/a@b/c?x=1")),
+    ?assertEqual(redacted, nova_basic_handler:loggable_location("/a?t=1")).
 
 handle_redirect_req_passthrough_test() ->
     Req = nova_test_helper:mock_req(<<"GET">>, <<"/">>),
@@ -327,3 +427,19 @@ handle_status_with_headers_test_() ->
             {status, 301, #{<<"location">> => <<"/new">>}}, ?CALLBACK, Req),
         ?assertEqual(301, maps:get(resp_status_code, Req1))
     end}.
+
+decoded_body(#{resp_body := Body}) when is_binary(Body) ->
+    json:decode(Body).
+
+%% io_lib:format/2 prints a binary with a control byte as a list of integers,
+%% so a text search of its output would miss a leak.
+has_text(Bin, Needle) when is_binary(Bin) ->
+    binary:match(Bin, Needle) =/= nomatch;
+has_text(Tuple, Needle) when is_tuple(Tuple) ->
+    has_text(tuple_to_list(Tuple), Needle);
+has_text(Map, Needle) when is_map(Map) ->
+    has_text(maps:to_list(Map), Needle);
+has_text([Head | Tail], Needle) ->
+    has_text(Head, Needle) orelse has_text(Tail, Needle);
+has_text(_Term, _Needle) ->
+    false.
