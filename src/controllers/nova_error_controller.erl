@@ -6,6 +6,8 @@
 	 status_code/1
         ]).
 
+-define(MAX_ACCEPT, 1024).
+
 
 status_code(Req) ->
     {status, maps:get(resp_status_code, Req, 200)}.
@@ -43,15 +45,15 @@ server_error(#{crash_info := #{status_code := StatusCode} = CrashInfo} = Req) ->
             {status, StatusCode}
     end;
 server_error(#{crash_info := #{class := Class, reason := Reason} = CrashInfo} = Req) ->
-    case nova:get_environment() of
-        dev ->
+    case show_details() of
+        true ->
             Variables = debug_details(#{status => ~"Internal Server Error",
                                         title => ~"500 Internal Server Error",
                                         message => ~"Something internal crashed. Please take a look!"},
                                       iolist_to_binary(io_lib:format("Class: ~p~nReason: ~p", [Class, Reason])),
                                       maps:get(stacktrace, CrashInfo, [])),
             render(500, Variables, Req);
-        _ ->
+        false ->
             {status, 500}
     end.
 
@@ -68,26 +70,51 @@ render(StatusCode, Variables, Req) ->
     end.
 
 %% Crash details can carry anything a controller or plugin returned, so they
-%% are only shown while developing. An unset environment means dev.
+%% are only shown when the environment is explicitly set to dev; an unset
+%% environment shows none.
 debug_details(Variables, ExtraMsg, Stacktrace) ->
-    case nova:get_environment() of
-        dev -> Variables#{extra_msg => ExtraMsg, stacktrace => format_stacktrace(Stacktrace)};
-        _ -> Variables
+    case show_details() of
+        true -> Variables#{extra_msg => ExtraMsg, stacktrace => format_stacktrace(Stacktrace)};
+        false -> Variables
     end.
+
+show_details() ->
+    application:get_env(nova, environment) =:= {ok, dev}.
 
 %% Media ranges as browsers and HTTP clients send them, for example
 %% "text/html,application/xhtml+xml;q=0.9" or "application/json; charset=utf-8".
+%% Cowboy joins repeated accept headers, so only the first ?MAX_ACCEPT bytes
+%% are looked at, and every step is linear in them.
 preferred_type(Req) ->
     case cowboy_req:header(~"accept", Req) of
         undefined ->
             none;
         Accept ->
-            Types = [string:trim(hd(binary:split(Range, ~";"))) || Range <- binary:split(Accept, ~",", [global])],
+            Head = binary:part(Accept, 0, min(byte_size(Accept), ?MAX_ACCEPT)),
+            Types = [media_type(Range) || Range <- binary:split(Head, ~",", [global])],
             case {lists:member(~"application/json", Types), lists:member(~"text/html", Types)} of
                 {true, _} -> json;
                 {_, true} -> html;
                 _ -> none
             end
+    end.
+
+%% Media types are case-insensitive (RFC 9110 8.3.1).
+media_type(Range) ->
+    [Type | _] = binary:split(Range, ~";"),
+    string:lowercase(trim_ows(Type)).
+
+trim_ows(<<C, Rest/binary>>) when C =:= $\s; C =:= $\t ->
+    trim_ows(Rest);
+trim_ows(Bin) ->
+    trim_trailing_ows(Bin, byte_size(Bin)).
+
+trim_trailing_ows(Bin, 0) ->
+    binary:part(Bin, 0, 0);
+trim_trailing_ows(Bin, Size) ->
+    case binary:at(Bin, Size - 1) of
+        C when C =:= $\s; C =:= $\t -> trim_trailing_ows(Bin, Size - 1);
+        _ -> binary:part(Bin, 0, Size)
     end.
 
 format_stacktrace(not_enabled) ->

@@ -186,3 +186,35 @@ crash_details_are_strings_in_dev_test_() ->
          ?assertEqual(~"Internal Server Error", Status),
          ?assertEqual(~"Class: error\nReason: boom", ExtraMsg)
      end}.
+
+%% nova:get_environment/0 reads an unset environment as dev, but crash details
+%% must not reach clients unless dev was chosen explicitly.
+extra_msg_is_hidden_when_environment_is_unset_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         application:unset_env(nova, environment),
+         try
+             CrashInfo = unsupported_return_crash_info(),
+             {status, 500, _, Json} =
+                 nova_error_controller:server_error((json_req())#{crash_info => CrashInfo}),
+             Decoded = json:decode(iolist_to_binary(Json)),
+             ?assertNot(is_map_key(~"extra_msg", Decoded)),
+             ?assertNot(is_map_key(~"stacktrace", Decoded)),
+             ?assertEqual({status, 500},
+                          nova_error_controller:server_error(
+                            (json_req())#{crash_info => #{class => error, reason => secret}}))
+         after
+             application:set_env(nova, environment, dev)
+         end
+     end}.
+
+accept_media_types_are_case_insensitive_test() ->
+    Req = nova_test_helper:with_header(~"accept", ~" Text/HTML ;q=0.9", nova_test_helper:mock_req(~"GET", ~"/")),
+    ?assertEqual(html, nova_error_controller:preferred_type(Req)).
+
+%% Cowboy joins repeated accept headers; parsing must stay linear.
+huge_accept_header_is_cheap_test() ->
+    Accept = binary:copy(~",", 400000),
+    Req = nova_test_helper:with_header(~"accept", Accept, nova_test_helper:mock_req(~"GET", ~"/")),
+    {Micros, none} = timer:tc(fun() -> nova_error_controller:preferred_type(Req) end),
+    ?assert(Micros < 100000).

@@ -42,6 +42,7 @@
          static_file_content_type/1,
          custom_not_found/1,
          controller_crash_is_a_500/1,
+         repeated_accept_headers_are_cheap/1,
          websocket_echo/1,
          sub_app_mounted_under_prefix/1,
          add_and_remove_application/1
@@ -100,7 +101,8 @@ groups() ->
                    ]},
      {errors, [parallel], [
                            custom_not_found,
-                           controller_crash_is_a_500
+                           controller_crash_is_a_500,
+                           repeated_accept_headers_are_cheap
                           ]},
      {websocket, [], [
                       websocket_echo
@@ -302,6 +304,27 @@ custom_not_found(Config) ->
 
 controller_crash_is_a_500(Config) ->
     {500, _Headers, _Body} = get(Config, "/crash").
+
+%% Cowboy joins repeated accept headers into one value, which the default
+%% error page parses. 98 headers plus Host and Connection hit Cowboy's default
+%% max_headers of 100. The app overrides the 404 page, so this uses the 500 one.
+%% The first request warms up the error page so only the parse is timed.
+repeated_accept_headers_are_cheap(Config) ->
+    Port = ?config(port, Config),
+    {500, _, _} = get(Config, "/crash"),
+    {ok, Socket} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, raw}]),
+    Accept = ["Accept: ", binary:copy(~",", 4000), "\r\n"],
+    Request = ["GET /crash HTTP/1.1\r\n",
+               "Host: localhost:", integer_to_list(Port), "\r\n",
+               lists:duplicate(98, Accept),
+               "Connection: close\r\n\r\n"],
+    {Micros, {ok, Response}} = timer:tc(fun() ->
+                                                ok = gen_tcp:send(Socket, Request),
+                                                gen_tcp:recv(Socket, 0, 10000)
+                                        end),
+    gen_tcp:close(Socket),
+    ?assertMatch(<<"HTTP/1.1 500", _/binary>>, Response),
+    ?assert(Micros < 100000).
 
 %%====================================================================
 %% WebSocket
