@@ -42,6 +42,8 @@
          plugin_error_is_a_500/1,
          request_body_limit/1,
          request_body_read_timeout/1,
+         request_body_timeout_closes_connection/1,
+         request_body_limit_closes_connection/1,
          static_file_content_type/1,
          static_file_is_nosniff/1,
          static_document_types_are_octet_stream/1,
@@ -107,7 +109,9 @@ groups() ->
                     plugin_stop_two_tuple_replies,
                     plugin_error_is_a_500,
                     request_body_limit,
-                    request_body_read_timeout
+                    request_body_read_timeout,
+                    request_body_timeout_closes_connection,
+                    request_body_limit_closes_connection
                    ]},
      {errors, [parallel], [
                            custom_not_found,
@@ -397,6 +401,43 @@ request_body_read_timeout(Config) ->
     gen_tcp:close(Socket),
     ?assertMatch(<<"HTTP/1.1 408", _/binary>>, Response),
     ?assert(Elapsed < 2000).
+
+%% The unread rest of a Content-Length body would be the start of the next
+%% request, so the 408 and the 413 close the connection.
+request_body_timeout_closes_connection(Config) ->
+    Socket = send_post_headers(Config, ~"/body-timeout/", ~"Content-Length: 1000\r\n"),
+    Trickle = spawn_link(fun() -> trickle_bytes(Socket, 40) end),
+    {ok, Response} = gen_tcp:recv(Socket, 0, 3000),
+    Next = gen_tcp:recv(Socket, 0, 2000),
+    unlink(Trickle),
+    exit(Trickle, kill),
+    gen_tcp:close(Socket),
+    ?assertMatch(<<"HTTP/1.1 408", _/binary>>, Response),
+    ?assertEqual({error, closed}, Next).
+
+request_body_limit_closes_connection(Config) ->
+    Socket = send_post_headers(Config, ~"/body-limit/", ~"Content-Length: 1000\r\n"),
+    {ok, Response} = gen_tcp:recv(Socket, 0, 3000),
+    Next = gen_tcp:recv(Socket, 0, 2000),
+    gen_tcp:close(Socket),
+    ?assertMatch(<<"HTTP/1.1 413", _/binary>>, Response),
+    ?assertEqual({error, closed}, Next).
+
+send_post_headers(Config, Path, Header) ->
+    Port = ?config(port, Config),
+    {ok, Socket} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, raw}]),
+    ok = gen_tcp:send(Socket, [~"POST ", Path, ~" HTTP/1.1\r\n",
+                               ~"Host: localhost:", integer_to_binary(Port), ~"\r\n",
+                               ~"Content-Type: application/json\r\n",
+                               Header, ~"\r\n"]),
+    Socket.
+
+trickle_bytes(_Socket, 0) ->
+    ok;
+trickle_bytes(Socket, N) ->
+    _ = gen_tcp:send(Socket, ~" "),
+    timer:sleep(50),
+    trickle_bytes(Socket, N - 1).
 
 trickle(_Socket, 0) ->
     ok;

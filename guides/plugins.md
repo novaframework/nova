@@ -188,7 +188,7 @@ An empty or malformed JSON body is answered with a bare `400` (no body, no statu
 
 The body is read only when `decode_json_body` or `read_urlencoded_body` is set,
 and at most `max_body_length` bytes of it (default `1000000`, 1 MB). A body
-whose `Content-Length` is over the limit gets a bare `413` before any of it is
+whose `Content-Length` is over the limit gets a `413` before any of it is
 read; a chunked body gets one as soon as it passes the limit. Decoded JSON
 takes several times the size of its text in memory, and this happens before
 your controller or security callback runs, so raise the limit only on the
@@ -199,10 +199,13 @@ any size.
 
 Reading the body also has a deadline, `body_read_timeout` (default `60000`
 milliseconds). A body that has not fully arrived by then, such as one sent a
-byte at a time, gets a bare `408`. `infinity` turns the deadline off.
+byte at a time, gets a `408`. `infinity` turns the deadline off. Both the
+`413` and the `408` have no body and close the connection, since the rest of
+the request body is still on it.
 
-A value for either option that is neither a non-negative integer nor
-`infinity` is replaced by the default, with one warning per value.
+`max_body_length` takes a non-negative integer and `body_read_timeout` a
+positive one, or `infinity`. Any other value, including a `body_read_timeout`
+of `0`, is replaced by the default, with one warning per value.
 
 The content type must be exactly `application/json` (in any case, with any
 parameters such as `charset`) for `decode_json_body`, and
@@ -217,7 +220,7 @@ of your own.
 |read_urlencoded_body|If header is application/x-www-form-urlencoded it will decode it.| `Req#{params => Map}`|
 |parse_qs| If the path have qs in it we will get them.|`Req#{parsed_qs => Map or List}`|
 |max_body_length|Bytes of body read for `decode_json_body` and `read_urlencoded_body`, or `infinity`. Default `1000000`. A longer body gets a `413`.| |
-|body_read_timeout|Milliseconds allowed for reading that body, or `infinity`. Default `60000`. A slower body gets a `408`.| |
+|body_read_timeout|Milliseconds allowed for reading that body (at least `1`), or `infinity`. Default `60000`. A slower body gets a `408`.| |
 
 ### Nova multipart
 

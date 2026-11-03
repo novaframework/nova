@@ -20,15 +20,17 @@
 -spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
                          {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
                          {stop, Req0 :: cowboy_req:req(), NewState :: any()} |
-                         {stop, {status, 408 | 413}, Req0 :: cowboy_req:req(), NewState :: any()}.
+                         {stop, {status, 408 | 413, #{binary() => binary()}}, Req0 :: cowboy_req:req(),
+                          NewState :: any()}.
 pre_request(Req, _Env, Options, State) ->
     ListOptions = maps:to_list(Options),
-    MaxLength = limit(max_body_length, Options, ?DEFAULT_MAX_BODY_LENGTH),
-    Timeout = limit(body_read_timeout, Options, ?DEFAULT_BODY_READ_TIMEOUT),
+    MaxLength = limit(max_body_length, Options, ?DEFAULT_MAX_BODY_LENGTH, 0),
+    Timeout = limit(body_read_timeout, Options, ?DEFAULT_BODY_READ_TIMEOUT, 1),
+    %% The rest of the body is still on the connection, so it is closed.
     case read_request_body(Req, ListOptions, MaxLength, Timeout) of
         {ok, Req0} -> modulate_state(Req0, ListOptions, State);
-        {too_large, Req0} -> {stop, {status, 413}, Req0, State};
-        {timeout, Req0} -> {stop, {status, 408}, Req0, State}
+        {too_large, Req0} -> {stop, {status, 413, #{~"connection" => ~"close"}}, Req0, State};
+        {timeout, Req0} -> {stop, {status, 408, #{~"connection" => ~"close"}}, Req0, State}
     end.
 
 %%--------------------------------------------------------------------
@@ -57,7 +59,7 @@ plugin_info() ->
                   {decode_json_body, <<"Decodes the body as JSON and puts it under `json`">>},
                   {read_urlencoded_body, <<"Used to parse body as query-string and put them in state under `qs` key">>},
                   {max_body_length, ~"Reply 413 when the body read for decode_json_body or read_urlencoded_body is longer than this many bytes, or infinity (default 1 000 000)"},
-                  {body_read_timeout, ~"Reply 408 when reading that body takes longer than this many milliseconds, or infinity (default 60 000)"}
+                  {body_read_timeout, ~"Reply 408 when reading that body takes longer than this many milliseconds (at least 1), or infinity (default 60 000)"}
                  ]
      }.
 
@@ -130,11 +132,11 @@ read_request_body(Req, Options, MaxLength, Timeout) ->
         false -> {ok, Req#{body => <<>>}}
     end.
 
--spec limit(atom(), map(), non_neg_integer()) -> non_neg_integer() | infinity.
-limit(Key, Options, Default) ->
+-spec limit(atom(), map(), non_neg_integer(), non_neg_integer()) -> non_neg_integer() | infinity.
+limit(Key, Options, Default, Min) ->
     case maps:get(Key, Options, Default) of
         infinity -> infinity;
-        Value when is_integer(Value), Value >= 0 -> Value;
+        Value when is_integer(Value), Value >= Min -> Value;
         Value -> invalid_limit(Key, Value, Default)
     end.
 
