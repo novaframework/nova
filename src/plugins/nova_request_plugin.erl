@@ -142,6 +142,8 @@ read_body(Req, MaxLength) ->
         _ -> read_body(Req, MaxLength, <<>>)
     end.
 
+-spec read_body(cowboy_req:req(), non_neg_integer() | infinity, binary()) ->
+          {ok | too_large, cowboy_req:req()}.
 read_body(Req, MaxLength, Acc) ->
     ReadLength = case MaxLength of
                      infinity -> ?CHUNK_LENGTH;

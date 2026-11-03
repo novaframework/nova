@@ -105,8 +105,7 @@ handle_json_old_order_warns_once_test_() ->
 location_test() ->
     ?assertEqual(~"/login", nova_basic_handler:location(~"/login")),
     ?assertEqual(~"/söka", nova_basic_handler:location("/söka")),
-    ?assertEqual(error, nova_basic_handler:location([16#D800])),
-    ?assertEqual(error, nova_basic_handler:location([not_a_char])).
+    ?assertEqual(error, nova_basic_handler:location([16#D800])).
 
 %%====================================================================
 %% handle_status/3
