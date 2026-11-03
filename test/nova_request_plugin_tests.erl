@@ -99,6 +99,19 @@ modulate_state_decode_json_post_test_() ->
          ?assertEqual(<<"test">>, maps:get(<<"name">>, JSON))
      end}.
 
+%% {json_lib, json} (OTP json) returns the term itself instead of {ok, Term};
+%% every JSON body used to be answered with a 400.
+modulate_state_decode_json_with_otp_json_test_() ->
+    {setup,
+     fun() -> Prev = nova_test_helper:setup_nova_env(), application:set_env(nova, json_lib, json), Prev end,
+     fun(Prev) -> application:set_env(nova, json_lib, thoas), nova_test_helper:cleanup_nova_env(Prev) end,
+     fun() ->
+         Req = nova_test_helper:with_json_body(~"{\"name\":\"test\"}",
+                                               nova_test_helper:mock_req(~"POST", ~"/")),
+         {ok, Req1, state} = nova_request_plugin:modulate_state(Req, [{decode_json_body, true}], state),
+         ?assertEqual(#{~"name" => ~"test"}, maps:get(json, Req1))
+     end}.
+
 %%====================================================================
 %% modulate_state/3 — decode_json_body on POST with empty body -> stop
 %%====================================================================

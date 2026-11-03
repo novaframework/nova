@@ -50,11 +50,19 @@ These parameters can be specified in your *main* application (Eg the one you've 
 
 ### Configure json_lib
 
-One can configure which json library to use for encoding/decoding json structures. The module defined for this should expose two different functions:
+One can configure which json library to use for encoding/decoding json structures. The default is `thoas`. Set `json_lib` in your bootstrap application's environment; Nova also reads it from the `nova` environment when the bootstrap application does not set it.
+
+```erlang
+{my_app, [{json_lib, json}]}
+```
+
+The module defined for this should expose two different functions:
 
 `encode(Structure) -> binary() | iolist()`
 
-`decode(JsonString) -> {ok, Structure}`
+`decode(JsonString) -> {ok, Structure} | {error, Reason} | Structure`
+
+`decode/1` may return `{ok, Structure}` (like `thoas`) or the structure itself and raise on bad input (like OTP's `json` module), so `{json_lib, json}` works without an adapter.
 
 
 ## Handling errors in Nova

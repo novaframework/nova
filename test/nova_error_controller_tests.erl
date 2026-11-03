@@ -80,3 +80,47 @@ not_found_no_accept_test_() ->
          {status, 404, Headers, _Body} = nova_error_controller:not_found(Req),
          ?assertEqual(<<"application/json">>, maps:get(<<"content-type">>, Headers))
      end}.
+
+%% The message used to be encoded as a list of character codes.
+not_found_json_message_is_a_string_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Req = nova_test_helper:mock_req(~"GET", ~"/missing"),
+         {status, 404, _Headers, Body} = nova_error_controller:not_found(Req),
+         ?assertEqual(#{~"message" => ~"Resource not found"}, json:decode(iolist_to_binary(Body)))
+     end}.
+
+not_found_json_with_parameters_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Req = nova_test_helper:with_header(~"accept", ~"application/json; charset=utf-8",
+                                            nova_test_helper:mock_req(~"GET", ~"/missing")),
+         {status, 404, Headers, _Body} = nova_error_controller:not_found(Req),
+         ?assertEqual(~"application/json", maps:get(~"content-type", Headers))
+     end}.
+
+%% nova_handler's crash payload has a status code but no title or message.
+server_error_has_title_and_message_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Req = nova_test_helper:with_header(~"accept", ~"application/json",
+                                            nova_test_helper:mock_req(~"GET", ~"/")),
+         CrashInfo = #{status_code => 500, class => error, reason => boom},
+         {status, 500, _Headers, Body} = nova_error_controller:server_error(Req#{crash_info => CrashInfo}),
+         #{~"title" := Title, ~"status" := Status, ~"message" := Message} =
+             json:decode(iolist_to_binary(Body)),
+         ?assertEqual(~"500 Internal Server Error", Title),
+         ?assertEqual(~"Internal Server Error", Status),
+         ?assertNotEqual(~"undefined", Message)
+     end}.
+
+server_error_html_for_browsers_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Accept = ~"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+         Req = nova_test_helper:with_header(~"accept", Accept, nova_test_helper:mock_req(~"GET", ~"/")),
+         CrashInfo = #{status_code => 500, class => error, reason => boom},
+         {status, 500, Headers, Body} = nova_error_controller:server_error(Req#{crash_info => CrashInfo}),
+         ?assertEqual(~"text/html", maps:get(~"content-type", Headers)),
+         ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Body), ~"500 Internal Server Error"))
+     end}.

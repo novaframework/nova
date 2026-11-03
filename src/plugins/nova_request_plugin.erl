@@ -63,8 +63,7 @@ modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", 
     {stop, Req400, State};
 modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}, body := Body}, [{decode_json_body, true}|Tl], State) ->
     %% Decode the data
-    JsonLib = nova:get_env(json_lib, thoas),
-    case JsonLib:decode(Body) of
+    case nova_json:decode(Body) of
         {ok, JSON} ->
             modulate_state(Req#{json => JSON}, Tl, State);
         Error ->
