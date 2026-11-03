@@ -8,7 +8,8 @@
          handle_redirect/3,
          handle_sendfile/3,
          handle_websocket/3,
-         handle_ws/2
+         handle_ws/2,
+         location/1
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -184,6 +185,18 @@ handle_redirect({redirect, Route}, _Callback, Req) ->
     Req0 = cowboy_req:set_resp_headers(Headers, Req),
     Req1 = Req0#{resp_status_code => 302},
     {ok, Req1}.
+
+-doc false.
+-spec location(binary() | string()) -> binary() | error.
+location(Url) when is_binary(Url) ->
+    Url;
+location(Url) ->
+    try unicode:characters_to_binary(Url) of
+        Location when is_binary(Location) -> Location;
+        _ -> error
+    catch
+        error:badarg -> error
+    end.
 
 %%--------------------------------------------------------------------
 -doc """

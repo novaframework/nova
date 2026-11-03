@@ -175,6 +175,15 @@ stop_redirect_string_reply_test_() ->
         ?assertEqual(~"/login", maps:get(~"location", maps:get(resp_headers, Req1)))
     end}.
 
+%% A redirect target that is not valid chardata gets Nova's 500 page.
+stop_redirect_invalid_location_is_a_500_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        P = fun(R, _Env, _Opts, _State) -> {stop, {redirect, [not_a_char]}, R, #{}} end,
+        Req = req([{pre_request, [plugin(P)]}]),
+        {ok, Req1, _} = nova_plugin_handler:execute(Req, env()),
+        ?assertEqual(500, maps:get(resp_status_code, Req1))
+    end}.
+
 %%====================================================================
 %% Pre plugin returns {stop, Req, State} -> {stop, Req}
 %%====================================================================

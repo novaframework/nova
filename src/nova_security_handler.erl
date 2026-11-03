@@ -69,18 +69,17 @@ handle_response({false, StatusCode, Headers, Body}, Req = #{host := Host}, Env) 
     Req2 = cowboy_req:set_resp_headers(Headers, Req1),
     Req3 = cowboy_req:reply(StatusCode, Req2),
     {stop, Req3};
-handle_response({redirect, Route}, Req, _Env) ->
-    Req0 = cowboy_req:set_resp_headers(#{~"location" => location(Route)}, Req),
-    Req1 = cowboy_req:reply(302, Req0),
-    {stop, Req1};
+handle_response({redirect, Route}, Req, Env) when is_binary(Route); is_list(Route) ->
+    case nova_basic_handler:location(Route) of
+        error ->
+            ?LOG_ERROR(#{msg => ~"Security callback redirected to an invalid location"}),
+            handle_response(invalid_redirect, Req, Env);
+        Location ->
+            Req0 = cowboy_req:set_resp_headers(#{~"location" => Location}, Req),
+            Req1 = cowboy_req:reply(302, Req0),
+            {stop, Req1}
+    end;
 handle_response(_, Req = #{host := Host}, Env) ->
     {ok, Req0, _Env0} = nova_router:render_status_page(Host, 401, #{}, Req, Env),
     Req1 = cowboy_req:reply(401, Req0),
     {stop, Req1}.
-
-location(Route) when is_binary(Route) ->
-    Route;
-location(Route) ->
-    case unicode:characters_to_binary(Route) of
-        Location when is_binary(Location) -> Location
-    end.

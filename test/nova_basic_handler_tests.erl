@@ -102,6 +102,12 @@ handle_json_old_order_warns_once_test_() ->
          ?assertMatch([#{controller := dummy_mod}], json_order_warnings())
      end}.
 
+location_test() ->
+    ?assertEqual(~"/login", nova_basic_handler:location(~"/login")),
+    ?assertEqual(~"/söka", nova_basic_handler:location("/söka")),
+    ?assertEqual(error, nova_basic_handler:location([16#D800])),
+    ?assertEqual(error, nova_basic_handler:location([not_a_char])).
+
 %%====================================================================
 %% handle_status/3
 %%====================================================================

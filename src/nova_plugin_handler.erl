@@ -102,8 +102,13 @@ handle_reply({reply, Status, Headers, Body}, Req) when is_integer(Status), is_ma
     Req1 = cowboy_req:set_resp_body(Body, Req0),
     {ok, Req1#{resp_status_code => Status}};
 handle_reply({redirect, Url}, Req) when is_binary(Url); is_list(Url) ->
-    Req0 = cowboy_req:set_resp_headers(#{~"location" => location(Url)}, Req),
-    {ok, Req0#{resp_status_code => 302}};
+    case nova_basic_handler:location(Url) of
+        error ->
+            error;
+        Location ->
+            Req0 = cowboy_req:set_resp_headers(#{~"location" => Location}, Req),
+            {ok, Req0#{resp_status_code => 302}}
+    end;
 handle_reply({status, Status}, Req) ->
     handle_reply({status, Status, #{}}, Req);
 handle_reply({status, Status, Headers}, Req) when is_integer(Status), is_map(Headers) orelse is_list(Headers) ->
@@ -140,13 +145,6 @@ deprecated_break(Callback) ->
 plugin_module(Callback) ->
     {module, Module} = erlang:fun_info(Callback, module),
     Module.
-
-location(Url) when is_binary(Url) ->
-    Url;
-location(Url) ->
-    case unicode:characters_to_binary(Url) of
-        Location when is_binary(Location) -> Location
-    end.
 
 %% Plugin state lives in nova_plugin_manager's table and is written through
 %% one gen_server. Most plugins hand their state back untouched, so only

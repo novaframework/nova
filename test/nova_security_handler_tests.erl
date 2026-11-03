@@ -164,6 +164,14 @@ callback_redirect_binary_test_() ->
         ?assertEqual(~"/login", maps:get(~"location", maps:get(resp_headers, Req1)))
     end}.
 
+callback_redirect_invalid_location_is_a_401_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Callback = fun(_) -> {redirect, [16#D800]} end,
+        {stop, Req1} = nova_security_handler:execute(req(), (env())#{secure => Callback}),
+        ?assertEqual(401, maps:get(resp_status_code, Req1)),
+        ?assertNot(maps:is_key(~"location", maps:get(resp_headers, Req1, #{})))
+    end}.
+
 %%====================================================================
 %% Callback returns unexpected value -> 401 stop
 %%====================================================================
