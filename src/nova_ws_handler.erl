@@ -107,7 +107,7 @@ handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData, plugins
                     end
             end;
         {stop, _} = Stop ->
-            ?LOG_WARNING(#{msg => <<"Got stop signal">>, signal => Stop}),
+            ?LOG_WARNING(#{msg => <<"Got stop signal">>, signal => nova_redact:term(Stop)}),
             Stop
     end;
 handle_ws(Mod, Func, Args, State) ->
@@ -127,7 +127,7 @@ invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData})
                 {error, not_found} ->
                     ?LOG_ERROR(#{msg => <<"Websocket handler not found. Check that a handler is
                                            registered on handle 'ws'">>,
-                                   controller => Mod, function => Func, return => RetObj}),
+                                   controller => Mod, function => Func, return => nova_redact:term(RetObj)}),
                     {stop, State}
             end
     catch
@@ -154,7 +154,7 @@ run_plugins([{Module, Options}|Tl], Callback, ControllerState, State) ->
         {break, State0} ->
             {ok, State0};
         {error, Reason} ->
-            ?LOG_ERROR(#{msg => <<"Plugin returned error">>, plugin => Module, function => Callback, reason => Reason}),
+            ?LOG_ERROR(#{msg => <<"Plugin returned error">>, plugin => Module, function => Callback, reason => nova_redact:term(Reason)}),
             {stop, State}
     catch
         Class:Reason:Stacktrace ->

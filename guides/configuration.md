@@ -27,7 +27,8 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 | Key | Description | Value | Default |
 |-----|-------------|-------|---------|
 | `use_persistent_term` | Use `persistent_term` module to store routing tree | `boolean()` | `true` |
-| `use_stacktrace` | If Nova should include stacktrace in error-pages and crash logs. Argument lists are replaced by their arity and request maps by their method and path, so headers and cookies never end up in either. | `boolean()` | `false` |
+| `use_stacktrace` | If Nova should include stacktrace in error-pages and crash logs. What is redacted from both is listed under *Redaction in logs and error pages*. | `boolean()` | `false` |
+| `redact_keys` | Extra keys whose values are redacted from crash logs and error pages, on top of the built-in list. Atoms, binaries or strings, matched case-insensitively. | `[atom() \| binary() \| string()]` | `[]` |
 | `render_error_pages` | If Nova should render error-pages for HTML-request | `boolean()` | `true` |
 | `use_sessions` | Turn off/on support for sessions | `boolean()` | `true` |
 | `session_manager` | Specifify a module to use as the session manager. Defaults to `nova_session_ets` | `atom()` | `nova_session_ets` |
@@ -41,7 +42,7 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 
 ### Where Nova reads a setting
 
-`json_lib` and `use_sessions` are read from the bootstrap application's environment first, then from the `nova` environment, then the default. A value set in your own application always wins:
+`json_lib`, `use_sessions` and `redact_keys` are read from the bootstrap application's environment first, then from the `nova` environment, then the default. A value set in your own application always wins:
 
 ```erlang
 [{nova, [{bootstrap_application, my_app}]},
@@ -49,6 +50,16 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 ```
 
 The other keys in the table above are only read from `nova`.
+
+### Redaction in logs and error pages
+
+Crash reasons, plugin and controller results, and stacktraces can hold request data. Before Nova writes them to a log line or a crash report, or renders them on an error page, it:
+
+- replaces every Cowboy request map with its method and path, so headers, cookies, the query string and the body are left out;
+- replaces the argument list of every stacktrace frame with its arity;
+- replaces the value of these keys, in maps and in `{Key, Value}` pairs such as proplists and header or query string lists, with `redacted`: `authorization`, `cookie`, `set-cookie`, `password`, `token`, `secret`, `_csrf_token`, `x-csrf-token`, `session_id` and `qs` (so the query string of the partial request a websocket's `terminate/3` gets is redacted too), plus the keys in `redact_keys`. Keys match case-insensitively whether they are atoms, binaries or strings.
+
+Anything else is logged as is: a secret held under another key, or in a plain tuple or a binary, still reaches the log. Add such keys to `redact_keys`. Values your own code logs are not touched.
 
 ## Application parameters
 

@@ -39,6 +39,26 @@ stacktrace_arguments_are_dropped_test() ->
                   {nova_handler, execute, 2, []}],
                  nova_redact:stacktrace(Stacktrace)).
 
+sensitive_keys_are_redacted_in_maps_and_proplists_test() ->
+    Term = {error, #{~"Authorization" => ~"Bearer x", nested => #{password => ~"pw", user => ~"u"}},
+            [{~"token", ~"t"}, {"Set-Cookie", ~"c"}, {name, ~"n"}]},
+    ?assertEqual({error, #{~"Authorization" => redacted, nested => #{password => redacted, user => ~"u"}},
+                  [{~"token", redacted}, {"Set-Cookie", redacted}, {name, ~"n"}]},
+                 nova_redact:term(Term)).
+
+partial_websocket_request_qs_is_redacted_test() ->
+    PartialReq = #{method => ~"GET", path => ~"/ws", qs => ~"password=SECRETPW", peer => {{127, 0, 0, 1}, 1}},
+    ?assertEqual(PartialReq#{qs => redacted}, nova_redact:term(PartialReq)).
+
+configured_redact_keys_are_added_test() ->
+    application:set_env(nova, redact_keys, [api_key, ~"X-Api-Key"]),
+    try
+        ?assertEqual(#{~"x-api-key" => redacted, ~"API_KEY" => redacted, other => 1},
+                     nova_redact:term(#{~"x-api-key" => ~"k", ~"API_KEY" => ~"k", other => 1}))
+    after
+        application:unset_env(nova, redact_keys)
+    end.
+
 format_stacktrace_drops_arguments_test() ->
     [Frame] = nova:format_stacktrace([{my_controller, index, [req()], []}]),
     ?assertEqual(1, maps:get(arity, Frame)).
@@ -68,6 +88,20 @@ badmatch_on_request_log_has_no_request_test_() ->
              {ok, Req1, _Env} = nova_handler:execute(req(), Env),
              assert_not_leaked(maps:get(crash_info, Req1)),
              assert_logged_without_request()
+     end}.
+
+query_string_behind_a_badmatch_is_not_logged_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             capture_logs(),
+             Callback = fun(Req) -> [] = cowboy_req:parse_qs(Req) end,
+             Env = #{callback => Callback, app => test_app, secure => false, controller_data => #{}},
+             Req0 = (nova_test_helper:mock_req(~"GET", ~"/login"))#{qs => ~"password=SECRETPW"},
+             {ok, Req1, _Env} = nova_handler:execute(Req0, Env),
+             Logs = logged(),
+             ?assertNotEqual([], Logs),
+             Text = iolist_to_binary(io_lib:format("~p", [{Logs, maps:get(crash_info, Req1)}])),
+             ?assertEqual(nomatch, binary:match(Text, ~"SECRETPW"))
      end}.
 
 setup() ->

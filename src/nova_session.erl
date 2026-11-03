@@ -199,7 +199,7 @@ known(SessionId) ->
             catch
                 Class:Reason ->
                     ?LOG_WARNING(#{msg => ~"Session backend failed to look up a session",
-                                   backend => Mod, class => Class, reason => Reason}),
+                                   backend => Mod, class => Class, reason => nova_redact:term(Reason)}),
                     false
             end;
         false ->
