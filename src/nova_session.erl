@@ -245,10 +245,10 @@ cookie_opts(Req) ->
 
 merge_cookie_opts([], Opts) ->
     Opts;
-merge_cookie_opts([{Key, Value} | Rest], Opts) when Key =:= path; Key =:= domain ->
-    merge_cookie_opts(Rest, if is_binary(Value) -> Opts#{Key => Value}; true -> Opts end);
-merge_cookie_opts([{Key, Value} | Rest], Opts) when Key =:= secure; Key =:= http_only ->
-    merge_cookie_opts(Rest, if is_boolean(Value) -> Opts#{Key => Value}; true -> Opts end);
+merge_cookie_opts([{Key, Value} | Rest], Opts) when (Key =:= path orelse Key =:= domain), is_binary(Value) ->
+    merge_cookie_opts(Rest, Opts#{Key => Value});
+merge_cookie_opts([{Key, Value} | Rest], Opts) when (Key =:= secure orelse Key =:= http_only), is_boolean(Value) ->
+    merge_cookie_opts(Rest, Opts#{Key => Value});
 merge_cookie_opts([{max_age, Value} | Rest], Opts) when is_integer(Value), Value >= 0 ->
     merge_cookie_opts(Rest, Opts#{max_age => Value});
 merge_cookie_opts([{same_site, Value} | Rest], Opts)
