@@ -7,7 +7,9 @@ The session id lives in the `session_id` cookie (see `session_cookie_name` in
 the configuration guide). `nova_stream_h` issues it with the response of the
 first request that writes to the session, so visitors that never store
 anything get no cookie. A request carrying two or more different session ids
-is treated as having no session.
+is treated as having no session. A request whose Cookie header does not parse
+gets a session for that request only and no cookie, so a session cookie the
+client already holds is not overwritten.
 
 Call `renew/1` whenever the privilege level of the client changes (sign-in,
 sign-out, password change). That is the defence against session fixation: a
@@ -312,8 +314,10 @@ merge_cookie_opts([_ | Rest], Opts) ->
 
 %% The id the client sent. No cookie, or two or more different ids (a cookie
 %% set for a parent domain or another path next to ours), means no session.
+%% A header that does not parse may still hold our cookie, so it is reported
+%% apart.
 -doc false.
--spec presented_session_id(cowboy_req:req()) -> binary() | undefined.
+-spec presented_session_id(cowboy_req:req()) -> binary() | undefined | unparsable.
 presented_session_id(Req) ->
     Name = cookie_name(),
     try lists:usort([Value || {Key, Value} <- cowboy_req:parse_cookies(Req), Key =:= Name]) of
@@ -325,8 +329,8 @@ presented_session_id(Req) ->
         _ ->
             undefined
     catch
-        _:_ ->
-            undefined
+        exit:{request_error, _, _} ->
+            unparsable
     end.
 
 %%%===================================================================
@@ -375,8 +379,8 @@ session_id(#{nova_session_presented := Presented, nova_session_pending := Pendin
 session_id(Req) ->
     %% Without nova_stream_h there is only the cookie.
     case presented_session_id(Req) of
-        undefined -> {error, not_found};
-        SessionId -> {ok, SessionId}
+        SessionId when is_binary(SessionId) -> {ok, SessionId};
+        _ -> {error, not_found}
     end.
 
 with_session_id(SessionId, Req) ->

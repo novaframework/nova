@@ -83,7 +83,9 @@ early_error(StreamID, Reason, PartialReq, {_, _Status, _Headers, _} = Resp, Opts
 %% The request gets the id the client presented, if any, and a fresh one.
 %% nova_session checks the presented id against the backend when it is first
 %% used, in the request process, so a slow backend never blocks the
-%% connection.
+%% connection. A Cookie header that does not parse may still carry a valid
+%% session cookie, so that request works with a fresh id and its response
+%% never sets or expires the cookie.
 init_session(Req) ->
     case nova_session:enabled() of
         true ->
@@ -91,6 +93,8 @@ init_session(Req) ->
             case nova_session:presented_session_id(Req) of
                 undefined ->
                     {Req#{nova_session_id => Pending}, #session{current = Pending}};
+                unparsable ->
+                    {Req#{nova_session_id => Pending}, undefined};
                 Presented ->
                     {Req#{nova_session_presented => Presented, nova_session_pending => Pending},
                      #session{presented = Presented, current = Pending}}

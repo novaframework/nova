@@ -24,6 +24,7 @@ setup() ->
                 fun(Req) ->
                     case maps:get(cookie_session_id, Req, undefined) of
                         undefined -> [];
+                        unparsable -> exit({request_error, {header, ~"cookie"}, malformed});
                         SId -> [{~"session_id", SId}]
                     end
                 end),
@@ -98,6 +99,7 @@ nova_session_ets_test_() ->
       fun delete_single_key/0,
       fun cookie_fallback/0,
       fun no_session_returns_error/0,
+      fun unparsable_cookie_is_no_session_without_stream_handler/0,
       fun no_session_delete_returns_ok/0,
       fun sessions_disabled_throws/0,
       fun delete_moves_request_to_new_session/0,
@@ -185,6 +187,12 @@ no_session_returns_error() ->
     Req = #{},
     ?assertEqual({error, not_found}, nova_session:get(Req, <<"key">>)),
     ?assertEqual({error, session_id_not_set}, nova_session:set(Req, <<"k">>, <<"v">>)).
+
+unparsable_cookie_is_no_session_without_stream_handler() ->
+    Req = req_with_cookie(unparsable),
+    ?assertEqual(unparsable, nova_session:presented_session_id(Req)),
+    ?assertEqual({error, not_found}, nova_session:get(Req, ~"key")),
+    ?assertEqual({error, session_id_not_set}, nova_session:set(Req, ~"k", ~"v")).
 
 no_session_delete_returns_ok() ->
     Req = #{},

@@ -54,6 +54,7 @@ stream_test_() ->
       fun host_prefixed_cookie_name/0,
       fun two_session_cookies_mean_no_session/0,
       fun repeated_identical_cookie_is_one_session/0,
+      fun unparsable_cookie_header_never_sets_cookie/0,
       fun configured_cookie_attributes/0,
       fun invalid_cookie_opts_are_ignored/0,
       fun known_session_is_kept/0,
@@ -143,6 +144,16 @@ two_session_cookies_mean_no_session() ->
 repeated_identical_cookie_is_one_session() ->
     {Req, _} = start(req(~"session_id=same; session_id=same")),
     ?assertEqual(~"same", maps:get(nova_session_presented, Req)).
+
+%% The client may hold a valid session cookie Nova cannot read past the rest
+%% of the header, so a write, renew or delete leaves it alone.
+unparsable_cookie_header_never_sets_cookie() ->
+    {Req, State} = start(req(~"session_id=abc; =x")),
+    #{nova_session_id := Id} = Req,
+    ?assertNot(maps:is_key(nova_session_presented, Req)),
+    ?assertEqual([], set_cookies(respond(event({written, Id}, State)))),
+    ?assertEqual([], set_cookies(respond(event({renewed, ~"renewed"}, State)))),
+    ?assertEqual([], set_cookies(respond(event({deleted, ~"fresh"}, State)))).
 
 secure_over_https() ->
     {#{nova_session_id := Id}, State} = start((req())#{scheme => ~"https"}),
