@@ -28,6 +28,9 @@ routes(_Environment) ->
        plugins => [{pre_request, nova_test_app_plugin, #{}},
                    {pre_request, nova_test_app_return_plugin, #{return => error}}],
        routes => [{"/", fun nova_test_app_controller:json/1, #{methods => [get]}}]},
+     #{prefix => "/body-limit",
+       plugins => [{pre_request, nova_request_plugin, #{decode_json_body => true, max_body_length => 64}}],
+       routes => [{"/", fun nova_test_app_controller:body/1, #{methods => [post]}}]},
 
      %% Plain routes, bindings, methods, plugins and a catch-all static dir.
      #{prefix => "",

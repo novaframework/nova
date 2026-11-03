@@ -168,7 +168,7 @@ multipart_body_not_drained_test_() ->
          meck:new(cowboy_req, [passthrough]),
          meck:expect(cowboy_req, has_body, fun(_Req) -> true end),
          meck:expect(cowboy_req, read_body,
-                     fun(_Req) -> erlang:error(body_should_not_be_read) end)
+                     fun(_Req, _Opts) -> erlang:error(body_should_not_be_read) end)
      end,
      fun(_) -> meck:unload(cowboy_req) end,
      [fun() ->
@@ -183,3 +183,74 @@ multipart_body_not_drained_test_() ->
           {ok, Req, state} = nova_request_plugin:pre_request(Req0, env, #{decode_json_body => true}, state),
           ?assertEqual(<<>>, maps:get(body, Req))
       end]}.
+
+%%====================================================================
+%% max_body_length
+%%====================================================================
+
+-define(CHUNK, binary:copy(~" ", 64000)).
+
+%% A JSON body sent in Chunks chunks of 64000 bytes: an object padded with
+%% spaces. BodyLength is what Cowboy knows from Content-Length.
+body_req(Chunks, BodyLength) ->
+    Req = nova_test_helper:with_content_type(~"application/json",
+                                             nova_test_helper:mock_req(~"POST", ~"/")),
+    Req#{has_body => true, body_length => BodyLength, chunks_left => Chunks}.
+
+body_setup() ->
+    meck:new(cowboy_req, [passthrough, no_link]),
+    meck:expect(cowboy_req, read_body,
+                fun(#{chunks_left := 1} = Req, #{length := Length}) when Length =< 64000 ->
+                        {ok, <<"{}", (binary:part(?CHUNK, 0, 63998))/binary>>, Req#{chunks_left => 0}};
+                   (#{chunks_left := N} = Req, #{length := Length}) when Length =< 64000 ->
+                        {more, ?CHUNK, Req#{chunks_left => N - 1}}
+                end).
+
+body_reads() ->
+    meck:num_calls(cowboy_req, read_body, '_').
+
+body_length_test_() ->
+    {foreach, fun body_setup/0, fun(_) -> meck:unload(cowboy_req) end,
+     [{"a body as long as the limit is decoded",
+       fun() ->
+           {ok, Req, state} = nova_request_plugin:pre_request(
+                                body_req(3, undefined), env,
+                                #{decode_json_body => true, max_body_length => 3 * 64000}, state),
+           ?assertEqual(#{}, maps:get(json, Req)),
+           ?assertEqual(3, body_reads())
+       end},
+      {"a declared length over the limit is refused before reading",
+       fun() ->
+           ?assertMatch({stop, {status, 413}, _, state},
+                        nova_request_plugin:pre_request(
+                          body_req(3, 3 * 64000), env,
+                          #{decode_json_body => true, max_body_length => 3 * 64000 - 1}, state)),
+           ?assertEqual(0, body_reads())
+       end},
+      {"a chunked body stops being read once it passes the limit",
+       fun() ->
+           ?assertMatch({stop, {status, 413}, _, state},
+                        nova_request_plugin:pre_request(
+                          body_req(1000, undefined), env,
+                          #{read_urlencoded_body => true, max_body_length => 100000}, state)),
+           ?assertEqual(2, body_reads())
+       end},
+      {"the default limit is 8000000 bytes",
+       fun() ->
+           ?assertMatch({stop, {status, 413}, _, state},
+                        nova_request_plugin:pre_request(body_req(1000, 8000001), env,
+                                                        #{decode_json_body => true}, state)),
+           ?assertEqual(0, body_reads()),
+           ?assertMatch({stop, {status, 413}, _, state},
+                        nova_request_plugin:pre_request(body_req(1000, undefined), env,
+                                                        #{decode_json_body => true}, state)),
+           ?assertEqual(8000000 div 64000 + 1, body_reads())
+       end},
+      {"infinity reads the whole body",
+       fun() ->
+           {ok, Req, state} = nova_request_plugin:pre_request(
+                                body_req(200, 200 * 64000), env,
+                                #{decode_json_body => true, max_body_length => infinity}, state),
+           ?assertEqual(#{}, maps:get(json, Req)),
+           ?assertEqual(200, body_reads())
+       end}]}.

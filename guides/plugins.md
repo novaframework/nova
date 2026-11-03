@@ -186,12 +186,25 @@ This plugins handle incoming data and can transform them to erlang maps dependin
 
 An empty or malformed JSON body is answered with a bare `400` (no body, no status page).
 
+The body is read only when `decode_json_body` or `read_urlencoded_body` is set,
+and at most `max_body_length` bytes of it (default `8000000`, 8 MB). A body
+whose `Content-Length` is over the limit gets a bare `413` before any of it is
+read; a chunked body gets one as soon as it passes the limit. Set
+`max_body_length => infinity` to read bodies of any size.
+
+The content type must be exactly `application/json` (in any case, with any
+parameters such as `charset`) for `decode_json_body`, and
+`application/x-www-form-urlencoded` for `read_urlencoded_body`. Other JSON
+types, such as `application/problem+json` or `application/json-seq`, are not
+decoded: decode them in the controller from the request body, or with a plugin
+of your own.
 
 |Option|Description|Req|
 |------|-----------|----|
 |decode_json_body|If header is application/json it will decode the body.| `Req#{json => Map}`|
 |read_urlencoded_body|If header is application/x-www-form-urlencoded it will decode it.| `Req#{params => Map}`|
 |parse_qs| If the path have qs in it we will get them.|`Req#{parsed_qs => Map or List}`|
+|max_body_length|Bytes of body read for `decode_json_body` and `read_urlencoded_body`, or `infinity`. Default `8000000`. A longer body gets a `413`.| |
 
 ### Nova multipart
 

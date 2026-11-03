@@ -8,14 +8,22 @@
          plugin_info/0
         ]).
 
+-define(DEFAULT_MAX_BODY_LENGTH, 8000000).
+-define(CHUNK_LENGTH, 64000).
+-define(CHUNK_PERIOD, 15000).
+
 %%--------------------------------------------------------------------
 -doc "Pre-request callback".
 -spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
                          {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
-                         {stop, Req0 :: cowboy_req:req(), NewState :: any()}.
+                         {stop, Req0 :: cowboy_req:req(), NewState :: any()} |
+                         {stop, {status, 413}, Req0 :: cowboy_req:req(), NewState :: any()}.
 pre_request(Req, _Env, Options, State) ->
     ListOptions = maps:to_list(Options),
-    modulate_state(read_request_body(Req, ListOptions), ListOptions, State).
+    case read_request_body(Req, ListOptions, max_body_length(Options)) of
+        {ok, Req0} -> modulate_state(Req0, ListOptions, State);
+        {too_large, Req0} -> {stop, {status, 413}, Req0, State}
+    end.
 
 %%--------------------------------------------------------------------
 -doc "Post-request callback".
@@ -41,7 +49,8 @@ plugin_info() ->
       description => <<"This plugin modulates the body of a request.">>,
       options => [
                   {decode_json_body, <<"Decodes the body as JSON and puts it under `json`">>},
-                  {read_urlencoded_body, <<"Used to parse body as query-string and put them in state under `qs` key">>}
+                  {read_urlencoded_body, <<"Used to parse body as query-string and put them in state under `qs` key">>},
+                  {max_body_length, ~"Reply 413 when the body read for decode_json_body or read_urlencoded_body is longer than this many bytes, or infinity (default 8 000 000)"}
                  ]
      }.
 
@@ -108,19 +117,42 @@ content_type(Req) ->
 
 %% A multipart body is never buffered here; nova_multipart_plugin or the
 %% controller reads the parts from the stream.
-read_request_body(Req, Options) ->
+read_request_body(Req, Options, MaxLength) ->
     case not is_multipart(Req) andalso should_read_body(Options) andalso cowboy_req:has_body(Req) of
-        true -> read_body(Req, <<>>);
-        false -> Req#{body => <<>>}
+        true -> read_body(Req, MaxLength);
+        false -> {ok, Req#{body => <<>>}}
+    end.
+
+max_body_length(Options) ->
+    case maps:get(max_body_length, Options, ?DEFAULT_MAX_BODY_LENGTH) of
+        infinity -> infinity;
+        Length when is_integer(Length), Length >= 0 -> Length;
+        _ -> ?DEFAULT_MAX_BODY_LENGTH
     end.
 
 is_multipart(Req) ->
     content_type(Req) =:= {~"multipart", ~"form-data"}.
 
-read_body(Req, Acc) ->
-    case cowboy_req:read_body(Req) of
-        {ok, Data, Req0} -> Req0#{body => <<Acc/binary, Data/binary>>};
-        {more, Data, Req0} -> read_body(Req0, <<Acc/binary, Data/binary>>)
+%% A declared length over the limit is refused before anything is read. A
+%% chunked body is read until it passes the limit; Cowboy returns once it has
+%% the bytes asked for, so no more than one past the limit is waited for.
+read_body(Req, MaxLength) ->
+    case cowboy_req:body_length(Req) of
+        Length when is_integer(Length), MaxLength =/= infinity, Length > MaxLength -> {too_large, Req};
+        _ -> read_body(Req, MaxLength, <<>>)
+    end.
+
+read_body(Req, MaxLength, Acc) ->
+    ReadLength = case MaxLength of
+                     infinity -> ?CHUNK_LENGTH;
+                     _ -> min(?CHUNK_LENGTH, MaxLength - byte_size(Acc) + 1)
+                 end,
+    {Status, Data, Req0} = cowboy_req:read_body(Req, #{length => ReadLength, period => ?CHUNK_PERIOD}),
+    Body = <<Acc/binary, Data/binary>>,
+    case {Status, MaxLength =/= infinity andalso byte_size(Body) > MaxLength} of
+        {_, true} -> {too_large, Req0};
+        {ok, false} -> {ok, Req0#{body => Body}};
+        {more, false} -> read_body(Req0, MaxLength, Body)
     end.
 
 should_read_body([]) -> false;
