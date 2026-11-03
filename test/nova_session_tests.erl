@@ -108,6 +108,8 @@ nova_session_ets_test_() ->
       fun renew_without_session/0,
       fun renew_sets_cookie_without_stream_handler/0,
       fun delete_expires_cookie_without_stream_handler/0,
+      fun invalid_cookie_name_raises_without_stream_handler/0,
+      fun invalid_cookie_domain_raises_without_stream_handler/0,
       fun renew_with_stream_handler_sets_no_cookie/0,
       fun use_sessions_bootstrap_app_wins/0,
       fun known_presented_id_is_used/0,
@@ -253,6 +255,31 @@ delete_expires_cookie_without_stream_handler() ->
     {ok, SId} = nova_session:generate_session_id(),
     {ok, Req1} = nova_session:delete(req_with_cookie(SId)),
     #{resp_cookie := #{name := ~"session_id", value := <<>>, opts := #{max_age := 0}}} = Req1.
+
+%% cowboy_req:set_resp_cookie/4 is mocked here, so the refusal is Nova's own
+%% and does not depend on the cowlib version. The mocked request only carries
+%% a session_id cookie, so delete/1 is checked with the invalid domain.
+invalid_cookie_name_raises_without_stream_handler() ->
+    application:set_env(nova, session_cookie_name, ~"app:sid"),
+    try
+        {ok, SId} = nova_session:generate_session_id(),
+        ?assertError({invalid_session_cookie_config, #{name := ~"app:sid"}},
+                     nova_session:renew(req_with_cookie(SId)))
+    after
+        application:unset_env(nova, session_cookie_name)
+    end.
+
+invalid_cookie_domain_raises_without_stream_handler() ->
+    application:set_env(nova, session_cookie_opts, #{domain => <<"a\nb">>}),
+    try
+        {ok, SId} = nova_session:generate_session_id(),
+        ?assertError({invalid_session_cookie_config, #{domain := <<"a\nb">>}},
+                     nova_session:renew(req_with_cookie(SId))),
+        ?assertError({invalid_session_cookie_config, #{domain := <<"a\nb">>}},
+                     nova_session:delete(req_with_cookie(SId)))
+    after
+        application:unset_env(nova, session_cookie_opts)
+    end.
 
 renew_with_stream_handler_sets_no_cookie() ->
     {ok, SId} = nova_session:generate_session_id(),
