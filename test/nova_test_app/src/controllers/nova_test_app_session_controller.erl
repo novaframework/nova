@@ -21,11 +21,11 @@ get(Req) ->
 renew(Req) ->
     {ok, Req1} = nova_session:renew(Req),
     ok = nova_session:set(Req1, ~"value", ~"renewed"),
-    {json, #{renewed => true}}.
+    {json, 200, #{}, Req1, #{renewed => true}}.
 
 delete(Req) ->
-    {ok, _Req1} = nova_session:delete(Req),
-    {json, #{deleted => true}}.
+    {ok, Req1} = nova_session:delete(Req),
+    {json, 200, #{}, Req1, #{deleted => true}}.
 
 untouched(_Req) ->
     {json, #{untouched => true}}.

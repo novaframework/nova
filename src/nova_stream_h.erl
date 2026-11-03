@@ -27,8 +27,6 @@
 
 -type state() :: #state{}.
 
--define(COOKIE, ~"session_id").
-
 -spec init(cowboy_stream:streamid(), cowboy_req:req(), cowboy:opts())
           -> {cowboy_stream:commands(), state()}.
 init(StreamID, Req, Opts) ->
@@ -89,7 +87,7 @@ init_session(Req) ->
     case nova_session:enabled() of
         true ->
             {ok, Pending} = nova_session:generate_session_id(),
-            case presented_session_id(Req) of
+            case nova_session:presented_session_id(Req) of
                 undefined ->
                     {Req#{nova_session_id => Pending}, #session{current = Pending}};
                 Presented ->
@@ -98,17 +96,6 @@ init_session(Req) ->
             end;
         false ->
             {Req, undefined}
-    end.
-
-presented_session_id(Req) ->
-    try lists:keyfind(?COOKIE, 1, cowboy_req:parse_cookies(Req)) of
-        {_, SessionId} when is_binary(SessionId), SessionId =/= <<>> ->
-            SessionId;
-        _ ->
-            undefined
-    catch
-        _:_ ->
-            undefined
     end.
 
 session_event(_Event, undefined) ->
@@ -124,11 +111,11 @@ session_event(_Event, Session) ->
 
 session_cookie(Headers, State = #state{session = #session{issue = true, current = SessionId} = Session,
                                        req = Req}) ->
-    Cookie = cow_cookie:setcookie(?COOKIE, SessionId, cookie_opts(Req)),
+    Cookie = cow_cookie:setcookie(nova_session:cookie_name(), SessionId, nova_session:cookie_opts(Req)),
     {add_cookie(Cookie, Headers),
      State#state{session = Session#session{presented = SessionId, issue = false}}};
 session_cookie(Headers, State = #state{session = #session{expire = true} = Session, req = Req}) ->
-    Cookie = cow_cookie:setcookie(?COOKIE, <<>>, (cookie_opts(Req))#{max_age => 0}),
+    Cookie = cow_cookie:setcookie(nova_session:cookie_name(), <<>>, (nova_session:cookie_opts(Req))#{max_age => 0}),
     {add_cookie(Cookie, Headers),
      State#state{session = Session#session{presented = undefined, expire = false}}};
 session_cookie(Headers, State) ->
@@ -140,19 +127,3 @@ add_cookie(Cookie, Headers) ->
                   Single -> [Single]
               end,
     Headers#{~"set-cookie" => Cookies ++ [Cookie]}.
-
-cookie_opts(Req) ->
-    Defaults = #{path => ~"/",
-                 http_only => true,
-                 same_site => lax,
-                 secure => maps:get(scheme, Req, ~"http") =:= ~"https"},
-    Opts = case application:get_env(nova, session_cookie_opts) of
-               {ok, Configured} when is_map(Configured) -> maps:merge(Defaults, Configured);
-               _ -> Defaults
-           end,
-    case application:get_env(nova, session_max_age) of
-        {ok, MaxAge} when is_integer(MaxAge), MaxAge > 0 ->
-            maps:merge(#{max_age => MaxAge}, Opts);
-        _ ->
-            Opts
-    end.

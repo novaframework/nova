@@ -60,13 +60,36 @@ of `{Module, Function}` in Nova.
 - **The session cookie is issued lazily.** Nova used to set a `session_id`
   cookie on every response to a client without one. It is now only sent with
   the response of a request that writes to the session (or calls `renew/1` or
-  `delete/1`), and carries `Path=/; HttpOnly; SameSite=Lax`, plus `Secure` over
-  HTTPS. As before, `nova_session_id` is only in the request for a client that
+  `delete/1`), and carries `Path=/; HttpOnly; SameSite=Lax`. As before, `nova_session_id` is only in the request for a client that
   sent no cookie; use `nova_session` rather than reading it, since that id only
   reaches the client once the session is written.
 
 - **Presented ids the backend does not know are replaced**, for backends that
   implement `session_exists/1` (`nova_session_ets` does). Sessions held by
   another node, for example during a rolling deploy, are among them.
+
+- **Sessions expire after 14 days by default.** `session_max_age` used to
+  default to no limit; it is now `1209600` seconds, which also sets the
+  cookie's `Max-Age`. Set `{session_max_age, infinity}` for the old behaviour.
+
+- **The cookie is `Secure` unless the environment is `dev`.** It used to be
+  `Secure` only when the request came in over HTTPS, which a proxy that
+  terminates TLS hides. A staging environment served over plain HTTP needs
+  `{environment, dev}` or `#{secure => false}` in `session_cookie_opts`.
+
+- **Two different session cookies mean no session.** A request carrying two
+  or more different session ids (for example one set for a parent domain) is
+  treated as having none instead of using the first. A warning is logged once
+  per node. The new `session_cookie_name` option takes a `__Host-` name,
+  which prevents this; changing the name signs every client out once.
+
+- **Session settings follow the bootstrap application.** `session_cookie_opts`,
+  `session_max_age`, `session_cookie_name` and the new `redact_keys` are read
+  like `use_sessions`: the bootstrap application first, then `nova`.
+
+- **Without `nova_stream_h`, `renew/1` and `delete/1` set the cookie on the
+  request they return.** Return that request from the controller.
+
+- **A session manager without `session_exists/1` gets a warning at boot.**
 
 - Use `nova_session:renew/1` at sign-in.

@@ -36,6 +36,9 @@ cleanup(Pid) ->
     application:unset_env(nova, session_manager),
     application:unset_env(nova, session_cookie_opts),
     application:unset_env(nova, session_max_age),
+    application:unset_env(nova, session_cookie_name),
+    application:unset_env(nova, environment),
+    application:unset_env(nova_stream_h_tests_app, session_max_age),
     ok.
 
 stream_test_() ->
@@ -44,8 +47,15 @@ stream_test_() ->
       fun no_cookie_when_session_is_not_written/0,
       fun cookie_issued_when_session_is_written/0,
       fun default_cookie_attributes/0,
+      fun dev_cookie_attributes/0,
       fun secure_over_https/0,
+      fun max_age_infinity_has_no_max_age/0,
+      fun settings_are_read_from_bootstrap_app/0,
+      fun host_prefixed_cookie_name/0,
+      fun two_session_cookies_mean_no_session/0,
+      fun repeated_identical_cookie_is_one_session/0,
       fun configured_cookie_attributes/0,
+      fun invalid_cookie_opts_are_ignored/0,
       fun known_session_is_kept/0,
       fun unknown_session_is_replaced/0,
       fun no_backend_lookup_in_connection_process/0,
@@ -73,14 +83,66 @@ cookie_issued_when_session_is_written() ->
     ?assertMatch(<<"session_id=", _/binary>>, Cookie),
     ?assertEqual(Id, cookie_value(Cookie)).
 
+%% Behind a proxy that terminates TLS the request is plain http, so the cookie
+%% is Secure unless the environment is explicitly dev.
 default_cookie_attributes() ->
     {#{nova_session_id := Id}, State} = start(req()),
     [Cookie] = set_cookies(respond(event({written, Id}, State))),
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Path=/")),
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; HttpOnly")),
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; SameSite=Lax")),
-    ?assertEqual(nomatch, binary:match(Cookie, ~"; Secure")),
+    ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Secure")),
+    ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Max-Age=1209600")).
+
+dev_cookie_attributes() ->
+    application:set_env(nova, environment, dev),
+    {#{nova_session_id := Id}, State} = start(req()),
+    [Cookie] = set_cookies(respond(event({written, Id}, State))),
+    ?assertEqual(nomatch, binary:match(Cookie, ~"; Secure")).
+
+max_age_infinity_has_no_max_age() ->
+    application:set_env(nova, session_max_age, infinity),
+    {#{nova_session_id := Id}, State} = start(req()),
+    [Cookie] = set_cookies(respond(event({written, Id}, State))),
     ?assertEqual(nomatch, binary:match(Cookie, ~"Max-Age")).
+
+settings_are_read_from_bootstrap_app() ->
+    application:set_env(nova, bootstrap_application, nova_stream_h_tests_app),
+    application:set_env(nova_stream_h_tests_app, session_max_age, 60),
+    application:set_env(nova, session_max_age, 3600),
+    {#{nova_session_id := Id}, State} = start(req()),
+    [Cookie] = set_cookies(respond(event({written, Id}, State))),
+    ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Max-Age=60")).
+
+%% Browsers only store a __Host- cookie that is Secure, has Path=/ and no
+%% Domain, so those win over session_cookie_opts.
+host_prefixed_cookie_name() ->
+    application:set_env(nova, environment, dev),
+    application:set_env(nova, session_cookie_name, ~"__Host-session_id"),
+    application:set_env(nova, session_cookie_opts, #{domain => ~"example.com", path => ~"/app"}),
+    ok = nova_session_ets:set_value(~"known", ~"k", ~"v"),
+    {Req, _} = start(req(~"session_id=other; __Host-session_id=known")),
+    ?assertEqual(~"known", maps:get(nova_session_presented, Req)),
+    {#{nova_session_id := Id}, State} = start(req()),
+    [Cookie] = set_cookies(respond(event({written, Id}, State))),
+    ?assertMatch(<<"__Host-session_id=", _/binary>>, Cookie),
+    ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Secure")),
+    ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Path=/;")),
+    ?assertEqual(nomatch, binary:match(Cookie, ~"Domain")).
+
+%% A cookie of the same name set for a parent domain or path arrives next to
+%% ours; neither is trusted.
+two_session_cookies_mean_no_session() ->
+    ok = nova_session_ets:set_value(~"one", ~"k", ~"v"),
+    ok = nova_session_ets:set_value(~"two", ~"k", ~"v"),
+    {Req, _} = start(req(~"session_id=one; session_id=two")),
+    ?assertNot(maps:is_key(nova_session_presented, Req)),
+    ?assert(is_binary(maps:get(nova_session_id, Req))),
+    ?assert(persistent_term:get({nova_session, ambiguous_cookie_warned}, false)).
+
+repeated_identical_cookie_is_one_session() ->
+    {Req, _} = start(req(~"session_id=same; session_id=same")),
+    ?assertEqual(~"same", maps:get(nova_session_presented, Req)).
 
 secure_over_https() ->
     {#{nova_session_id := Id}, State} = start((req())#{scheme => ~"https"}),
@@ -98,6 +160,15 @@ configured_cookie_attributes() ->
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Domain=example.com")),
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Max-Age=3600")),
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; HttpOnly")).
+
+invalid_cookie_opts_are_ignored() ->
+    application:set_env(nova, session_cookie_opts, #{path => "/not-a-binary", same_site => sideways,
+                                                     unknown => 1, http_only => false}),
+    {#{nova_session_id := Id}, State} = start(req()),
+    [Cookie] = set_cookies(respond(event({written, Id}, State))),
+    ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Path=/;")),
+    ?assertNotEqual(nomatch, binary:match(Cookie, ~"; SameSite=Lax")),
+    ?assertEqual(nomatch, binary:match(Cookie, ~"HttpOnly")).
 
 known_session_is_kept() ->
     ok = nova_session_ets:set_value(~"known", ~"k", ~"v"),

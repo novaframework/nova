@@ -7,11 +7,11 @@
 The default session backend. Sessions live in an ETS table on every node and
 are replicated through `nova_pubsub`.
 
-With `{nova, [{session_max_age, Seconds}]}` a session is dropped `Seconds`
-after it was created, whatever happens to it in between. Without it sessions
-live until they are deleted or the node restarts. Expired sessions are swept
-once a minute, also when `session_max_age` is set after startup; a session
-created before it was set never expires.
+A session is dropped `session_max_age` seconds (14 days by default) after it
+was created, whatever happens to it in between. With
+`{nova, [{session_max_age, infinity}]}` sessions live until they are deleted
+or the node restarts. Expired sessions are swept once a minute; a session
+created while the setting was `infinity` never expires.
 
 Sessions do not survive a restart, and a node that starts or joins later only
 has the sessions written after it joined. During a rolling deploy or behind a
@@ -256,9 +256,9 @@ expired(infinity) -> false;
 expired(ExpiresAt) -> ExpiresAt =< erlang:system_time(millisecond).
 
 max_age() ->
-    case application:get_env(nova, session_max_age) of
-        {ok, MaxAge} when is_integer(MaxAge), MaxAge > 0 -> MaxAge;
-        _ -> undefined
+    case nova_session:max_age() of
+        infinity -> undefined;
+        MaxAge -> MaxAge
     end.
 
 schedule_sweep() ->

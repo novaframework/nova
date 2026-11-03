@@ -37,8 +37,7 @@ get_falls_back_to_cookie_test() ->
     setup_meck(),
     try
         SessionId = <<"cookie-session-id">>,
-        meck:expect(cowboy_req, match_cookies,
-                    fun([{session_id, [], undefined}], _Req) -> #{session_id => SessionId} end),
+        meck:expect(cowboy_req, parse_cookies, fun(_Req) -> [{~"session_id", SessionId}] end),
         meck:expect(nova_session_ets, get_value,
                     fun(SId, <<"key">>) when SId =:= SessionId -> {ok, <<"val">>} end),
         Req = #{},

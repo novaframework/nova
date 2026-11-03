@@ -20,10 +20,12 @@ setup() ->
     application:set_env(nova, session_manager, nova_session_ets),
     {ok, Pid} = nova_session_ets:start_link(),
     meck:new(cowboy_req, [non_strict]),
-    meck:expect(cowboy_req, match_cookies,
-                fun([{session_id, [], undefined}], Req) ->
-                    SId = maps:get(cookie_session_id, Req, undefined),
-                    #{session_id => SId}
+    meck:expect(cowboy_req, parse_cookies,
+                fun(Req) ->
+                    case maps:get(cookie_session_id, Req, undefined) of
+                        undefined -> [];
+                        SId -> [{~"session_id", SId}]
+                    end
                 end),
     meck:expect(cowboy_req, set_resp_cookie,
                 fun(Name, Value, Req, Opts) ->
@@ -104,6 +106,9 @@ nova_session_ets_test_() ->
       fun renew_drops_old_session/0,
       fun renew_tells_stream_handler/0,
       fun renew_without_session/0,
+      fun renew_sets_cookie_without_stream_handler/0,
+      fun delete_expires_cookie_without_stream_handler/0,
+      fun renew_with_stream_handler_sets_no_cookie/0,
       fun use_sessions_bootstrap_app_wins/0,
       fun known_presented_id_is_used/0,
       fun unknown_presented_id_is_replaced/0,
@@ -232,6 +237,29 @@ renew_tells_stream_handler() ->
     {ok, SId} = nova_session:generate_session_id(),
     {ok, #{nova_session_id := NewId}} = nova_session:renew(stream_req(SId)),
     ?assertEqual({renewed, NewId}, stream_event()).
+
+%% Without nova_stream_h, renew/1 and delete/1 put the cookie on the request.
+renew_sets_cookie_without_stream_handler() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    {ok, Req1} = nova_session:renew(req_with_cookie(SId)),
+    #{nova_session_id := NewId, resp_cookie := #{name := Name, value := Value, opts := Opts}} = Req1,
+    ?assertEqual({~"session_id", NewId}, {Name, Value}),
+    ?assertMatch(#{path := ~"/", http_only := true, max_age := 1209600}, Opts),
+    {ok, Req2} = nova_session:renew(Req1),
+    #{nova_session_id := NewerId, resp_cookie := #{value := NewerId}} = Req2,
+    ?assertNotEqual(NewId, NewerId).
+
+delete_expires_cookie_without_stream_handler() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    {ok, Req1} = nova_session:delete(req_with_cookie(SId)),
+    #{resp_cookie := #{name := ~"session_id", value := <<>>, opts := #{max_age := 0}}} = Req1.
+
+renew_with_stream_handler_sets_no_cookie() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    {ok, Req1} = nova_session:renew(req_with_session(SId)),
+    ?assertNot(is_map_key(resp_cookie, Req1)),
+    {ok, Req2} = nova_session:delete(Req1),
+    ?assertNot(is_map_key(resp_cookie, Req2)).
 
 renew_without_session() ->
     {ok, #{nova_session_id := NewId}} = nova_session:renew(nova_test_helper:mock_req(~"GET", ~"/")),
