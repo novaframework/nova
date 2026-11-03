@@ -1,6 +1,7 @@
 -module(nova_stream_h).
 -moduledoc false.
 -behavior(cowboy_stream).
+-include_lib("kernel/include/logger.hrl").
 
 -export([
          init/3,
@@ -111,15 +112,26 @@ session_event(_Event, Session) ->
 
 session_cookie(Headers, State = #state{session = #session{issue = true, current = SessionId} = Session,
                                        req = Req}) ->
-    Cookie = cow_cookie:setcookie(nova_session:cookie_name(), SessionId, nova_session:cookie_opts(Req)),
-    {add_cookie(Cookie, Headers),
+    {with_cookie(SessionId, nova_session:cookie_opts(Req), Headers),
      State#state{session = Session#session{presented = SessionId, issue = false}}};
 session_cookie(Headers, State = #state{session = #session{expire = true} = Session, req = Req}) ->
-    Cookie = cow_cookie:setcookie(nova_session:cookie_name(), <<>>, (nova_session:cookie_opts(Req))#{max_age => 0}),
-    {add_cookie(Cookie, Headers),
+    {with_cookie(<<>>, (nova_session:cookie_opts(Req))#{max_age => 0}, Headers),
      State#state{session = Session#session{presented = undefined, expire = false}}};
 session_cookie(Headers, State) ->
     {Headers, State}.
+
+%% A raise here would make Cowboy send its 500 back through this handler and
+%% raise again, forever, so a cookie cow_cookie refuses is dropped instead.
+with_cookie(Value, Opts, Headers) ->
+    Name = nova_session:cookie_name(),
+    try cow_cookie:setcookie(Name, Value, Opts) of
+        Cookie -> add_cookie(Cookie, Headers)
+    catch
+        error:_ ->
+            ?LOG_ERROR(#{msg => ~"Session cookie not set: session_cookie_name or session_cookie_opts is invalid",
+                         cookie => Name}),
+            Headers
+    end.
 
 add_cookie(Cookie, Headers) ->
     Cookies = case maps:get(~"set-cookie", Headers, []) of

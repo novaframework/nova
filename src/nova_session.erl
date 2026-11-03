@@ -40,6 +40,7 @@ above.
          enabled/0,
          cookie_name/0,
          cookie_opts/1,
+         validate_cookie_config/0,
          presented_session_id/1,
          max_age/0
         ]).
@@ -227,8 +228,10 @@ max_age() ->
 -doc false.
 -spec cookie_opts(cowboy_req:req()) -> cow_cookie:cookie_opts().
 cookie_opts(Req) ->
-    Secure = application:get_env(nova, environment) =/= {ok, dev}
-        orelse maps:get(scheme, Req, ~"http") =:= ~"https",
+    cookie_opts_for(maps:get(scheme, Req, ~"http")).
+
+cookie_opts_for(Scheme) ->
+    Secure = application:get_env(nova, environment) =/= {ok, dev} orelse Scheme =:= ~"https",
     Defaults = #{path => ~"/", http_only => true, same_site => lax, secure => Secure},
     Defaults0 = case max_age() of
                     infinity -> Defaults;
@@ -241,6 +244,19 @@ cookie_opts(Req) ->
     case cookie_name() of
         <<"__Host-", _/binary>> -> maps:remove(domain, Opts#{secure => true, path => ~"/"});
         _ -> Opts
+    end.
+
+%% cow_cookie:setcookie/3 raises on a name that is not an RFC 6265 token or an
+%% attribute with control or non-ASCII bytes. Checked at boot so a bad setting
+%% stops the node instead of failing every response that sets the cookie.
+-doc false.
+-spec validate_cookie_config() -> ok.
+validate_cookie_config() ->
+    Name = cookie_name(),
+    try cow_cookie:setcookie(Name, ~"x", cookie_opts_for(~"http")) of
+        _ -> ok
+    catch
+        error:_ -> erlang:error({invalid_session_cookie_config, #{name => Name}})
     end.
 
 merge_cookie_opts([], Opts) ->

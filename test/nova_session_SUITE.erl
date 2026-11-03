@@ -3,6 +3,9 @@
 
 -export([all/0, groups/0, init_per_suite/1, end_per_suite/1, init_per_group/2, end_per_group/2]).
 
+%% Logger handler callback: forwards every event to the test process.
+-export([log/2]).
+
 -export([
          no_cookie_until_session_is_written/1,
          cookie_has_safe_attributes/1,
@@ -10,6 +13,8 @@
          unknown_session_id_is_replaced/1,
          renew_rotates_session_id/1,
          delete_clears_cookie/1,
+         invalid_cookie_name_at_runtime_drops_the_cookie/1,
+         invalid_cookie_name_fails_boot/1,
          renew_sets_cookie_without_stream_h/1,
          delete_expires_cookie_without_stream_h/1
         ]).
@@ -25,6 +30,8 @@ all() ->
      unknown_session_id_is_replaced,
      renew_rotates_session_id,
      delete_clears_cookie,
+     invalid_cookie_name_at_runtime_drops_the_cookie,
+     invalid_cookie_name_fails_boot,
      {group, without_stream_h}
     ].
 
@@ -141,6 +148,40 @@ delete_expires_cookie_without_stream_h(Config) ->
     {200, _, Body} = get(Config, "/session/get", Id),
     ?assertEqual(#{~"value" => null}, json:decode(Body)).
 
+%% cow_cookie raises on a name that is not a token. That used to loop on
+%% Cowboy's 500 path in nova_stream_h, logging the request on every pass.
+invalid_cookie_name_at_runtime_drops_the_cookie(Config) ->
+    ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
+    application:set_env(nova, session_cookie_name, ~"app:sid"),
+    try
+        {ok, {{_, Status, _}, Headers, _}} =
+            httpc:request(get, {?config(base, Config) ++ "/session/set/a",
+                                [{"authorization", "Bearer AUTH_SECRET"}]},
+                          [{timeout, 5000}], [{body_format, binary}]),
+        ?assertEqual(200, Status),
+        ?assertEqual([], [V || {N, V} <- Headers, string:lowercase(N) =:= "set-cookie"]),
+        timer:sleep(200),
+        Logs = logged(),
+        ?assertMatch([#{cookie := ~"app:sid"}],
+                     [R || {report, #{msg := <<"Session cookie not set", _/binary>>} = R} <- Logs]),
+        ?assertEqual(nomatch, string:find(io_lib:format("~p", [Logs]), "AUTH_SECRET"))
+    after
+        application:unset_env(nova, session_cookie_name),
+        logger:remove_handler(?MODULE)
+    end.
+
+%% Leaves Nova stopped; the next group starts it again.
+invalid_cookie_name_fails_boot(_Config) ->
+    application:stop(nova_test_app),
+    application:stop(nova),
+    application:set_env(nova, session_cookie_name, ~"app:sid"),
+    try
+        {error, Reason} = application:ensure_all_started(nova_test_app),
+        ?assertNotEqual(nomatch, string:find(io_lib:format("~p", [Reason]), "invalid_session_cookie_config"))
+    after
+        application:unset_env(nova, session_cookie_name)
+    end.
+
 %%====================================================================
 %% Helpers
 %%====================================================================
@@ -168,3 +209,14 @@ free_port() ->
     {ok, Port} = inet:port(Socket),
     ok = gen_tcp:close(Socket),
     Port.
+
+log(#{msg := Msg}, #{config := #{test_pid := Pid}}) ->
+    Pid ! {logged, Msg},
+    ok.
+
+logged() ->
+    receive
+        {logged, Msg} -> [Msg | logged()]
+    after 0 ->
+            []
+    end.
