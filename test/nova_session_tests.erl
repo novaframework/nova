@@ -49,6 +49,24 @@ req_with_session(SessionId) ->
 req_with_cookie(SessionId) ->
     #{cookie_session_id => SessionId}.
 
+%% A request whose connection process is a stand-in that forwards what
+%% nova_session tells the stream handler.
+stream_req(SessionId) ->
+    Self = self(),
+    Conn = spawn_link(fun() ->
+                              receive
+                                  {{_Pid, 7}, Event} -> Self ! {stream_event, Event}
+                              end
+                      end),
+    #{nova_session_id => SessionId, pid => Conn, streamid => 7}.
+
+stream_event() ->
+    receive
+        {stream_event, {nova_session, Event}} -> Event
+    after 1000 ->
+            error(no_stream_event)
+    end.
+
 %%====================================================================
 %% Test generators
 %%====================================================================
@@ -68,7 +86,13 @@ nova_session_ets_test_() ->
       fun no_session_returns_error/0,
       fun no_session_delete_returns_ok/0,
       fun sessions_disabled_throws/0,
-      fun delete_sets_expired_cookie/0,
+      fun delete_moves_request_to_new_session/0,
+      fun delete_tells_stream_handler/0,
+      fun set_tells_stream_handler/0,
+      fun renew_drops_old_session/0,
+      fun renew_tells_stream_handler/0,
+      fun renew_without_session/0,
+      fun use_sessions_read_from_nova_env/0,
       fun delete_key_preserves_other_keys/0,
       fun set_overwrites_existing_key/0,
       fun generate_session_id_format/0
@@ -151,13 +175,65 @@ sessions_disabled_throws() ->
     ?assertThrow({nova_session, unsupported_session_used}, nova_session:delete(Req, <<"k">>)),
     application:set_env(nova, use_sessions, true).
 
-delete_sets_expired_cookie() ->
+delete_moves_request_to_new_session() ->
     {ok, SId} = nova_session:generate_session_id(),
     Req = req_with_session(SId),
     ok = nova_session:set(Req, <<"key">>, <<"val">>),
-    sync(),
     {ok, Req1} = nova_session:delete(Req),
-    ?assertMatch(#{resp_cookie := #{name := <<"session_id">>, opts := #{max_age := 0}}}, Req1).
+    #{nova_session_id := NewId} = Req1,
+    ?assertNotEqual(SId, NewId),
+    ok = nova_session:set(Req1, ~"other", ~"x"),
+    ?assertEqual({error, not_found}, nova_session:get(Req, ~"other")),
+    ?assertEqual({ok, ~"x"}, nova_session:get(Req1, ~"other")).
+
+delete_tells_stream_handler() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    Req = stream_req(SId),
+    {ok, #{nova_session_id := NewId}} = nova_session:delete(Req),
+    ?assertEqual({deleted, NewId}, stream_event()).
+
+set_tells_stream_handler() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    ok = nova_session:set(stream_req(SId), ~"k", ~"v"),
+    ?assertEqual({written, SId}, stream_event()).
+
+renew_drops_old_session() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    Req = req_with_session(SId),
+    ok = nova_session:set(Req, ~"user_id", ~"1"),
+    {ok, Req1} = nova_session:renew(Req),
+    #{nova_session_id := NewId} = Req1,
+    ?assertNotEqual(SId, NewId),
+    ?assertEqual({error, not_found}, nova_session:get(Req, ~"user_id")),
+    ?assertEqual({error, not_found}, nova_session:get(Req1, ~"user_id")),
+    ok = nova_session:set(Req1, ~"user_id", ~"2"),
+    ?assertEqual({ok, ~"2"}, nova_session:get(Req1, ~"user_id")),
+    ?assertNot(nova_session_ets:session_exists(SId)).
+
+renew_tells_stream_handler() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    {ok, #{nova_session_id := NewId}} = nova_session:renew(stream_req(SId)),
+    ?assertEqual({renewed, NewId}, stream_event()).
+
+renew_without_session() ->
+    {ok, #{nova_session_id := NewId}} = nova_session:renew(#{}),
+    ?assert(is_binary(NewId)).
+
+use_sessions_read_from_nova_env() ->
+    application:set_env(nova, bootstrap_application, nova_session_tests_app),
+    application:set_env(nova_session_tests_app, use_sessions, true),
+    application:set_env(nova, use_sessions, false),
+    try
+        ?assertNot(nova_session:enabled()),
+        application:unset_env(nova, use_sessions),
+        ?assert(nova_session:enabled()),
+        application:set_env(nova_session_tests_app, use_sessions, false),
+        ?assertNot(nova_session:enabled())
+    after
+        application:unset_env(nova_session_tests_app, use_sessions),
+        application:set_env(nova, bootstrap_application, nova),
+        application:set_env(nova, use_sessions, true)
+    end.
 
 delete_key_preserves_other_keys() ->
     {ok, SId} = nova_session:generate_session_id(),

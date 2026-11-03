@@ -27,10 +27,12 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 | Key | Description | Value | Default |
 |-----|-------------|-------|---------|
 | `use_persistent_term` | Use `persistent_term` module to store routing tree | `boolean()` | `true` |
-| `use_stacktrace` | If Nova should include stacktrace in error-pages | `boolean()` | `false` |
+| `use_stacktrace` | If Nova should include stacktrace in error-pages and crash logs. Argument lists are replaced by their arity and request maps by their method and path, so headers and cookies never end up in either. | `boolean()` | `false` |
 | `render_error_pages` | If Nova should render error-pages for HTML-request | `boolean()` | `true` |
 | `use_sessions` | Turn off/on support for sessions | `boolean()` | `true` |
 | `session_manager` | Specifify a module to use as the session manager. Defaults to `nova_session_ets` | `atom()` | `nova_session_ets` |
+| `session_cookie_opts` | Options for the `session_id` cookie, merged over the defaults. See the [Sessions](sessions.md) guide. | `cowboy_req:cookie_opts()` | `#{path => <<"/">>, http_only => true, same_site => lax, secure => <request is HTTPS>}` |
+| `session_max_age` | Seconds a session lives after it was created. Sets the cookie's `Max-Age` and expires `nova_session_ets` entries. | `pos_integer()` | `undefined` (no limit) |
 | `use_strict_routing`    | If the routing module should work under the strict mode. Using strict mode will cause errors if non-deterministic paths are detected. This is a beta-function so use with caution. | `boolean()` | `false` |
 | `bootstrap_application` | Define which application to bootstrap with Nova. This should be the name of your application. | `atom()` | *Will crash if not defined* |
 | `cowboy_configuration` | If you need some additional configuration done to Cowboy this is the place. Check `nova_sup` module to learn which keys that can be defined. | `map()` | `#{}` |
