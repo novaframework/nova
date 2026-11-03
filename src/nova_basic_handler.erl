@@ -186,17 +186,29 @@ handle_redirect({redirect, Route}, _Callback, Req) ->
     Req1 = Req0#{resp_status_code => 302},
     {ok, Req1}.
 
+%% A location header value: valid UTF-8 without control characters, so a
+%% redirect target can neither split the response nor make Cowboy crash it.
 -doc false.
 -spec location(binary() | string()) -> binary() | error.
 location(Url) when is_binary(Url) ->
-    Url;
+    case valid_location(Url) of
+        true -> Url;
+        false -> error
+    end;
 location(Url) ->
     try unicode:characters_to_binary(Url) of
-        Location when is_binary(Location) -> Location;
+        Location when is_binary(Location) -> location(Location);
         _ -> error
     catch
         error:badarg -> error
     end.
+
+valid_location(<<C/utf8, Rest/binary>>) when C =:= $\t; C >= 16#20, C =/= 16#7F ->
+    valid_location(Rest);
+valid_location(<<>>) ->
+    true;
+valid_location(_) ->
+    false.
 
 %%--------------------------------------------------------------------
 -doc """

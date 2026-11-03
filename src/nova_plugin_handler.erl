@@ -118,8 +118,16 @@ handle_reply(_Reply, _Req) ->
 
 unsupported_reply(Callback, Reply, Req, Env) ->
     ?LOG_ERROR(#{msg => ~"Plugin returned an unsupported reply", plugin => plugin_module(Callback),
-                 reply => nova_redact:term(Reply)}),
+                 reply => nova_redact:term(loggable_reply(Reply))}),
     render_500(Req, Env, #{class => error, reason => unsupported_plugin_reply}).
+
+%% A redirect target's query string and fragment can carry tokens.
+loggable_reply({redirect, Url}) when is_binary(Url) ->
+    {redirect, hd(binary:split(Url, [~"?", ~"#"]))};
+loggable_reply({redirect, _Url}) ->
+    {redirect, redacted};
+loggable_reply(Reply) ->
+    Reply.
 
 %% The status page runs through nova_handler and then the post_request phase.
 %% Marking the pre_request phase done keeps the pre plugins from running twice.

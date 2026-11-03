@@ -105,7 +105,11 @@ handle_json_old_order_warns_once_test_() ->
 location_test() ->
     ?assertEqual(~"/login", nova_basic_handler:location(~"/login")),
     ?assertEqual(~"/söka", nova_basic_handler:location("/söka")),
-    ?assertEqual(error, nova_basic_handler:location([16#D800])).
+    ?assertEqual(error, nova_basic_handler:location([16#D800])),
+    ?assertEqual(~"/a\tb", nova_basic_handler:location(~"/a\tb")),
+    [?assertEqual(error, nova_basic_handler:location(Bad))
+     || Bad <- [<<"/a", 0, "b">>, ~"/a\r\nset-cookie: x=1", ~"/a\nb", <<"/x", 255>>, <<"/a", 127>>,
+                "/a\r\nset-cookie: x=1", [$/, 0]]].
 
 %%====================================================================
 %% handle_status/3

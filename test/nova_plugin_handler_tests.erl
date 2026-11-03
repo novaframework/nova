@@ -184,6 +184,26 @@ stop_redirect_invalid_location_is_a_500_test_() ->
         ?assertEqual(500, maps:get(resp_status_code, Req1))
     end}.
 
+%% Control bytes and invalid UTF-8 would split the response or make Cowboy
+%% crash it; they get the 500 page and a log line without the query string.
+stop_redirect_with_control_bytes_is_a_500_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
+        try
+            [begin
+                 P = fun(R, _Env, _Opts, _State) -> {stop, {redirect, Url}, R, #{}} end,
+                 {ok, Req1, _} = nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env()),
+                 ?assertEqual(500, maps:get(resp_status_code, Req1)),
+                 Logs = logged(),
+                 ?assertMatch([{report, #{msg := ~"Plugin returned an unsupported reply"}} | _], Logs),
+                 ?assertEqual(nomatch, binary:match(iolist_to_binary(io_lib:format("~p", [Logs])), ~"TOKEN"))
+             end || Url <- [<<"/a", 0, "b?t=TOKEN">>, ~"/a\r\nset-cookie: x=1?t=TOKEN", <<"/x", 255, "?t=TOKEN">>,
+                            "/a\r\nb?t=TOKEN"]]
+        after
+            logger:remove_handler(?MODULE)
+        end
+    end}.
+
 %%====================================================================
 %% Pre plugin returns {stop, Req, State} -> {stop, Req}
 %%====================================================================
