@@ -196,9 +196,9 @@ stop_redirect_with_control_bytes_is_a_500_test_() ->
                  ?assertEqual(500, maps:get(resp_status_code, Req1)),
                  Logs = logged(),
                  ?assertMatch([{report, #{msg := ~"Plugin returned an unsupported reply"}} | _], Logs),
-                 ?assertEqual(nomatch, binary:match(iolist_to_binary(io_lib:format("~p", [Logs])), ~"TOKEN"))
+                 ?assertNot(has_text(Logs, ~"TOKEN"))
              end || Url <- [<<"/a", 0, "b?t=TOKEN">>, ~"/a\r\nset-cookie: x=1?t=TOKEN", <<"/x", 255, "?t=TOKEN">>,
-                            "/a\r\nb?t=TOKEN"]]
+                            "/a\r\nb?t=TOKEN", <<"https://user:TOKEN@host/a", 0>>]]
         after
             logger:remove_handler(?MODULE)
         end
@@ -604,3 +604,16 @@ logged() ->
 assert_not_leaked(Term) ->
     Text = iolist_to_binary(io_lib:format("~p", [Term])),
     ?assertEqual(nomatch, binary:match(Text, ~"VICTIMCOOKIE")).
+
+%% io_lib:format/2 prints a binary with a control byte as a list of integers,
+%% so a text search of its output would miss a leak.
+has_text(Bin, Needle) when is_binary(Bin) ->
+    binary:match(Bin, Needle) =/= nomatch;
+has_text(Tuple, Needle) when is_tuple(Tuple) ->
+    has_text(tuple_to_list(Tuple), Needle);
+has_text(Map, Needle) when is_map(Map) ->
+    has_text(maps:to_list(Map), Needle);
+has_text([Head | Tail], Needle) ->
+    has_text(Head, Needle) orelse has_text(Tail, Needle);
+has_text(_Term, _Needle) ->
+    false.

@@ -121,11 +121,8 @@ unsupported_reply(Callback, Reply, Req, Env) ->
                  reply => nova_redact:term(loggable_reply(Reply))}),
     render_500(Req, Env, #{class => error, reason => unsupported_plugin_reply}).
 
-%% A redirect target's query string and fragment can carry tokens.
-loggable_reply({redirect, Url}) when is_binary(Url) ->
-    {redirect, hd(binary:split(Url, [~"?", ~"#"]))};
-loggable_reply({redirect, _Url}) ->
-    {redirect, redacted};
+loggable_reply({redirect, Url}) ->
+    {redirect, nova_basic_handler:loggable_location(Url)};
 loggable_reply(Reply) ->
     Reply.
 

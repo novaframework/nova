@@ -9,7 +9,8 @@
          handle_sendfile/3,
          handle_websocket/3,
          handle_ws/2,
-         location/1
+         location/1,
+         loggable_location/1
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -178,13 +179,18 @@ Optionally you can attach the request object as the third argument. This is usef
                       Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()}.
 handle_redirect({redirect, Route, Req0}, Callback, _Req) ->
     handle_redirect({redirect, Route}, Callback, Req0);
-handle_redirect({redirect, Route}, Callback, Req) when is_list(Route) ->
-    handle_redirect({redirect, list_to_binary(Route)}, Callback, Req);
-handle_redirect({redirect, Route}, _Callback, Req) ->
-    Headers = #{<<"location">> => Route},
-    Req0 = cowboy_req:set_resp_headers(Headers, Req),
-    Req1 = Req0#{resp_status_code => 302},
-    {ok, Req1}.
+handle_redirect({redirect, Route}, Callback, Req) ->
+    case location(Route) of
+        error ->
+            {module, Module} = erlang:fun_info(Callback, module),
+            ?LOG_ERROR(#{msg => ~"Controller redirected to an invalid location", controller => Module,
+                         location => loggable_location(Route)}),
+            %% nova_handler renders the 500 status page for a thrown {Status, Reason}.
+            throw({500, #{status_code => 500, class => error, reason => invalid_redirect_location}});
+        Location ->
+            Req0 = cowboy_req:set_resp_headers(#{~"location" => Location}, Req),
+            {ok, Req0#{resp_status_code => 302}}
+    end.
 
 %% A location header value: valid UTF-8 without control characters, so a
 %% redirect target can neither split the response nor make Cowboy crash it.
@@ -209,6 +215,16 @@ valid_location(<<>>) ->
     true;
 valid_location(_) ->
     false.
+
+%% A redirect target for a log line: the query string, fragment and userinfo
+%% can carry tokens, so only the scheme, host and path are kept.
+-doc false.
+-spec loggable_location(term()) -> binary() | redacted.
+loggable_location(Url) when is_binary(Url) ->
+    [Target | _] = binary:split(Url, [~"?", ~"#"]),
+    re:replace(Target, "^((?:[A-Za-z][A-Za-z0-9+.-]*:)?//)[^/]*@", "\\1", [{return, binary}]);
+loggable_location(_Url) ->
+    redacted.
 
 %%--------------------------------------------------------------------
 -doc """

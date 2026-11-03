@@ -90,6 +90,16 @@ execute_controller_throw_status_test_() ->
         ?assertEqual(403, maps:get(resp_status_code, Req1))
     end}.
 
+execute_redirect_to_invalid_location_is_a_500_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Callback = fun(_Req) -> {redirect, ~"/a\r\nset-cookie: x=1"} end,
+        Req = nova_test_helper:mock_req(~"GET", ~"/"),
+        Env = #{callback => Callback, app => test_app, secure => false, controller_data => #{}},
+        {ok, Req1, _Env1} = nova_handler:execute(Req, Env),
+        ?assertEqual(500, maps:get(resp_status_code, Req1)),
+        ?assertNot(maps:is_key(~"location", maps:get(resp_headers, Req1, #{})))
+    end}.
+
 execute_controller_crash_with_stacktrace_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         persistent_term:put(nova_use_stacktrace, true),

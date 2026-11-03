@@ -14,6 +14,13 @@ log(#{msg := {report, Report}}, #{config := #{test_pid := Pid}}) ->
 log(_Event, _Config) ->
     ok.
 
+all_logged() ->
+    receive
+        {logged, Report} -> [{report, Report} | all_logged()]
+    after 50 ->
+            []
+    end.
+
 json_order_warnings() ->
     receive
         {logged, #{msg := <<"{json, Status, Headers, Req, JSON}", _/binary>>} = Report} ->
@@ -158,6 +165,31 @@ handle_redirect_list_route_test() ->
     {ok, Req1} = nova_basic_handler:handle_redirect({redirect, "/home"}, ?CALLBACK, Req),
     ?assertEqual(302, maps:get(resp_status_code, Req1)),
     ?assertEqual(<<"/home">>, maps:get(<<"location">>, maps:get(resp_headers, Req1))).
+
+%% A location Cowboy cannot send is a 500 from nova_handler, logged without
+%% the query string.
+handle_redirect_invalid_location_test_() ->
+    {setup,
+     fun() -> ok end,
+     fun(_) -> logger:remove_handler(?MODULE) end,
+     fun() ->
+         ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
+         Req = nova_test_helper:mock_req(~"GET", ~"/"),
+         [begin
+              ?assertThrow({500, #{status_code := 500, reason := invalid_redirect_location}},
+                           nova_basic_handler:handle_redirect({redirect, Route}, ?CALLBACK, Req)),
+              Reports = [R || {report, R} <- all_logged()],
+              ?assertMatch([#{msg := ~"Controller redirected to an invalid location", controller := dummy_mod}],
+                           Reports),
+              ?assertNot(has_text(Reports, ~"TOKEN"))
+          end || Route <- [~"/a\r\nb?t=TOKEN", <<"/x", 255, "?t=TOKEN">>, [$/, 16#110000], "/a\x{100}\r?t=TOKEN"]]
+     end}.
+
+loggable_location_test() ->
+    ?assertEqual(~"https://host/a", nova_basic_handler:loggable_location(~"https://user:pass@host/a?t=1#f")),
+    ?assertEqual(~"//host/x", nova_basic_handler:loggable_location(~"//user@host/x")),
+    ?assertEqual(~"/a@b/c", nova_basic_handler:loggable_location(~"/a@b/c?x=1")),
+    ?assertEqual(redacted, nova_basic_handler:loggable_location("/a?t=1")).
 
 handle_redirect_req_passthrough_test() ->
     Req = nova_test_helper:mock_req(<<"GET">>, <<"/">>),
@@ -398,3 +430,16 @@ handle_status_with_headers_test_() ->
 
 decoded_body(#{resp_body := Body}) when is_binary(Body) ->
     json:decode(Body).
+
+%% io_lib:format/2 prints a binary with a control byte as a list of integers,
+%% so a text search of its output would miss a leak.
+has_text(Bin, Needle) when is_binary(Bin) ->
+    binary:match(Bin, Needle) =/= nomatch;
+has_text(Tuple, Needle) when is_tuple(Tuple) ->
+    has_text(tuple_to_list(Tuple), Needle);
+has_text(Map, Needle) when is_map(Map) ->
+    has_text(maps:to_list(Map), Needle);
+has_text([Head | Tail], Needle) ->
+    has_text(Head, Needle) orelse has_text(Tail, Needle);
+has_text(_Term, _Needle) ->
+    false.
