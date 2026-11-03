@@ -59,6 +59,27 @@ plugin_strategy_on_route_entry_test_() ->
              ?assertEqual([nova_request_plugin], pre_request_modules(~"/local"))
      end}.
 
+%% The including application's nova_apps option wins, as override_secure does.
+plugin_strategy_app_option_wins_test_() ->
+    {setup,
+     fun() ->
+             Prev = setup(),
+             application:set_env(nova, plugins, [{pre_request, nova_correlation_plugin, #{}}]),
+             Prev
+     end,
+     fun(S) -> application:unset_env(nova, plugins), cleanup(S) end,
+     fun() ->
+             Callback = fun(_) -> {json, #{}} end,
+             Routes = [#{plugin_strategy => global_first,
+                         plugins => [{pre_request, nova_request_plugin, #{}}],
+                         routes => [{"/app-wins", Callback, #{methods => [get]}}]}],
+             Options = #{app => strategy_app, router_file => undefined, dispatch_key => nova_dispatch,
+                         plugin_strategy => local_only},
+             {ok, Dispatch, _} = nova_router:compile_paths(Routes, persistent_term:get(nova_dispatch), Options),
+             persistent_term:put(nova_dispatch, Dispatch),
+             ?assertEqual([nova_request_plugin], pre_request_modules(~"/app-wins"))
+     end}.
+
 pre_request_modules(Path) ->
     {ok, _, #nova_handler_value{plugins = Plugins}} = nova_router:lookup_url('_', Path, ~"GET"),
     case proplists:get_value(pre_request, Plugins, []) of

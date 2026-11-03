@@ -363,8 +363,13 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     App = maps:get(app, Options),
     RouterFile = maps:get(router_file, Options),
 
-    %% A route entry's own strategy wins over the one given for the app.
-    Strategy = maps:get(plugin_strategy, RouteInfo, maps:get(plugin_strategy, Options, local_or_global)),
+    %% As with override_secure, the including application's nova_apps option
+    %% wins over what the route entry declares for itself.
+    Strategy =
+        case Options of
+            #{plugin_strategy := AppStrategy} -> AppStrategy;
+            _ -> maps:get(plugin_strategy, RouteInfo, local_or_global)
+        end,
     Plugins = resolve_plugins(Strategy, RouteInfo, RouterFile),
 
     Secure =

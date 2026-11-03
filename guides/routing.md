@@ -210,8 +210,9 @@ You can also include *post-request*-plugins in the same way.
 
 By default a route entry that declares `plugins` uses exactly those, and one
 that does not uses the plugins configured globally. Set `plugin_strategy` on
-the entry to combine them instead (it can also be set for a whole included
-application in its `nova_apps` options; the entry's own value wins):
+the entry to combine them instead. It can also be set for a whole included
+application in its `nova_apps` options; like `override_secure`, that value
+wins over what the application's own route entries declare:
 
 | Value | Plugins used |
 |---|---|
