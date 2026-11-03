@@ -72,7 +72,8 @@ handle_result({break, Reply, Req0, State0}, Callback, State, Tl, CallbackType, R
 handle_result({stop, Req0, State0}, Callback, State, _Tl, _CallbackType, _Req, _Env) ->
     set_state(Callback, State, State0),
     {stop, Req0};
-handle_result({stop, Req0}, _Callback, _State, _Tl, _CallbackType, _Req, _Env) when is_map(Req0) ->
+handle_result({stop, Req0}, Callback, _State, _Tl, _CallbackType, _Req, _Env) when is_map(Req0) ->
+    deprecated_stop(Callback),
     {stop, Req0};
 handle_result({stop, Reply, Req0, State0}, Callback, State, _Tl, _CallbackType, _Req, Env) ->
     set_state(Callback, State, State0),
@@ -136,15 +137,22 @@ render_500(Req, Env, CrashInfo) ->
 %% Once per plugin module, so a plugin returning break on every request does
 %% not flood the log.
 deprecated_break(Callback) ->
+    warn_once(Callback, break_warned,
+              ~"Plugin returned break, which is deprecated and behaves like stop. Return stop instead").
+
+deprecated_stop(Callback) ->
+    warn_once(Callback, stop_req_warned,
+              ~"Plugin returned {stop, Req}, which is deprecated and will be removed in 1.0. Return {stop, Req, State} instead").
+
+warn_once(Callback, Tag, Msg) ->
     Module = plugin_module(Callback),
-    Key = {?MODULE, break_warned, Module},
+    Key = {?MODULE, Tag, Module},
     case persistent_term:get(Key, false) of
         true ->
             ok;
         false ->
             persistent_term:put(Key, true),
-            ?LOG_WARNING(#{msg => ~"Plugin returned break, which is deprecated and behaves like stop. Return stop instead",
-                           plugin => Module})
+            ?LOG_WARNING(#{msg => Msg, plugin => Module})
     end.
 
 plugin_module(Callback) ->

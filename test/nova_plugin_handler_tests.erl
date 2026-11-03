@@ -590,6 +590,21 @@ break_is_warned_about_once_test_() ->
         end
     end}.
 
+stop_req_is_warned_about_once_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        persistent_term:erase({nova_plugin_handler, stop_req_warned, ?MODULE}),
+        P = fun(R, _Env, _Opts, _State) -> {stop, R} end,
+        ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
+        try
+            {stop, _} = nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env()),
+            ?assertMatch([_], logged()),
+            {stop, _} = nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env()),
+            ?assertEqual([], logged())
+        after
+            logger:remove_handler(?MODULE)
+        end
+    end}.
+
 log(#{msg := Msg}, #{config := #{test_pid := Pid}}) ->
     Pid ! {logged, Msg},
     ok.
