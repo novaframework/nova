@@ -87,7 +87,6 @@ terminate(Reason, Req, Callback) ->
     {module, Module} = erlang:fun_info(Callback, module),
     call_terminate(Module, Reason, Req, #{}).
 
-%% Matches the terminate/3 callback above and cowboy_handler's.
 call_terminate(Module, Reason, Req, State) ->
     case function_exported(Module, terminate, 3) of
         true ->

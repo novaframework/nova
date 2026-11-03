@@ -34,7 +34,7 @@ get_file(#{extra_state := #{static := File, options := Options}, headers := Head
                     RespHeaders = #{<<"content-range">> => <<"bytes ", (integer_to_binary(Start))/binary, "-",
                                                              (integer_to_binary(End))/binary, "/",
                                                              (integer_to_binary(Size))/binary>>,
-                                    <<"content-length">> => integer_to_binary(Length),
+                                    ~"content-length" => integer_to_binary(Length),
                                     ~"x-content-type-options" => ~"nosniff"},
                     {sendfile, 206, RespHeaders, {Start, Length, Filepath}, MimeType};
                 _ ->

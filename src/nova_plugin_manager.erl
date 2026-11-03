@@ -222,7 +222,6 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-%% The behaviour declares stop/1; stop/0 is what this module used to call.
 stop_plugin(#plugin{module = Module, state = State}) ->
     try
         case {erlang:function_exported(Module, stop, 1), erlang:function_exported(Module, stop, 0)} of
