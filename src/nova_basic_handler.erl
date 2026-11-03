@@ -32,7 +32,7 @@ Handler for JSON. It can take one of three different return objects:
 
 \{json, StatusCode :: integer(), Headers :: map(), JSON :: map()\} Same operation as the above except you can set custom status code and custom headers.
 
-\{json, StatusCode :: integer(), Headers :: map(), JSON :: map(), Req0 :: cowboy_req:req()\} This is the same as the above but you can also return the request object. This is particularly useful if you want to set cookies or other headers that are not supported by the handler. Older releases only accepted the request before the JSON, \{json, StatusCode, Headers, Req0, JSON\}; that order still works.
+\{json, StatusCode :: integer(), Headers :: map(), JSON :: map(), Req0 :: cowboy_req:req()\} This is the same as the above but you can also return the request object. This is particularly useful if you want to set cookies or other headers that are not supported by the handler. Older releases only accepted the request before the JSON, \{json, StatusCode, Headers, Req0, JSON\}; that order still works but is deprecated and logs a warning.
 """.
 -spec handle_json({json, JSON :: map()} | {json, StatusCode :: integer(), Headers :: map(), JSON :: map()} |
                   {json, StatusCode :: integer(), Headers :: map(), JSON :: map(), Req0 :: cowboy_req:req()} |
@@ -41,6 +41,7 @@ Handler for JSON. It can take one of three different return objects:
 handle_json({json, StatusCode, Headers, JSON, Req0}, Callback, _Req) when not ?IS_REQ(JSON), ?IS_REQ(Req0) ->
     handle_json({json, StatusCode, Headers, JSON}, Callback, Req0);
 handle_json({json, StatusCode, Headers, Req0, JSON}, Callback, _Req) ->
+    ?LOG_WARNING(#{msg => ~"{json, Status, Headers, Req, JSON} is deprecated, return {json, Status, Headers, JSON, Req}"}),
     handle_json({json, StatusCode, Headers, JSON}, Callback, Req0);
 handle_json({json, StatusCode, Headers, JSON}, _Callback, Req) ->
     EncodedJSON = nova_json:encode(JSON),

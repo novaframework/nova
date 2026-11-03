@@ -51,6 +51,20 @@ of `{Module, Function}` in Nova.
   `plugin_strategy` option lets you combine both; see the
   [routing guide](routing.md).
 
+- **`{break, ...}` from a plugin is a deprecated alias of `stop`.** It ends the
+  request and sends its reply, if it has one, and logs a warning. It will be
+  removed in 1.0; return `{stop, ...}` instead. A plugin reply Nova does not
+  know (anything but `{reply, ...}`, `{redirect, Url}` or `{status, ...}`) now
+  renders the 500 page instead of being ignored.
+
+- **`{json, Status, Headers, Req, JSON}` is deprecated.** Return
+  `{json, Status, Headers, JSON, Req}`, the order the docs always gave. The old
+  order still works and logs a warning.
+
+- **`nova_cors_plugin`** answers only real preflights (`OPTIONS` with `Origin`
+  and `Access-Control-Request-Method`) itself, with a `204`. Other `OPTIONS`
+  requests reach the application.
+
 - **`nova_router:lookup_url/1,2,3`** keep their return shapes, including
   `{error, comparator_not_found, AllowedMethods}` for a path that exists but
   does not accept the method.

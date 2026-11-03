@@ -76,4 +76,6 @@ By defauly Nova outputs a lot of information, including the stacktrace. This mig
 
 This will exclude stacktrace from the error page.
 
+The details of a crash (the message describing what went wrong and the stacktrace) are only part of the error page, HTML or JSON, while `nova`'s `environment` is `dev`, which is also what an unset `environment` means. In any other environment the page only has its title and a generic message.
+
 *Note* Nova is aware about which `accept`-headers the request is sent with and will respond with the correct content-type. If the request is sent with `application/json` Nova will respond with a JSON-structure instead of a HTML-page.

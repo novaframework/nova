@@ -47,17 +47,18 @@ This plugin injects a UUID into the headers.
 |--------|--------|
 | `{ok, Req, State}` | Carry on with the next plugin. |
 | `{ok, Reply, Req, State}` | Set the reply's status, headers and body on `Req` and carry on. |
-| `{break, Req, State}` | Skip the remaining plugins of this phase. The request carries on to the security function and the controller (or, for `post_request`, ends). |
-| `{break, Reply, Req, State}` | As `break`, with the reply set on `Req`. |
 | `{stop, Req, State}` or `{stop, Req}` | End the request here. The plugin has replied itself, for example with `cowboy_req:reply/4`. |
 | `{stop, Reply, Req, State}` | End the request and send `Reply`. |
+| `{break, Req, State}`, `{break, Reply, Req, State}` | Deprecated aliases of the matching `stop` returns, removed in 1.0. They log a warning. |
 | `{error, Reason}` | End the request with the 500 status page. |
 
-`Reply` is `{reply, Body}`, `{reply, Status, Body}` or `{reply, Status, Headers, Body}`.
+`Reply` is one of `{reply, Body}`, `{reply, Status, Body}`, `{reply, Status, Headers, Body}`, `{redirect, Url}`, `{status, Status}` or `{status, Status, Headers}`. `{status, ...}` sends the bare status without rendering a status-code route. Any other reply renders the 500 status page.
 
 Once a `pre_request` plugin stops the request or the security function refuses it, the controller and the `post_request` plugins do not run. Keep access logging and similar work that has to see every request in a stream handler or in a `pre_request` plugin.
 
-The state a plugin returns is stored per plugin module, not per request, and is shared by every request. Nova only writes it when it changed. Keep per-request data in `Req`.
+The state a plugin returns is stored per plugin module, not per request, and is shared by every request. Nova only writes it when it changed, and concurrent requests overwrite each other's writes: the last writer wins. Keep per-request data in `Req`, and keep shared data that has to add up (counters, rate-limit buckets) in `ets` or `counters`.
+
+Websocket handlers run their plugins through `nova_ws_handler`, which has its own contract. See the `nova_websocket` documentation.
 
 
 ## Optional callbacks
@@ -145,14 +146,16 @@ This plugin will generate a uuid v4 and set it as a response header as `X-Correl
 
 ### Nova cors
 
-This plugin answers every `OPTIONS` request itself with a `204` and the CORS headers, so you don't need a controller for preflights. For other methods it adds the CORS headers to the response.
+This plugin answers CORS preflights (an `OPTIONS` request with both `Origin` and `Access-Control-Request-Method`) itself with a `204` and the CORS headers, so you don't need a controller for them. Any other request, including a plain `OPTIONS`, goes on to the application with the CORS headers added to the response.
 
 ```erlang
 {pre_request, nova_cors_plugin, #{allow_origins => [<<"https://app.example.com">>,
                                                     <<"https://admin.example.com">>]}}
 ```
 
-With a list (or a single origin), the request's `Origin` is echoed back in `access-control-allow-origin` only when it is on the list, and every response carries `vary: origin` so caches keep the answers apart. `<<"*">>` allows any origin.
+With a list (or a single origin), the request's `Origin` is echoed back in `access-control-allow-origin` only when it is on the list, and every response carries `vary: origin` (added to any `vary` value already set) so caches keep the answers apart. `<<"*">>` allows any origin.
+
+By default a preflight is told that every header it asks for is allowed. That is only safe because `access-control-allow-origin` is sent to allowed origins alone: list the origins you trust, and set `allow_headers` explicitly when you use `<<"*">>`.
 
 |Option|Description|
 |------|-----------|

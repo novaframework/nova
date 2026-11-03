@@ -22,6 +22,14 @@ After the upgrade, `websocket_init/1`, `websocket_handle/2` and
 `terminate/3` is called with the reason, the partial request and the state
 when the connection goes away.
 
+The upgrade request runs the route's `pre_request` plugins like any HTTP
+request. After the upgrade, plugins listed under `pre_ws_request`,
+`post_ws_request` and `post_ws_connection` are called as
+`Module:Phase(ControllerState, State, Options)` and return `{ok,
+ControllerState, State}`, `{break, State}` (skip the rest of the phase),
+`{stop, State}` (close the connection) or `{error, Reason}` (close it and log).
+This is not the `nova_plugin` contract.
+
 ```erlang
 -module(my_ws_controller).
 -behaviour(nova_websocket).
