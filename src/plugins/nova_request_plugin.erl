@@ -55,30 +55,19 @@ modulate_state(Req, [], State) ->
 
 modulate_state( Req = #{method := Method}, [{decode_json_body, true}|Tail], State) when Method =:= <<"GET">>; Method =:= <<"DELETE">> ->
     modulate_state(Req, Tail, State);
-modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}, body := <<>>}, [{decode_json_body, true}|_Tl], State) ->
-    Req400 = cowboy_req:reply(400, Req),
-    logger:warning(#{status_code => 400,
-                     msg => "Failed to decode json.",
-                     error => "No body to decode."}),
-    {stop, Req400, State};
-modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}, body := Body}, [{decode_json_body, true}|Tl], State) ->
-    %% Decode the data
-    case nova_json:decode(Body) of
-        {ok, JSON} ->
-            modulate_state(Req#{json => JSON}, Tl, State);
-        Error ->
-            Req400 = cowboy_req:reply(400, Req),
-            logger:warning(#{status_code => 400,
-                             msg => "Failed to decode json.",
-                             error => Error}),
-            {stop, Req400, State}
+modulate_state(Req = #{body := Body}, [{decode_json_body, true}|Tl], State) ->
+    case content_type(Req) of
+        {~"application", ~"json"} -> decode_json(Req, Body, Tl, State);
+        _ -> modulate_state(Req, Tl, State)
     end;
-modulate_state(#{headers := #{<<"content-type">> := <<"application/x-www-form-urlencoded", _/binary>>}, body := Body} = Req,
-               [{read_urlencoded_body, true}|Tl], State) ->
-    Data = cow_qs:parse_qs(Body),
-    %% First read in the body
-    Params = maps:from_list(Data),
-    modulate_state(Req#{params => Params}, Tl, State);
+modulate_state(Req = #{body := Body}, [{read_urlencoded_body, true}|Tl], State) ->
+    case content_type(Req) of
+        {~"application", ~"x-www-form-urlencoded"} ->
+            Params = maps:from_list(cow_qs:parse_qs(Body)),
+            modulate_state(Req#{params => Params}, Tl, State);
+        _ ->
+            modulate_state(Req, Tl, State)
+    end;
 modulate_state(Req, [{parse_qs, Type}|T1], State) ->
     Qs = cowboy_req:parse_qs(Req),
     case Type of
@@ -89,6 +78,34 @@ modulate_state(Req, [{parse_qs, Type}|T1], State) ->
 modulate_state(Req, [_|Tl], State) ->
     modulate_state(Req, Tl, State).
 
+decode_json(Req, <<>>, _Tl, State) ->
+    Req400 = cowboy_req:reply(400, Req),
+    logger:warning(#{status_code => 400,
+                     msg => "Failed to decode json.",
+                     error => "No body to decode."}),
+    {stop, Req400, State};
+decode_json(Req, Body, Tl, State) ->
+    case nova_json:decode(Body) of
+        {ok, JSON} ->
+            modulate_state(Req#{json => JSON}, Tl, State);
+        Error ->
+            Req400 = cowboy_req:reply(400, Req),
+            logger:warning(#{status_code => 400,
+                             msg => "Failed to decode json.",
+                             error => Error}),
+            {stop, Req400, State}
+    end.
+
+%% cowboy_req:parse_header/2 lowercases the type and subtype, which are
+%% case-insensitive (RFC 9110 8.3.1).
+content_type(Req) ->
+    try cowboy_req:parse_header(~"content-type", Req) of
+        {Type, SubType, _Params} -> {Type, SubType};
+        _ -> undefined
+    catch
+        _:_ -> undefined
+    end.
+
 %% A multipart body is never buffered here; nova_multipart_plugin or the
 %% controller reads the parts from the stream.
 read_request_body(Req, Options) ->
@@ -98,12 +115,7 @@ read_request_body(Req, Options) ->
     end.
 
 is_multipart(Req) ->
-    try cowboy_req:parse_header(<<"content-type">>, Req) of
-        {<<"multipart">>, <<"form-data">>, _Params} -> true;
-        _ -> false
-    catch
-        _:_ -> false
-    end.
+    content_type(Req) =:= {~"multipart", ~"form-data"}.
 
 read_body(Req, Acc) ->
     case cowboy_req:read_body(Req) of

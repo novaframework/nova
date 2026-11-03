@@ -126,6 +126,24 @@ modulate_state_decode_json_empty_body_test_() ->
              Req2, [{decode_json_body, true}], state)
      end}.
 
+%% Media types are case-insensitive; a byte prefix match missed these.
+modulate_state_content_type_case_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Post = fun(ContentType, Body) ->
+                        (nova_test_helper:with_content_type(ContentType, nova_test_helper:mock_req(~"POST", ~"/")))#{body => Body}
+                end,
+         {ok, Json, state} = nova_request_plugin:modulate_state(
+                               Post(~"Application/JSON; charset=utf-8", ~"{\"a\":1}"), [{decode_json_body, true}], state),
+         ?assertEqual(#{~"a" => 1}, maps:get(json, Json)),
+         {ok, Form, state} = nova_request_plugin:modulate_state(
+                               Post(~"Application/X-WWW-Form-Urlencoded", ~"a=1"), [{read_urlencoded_body, true}], state),
+         ?assertEqual(#{~"a" => ~"1"}, maps:get(params, Form)),
+         {ok, Other, state} = nova_request_plugin:modulate_state(
+                                Post(~"text/plain", ~"{}"), [{decode_json_body, true}], state),
+         ?assertNot(maps:is_key(json, Other))
+     end}.
+
 %%====================================================================
 %% plugin_info/0
 %%====================================================================
