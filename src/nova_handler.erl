@@ -149,13 +149,13 @@ call_handler(Callback, Req, RetObj, Env, IsFallbackController) ->
                     {module, Module} = erlang:fun_info(Callback, module),
                     {name, Function} = erlang:fun_info(Callback, name),
                     ?LOG_ERROR(#{msg => <<"Controller returned unsupported result">>, controller => Module,
-                                 function => Function, return => RetObj}),
+                                 function => Function, return => nova_redact:term(RetObj)}),
                     Payload = #{status_code => 500,
                                 status => <<"Controller returned unsupported result">>,
                                 title => <<"Error in controller">>,
                                 extra_msg => list_to_binary(io_lib:format("Controller ~s:~s/1 returned a " ++
                                                                               "non-valid result ~p",
-                                                                          [Module, Function, RetObj]))},
+                                                                          [Module, Function, nova_redact:term(RetObj)]))},
                     render_response(Req#{crash_info => Payload}, Env, 500);
                 _ ->
                     execute_fallback(Callback, Req, RetObj, Env)

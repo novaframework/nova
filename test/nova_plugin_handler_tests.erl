@@ -1,6 +1,8 @@
 -module(nova_plugin_handler_tests).
 -include_lib("eunit/include/eunit.hrl").
 
+-export([log/2]).
+
 -define(SETUP, fun() -> setup() end).
 -define(CLEANUP, fun(S) -> cleanup(S) end).
 
@@ -440,3 +442,61 @@ unchanged_state_is_not_written_test_() ->
             meck:unload(nova_plugin_manager)
         end
     end}.
+
+%%====================================================================
+%% Every 500 carries crash_info the error page can render
+%%====================================================================
+
+failures_carry_crash_info_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Plugins = [fun(_R, _Env, _Opts, _State) -> what_is_this end,
+                   fun(R, _Env, _Opts, _State) -> {stop, {not_a_reply, 1}, R, #{}} end,
+                   fun(_R, _Env, _Opts, _State) -> {error, boom} end,
+                   fun(_R, _Env, _Opts, _State) -> error(boom) end],
+        [begin
+             {ok, Req1, _} = nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env()),
+             ?assertMatch(#{class := _, reason := _}, maps:get(crash_info, Req1)),
+             ?assertMatch({status, 500, _, _},
+                          nova_error_controller:server_error(Req1#{headers => #{~"accept" => ~"application/json"}}))
+         end || P <- Plugins]
+    end}.
+
+%%====================================================================
+%% Logs and crash_info leave out request data and secrets
+%%====================================================================
+
+plugin_failures_are_redacted_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Secret = (req())#{headers => #{~"cookie" => ~"session_id=VICTIMCOOKIE"}},
+        Plugins = [fun(_R, _Env, _Opts, _State) -> {error, #{password => ~"VICTIMCOOKIE"}} end,
+                   fun(_R, _Env, _Opts, _State) -> {unexpected, Secret} end,
+                   fun(R, _Env, _Opts, _State) -> {stop, {not_a_reply, Secret}, R, #{}} end,
+                   fun(#{this_key_is_missing := _}, _Env, _Opts, _State) -> ok end],
+        ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
+        try
+            [begin
+                 Req = (req([{pre_request, [plugin(P)]}]))#{headers => #{~"cookie" => ~"session_id=VICTIMCOOKIE"}},
+                 {ok, Req1, _} = nova_plugin_handler:execute(Req, env()),
+                 Logs = logged(),
+                 ?assertNotEqual([], Logs),
+                 assert_not_leaked({Logs, maps:get(crash_info, Req1)})
+             end || P <- Plugins]
+        after
+            logger:remove_handler(?MODULE)
+        end
+    end}.
+
+log(#{msg := Msg}, #{config := #{test_pid := Pid}}) ->
+    Pid ! {logged, Msg},
+    ok.
+
+logged() ->
+    receive
+        {logged, Msg} -> [Msg | logged()]
+    after 50 ->
+            []
+    end.
+
+assert_not_leaked(Term) ->
+    Text = iolist_to_binary(io_lib:format("~p", [Term])),
+    ?assertEqual(nomatch, binary:match(Text, ~"VICTIMCOOKIE")).

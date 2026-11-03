@@ -39,12 +39,11 @@ run_plugins([{Callback, Options}|Tl], CallbackType, Req, Env) when is_function(C
         Result ->
             handle_result(Result, Callback, State, Tl, CallbackType, Req, Env)
     catch
-        Class:Reason:Stacktrace ->
+        Class:Reason0:Stacktrace0 ->
+            Reason = nova_redact:term(Reason0),
+            Stacktrace = nova_redact:stacktrace(Stacktrace0),
             ?LOG_ERROR(#{msg => <<"Plugin crashed">>, class => Class, reason => Reason, stacktrace => Stacktrace}),
-            Req0 = Req#{crash_info => #{class => Class,
-                                        reason => Reason,
-                                        stacktrace => Stacktrace}},
-            render_500(Req0, Env)
+            render_500(Req, Env, nova_redact:crash_info(Class, Reason0, #{stacktrace => Stacktrace}))
     end.
 
 handle_result({ok, Req0, State0}, Callback, State, Tl, CallbackType, _Req, Env) ->
@@ -78,12 +77,13 @@ handle_result({stop, Reply, Req0, State0}, Callback, State, _Tl, _CallbackType, 
             unsupported_reply(Callback, Reply, Req0, Env)
     end;
 handle_result({error, Reason}, Callback, _State, _Tl, _CallbackType, Req, Env) ->
-    ?LOG_ERROR(#{msg => ~"Plugin returned an error", plugin => plugin_module(Callback), reason => Reason}),
-    render_500(Req#{crash_info => #{class => error, reason => Reason}}, Env);
+    ?LOG_ERROR(#{msg => ~"Plugin returned an error", plugin => plugin_module(Callback),
+                 reason => nova_redact:term(Reason)}),
+    render_500(Req, Env, nova_redact:crash_info(error, Reason, #{}));
 handle_result(Result, Callback, _State, _Tl, _CallbackType, Req, Env) ->
     ?LOG_ERROR(#{msg => ~"Plugin returned an unsupported result", plugin => plugin_module(Callback),
-                 result => Result}),
-    render_500(Req, Env).
+                 result => nova_redact:term(Result)}),
+    render_500(Req, Env, #{class => error, reason => unsupported_plugin_result}).
 
 handle_reply({reply, Body}, Req) ->
     handle_reply({reply, 200, #{}, Body}, Req);
@@ -105,13 +105,14 @@ handle_reply(_Reply, _Req) ->
 
 unsupported_reply(Callback, Reply, Req, Env) ->
     ?LOG_ERROR(#{msg => ~"Plugin returned an unsupported reply", plugin => plugin_module(Callback),
-                 reply => Reply}),
-    render_500(Req, Env).
+                 reply => nova_redact:term(Reply)}),
+    render_500(Req, Env, #{class => error, reason => unsupported_plugin_reply}).
 
 %% The status page runs through nova_handler and then the post_request phase.
 %% Marking the pre_request phase done keeps the pre plugins from running twice.
-render_500(Req, Env) ->
-    {ok, Req0, Env0} = nova_router:render_status_page('_', 500, #{}, Req, Env),
+%% The default 500 page needs crash_info.
+render_500(Req, Env, CrashInfo) ->
+    {ok, Req0, Env0} = nova_router:render_status_page('_', 500, #{}, Req#{crash_info => CrashInfo}, Env),
     {ok, Req0, Env0#{plugin_state => pre_request}}.
 
 deprecated_break(Callback) ->
