@@ -33,19 +33,12 @@ decode(Json) ->
     end.
 
 -doc """
-The configured JSON library. Read from the bootstrap application's
-environment first, then from `nova`'s, and `thoas` when neither sets it.
+The configured JSON library: `json_lib` from the bootstrap application's
+environment, then from `nova`'s, and `thoas` when neither sets it.
 """.
 -spec json_lib() -> module().
 json_lib() ->
-    case nova:get_env(json_lib, undefined) of
-        undefined ->
-            case application:get_env(nova, json_lib) of
-                {ok, Lib} when is_atom(Lib) -> Lib;
-                _ -> thoas
-            end;
-        Lib when is_atom(Lib) ->
-            Lib;
-        _ ->
-            thoas
+    case nova_config:get_env(json_lib, thoas) of
+        Lib when is_atom(Lib) -> Lib;
+        _ -> thoas
     end.
