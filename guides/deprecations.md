@@ -110,12 +110,12 @@ of `{Module, Function}` in Nova.
   `nova_handlers:register_handler/2` used to build `fun Module:Function/4`,
   but handlers are called with three arguments. Export `Function/3`.
 
-- **`decode_json_body` decodes `application/json` only.** The content type is
-  matched exactly (in any case, with any parameters). Types that only began
-  with `application/json`, such as `application/json-seq` or
-  `application/json-patch+json`, are no longer decoded; neither were `+json`
-  types such as `application/problem+json`. Decode those in the controller
-  from the request body, or with a plugin of your own.
+- **`decode_json_body` decodes `application/json` and `application/*+json`.**
+  The type is matched in any case, with any parameters, and `+json` types
+  such as `application/vnd.api+json` are now decoded too (RFC 6839). Types
+  that only began with `application/json`, such as `application/json-seq`,
+  are no longer decoded. Decode those in the controller from the request
+  body, or with a plugin of your own.
   `read_urlencoded_body` likewise matches `application/x-www-form-urlencoded`
   exactly.
 

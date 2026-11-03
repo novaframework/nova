@@ -74,9 +74,9 @@ modulate_state(Req, [], State) ->
 modulate_state( Req = #{method := Method}, [{decode_json_body, true}|Tail], State) when Method =:= <<"GET">>; Method =:= <<"DELETE">> ->
     modulate_state(Req, Tail, State);
 modulate_state(Req = #{body := Body}, [{decode_json_body, true}|Tl], State) ->
-    case content_type(Req) of
-        {~"application", ~"json"} -> decode_json(Req, Body, Tl, State);
-        _ -> modulate_state(Req, Tl, State)
+    case is_json(content_type(Req)) of
+        true -> decode_json(Req, Body, Tl, State);
+        false -> modulate_state(Req, Tl, State)
     end;
 modulate_state(Req = #{body := Body}, [{read_urlencoded_body, true}|Tl], State) ->
     case content_type(Req) of
@@ -113,6 +113,15 @@ decode_json(Req, Body, Tl, State) ->
                              error => Error}),
             {stop, Req400, State}
     end.
+
+%% application/json, or any application type with the +json structured
+%% syntax suffix (RFC 6839), such as application/vnd.api+json.
+is_json({~"application", ~"json"}) ->
+    true;
+is_json({~"application", SubType}) when byte_size(SubType) > 5 ->
+    binary:part(SubType, byte_size(SubType), -5) =:= ~"+json";
+is_json(_) ->
+    false.
 
 %% cowboy_req:parse_header/2 lowercases the type and subtype, which are
 %% case-insensitive (RFC 9110 8.3.1).

@@ -207,12 +207,13 @@ the request body is still on it.
 positive one, or `infinity`. Any other value, including a `body_read_timeout`
 of `0`, is replaced by the default, with one warning per value.
 
-The content type must be exactly `application/json` (in any case, with any
-parameters such as `charset`) for `decode_json_body`, and
-`application/x-www-form-urlencoded` for `read_urlencoded_body`. Other JSON
-types, such as `application/problem+json` or `application/json-seq`, are not
-decoded: decode them in the controller from the request body, or with a plugin
-of your own.
+`decode_json_body` decodes `application/json` and any `application` type with
+the `+json` suffix (RFC 6839), such as `application/vnd.api+json` or
+`application/merge-patch+json`. The match ignores case and parameters such as
+`charset`. Types that only start with `application/json`, such as
+`application/json-seq`, are not decoded: decode them in the controller from the
+request body, or with a plugin of your own. `read_urlencoded_body` needs
+`application/x-www-form-urlencoded`.
 
 |Option|Description|Req|
 |------|-----------|----|

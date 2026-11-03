@@ -147,6 +147,25 @@ modulate_state_content_type_case_test_() ->
          ?assertNot(maps:is_key(json, Other))
      end}.
 
+%% RFC 6839: any application/*+json type is JSON; types that only start with
+%% application/json are not.
+modulate_state_json_suffix_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Decode = fun(ContentType) ->
+                          Req = (nova_test_helper:with_content_type(ContentType, nova_test_helper:mock_req(~"POST", ~"/")))#{body => ~"{\"a\":1}"},
+                          {ok, Req0, state} = nova_request_plugin:modulate_state(Req, [{decode_json_body, true}], state),
+                          maps:get(json, Req0, undefined)
+                  end,
+         ?assertEqual(#{~"a" => 1}, Decode(~"application/vnd.api+json")),
+         ?assertEqual(#{~"a" => 1}, Decode(~"application/merge-patch+json")),
+         ?assertEqual(#{~"a" => 1}, Decode(~"Application/Problem+JSON; charset=utf-8")),
+         ?assertEqual(#{~"a" => 1}, Decode(~"application/json; charset=utf-8")),
+         ?assertEqual(undefined, Decode(~"application/json-seq")),
+         ?assertEqual(undefined, Decode(~"application/+json")),
+         ?assertEqual(undefined, Decode(~"text/vnd.x+json"))
+     end}.
+
 %%====================================================================
 %% plugin_info/0
 %%====================================================================
