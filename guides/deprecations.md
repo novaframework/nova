@@ -76,7 +76,9 @@ of `{Module, Function}` in Nova.
 
 - **`{json, Status, Headers, Req, JSON}` is deprecated.** Return
   `{json, Status, Headers, JSON, Req}`, the order the docs always gave. The old
-  order still works and logs a warning.
+  order still works and logs a warning once per controller module. The order
+  is read from the fourth element: it is taken as the request only when it
+  looks like one (a map with `pid` and `streamid`) and the fifth does not.
 
 - **`nova_cors_plugin`** answers only real preflights (`OPTIONS` with `Origin`
   and `Access-Control-Request-Method`) itself, with a `204`. Other `OPTIONS`

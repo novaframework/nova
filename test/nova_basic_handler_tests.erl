@@ -5,6 +5,25 @@
 -define(CLEANUP, fun(Prev) -> nova_test_helper:cleanup_nova_env(Prev) end).
 -define(CALLBACK, fun dummy_mod:dummy_fun/1).
 
+%% Logger handler callback: forwards reports to the process that added it.
+-export([log/2]).
+
+log(#{msg := {report, Report}}, #{config := #{test_pid := Pid}}) ->
+    Pid ! {logged, Report},
+    ok;
+log(_Event, _Config) ->
+    ok.
+
+json_order_warnings() ->
+    receive
+        {logged, #{msg := <<"{json, Status, Headers, Req, JSON}", _/binary>>} = Report} ->
+            [Report | json_order_warnings()];
+        {logged, _} ->
+            json_order_warnings()
+    after 0 ->
+            []
+    end.
+
 %%====================================================================
 %% handle_json/3
 %%====================================================================
@@ -53,6 +72,35 @@ handle_json_documented_order_test_() ->
         ?assertEqual(201, maps:get(resp_status_code, Req1)),
         ?assertEqual(#{~"data" => 1}, decoded_body(Req1))
     end}.
+
+%% A request built in a test may lack pid; the documented order is the default.
+handle_json_documented_order_without_pid_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Req = maps:remove(pid, nova_test_helper:mock_req(~"GET", ~"/")),
+        {ok, Req1} = nova_basic_handler:handle_json({json, 200, #{}, #{data => 1}, Req#{custom_field => true}},
+                                                    ?CALLBACK, Req),
+        ?assertEqual(true, maps:get(custom_field, Req1)),
+        ?assertEqual(#{~"data" => 1}, decoded_body(Req1))
+    end}.
+
+handle_json_old_order_warns_once_test_() ->
+    {setup,
+     fun() ->
+         persistent_term:erase({nova_basic_handler, json_order_warned, dummy_mod}),
+         nova_test_helper:setup_nova_env()
+     end,
+     fun(Prev) ->
+         logger:remove_handler(?MODULE),
+         persistent_term:erase({nova_basic_handler, json_order_warned, dummy_mod}),
+         nova_test_helper:cleanup_nova_env(Prev)
+     end,
+     fun() ->
+         ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
+         Req = nova_test_helper:mock_req(~"GET", ~"/"),
+         [{ok, _} = nova_basic_handler:handle_json({json, 200, #{}, Req, #{data => N}}, ?CALLBACK, Req)
+          || N <- [1, 2, 3]],
+         ?assertMatch([#{controller := dummy_mod}], json_order_warnings())
+     end}.
 
 %%====================================================================
 %% handle_status/3

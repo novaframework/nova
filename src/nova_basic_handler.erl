@@ -32,16 +32,16 @@ Handler for JSON. It can take one of three different return objects:
 
 \{json, StatusCode :: integer(), Headers :: map(), JSON :: map()\} Same operation as the above except you can set custom status code and custom headers.
 
-\{json, StatusCode :: integer(), Headers :: map(), JSON :: map(), Req0 :: cowboy_req:req()\} This is the same as the above but you can also return the request object. This is particularly useful if you want to set cookies or other headers that are not supported by the handler. Older releases only accepted the request before the JSON, \{json, StatusCode, Headers, Req0, JSON\}; that order still works but is deprecated and logs a warning.
+\{json, StatusCode :: integer(), Headers :: map(), JSON :: map(), Req0 :: cowboy_req:req()\} This is the same as the above but you can also return the request object. This is particularly useful if you want to set cookies or other headers that are not supported by the handler. Older releases only accepted the request before the JSON, \{json, StatusCode, Headers, Req0, JSON\}; that order still works but is deprecated and logs a warning once per controller module.
 """.
 -spec handle_json({json, JSON :: map()} | {json, StatusCode :: integer(), Headers :: map(), JSON :: map()} |
                   {json, StatusCode :: integer(), Headers :: map(), JSON :: map(), Req0 :: cowboy_req:req()} |
                   {json, StatusCode :: integer(), Headers :: map(), Req0 :: cowboy_req:req(), JSON :: map()},
                   Callback :: function(), Req :: cowboy_req:req()) -> {ok, State :: cowboy_req:req()}.
-handle_json({json, StatusCode, Headers, JSON, Req0}, Callback, _Req) when not ?IS_REQ(JSON), ?IS_REQ(Req0) ->
+handle_json({json, StatusCode, Headers, Req0, JSON}, Callback, _Req) when ?IS_REQ(Req0), not ?IS_REQ(JSON) ->
+    deprecated_json_order(Callback),
     handle_json({json, StatusCode, Headers, JSON}, Callback, Req0);
-handle_json({json, StatusCode, Headers, Req0, JSON}, Callback, _Req) ->
-    ?LOG_WARNING(#{msg => ~"{json, Status, Headers, Req, JSON} is deprecated, return {json, Status, Headers, JSON, Req}"}),
+handle_json({json, StatusCode, Headers, JSON, Req0}, Callback, _Req) ->
     handle_json({json, StatusCode, Headers, JSON}, Callback, Req0);
 handle_json({json, StatusCode, Headers, JSON}, _Callback, Req) ->
     EncodedJSON = nova_json:encode(JSON),
@@ -56,6 +56,18 @@ handle_json({json, JSON}, Callback, Req = #{method := Method}) ->
             handle_json({json, 201, #{}, JSON}, Callback, Req);
         _ ->
             handle_json({json, 200, #{}, JSON}, Callback, Req)
+    end.
+
+deprecated_json_order(Callback) ->
+    {module, Module} = erlang:fun_info(Callback, module),
+    Key = {?MODULE, json_order_warned, Module},
+    case persistent_term:get(Key, false) of
+        true ->
+            ok;
+        false ->
+            persistent_term:put(Key, true),
+            ?LOG_WARNING(#{msg => ~"{json, Status, Headers, Req, JSON} is deprecated, return {json, Status, Headers, JSON, Req}",
+                           controller => Module})
     end.
 
 

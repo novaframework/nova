@@ -33,7 +33,7 @@ Same as the simple interface but with two additional elements for specifying HTT
 
 *Spec*: `{json, StatusCode :: integer(), Headers :: map(), JSON :: map() | list(), Req :: cowboy_req:req()}`
 
-Same as above but also hands back the request, for example after setting a cookie on it. The older order with the request before the JSON is still accepted, but it is deprecated and logs a warning.
+Same as above but also hands back the request, for example after setting a cookie on it. The older order with the request before the JSON is still accepted, but it is deprecated and logs a warning once per controller module.
 
 ### HTML templates (Using Erlydtl)
 
