@@ -56,6 +56,10 @@ of `{Module, Function}` in Nova.
   `plugin_strategy` option lets you combine both; see the
   [routing guide](routing.md).
 
+- **`{stop, Req}` from a plugin is deprecated.** It still ends the request
+  like `{stop, Req, State}` and keeps the plugin's state as it was. It will be
+  removed in 1.0; return `{stop, Req, State}` instead.
+
 - **`{break, ...}` from a plugin is a deprecated alias of `stop`.** It ends the
   request and sends its reply, if it has one, and logs a warning once per
   plugin module. It will be removed in 1.0; return `{stop, ...}` instead. A

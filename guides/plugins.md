@@ -47,7 +47,8 @@ This plugin injects a UUID into the headers.
 |--------|--------|
 | `{ok, Req, State}` | Carry on with the next plugin. |
 | `{ok, Reply, Req, State}` | Set the reply's status, headers and body on `Req` and carry on. Only `{reply, ...}` is accepted here; see below. |
-| `{stop, Req, State}` or `{stop, Req}` | End the request here. The plugin has replied itself, for example with `cowboy_req:reply/4`. |
+| `{stop, Req, State}` | End the request here. The plugin has replied itself, for example with `cowboy_req:reply/4`. |
+| `{stop, Req}` | Deprecated form of `{stop, Req, State}` that keeps the plugin's state, removed in 1.0. |
 | `{stop, Reply, Req, State}` | End the request and send `Reply`. |
 | `{break, Req, State}`, `{break, Reply, Req, State}` | Deprecated aliases of the matching `stop` returns, removed in 1.0. They log a warning, once per plugin module. |
 | `{error, Reason}` | End the request with the 500 status page. |
