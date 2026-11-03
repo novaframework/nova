@@ -3,7 +3,8 @@
 
 -export([
          term/1,
-         stacktrace/1
+         stacktrace/1,
+         crash_info/3
         ]).
 
 -doc """
@@ -44,3 +45,12 @@ frame({Module, Function, Args, Location}) when is_list(Args) ->
     {Module, Function, length(Args), Location};
 frame(Frame) ->
     Frame.
+
+-doc """
+Builds the `crash_info` an error page is rendered from, with `Reason`
+redacted. `Extra` carries the rest, such as `status_code` and an already
+formatted `stacktrace`.
+""".
+-spec crash_info(Class :: atom(), Reason :: term(), Extra :: map()) -> map().
+crash_info(Class, Reason, Extra) ->
+    Extra#{class => Class, reason => term(Reason)}.

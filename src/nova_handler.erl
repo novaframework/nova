@@ -34,17 +34,13 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
         Class:Reason0:Stacktrace when UseStacktrace == true ->
             Reason = nova_redact:term(Reason0),
             FormattedStacktrace = nova:format_stacktrace(Stacktrace),
-            Payload = #{status_code => 404,
-                        stacktrace => FormattedStacktrace,
-                        class => Class,
-                        reason => Reason},
+            Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 404,
+                                                              stacktrace => FormattedStacktrace}),
             ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class, reason => Reason, stacktrace => FormattedStacktrace}),
             render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 404);
         Class:Reason0 ->
             Reason = nova_redact:term(Reason0),
-            Payload = #{status_code => 404,
-                        class => Class,
-                        reason => Reason},
+            Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 404}),
             ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class, reason => Reason}),
             render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 404)
     end;
@@ -62,7 +58,7 @@ execute(Req, Env = #{callback := Callback}) ->
             ?LOG_ERROR(#{msg => <<"Controller threw an exception">>,
                          class => Class,
                          reason => nova_redact:term(Reason)}),
-            render_response(Req#{crash_info => Reason}, Env, Status);
+            render_response(Req#{crash_info => nova_redact:term(Reason)}, Env, Status);
         Class:Reason0:Stacktrace when UseStacktrace == true ->
             Reason = nova_redact:term(Reason0),
             FormattedStacktrace = nova:format_stacktrace(Stacktrace),
@@ -72,10 +68,8 @@ execute(Req, Env = #{callback := Callback}) ->
                          stacktrace => FormattedStacktrace}),
             terminate(Reason0, Req, Callback),
             %% Build the payload object
-            Payload = #{status_code => 500,
-                        stacktrace => FormattedStacktrace,
-                        class => Class,
-                        reason => Reason},
+            Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 500,
+                                                              stacktrace => FormattedStacktrace}),
             render_response(Req#{crash_info => Payload}, Env, 500);
         Class:Reason0 ->
             Reason = nova_redact:term(Reason0),
@@ -84,9 +78,7 @@ execute(Req, Env = #{callback := Callback}) ->
                          reason => Reason}),
             terminate(Reason0, Req, Callback),
             %% Build the payload object
-            Payload = #{status_code => 500,
-                        class => Class,
-                        reason => Reason},
+            Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 500}),
             render_response(Req#{crash_info => Payload}, Env, 500)
     end.
 
