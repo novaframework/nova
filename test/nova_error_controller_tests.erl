@@ -220,12 +220,14 @@ extra_msg_is_hidden_when_environment_is_unset_test_() ->
      end}.
 
 accept_media_types_are_case_insensitive_test() ->
-    Req = nova_test_helper:with_header(~"accept", ~" Text/HTML ;q=0.9", nova_test_helper:mock_req(~"GET", ~"/")),
-    ?assertEqual(html, nova_error_controller:preferred_type(Req)).
+    ?assertEqual(html, nova_error_controller:preferred_type(~" Text/HTML ;q=0.9")).
 
 %% Cowboy joins repeated accept headers; parsing must stay linear.
 huge_accept_header_is_cheap_test() ->
     Accept = binary:copy(~",", 400000),
-    Req = nova_test_helper:with_header(~"accept", Accept, nova_test_helper:mock_req(~"GET", ~"/")),
-    {Micros, none} = timer:tc(fun() -> nova_error_controller:preferred_type(Req) end),
+    {Micros, none} = timer:tc(fun() -> nova_error_controller:preferred_type(Accept) end),
     ?assert(Micros < 100000).
+
+media_range_of_only_whitespace_is_empty_test() ->
+    ?assertEqual(<<>>, nova_error_controller:trim_ows(~" \t ")),
+    ?assertEqual(none, nova_error_controller:preferred_type(~" , \t")).

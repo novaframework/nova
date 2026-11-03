@@ -16,7 +16,7 @@ status_code(Req) ->
 not_found(Req) ->
     Type = case cowboy_req:header(~"accept", Req) of
                undefined -> json;
-               _ -> preferred_type(Req)
+               Accept -> preferred_type(Accept)
            end,
     case Type of
         json ->
@@ -59,7 +59,7 @@ server_error(#{crash_info := #{class := Class, reason := Reason} = CrashInfo} = 
     end.
 
 render(StatusCode, Variables, Req) ->
-    case preferred_type(Req) of
+    case preferred_type(cowboy_req:header(~"accept", Req)) of
         json ->
             Json = nova_json:encode(Variables),
             {status, StatusCode, #{~"content-type" => ~"application/json"}, Json};
@@ -86,18 +86,15 @@ show_details() ->
 %% "text/html,application/xhtml+xml;q=0.9" or "application/json; charset=utf-8".
 %% Cowboy joins repeated accept headers, so only the first ?MAX_ACCEPT bytes
 %% are looked at, and every step is linear in them.
-preferred_type(Req) ->
-    case cowboy_req:header(~"accept", Req) of
-        undefined ->
-            none;
-        Accept ->
-            Head = binary:part(Accept, 0, min(byte_size(Accept), ?MAX_ACCEPT)),
-            Types = [media_type(Range) || Range <- binary:split(Head, ~",", [global])],
-            case {lists:member(~"application/json", Types), lists:member(~"text/html", Types)} of
-                {true, _} -> json;
-                {_, true} -> html;
-                _ -> none
-            end
+preferred_type(undefined) ->
+    none;
+preferred_type(Accept) ->
+    Head = binary:part(Accept, 0, min(byte_size(Accept), ?MAX_ACCEPT)),
+    Types = [media_type(Range) || Range <- binary:split(Head, ~",", [global])],
+    case {lists:member(~"application/json", Types), lists:member(~"text/html", Types)} of
+        {true, _} -> json;
+        {_, true} -> html;
+        _ -> none
     end.
 
 %% Media types are case-insensitive (RFC 9110 8.3.1).
@@ -110,8 +107,8 @@ trim_ows(<<C, Rest/binary>>) when C =:= $\s; C =:= $\t ->
 trim_ows(Bin) ->
     trim_trailing_ows(Bin, byte_size(Bin)).
 
-trim_trailing_ows(Bin, 0) ->
-    binary:part(Bin, 0, 0);
+trim_trailing_ows(_Bin, 0) ->
+    <<>>;
 trim_trailing_ows(Bin, Size) ->
     case binary:at(Bin, Size - 1) of
         C when C =:= $\s; C =:= $\t -> trim_trailing_ows(Bin, Size - 1);
