@@ -217,10 +217,9 @@ the application's `nova_apps` options to combine them instead (available since
 {nova_apps, [{my_app, #{plugin_strategy => global_first}}]}
 ```
 
-Releases after 0.18.1 also read `plugin_strategy` from a route entry, for
-the routes of that entry. The `nova_apps` value, like `override_secure`, wins
-over what the application's own route entries declare. On 0.17.0 to 0.18.1
-a route entry's `plugin_strategy` is ignored.
+`plugin_strategy` is a per-application option and applies to every route
+entry of that application. A `plugin_strategy` key on a single route entry is
+ignored.
 
 | Value | Plugins used |
 |---|---|

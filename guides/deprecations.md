@@ -101,10 +101,6 @@ of `{Module, Function}` in Nova.
   served as `application/octet-stream`, so a browser does not run them as a
   page; set `mimetype` on the route to serve one with its type.
 
-- **The `plugin_strategy` option in `nova_apps` wins over a route entry's.**
-  The route entry's `plugin_strategy` is now read too, and is used when the
-  including application sets none; `local_or_global` is the default.
-
 - **`terminate/3` is called with three arguments.** `nova_handler` checked
   for `terminate/3` and called `terminate/2`. Controllers get
   `terminate(Reason, Req, #{})`; plain Cowboy handlers get their own state. A
