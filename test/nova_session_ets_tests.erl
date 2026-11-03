@@ -49,7 +49,7 @@ nova_session_ets_test_() ->
       fun unknown_cast_is_noreply/0,
       fun unknown_info_is_noreply/0,
       fun format_status_passthrough/0,
-      fun code_change_passthrough/0,
+      fun code_change_converts_old_rows/0,
       fun terminate_returns_ok/0,
       fun write_is_visible_without_sync/0,
       fun session_exists_after_write/0,
@@ -187,8 +187,18 @@ format_status_passthrough() ->
     Status = #{state => test, log => [], message => undefined, reason => undefined},
     ?assertEqual(Status, nova_session_ets:format_status(Status)).
 
-code_change_passthrough() ->
-    ?assertEqual({ok, mystate}, nova_session_ets:code_change("1.0", mystate, [])).
+%% Older releases stored {SessionId, Data}; a hot upgrade converts the rows.
+code_change_converts_old_rows() ->
+    Pid = nova_session_ets,
+    sys:replace_state(Pid, fun(State) ->
+                                   ets:insert(nova_session_ets_entries, {~"old-row", #{~"k" => ~"v"}}),
+                                   State
+                           end),
+    ok = sys:suspend(Pid),
+    ok = sys:change_code(Pid, nova_session_ets, "1.0", []),
+    ok = sys:resume(Pid),
+    ?assertEqual({ok, ~"v"}, nova_session_ets:get_value(~"old-row", ~"k")),
+    ?assert(nova_session_ets:session_exists(~"old-row")).
 
 terminate_returns_ok() ->
     ?assertEqual(ok, nova_session_ets:terminate(normal, #{})).

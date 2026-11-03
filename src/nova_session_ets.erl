@@ -9,7 +9,19 @@ are replicated through `nova_pubsub`.
 
 With `{nova, [{session_max_age, Seconds}]}` a session is dropped `Seconds`
 after it was created, whatever happens to it in between. Without it sessions
-live until they are deleted or the node restarts.
+live until they are deleted or the node restarts. Expired sessions are swept
+once a minute, also when `session_max_age` is set after startup; a session
+created before it was set never expires.
+
+Sessions do not survive a restart, and a node that starts or joins later only
+has the sessions written after it joined. During a rolling deploy or behind a
+load balancer without sticky sessions, a client whose id the serving node does
+not have gets a fresh session (Nova replaces ids the backend does not know),
+so it is signed out. Use a shared backend, such as a database, when sessions
+have to outlive a node.
+
+Rows are `{SessionId, Data, ExpiresAt}`. Older releases stored
+`{SessionId, Data}`; `code_change/3` converts them on a hot upgrade.
 """.
 
 -behaviour(gen_server).
@@ -73,8 +85,8 @@ delete_value(SessionId, Key) ->
     nova_pubsub:broadcast(?CHANNEL, "delete_value", {SessionId, Key}),
     sync().
 
-%% Read straight from the table: nova_stream_h calls this for every request
-%% that carries a session cookie.
+%% Read straight from the table: nova_session calls this on every access by a
+%% request that carries a session cookie.
 -spec session_exists(SessionId :: binary()) -> boolean().
 session_exists(SessionId) ->
     try ets:lookup(?TABLE, SessionId) of
@@ -175,8 +187,13 @@ handle_info(#nova_pubsub{topic = "delete_value", payload = SessionId}, State) ->
     ets:delete(?TABLE, SessionId),
     {noreply, State};
 handle_info(sweep, State) ->
-    Now = erlang:system_time(millisecond),
-    ets:select_delete(?TABLE, [{{'_', '_', '$1'}, [{is_integer, '$1'}, {'=<', '$1', Now}], [true]}]),
+    case max_age() of
+        undefined ->
+            ok;
+        _ ->
+            Now = erlang:system_time(millisecond),
+            ets:select_delete(?TABLE, [{{'_', '_', '$1'}, [{is_integer, '$1'}, {'=<', '$1', Now}], [true]}])
+    end,
     schedule_sweep(),
     {noreply, State};
 handle_info(_Info, State) ->
@@ -201,6 +218,8 @@ terminate(_Reason, _State) ->
                   Extra :: term()) -> {ok, NewState :: term()} |
                                       {error, Reason :: term()}.
 code_change(_OldVsn, State, _Extra) ->
+    Old = ets:select(?TABLE, [{{'$1', '$2'}, [], [{{'$1', '$2'}}]}]),
+    ets:insert(?TABLE, [{SessionId, Session, infinity} || {SessionId, Session} <- Old]),
     {ok, State}.
 
 %%--------------------------------------------------------------------
@@ -243,7 +262,4 @@ max_age() ->
     end.
 
 schedule_sweep() ->
-    case max_age() of
-        undefined -> ok;
-        _ -> erlang:send_after(?SWEEP_INTERVAL, self(), sweep)
-    end.
+    erlang:send_after(?SWEEP_INTERVAL, self(), sweep).
