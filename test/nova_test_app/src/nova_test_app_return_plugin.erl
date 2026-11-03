@@ -9,8 +9,12 @@
          plugin_info/0
         ]).
 
-pre_request(Req, _Env, #{return := break}, State) ->
-    {break, cowboy_req:set_resp_header(~"x-plugin", ~"break", Req), State};
+pre_request(Req, _Env, #{return := break_redirect}, State) ->
+    {break, {redirect, ~"/login"}, Req, State};
+pre_request(Req, _Env, #{return := break_status}, State) ->
+    {break, {status, 401}, Req, State};
+pre_request(Req, _Env, #{return := break_unknown}, State) ->
+    {break, {not_a_reply, 1}, Req, State};
 pre_request(Req, _Env, #{return := stop_two_tuple}, _State) ->
     {stop, cowboy_req:reply(429, #{}, ~"slow down", Req)};
 pre_request(_Req, _Env, #{return := error}, _State) ->

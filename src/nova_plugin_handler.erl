@@ -44,7 +44,7 @@ run_plugins([{Callback, Options}|Tl], CallbackType, Req, Env) when is_function(C
             Req0 = Req#{crash_info => #{class => Class,
                                         reason => Reason,
                                         stacktrace => Stacktrace}},
-            nova_router:render_status_page('_', 500, #{}, Req0, Env)
+            render_500(Req0, Env)
     end.
 
 handle_result({ok, Req0, State0}, Callback, State, Tl, CallbackType, _Req, Env) ->
@@ -52,47 +52,82 @@ handle_result({ok, Req0, State0}, Callback, State, Tl, CallbackType, _Req, Env) 
     run_plugins(Tl, CallbackType, Req0, Env);
 handle_result({ok, Reply, Req0, State0}, Callback, State, Tl, CallbackType, _Req, Env) ->
     set_state(Callback, State, State0),
-    run_plugins(Tl, CallbackType, handle_reply(Reply, Req0), Env);
-%% Break skips the rest of this phase's plugins; the request carries on.
-handle_result({break, Req0, State0}, Callback, State, _Tl, CallbackType, _Req, Env) ->
-    set_state(Callback, State, State0),
-    run_plugins([], CallbackType, Req0, Env);
-handle_result({break, Reply, Req0, State0}, Callback, State, _Tl, CallbackType, _Req, Env) ->
-    set_state(Callback, State, State0),
-    run_plugins([], CallbackType, handle_reply(Reply, Req0), Env);
+    case handle_reply(Reply, Req0) of
+        {ok, Req1} -> run_plugins(Tl, CallbackType, Req1, Env);
+        error -> unsupported_reply(Callback, Reply, Req0, Env)
+    end;
+handle_result({break, Req0, State0}, Callback, State, Tl, CallbackType, Req, Env) ->
+    deprecated_break(Callback),
+    handle_result({stop, Req0, State0}, Callback, State, Tl, CallbackType, Req, Env);
+handle_result({break, Reply, Req0, State0}, Callback, State, Tl, CallbackType, Req, Env) ->
+    deprecated_break(Callback),
+    handle_result({stop, Reply, Req0, State0}, Callback, State, Tl, CallbackType, Req, Env);
 handle_result({stop, Req0, State0}, Callback, State, _Tl, _CallbackType, _Req, _Env) ->
     set_state(Callback, State, State0),
     {stop, Req0};
 handle_result({stop, Req0}, _Callback, _State, _Tl, _CallbackType, _Req, _Env) when is_map(Req0) ->
     {stop, Req0};
-handle_result({stop, Reply, Req0, State0}, Callback, State, _Tl, _CallbackType, _Req, _Env) ->
+handle_result({stop, Reply, Req0, State0}, Callback, State, _Tl, _CallbackType, _Req, Env) ->
     set_state(Callback, State, State0),
-    Req1 = handle_reply(Reply, Req0),
-    %% Since we are stopping we need to send the statuscode to the requester. This is a special case for stop.
-    StatusCode = maps:get(resp_status_code, Req1, 200),
-    {stop, cowboy_req:reply(StatusCode, Req1)};
+    case handle_reply(Reply, Req0) of
+        {ok, Req1} ->
+            %% Stopping means nobody else will answer, so the reply goes out here.
+            StatusCode = maps:get(resp_status_code, Req1, 200),
+            {stop, cowboy_req:reply(StatusCode, Req1)};
+        error ->
+            unsupported_reply(Callback, Reply, Req0, Env)
+    end;
 handle_result({error, Reason}, Callback, _State, _Tl, _CallbackType, Req, Env) ->
-    {module, Module} = erlang:fun_info(Callback, module),
-    ?LOG_ERROR(#{msg => ~"Plugin returned an error", plugin => Module, reason => Reason}),
-    nova_router:render_status_page('_', 500, #{}, Req#{crash_info => #{class => error, reason => Reason}}, Env);
+    ?LOG_ERROR(#{msg => ~"Plugin returned an error", plugin => plugin_module(Callback), reason => Reason}),
+    render_500(Req#{crash_info => #{class => error, reason => Reason}}, Env);
 handle_result(Result, Callback, _State, _Tl, _CallbackType, Req, Env) ->
-    {module, Module} = erlang:fun_info(Callback, module),
-    ?LOG_ERROR(#{msg => ~"Plugin returned an unsupported result", plugin => Module,
+    ?LOG_ERROR(#{msg => ~"Plugin returned an unsupported result", plugin => plugin_module(Callback),
                  result => Result}),
-    nova_router:render_status_page('_', 500, #{}, Req, Env).
+    render_500(Req, Env).
 
 handle_reply({reply, Body}, Req) ->
     handle_reply({reply, 200, #{}, Body}, Req);
 handle_reply({reply, Status, Body}, Req) ->
     handle_reply({reply, Status, #{}, Body}, Req);
-handle_reply({reply, Status, Headers, Body}, Req) ->
+handle_reply({reply, Status, Headers, Body}, Req) when is_integer(Status), is_map(Headers) ->
     Req0 = cowboy_req:set_resp_headers(Headers, Req),
     Req1 = cowboy_req:set_resp_body(Body, Req0),
-    Req1#{resp_status_code => Status};
-handle_reply(_, Req) ->
-    Req.
+    {ok, Req1#{resp_status_code => Status}};
+handle_reply({redirect, Url}, Req) when is_binary(Url); is_list(Url) ->
+    Req0 = cowboy_req:set_resp_headers(#{~"location" => location(Url)}, Req),
+    {ok, Req0#{resp_status_code => 302}};
+handle_reply({status, Status}, Req) ->
+    handle_reply({status, Status, #{}}, Req);
+handle_reply({status, Status, Headers}, Req) when is_integer(Status), is_map(Headers) ->
+    {ok, (cowboy_req:set_resp_headers(Headers, Req))#{resp_status_code => Status}};
+handle_reply(_Reply, _Req) ->
+    error.
 
+unsupported_reply(Callback, Reply, Req, Env) ->
+    ?LOG_ERROR(#{msg => ~"Plugin returned an unsupported reply", plugin => plugin_module(Callback),
+                 reply => Reply}),
+    render_500(Req, Env).
 
+%% The status page runs through nova_handler and then the post_request phase.
+%% Marking the pre_request phase done keeps the pre plugins from running twice.
+render_500(Req, Env) ->
+    {ok, Req0, Env0} = nova_router:render_status_page('_', 500, #{}, Req, Env),
+    {ok, Req0, Env0#{plugin_state => pre_request}}.
+
+deprecated_break(Callback) ->
+    ?LOG_WARNING(#{msg => ~"Plugin returned break, which is deprecated and behaves like stop. Return stop instead",
+                   plugin => plugin_module(Callback)}).
+
+plugin_module(Callback) ->
+    {module, Module} = erlang:fun_info(Callback, module),
+    Module.
+
+location(Url) when is_binary(Url) ->
+    Url;
+location(Url) ->
+    case unicode:characters_to_binary(Url) of
+        Location when is_binary(Location) -> Location
+    end.
 
 %% Plugin state lives in nova_plugin_manager's table and is written through
 %% one gen_server. Most plugins hand their state back untouched, so only

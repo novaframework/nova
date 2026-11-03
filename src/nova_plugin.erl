@@ -11,22 +11,31 @@ A plugin returns one of:
 
 `{ok, Reply, Req, State}` sets the reply on `Req` and continues.
 
-`{break, Req, State}` and `{break, Reply, Req, State}` skip the rest of the current plugin chain. If a pre_request plugin breaks, the remaining pre_request plugins are skipped and the request carries on to the security function and the controller.
-
 `{stop, Req, State}` and `{stop, Req}` stop the execution. The plugin is responsible in this case for returning a proper response to the client. `{stop, Reply, Req, State}` stops and sends `Reply`.
+
+`{break, Req, State}` and `{break, Reply, Req, State}` are deprecated aliases of the matching `stop` returns and will be removed in 1.0. They log a warning; return `stop` instead.
 
 `{error, Reason}` stops the execution and renders the 500 status page.
 
+`Reply` is `{reply, Body}`, `{reply, Status, Body}`, `{reply, Status, Headers, Body}`, `{redirect, Url}`, `{status, Status}` or `{status, Status, Headers}`. Any other reply renders the 500 status page.
+
 When a pre_request plugin stops the request, or the security function refuses it, the controller and the post_request plugins do not run.
+
+The state a plugin returns is kept per plugin module and shared by every request. Nova writes it back only when it changed, and concurrent requests overwrite each other's writes (the last writer wins). Keep per-request data in `Req`, and use `ets` or `counters` for anything shared that has to add up, such as counters.
+
+These callbacks run for HTTP requests. Websocket handlers run their plugins through `nova_ws_handler`, which has its own contract; see `nova_websocket`.
 
 """.
 
 -type request_type() :: pre_request | post_request.
 -export_type([request_type/0, reply/0]).
 
--type reply() :: {reply, Body :: binary()} |
-                 {reply, Status :: integer(), Body :: binary()} |
-                 {reply, Status :: integer(), Headers :: [{binary(), binary()}], Body :: binary()}.
+-type reply() :: {reply, Body :: iodata()} |
+                 {reply, Status :: integer(), Body :: iodata()} |
+                 {reply, Status :: integer(), Headers :: cowboy:http_headers(), Body :: iodata()} |
+                 {redirect, Url :: binary() | string()} |
+                 {status, Status :: integer()} |
+                 {status, Status :: integer(), Headers :: cowboy:http_headers()}.
 
 -doc """
 Start function for the plugin. This function is called when the plugin is started

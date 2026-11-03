@@ -105,8 +105,8 @@ pre_plugin_ok_reply_test_() ->
     end}.
 
 %%====================================================================
-%% Pre plugin returns {break, Req, State} -> skips the rest of the chain and
-%% hands the request on (Cowboy rejects a bare {ok, Req} from a middleware)
+%% {break, ...} is a deprecated alias of stop. It must never let the request
+%% on to security and the controller.
 %%====================================================================
 
 pre_plugin_break_test_() ->
@@ -115,13 +115,9 @@ pre_plugin_break_test_() ->
             {break, R#{broke => true}, #{}}
         end,
         Req = req([{pre_request, [plugin(P)]}]),
-        {ok, Req1, #{plugin_state := pre_request}} = nova_plugin_handler:execute(Req, env()),
+        {stop, Req1} = nova_plugin_handler:execute(Req, env()),
         ?assertEqual(true, maps:get(broke, Req1))
     end}.
-
-%%====================================================================
-%% Pre plugin returns {break, Reply, Req, State} -> handles reply, stops
-%%====================================================================
 
 pre_plugin_break_reply_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
@@ -129,9 +125,48 @@ pre_plugin_break_reply_test_() ->
             {break, {reply, 403, <<"forbidden">>}, R, #{}}
         end,
         Req = req([{pre_request, [plugin(P)]}]),
-        {ok, Req1, #{plugin_state := pre_request}} = nova_plugin_handler:execute(Req, env()),
+        {stop, Req1} = nova_plugin_handler:execute(Req, env()),
         ?assertEqual(403, maps:get(resp_status_code, Req1)),
-        ?assertEqual(<<"forbidden">>, maps:get(resp_body, Req1))
+        ?assertEqual(<<"forbidden">>, maps:get(resp_body, Req1)),
+        ?assert(meck:called(cowboy_req, reply, [403, '_']))
+    end}.
+
+%% nova_oidcc answers anonymous users with these two.
+break_redirect_reply_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        P = fun(R, _Env, _Opts, _State) -> {break, {redirect, ~"/login"}, R, #{}} end,
+        Req = req([{pre_request, [plugin(P)]}]),
+        {stop, Req1} = nova_plugin_handler:execute(Req, env()),
+        ?assertEqual(302, maps:get(resp_status_code, Req1)),
+        ?assertEqual(~"/login", maps:get(~"location", maps:get(resp_headers, Req1))),
+        ?assert(meck:called(cowboy_req, reply, [302, '_']))
+    end}.
+
+break_status_reply_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        P = fun(R, _Env, _Opts, _State) -> {break, {status, 401}, R, #{}} end,
+        Req = req([{pre_request, [plugin(P)]}]),
+        {stop, Req1} = nova_plugin_handler:execute(Req, env()),
+        ?assertEqual(401, maps:get(resp_status_code, Req1)),
+        ?assert(meck:called(cowboy_req, reply, [401, '_']))
+    end}.
+
+break_unknown_reply_is_a_500_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        P = fun(R, _Env, _Opts, _State) -> {break, {not_a_reply, 1}, R, #{}} end,
+        Req = req([{pre_request, [plugin(P)]}]),
+        {ok, Req1, Env1} = nova_plugin_handler:execute(Req, env()),
+        ?assertEqual(500, maps:get(resp_status_code, Req1)),
+        ?assertEqual(pre_request, maps:get(plugin_state, Env1)),
+        ?assertEqual(fun nova_error_controller:status_code/1, maps:get(callback, Env1))
+    end}.
+
+stop_redirect_string_reply_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        P = fun(R, _Env, _Opts, _State) -> {stop, {redirect, "/login"}, R, #{}} end,
+        Req = req([{pre_request, [plugin(P)]}]),
+        {stop, Req1} = nova_plugin_handler:execute(Req, env()),
+        ?assertEqual(~"/login", maps:get(~"location", maps:get(resp_headers, Req1)))
     end}.
 
 %%====================================================================
@@ -234,7 +269,7 @@ break_stops_chain_test_() ->
             {ok, R#{p3 => true}, #{}}
         end,
         Req = req([{pre_request, [plugin(P1), plugin(P2), plugin(P3)]}]),
-        {ok, Req1, #{plugin_state := pre_request}} = nova_plugin_handler:execute(Req, env()),
+        {stop, Req1} = nova_plugin_handler:execute(Req, env()),
         ?assertEqual(true, maps:get(p1, Req1)),
         ?assertEqual(true, maps:get(p2, Req1)),
         ?assertNot(maps:is_key(p3, Req1))
@@ -288,17 +323,17 @@ handle_reply_full_test_() ->
     end}.
 
 %%====================================================================
-%% handle_reply passthrough with unknown format
+%% An unknown reply is a 500, not silently dropped
 %%====================================================================
 
-handle_reply_passthrough_test_() ->
+handle_reply_unknown_is_a_500_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         P = fun(R, _Env, _Opts, _State) ->
             {ok, something_unknown, R, #{}}
         end,
         Req = req([{pre_request, [plugin(P)]}]),
         {ok, Req1, _} = nova_plugin_handler:execute(Req, env()),
-        ?assertNot(maps:is_key(resp_status_code, Req1))
+        ?assertEqual(500, maps:get(resp_status_code, Req1))
     end}.
 
 %%====================================================================
@@ -365,10 +400,28 @@ post_plugin_break_test_() ->
         P1 = fun(R, _Env, _Opts, _State) -> {break, R#{p1 => true}, #{}} end,
         P2 = fun(R, _Env, _Opts, _State) -> {ok, R#{p2 => true}, #{}} end,
         Req = req([{post_request, [plugin(P1), plugin(P2)]}]),
-        {ok, Req1, _} = nova_plugin_handler:execute(Req, env(#{plugin_state => pre_request})),
+        {stop, Req1} = nova_plugin_handler:execute(Req, env(#{plugin_state => pre_request})),
         ?assert(maps:get(p1, Req1)),
         ?assertNot(maps:is_key(p2, Req1))
     end}.
+
+%% The 500 page goes through the post_request middleware. The pre_request
+%% plugins must not run again there, whichever way the phase failed.
+pre_plugins_run_once_on_failure_test_() ->
+    Failures = [fun(_R) -> {error, nope} end,
+                fun(_R) -> what_is_this end,
+                fun(_R) -> error(boom) end,
+                fun(R) -> {break, {not_a_reply, 1}, R, #{}} end],
+    {setup, ?SETUP, ?CLEANUP,
+     [fun() ->
+              Runs = counters:new(1, []),
+              Counting = fun(R, _Env, _Opts, State) -> counters:add(Runs, 1, 1), {ok, R, State} end,
+              Failing = fun(R, _Env, _Opts, _State) -> Fail(R) end,
+              Req = req([{pre_request, [plugin(Counting), plugin(Failing)]}]),
+              {ok, Req1, Env1} = nova_plugin_handler:execute(Req, env()),
+              {ok, _Req2, _Env2} = nova_plugin_handler:execute(Req1, Env1),
+              ?assertEqual(1, counters:get(Runs, 1))
+      end || Fail <- Failures]}.
 
 %% A plugin that hands its state back unchanged does not go through the
 %% plugin manager's gen_server.
