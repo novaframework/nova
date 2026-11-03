@@ -52,10 +52,22 @@ of `{Module, Function}` in Nova.
   [routing guide](routing.md).
 
 - **`{break, ...}` from a plugin is a deprecated alias of `stop`.** It ends the
-  request and sends its reply, if it has one, and logs a warning. It will be
-  removed in 1.0; return `{stop, ...}` instead. A plugin reply Nova does not
-  know (anything but `{reply, ...}`, `{redirect, Url}` or `{status, ...}`) now
-  renders the 500 page instead of being ignored.
+  request and sends its reply, if it has one, and logs a warning once per
+  plugin module. It will be removed in 1.0; return `{stop, ...}` instead. A
+  plugin reply Nova does not know (anything but `{reply, ...}`,
+  `{redirect, Url}` or `{status, ...}`) now renders the 500 page instead of
+  being ignored. Reply headers may be a map or a list of pairs.
+
+- **`{ok, Reply, Req, State}` from a plugin takes only `{reply, ...}`.** A
+  redirect or a status there used to be overwritten by the controller's
+  answer; it now renders the 500 page and logs that `stop` is needed.
+
+- **The default error page shows crash details only in `dev`.** Details
+  (the reason, extra messages and the stacktrace) are shown only when
+  `{nova, [{environment, dev}]}` is set. An unset environment shows none.
+
+- **`decode_json_body` and `read_urlencoded_body` match the content type
+  case-insensitively,** so `Application/JSON` is decoded.
 
 - **`{json, Status, Headers, Req, JSON}` is deprecated.** Return
   `{json, Status, Headers, JSON, Req}`, the order the docs always gave. The old
