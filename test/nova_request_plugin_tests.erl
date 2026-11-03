@@ -163,7 +163,8 @@ modulate_state_json_suffix_test_() ->
          ?assertEqual(#{~"a" => 1}, Decode(~"application/json; charset=utf-8")),
          ?assertEqual(undefined, Decode(~"application/json-seq")),
          ?assertEqual(undefined, Decode(~"application/+json")),
-         ?assertEqual(undefined, Decode(~"text/vnd.x+json"))
+         ?assertEqual(undefined, Decode(~"text/vnd.x+json")),
+         ?assertEqual(undefined, Decode(~"application/x+json+xml"))
      end}.
 
 %%====================================================================
