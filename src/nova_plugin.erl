@@ -3,17 +3,22 @@
 %%% Created : 12 Feb 2020 by Niclas Axelsson <niclas@burbas.se>
 -module(nova_plugin).
 -moduledoc """
-Plugins can be run at two different times; either in the beginning or at the end of a request. They can modify both the actual request or the nova-state. A plugin is implemented with the nova_plugin behaviour and needs to implement three different functions: pre_request/2, post_request/2 and plugin_info/0.
+Plugins can be run at two different times; either in the beginning or at the end of a request. They can modify both the actual request or the nova-state. A plugin is implemented with the nova_plugin behaviour and needs to implement pre_request/4 and/or post_request/4 and plugin_info/0.
 
-A plugin can return either \{ok, NewState\}, \{break, NewState\}, \{stop, NewState\}, \{error, Reason\}.
+A plugin returns one of:
 
-\{ok, NewState\} will continue the normal execution with the NewState.
+`{ok, Req, State}` continues with the next plugin.
 
-\{break, NewState\} breaks the execution of the current plugin-chain. This means that if a pre_request-plugin returns the break-statement the rest of the plugins in that chain will be skipped.
+`{ok, Reply, Req, State}` sets the reply on `Req` and continues.
 
-\{stop, NewState\} stops the execution. The plugin is responsible in this case for returning a proper response to the client.
+`{break, Req, State}` and `{break, Reply, Req, State}` skip the rest of the current plugin chain. If a pre_request plugin breaks, the remaining pre_request plugins are skipped and the request carries on to the security function and the controller.
 
-\{error, Reason\} will stop the execution and call the nova_error plugin, resulting in a 500 response back to the user. If debug mode is enabled the reason will be returned in the 500-response.
+`{stop, Req, State}` and `{stop, Req}` stop the execution. The plugin is responsible in this case for returning a proper response to the client. `{stop, Reply, Req, State}` stops and sends `Reply`.
+
+`{error, Reason}` stops the execution and renders the 500 status page.
+
+When a pre_request plugin stops the request, or the security function refuses it, the controller and the post_request plugins do not run.
+
 """.
 
 -type request_type() :: pre_request | post_request.
@@ -33,15 +38,14 @@ the life cycle of the plugin. The state can be any term.
 
 -doc """
 Stop function for the plugin. This function is called when the application is stopped.
-It takes a state as argument and should return ok.
+It takes the plugin's state as argument and should return ok.
 """.
 -callback stop(State :: nova:state()) -> ok.
 -optional_callbacks([stop/1]).
 
 -doc """
 This function is called before the request is processed. It can modify the request
-and the nova-state. It takes a state and a map of options as arguments and should return
-either `{ok, NewState}`, `{break, NewState}`, `{stop, NewState}`, or `{error, Reason}`.
+and the nova-state. See the module documentation for what it can return.
 """.
 -callback pre_request(Req :: cowboy_req:req(), Env :: any(),
                       Options :: map(), PluginState :: any()) ->
@@ -50,15 +54,14 @@ either `{ok, NewState}`, `{break, NewState}`, `{stop, NewState}`, or `{error, Re
     {break, Req0 :: cowboy_req:req(), NewState :: any()} |
     {break, Reply :: reply(), Req0 :: cowboy_req:req(), NewState :: any()} |
     {stop, Req0 :: cowboy_req:req(), NewState :: any()} |
+    {stop, Req0 :: cowboy_req:req()} |
     {stop, Reply :: reply(), Req0 :: cowboy_req:req(), NewState :: any()} |
     {error, Reason :: term()}.
 -optional_callbacks([pre_request/4]).
 
 -doc """
 This function is called after the request is processed. It can modify the request.
-It takes a state and a map of options as arguments and should return
-either `{ok, NewState}`, `{break, NewState}`, `{stop, NewState}` or `{error, Reason}`.
-The state is only used if there's another plugin invoked after this one.
+See the module documentation for what it can return.
 """.
 -callback post_request(Req :: cowboy_req:req(), Env :: any(),
                        Options :: map(), PluginState :: any()) ->
@@ -67,6 +70,7 @@ The state is only used if there's another plugin invoked after this one.
     {break, Req0 :: cowboy_req:req(), NewState :: any()} |
     {break, Reply :: reply(), Req0 :: cowboy_req:req(), NewState :: any()} |
     {stop, Req0 :: cowboy_req:req(), NewState :: any()} |
+    {stop, Req0 :: cowboy_req:req()} |
     {stop, Reply :: reply(), Req0 :: cowboy_req:req(), NewState :: any()} |
     {error, Reason :: term()}.
 -optional_callbacks([post_request/4]).

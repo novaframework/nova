@@ -37,27 +37,7 @@ run_plugins([{Callback, Options}|Tl], CallbackType, Req, Env) when is_function(C
 
     try Callback(Req, Env, Options, State) of
         Result ->
-            set_state(Callback, Result),
-            case Result of
-                {ok, Req0, _State0} ->
-                    run_plugins(Tl, CallbackType, Req0, Env);
-                {ok, Reply, Req0, _State0} ->
-                    Req1 = handle_reply(Reply, Req0),
-                    run_plugins(Tl, CallbackType, Req1, Env);
-                {break, Req0, _State0} ->
-                    {ok, Req0};
-                {break, Reply, Req0, _State0} ->
-                    Req1 = handle_reply(Reply, Req0),
-                    {ok, Req1};
-                {stop, Req0, _State0} ->
-                    {stop, Req0};
-                {stop, Reply, Req0, _State0} ->
-                    Req1 = handle_reply(Reply, Req0),
-                    %% Since we are stopping we need to send the statuscode to the requester. This is a special case for stop.
-                    StatusCode = maps:get(resp_status_code, Req1, 200),
-                    cowboy_req:reply(StatusCode, Req1),
-                    {stop, Req1}
-            end
+            handle_result(Result, Callback, State, Tl, CallbackType, Req, Env)
     catch
         Class:Reason:Stacktrace ->
             ?LOG_ERROR(#{msg => <<"Plugin crashed">>, class => Class, reason => Reason, stacktrace => Stacktrace}),
@@ -66,6 +46,40 @@ run_plugins([{Callback, Options}|Tl], CallbackType, Req, Env) when is_function(C
                                         stacktrace => Stacktrace}},
             nova_router:render_status_page('_', 500, #{}, Req0, Env)
     end.
+
+handle_result({ok, Req0, State0}, Callback, State, Tl, CallbackType, _Req, Env) ->
+    set_state(Callback, State, State0),
+    run_plugins(Tl, CallbackType, Req0, Env);
+handle_result({ok, Reply, Req0, State0}, Callback, State, Tl, CallbackType, _Req, Env) ->
+    set_state(Callback, State, State0),
+    run_plugins(Tl, CallbackType, handle_reply(Reply, Req0), Env);
+%% Break skips the rest of this phase's plugins; the request carries on.
+handle_result({break, Req0, State0}, Callback, State, _Tl, CallbackType, _Req, Env) ->
+    set_state(Callback, State, State0),
+    run_plugins([], CallbackType, Req0, Env);
+handle_result({break, Reply, Req0, State0}, Callback, State, _Tl, CallbackType, _Req, Env) ->
+    set_state(Callback, State, State0),
+    run_plugins([], CallbackType, handle_reply(Reply, Req0), Env);
+handle_result({stop, Req0, State0}, Callback, State, _Tl, _CallbackType, _Req, _Env) ->
+    set_state(Callback, State, State0),
+    {stop, Req0};
+handle_result({stop, Req0}, _Callback, _State, _Tl, _CallbackType, _Req, _Env) when is_map(Req0) ->
+    {stop, Req0};
+handle_result({stop, Reply, Req0, State0}, Callback, State, _Tl, _CallbackType, _Req, _Env) ->
+    set_state(Callback, State, State0),
+    Req1 = handle_reply(Reply, Req0),
+    %% Since we are stopping we need to send the statuscode to the requester. This is a special case for stop.
+    StatusCode = maps:get(resp_status_code, Req1, 200),
+    {stop, cowboy_req:reply(StatusCode, Req1)};
+handle_result({error, Reason}, Callback, _State, _Tl, _CallbackType, Req, Env) ->
+    {module, Module} = erlang:fun_info(Callback, module),
+    ?LOG_ERROR(#{msg => ~"Plugin returned an error", plugin => Module, reason => Reason}),
+    nova_router:render_status_page('_', 500, #{}, Req#{crash_info => #{class => error, reason => Reason}}, Env);
+handle_result(Result, Callback, _State, _Tl, _CallbackType, Req, Env) ->
+    {module, Module} = erlang:fun_info(Callback, module),
+    ?LOG_ERROR(#{msg => ~"Plugin returned an unsupported result", plugin => Module,
+                 result => Result}),
+    nova_router:render_status_page('_', 500, #{}, Req, Env).
 
 handle_reply({reply, Body}, Req) ->
     handle_reply({reply, 200, #{}, Body}, Req);
@@ -80,7 +94,10 @@ handle_reply(_, Req) ->
 
 
 
-set_state(Callback, Return) when is_function(Callback) ->
-    ReturnList = erlang:tuple_to_list(Return),
-    State = lists:last(ReturnList),
-    nova_plugin_manager:set_state(Callback, State).
+%% Plugin state lives in nova_plugin_manager's table and is written through
+%% one gen_server. Most plugins hand their state back untouched, so only
+%% changes are written.
+set_state(_Callback, State, State) ->
+    ok;
+set_state(Callback, _OldState, NewState) ->
+    nova_plugin_manager:set_state(Callback, NewState).

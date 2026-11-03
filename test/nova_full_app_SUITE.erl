@@ -34,6 +34,9 @@
          secure_route_accepts_token/1,
          auth_data_reaches_controller/1,
          pre_and_post_request_plugins_run/1,
+         plugin_break_reaches_controller/1,
+         plugin_stop_two_tuple_replies/1,
+         plugin_error_is_a_500/1,
          custom_not_found/1,
          controller_crash_is_a_500/1,
          websocket_echo/1,
@@ -84,7 +87,10 @@ groups() ->
                              auth_data_reaches_controller
                             ]},
      {plugins, [], [
-                    pre_and_post_request_plugins_run
+                    pre_and_post_request_plugins_run,
+                    plugin_break_reaches_controller,
+                    plugin_stop_two_tuple_replies,
+                    plugin_error_is_a_500
                    ]},
      {errors, [parallel], [
                            custom_not_found,
@@ -246,6 +252,21 @@ pre_and_post_request_plugins_run(Config) ->
 
     ?assert(counters:get(Counters, 1) > PreBefore),
     ?assert(counters:get(Counters, 2) > PostBefore).
+
+%% {break, ...} skips the rest of the phase and the controller still runs. It
+%% used to hand Cowboy a bare {ok, Req} and end in a 500.
+plugin_break_reaches_controller(Config) ->
+    {200, Headers, Body} = get(Config, "/plugin-break/"),
+    ?assertEqual(~"break", header(~"x-plugin", Headers)),
+    ?assertEqual(undefined, header(~"x-nova-pre-request", Headers)),
+    ?assertEqual(#{~"ok" => true, ~"from" => ~"nova_test_app"}, json(Body)).
+
+plugin_stop_two_tuple_replies(Config) ->
+    {429, _Headers, Body} = get(Config, "/plugin-stop/"),
+    ?assertEqual(~"slow down", Body).
+
+plugin_error_is_a_500(Config) ->
+    {500, _Headers, _Body} = get(Config, "/plugin-error/").
 
 %%====================================================================
 %% Errors

@@ -55,7 +55,7 @@ start_link() ->
 
 %%--------------------------------------------------------------------
 -doc """
-Adds a plugin to the manager. The plugin module must implement the plugin_info/0 function returning #\{title := Title, version := Version\}. Optionally it can implement init/0 returning the initial state for the plugin, and stop/0 for cleaning up when the manager terminates.
+Adds a plugin to the manager. The plugin module must implement the plugin_info/0 function returning #\{title := Title, version := Version\}. Optionally it can implement init/0 returning the initial state for the plugin, and stop/1, which gets that state, for cleaning up when the manager terminates.
 """.
 -spec add_plugin({Class :: atom(), Module :: atom(), Opts :: map()} |
                  Module :: atom() | Callback :: function()) ->
@@ -203,9 +203,7 @@ handle_info(_Info, State) ->
                 State :: term()) -> any().
 terminate(_Reason, _State) ->
     %% Stop all plugins and clean state
-    Plugins = ets:tab2list(?TABLE),
-    [ Plugin:stop() || #plugin{module = Plugin} <- Plugins,
-                       erlang:function_exported(Plugin, stop, 0) ],
+    [stop_plugin(Plugin) || Plugin <- ets:tab2list(?TABLE)],
     ets:delete(?TABLE),
     ok.
 
@@ -223,3 +221,16 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+%% The behaviour declares stop/1; stop/0 is what this module used to call.
+stop_plugin(#plugin{module = Module, state = State}) ->
+    try
+        case {erlang:function_exported(Module, stop, 1), erlang:function_exported(Module, stop, 0)} of
+            {true, _} -> Module:stop(State);
+            {false, true} -> Module:stop();
+            _ -> ok
+        end
+    catch
+        Class:Reason ->
+            ?LOG_ERROR(#{msg => ~"Plugin stop failed", plugin => Module, class => Class, reason => Reason})
+    end.

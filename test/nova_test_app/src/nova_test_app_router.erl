@@ -10,6 +10,18 @@
 
 routes(_Environment) ->
     [
+     %% One group per plugin return, driven by nova_full_app_SUITE.
+     #{prefix => "/plugin-break",
+       plugins => [{pre_request, nova_test_app_return_plugin, #{return => break}},
+                   {pre_request, nova_test_app_plugin, #{}}],
+       routes => [{"/", fun nova_test_app_controller:json/1, #{methods => [get]}}]},
+     #{prefix => "/plugin-stop",
+       plugins => [{pre_request, nova_test_app_return_plugin, #{return => stop_two_tuple}}],
+       routes => [{"/", fun nova_test_app_controller:json/1, #{methods => [get]}}]},
+     #{prefix => "/plugin-error",
+       plugins => [{pre_request, nova_test_app_return_plugin, #{return => error}}],
+       routes => [{"/", fun nova_test_app_controller:json/1, #{methods => [get]}}]},
+
      %% Plain routes, bindings, methods, plugins and a catch-all static dir.
      #{prefix => "",
        security => false,
