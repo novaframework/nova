@@ -49,20 +49,12 @@ get_file(_Req) ->
 get_dir(#{extra_state := #{pathinfo := Pathinfo, static := Dir, options := Options}} = Req) ->
     %% This case will be invoked if a directory was set with wildcard - pathinfo will then
     %% contain the segments of the wildcard value
-    Filepath = get_filepath(Dir),
-    Filepath0 = lists:foldl(fun(F, Acc) -> filename:join(Acc, binary_to_list(F)) end, Filepath, Pathinfo),
-    case filelib:is_dir(Filepath0) of
-        false ->
-            %% Check if it's a file
-            case filelib:is_file(Filepath0) of
-                true ->
-                    %% It's a file
-                    get_file(Req#{extra_state => #{static => {file, Filepath0}, options => Options}});
-                false ->
-                    {status, 404}
-            end;
+    case lists:all(fun safe_segment/1, Pathinfo) of
         true ->
-            get_dir(Req#{extra_state => #{static => {dir, Filepath0}, options => Options}})
+            Filepath = filename:join([get_filepath(Dir) | [binary_to_list(Segment) || Segment <- Pathinfo]]),
+            get_path(Filepath, Options, Req);
+        false ->
+            {status, 404}
     end;
 get_dir(#{path := Path, extra_state := #{static := Dir, options := Options}} = Req) ->
     Filepath = get_filepath(Dir),
@@ -92,6 +84,24 @@ get_dir(_Req) ->
 %%%%%%%%%%%%%%%%%%%%%%%%
 %% Internal functions %%
 %%%%%%%%%%%%%%%%%%%%%%%%
+
+get_path(Filepath, Options, Req) ->
+    case filelib:is_dir(Filepath) of
+        true ->
+            get_dir(Req#{extra_state => #{static => {dir, Filepath}, options => Options}});
+        false ->
+            case filelib:is_file(Filepath) of
+                true ->
+                    get_file(Req#{extra_state => #{static => {file, Filepath}, options => Options}});
+                false ->
+                    {status, 404}
+            end
+    end.
+
+%% The router already drops dot segments, so this only guards callers that
+%% build pathinfo themselves.
+safe_segment(~"..") -> false;
+safe_segment(Segment) -> binary:match(Segment, [~"/", <<0>>]) =:= nomatch.
 
 parse_range(RangeSpec, FileSize) ->
     %% Parse the "bytes=" range header value

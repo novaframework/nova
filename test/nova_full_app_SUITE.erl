@@ -30,6 +30,7 @@
          static_file_nested/1,
          static_directory_index/1,
          static_file_missing/1,
+         static_dot_segments_stay_inside_the_root/1,
          secure_route_rejects_anonymous/1,
          secure_route_accepts_token/1,
          auth_data_reaches_controller/1,
@@ -88,7 +89,8 @@ groups() ->
                                  static_file_is_nosniff,
                                  static_document_types_are_octet_stream,
                                  static_directory_index,
-                                 static_file_missing
+                                 static_file_missing,
+                                 static_dot_segments_stay_inside_the_root
                                 ]},
      {security, [parallel], [
                              secure_route_rejects_anonymous,
@@ -250,6 +252,39 @@ static_directory_index(Config) ->
 
 static_file_missing(Config) ->
     {404, _Headers, _Body} = get(Config, "/assets/does-not-exist.txt").
+
+%% HTTP clients normalise dot segments, so these go over a raw socket.
+%% priv/outside_assets.txt sits one level above the assets route's root.
+static_dot_segments_stay_inside_the_root(Config) ->
+    Paths = ["/assets/../outside_assets.txt",
+             "/assets/nested/../../outside_assets.txt",
+             "/assets/./../outside_assets.txt",
+             "/assets//../outside_assets.txt",
+             "/assets/%2e%2e/outside_assets.txt",
+             "/assets/%2E%2E/outside_assets.txt",
+             "/assets/..%2foutside_assets.txt",
+             "/assets/%252e%252e/outside_assets.txt",
+             "/assets/..%00/outside_assets.txt",
+             "http://localhost/assets/../outside_assets.txt"],
+    [?assertEqual(nomatch, binary:match(raw_get(Config, Path), ~"outside-assets-sentinel"), Path)
+     || Path <- Paths],
+    ?assertMatch(<<"HTTP/1.1 200", _/binary>>, raw_get(Config, "/assets/../../assets/hello.txt")).
+
+raw_get(Config, Path) ->
+    Port = ?config(port, Config),
+    {ok, Socket} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, raw}]),
+    ok = gen_tcp:send(Socket, ["GET ", Path, " HTTP/1.1\r\n",
+                               "Host: localhost:", integer_to_list(Port), "\r\n",
+                               "Connection: close\r\n\r\n"]),
+    Response = recv_all(Socket, []),
+    gen_tcp:close(Socket),
+    Response.
+
+recv_all(Socket, Acc) ->
+    case gen_tcp:recv(Socket, 0, 5000) of
+        {ok, Data} -> recv_all(Socket, [Acc, Data]);
+        {error, closed} -> iolist_to_binary(Acc)
+    end.
 
 %%====================================================================
 %% Security
