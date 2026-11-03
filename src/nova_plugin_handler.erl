@@ -59,7 +59,9 @@ run_plugins([{Callback, Options}|Tl], CallbackType, Req, Env) when is_function(C
                     {stop, Req1}
             end
     catch
-        Class:Reason:Stacktrace ->
+        Class:Reason0:Stacktrace0 ->
+            Reason = nova_redact:term(Reason0),
+            Stacktrace = nova_redact:stacktrace(Stacktrace0),
             ?LOG_ERROR(#{msg => <<"Plugin crashed">>, class => Class, reason => Reason, stacktrace => Stacktrace}),
             Req0 = Req#{crash_info => #{class => Class,
                                         reason => Reason,

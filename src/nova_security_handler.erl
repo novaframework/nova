@@ -17,7 +17,9 @@ execute(Req = #{host := Host}, Env = #{secure := Callback}) ->
         Result ->
             handle_response(Result, Req, Env)
     catch
-        Class:Reason:Stacktrace when UseStacktrace == true ->
+        Class:Reason0:Stacktrace0 when UseStacktrace == true ->
+            Reason = nova_redact:term(Reason0),
+            Stacktrace = nova_redact:stacktrace(Stacktrace0),
             ?LOG_ERROR(#{msg => <<"Security handler crashed">>,
                          class => Class,
                          reason => Reason,
@@ -29,7 +31,8 @@ execute(Req = #{host := Host}, Env = #{secure := Callback}) ->
             {ok, Req0, _Env} = nova_router:render_status_page(Host, 500, #{}, Req#{crash_info => Payload}, Env),
             Req1 = cowboy_req:reply(500, Req0),
             {stop, Req1};
-        Class:Reason ->
+        Class:Reason0 ->
+            Reason = nova_redact:term(Reason0),
             ?LOG_ERROR(#{msg => <<"Security handler crashed">>,
                          class => Class,
                          reason => Reason}),

@@ -220,7 +220,8 @@ handle_websocket({websocket, ControllerData}, Callback, Req) ->
             {ok, HandlerMod} = nova_handlers:get_handler(status),
             HandlerMod(StatusTuple, Callback, Req);
         Error ->
-            ?LOG_ERROR(#{msg => <<"Handler returned unsupported result">>, handler => Module, return_obj => Error}),
+            ?LOG_ERROR(#{msg => ~"Handler returned unsupported result", handler => Module,
+                         return_obj => nova_redact:term(Error)}),
             %% Render 500
             {ok, Req}
     end.

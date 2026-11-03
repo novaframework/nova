@@ -54,9 +54,20 @@ format_stacktrace_not_enabled_test() ->
 format_arity_integer_test() ->
     ?assertEqual(3, nova_error_controller:format_arity(3)).
 
-format_arity_function_test() ->
-    F = fun() -> ok end,
-    ?assertEqual(<<"fun">>, nova_error_controller:format_arity(F)).
+format_arity_drops_arguments_test() ->
+    ?assertEqual(2, nova_error_controller:format_arity([#{headers => #{}}, secret])).
+
+format_stacktrace_hides_arguments_test() ->
+    Entry = {my_mod, my_fun, [#{~"cookie" => ~"session_id=abc"}], [{file, "my_mod.erl"}, {line, 1}]},
+    [Formatted] = nova_error_controller:format_stacktrace([Entry]),
+    ?assertEqual(1, maps:get(arity, Formatted)).
+
+%% nova_handler hands over frames already formatted by nova:format_stacktrace/1.
+format_stacktrace_accepts_formatted_frames_test() ->
+    Frames = nova:format_stacktrace([{my_mod, my_fun, [a, b], [{file, "my_mod.erl"}, {line, 7}]}]),
+    ?assertEqual([#{module => ~"my_mod", function => ~"my_fun", arity => 2,
+                    file => ~"my_mod.erl", line => 7}],
+                 nova_error_controller:format_stacktrace(Frames)).
 
 %%====================================================================
 %% not_found/1
