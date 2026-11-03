@@ -41,6 +41,7 @@ above.
          cookie_name/0,
          cookie_opts/1,
          validate_cookie_config/0,
+         valid_cookie/2,
          presented_session_id/1,
          max_age/0
         ]).
@@ -246,17 +247,15 @@ cookie_opts_for(Scheme) ->
         _ -> Opts
     end.
 
-%% cow_cookie:setcookie/3 raises on a name that is not an RFC 6265 token or an
-%% attribute with control or non-ASCII bytes. Checked at boot so a bad setting
-%% stops the node instead of failing every response that sets the cookie.
-%% cookie_name/0 falls back to session_id for a name that is not a non-empty
-%% binary, so the configured value is checked here before that.
+%% Checked at boot so a bad setting stops the node instead of failing every
+%% response that sets the cookie. cookie_name/0 falls back to session_id for a
+%% name that is not a non-empty binary, so the configured value is checked here.
 -doc false.
 -spec validate_cookie_config() -> ok.
 validate_cookie_config() ->
     Opts = cookie_opts_for(~"http"),
     Configured = nova_config:get_env(session_cookie_name, ~"session_id"),
-    Valid = is_binary(Configured) andalso Configured =/= <<>> andalso
+    Valid = is_binary(Configured) andalso valid_cookie(Configured, Opts) andalso
         try cow_cookie:setcookie(Configured, ~"x", Opts) of
             _ -> true
         catch
@@ -264,11 +263,36 @@ validate_cookie_config() ->
         end,
     case Valid of
         true -> ok;
-        false ->
-            erlang:error({invalid_session_cookie_config,
-                          #{name => Configured, path => maps:get(path, Opts, undefined),
-                            domain => maps:get(domain, Opts, undefined)}})
+        false -> erlang:error(invalid_cookie_config(Configured, Opts))
     end.
+
+%% The name must be an RFC 6265 token and path and domain ASCII without control
+%% characters or ";". cowlib 2.21 refuses anything else, older versions only
+%% some of it, so Nova checks it itself.
+-doc false.
+-spec valid_cookie(binary(), cow_cookie:cookie_opts()) -> boolean().
+valid_cookie(Name, Opts) ->
+    Name =/= <<>> andalso is_token(Name) andalso
+        is_av_value(maps:get(path, Opts, <<>>)) andalso
+        is_av_value(maps:get(domain, Opts, <<>>)).
+
+invalid_cookie_config(Name, Opts) ->
+    {invalid_session_cookie_config,
+     #{name => Name, path => maps:get(path, Opts, undefined), domain => maps:get(domain, Opts, undefined)}}.
+
+is_token(<<C, Rest/binary>>) when C >= $a, C =< $z; C >= $A, C =< $Z; C >= $0, C =< $9 ->
+    is_token(Rest);
+is_token(<<C, Rest/binary>>) ->
+    lists:member(C, "!#$%&'*+-.^_`|~") andalso is_token(Rest);
+is_token(<<>>) ->
+    true.
+
+is_av_value(<<C, Rest/binary>>) when C >= 16#20, C =< 16#7E, C =/= $; ->
+    is_av_value(Rest);
+is_av_value(<<>>) ->
+    true;
+is_av_value(_) ->
+    false.
 
 merge_cookie_opts([], Opts) ->
     Opts;
@@ -364,7 +388,9 @@ stream_handled(Req) ->
     is_map_key(nova_session_id, Req) orelse is_map_key(nova_session_presented, Req).
 
 set_cookie(Value, Opts, Req) ->
-    Req0 = cowboy_req:set_resp_cookie(cookie_name(), Value, Req, Opts),
+    Name = cookie_name(),
+    valid_cookie(Name, Opts) orelse erlang:error(invalid_cookie_config(Name, Opts)),
+    Req0 = cowboy_req:set_resp_cookie(Name, Value, Req, Opts),
     Req0#{nova_session_direct => true}.
 
 warn_ambiguous_cookie(Name) ->

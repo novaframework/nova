@@ -416,3 +416,16 @@ validate_cookie_config_test_() ->
                              #{name := ~"session_id", path := ~"/", domain := <<"a\nb">>}},
                             nova_session:validate_cookie_config())
        end}]}.
+
+valid_cookie_test_() ->
+    [?_assert(nova_session:valid_cookie(~"__Host-session_id", #{path => ~"/", domain => ~"example.com"})),
+     ?_assert(nova_session:valid_cookie(~"a!#$%&'*+-.^_`|~9", #{})),
+     ?_assertNot(nova_session:valid_cookie(<<>>, #{})),
+     ?_assertNot(nova_session:valid_cookie(~"app:sid", #{})),
+     ?_assertNot(nova_session:valid_cookie(~"a/b", #{})),
+     ?_assertNot(nova_session:valid_cookie(~"a\"b", #{})),
+     ?_assertNot(nova_session:valid_cookie(<<"s", 200>>, #{})),
+     ?_assertNot(nova_session:valid_cookie(~"sid", #{path => <<"/a\nb">>})),
+     ?_assertNot(nova_session:valid_cookie(~"sid", #{path => ~"/a;b"})),
+     ?_assertNot(nova_session:valid_cookie(~"sid", #{domain => <<"ex", 200, ".com">>})),
+     ?_assertNot(nova_session:valid_cookie(~"sid", #{domain => <<"a", 127>>}))].

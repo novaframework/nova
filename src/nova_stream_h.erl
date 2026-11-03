@@ -121,12 +121,16 @@ session_cookie(Headers, State) ->
     {Headers, State}.
 
 %% A raise here would make Cowboy send its 500 back through this handler and
-%% raise again, forever, so a cookie cow_cookie refuses is dropped instead,
-%% with one log line per cookie name rather than one per response.
+%% raise again, forever, so a cookie Nova or cow_cookie refuses is dropped
+%% instead, with one log line per cookie name rather than one per response.
 with_cookie(Value, Opts, Headers) ->
     Name = nova_session:cookie_name(),
-    try cow_cookie:setcookie(Name, Value, Opts) of
-        Cookie -> add_cookie(Cookie, Headers)
+    try nova_session:valid_cookie(Name, Opts) andalso cow_cookie:setcookie(Name, Value, Opts) of
+        false ->
+            log_invalid_cookie(Name),
+            Headers;
+        Cookie ->
+            add_cookie(Cookie, Headers)
     catch
         error:_ ->
             log_invalid_cookie(Name),
