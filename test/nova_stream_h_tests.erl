@@ -48,6 +48,8 @@ stream_test_() ->
       fun configured_cookie_attributes/0,
       fun known_session_is_kept/0,
       fun unknown_session_is_replaced/0,
+      fun no_backend_lookup_in_connection_process/0,
+      fun switch_protocol_carries_cookie/0,
       fun renew_issues_new_cookie/0,
       fun delete_expires_cookie/0,
       fun write_after_delete_issues_new_cookie/0,
@@ -100,15 +102,39 @@ configured_cookie_attributes() ->
 known_session_is_kept() ->
     ok = nova_session_ets:set_value(~"known", ~"k", ~"v"),
     {Req, State} = start(req(~"session_id=known")),
-    ?assertEqual(~"known", maps:get(nova_session_id, Req)),
+    ?assertEqual(~"known", maps:get(nova_session_presented, Req)),
+    ?assertNot(maps:is_key(nova_session_id, Req)),
     ?assertEqual([], set_cookies(respond(event({written, ~"known"}, State)))).
 
-%% A client must not be able to pick its own session id.
+%% A client must not be able to pick its own session id: nova_session falls
+%% back to the fresh id, and that is the cookie the client gets.
 unknown_session_is_replaced() ->
     {Req, State} = start(req(~"session_id=attacker-chosen")),
-    #{nova_session_id := Id} = Req,
+    #{nova_session_pending := Id} = Req,
     ?assertNotEqual(~"attacker-chosen", Id),
     [Cookie] = set_cookies(respond(event({written, Id}, State))),
+    ?assertEqual(Id, cookie_value(Cookie)).
+
+%% The connection process serves every stream on the connection, so it must
+%% not wait for the session backend.
+no_backend_lookup_in_connection_process() ->
+    meck:new(nova_session_ets, [passthrough]),
+    try
+        {_Req, _State} = start(req(~"session_id=whatever")),
+        ?assertEqual(0, meck:num_calls(nova_session_ets, session_exists, '_'))
+    after
+        meck:unload(nova_session_ets)
+    end.
+
+%% A session written in nova_websocket:init/1 gets its cookie on the 101.
+switch_protocol_carries_cookie() ->
+    {#{nova_session_id := Id}, State} = start(req()),
+    State1 = event({written, Id}, State),
+    {[{switch_protocol, Headers, cowboy_websocket, ws_state}], _} =
+        nova_stream_h:info(1, {switch_protocol, #{~"upgrade" => ~"websocket"}, cowboy_websocket, ws_state},
+                           State1),
+    ?assertEqual(~"websocket", maps:get(~"upgrade", Headers)),
+    [Cookie] = set_cookies(Headers),
     ?assertEqual(Id, cookie_value(Cookie)).
 
 renew_issues_new_cookie() ->
@@ -137,9 +163,9 @@ stream_reply_carries_cookie() ->
     State1 = event({written, Id}, State),
     {[{headers, 200, Headers}], _} =
         nova_stream_h:info(1, {headers, 200, #{~"set-cookie" => [~"other=1"]}}, State1),
-    [Other, Cookie] = maps:get(~"set-cookie", Headers),
+    [Other, Cookie] = set_cookies(Headers),
     ?assertEqual(~"other=1", Other),
-    ?assertEqual(Id, cookie_value(iolist_to_binary(Cookie))).
+    ?assertEqual(Id, cookie_value(Cookie)).
 
 sessions_disabled() ->
     application:set_env(nova, use_sessions, false),

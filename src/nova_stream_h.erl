@@ -11,7 +11,7 @@
         ]).
 
 -record(session, {
-                  %% The known id the client sent, if any
+                  %% The id the client sent, if any, known or not
                   presented :: binary() | undefined,
                   %% The id the request is working with
                   current :: binary(),
@@ -54,6 +54,11 @@ info(StreamID, {response, Code, Headers, Body}, State) when is_integer(Code) ->
 info(StreamID, {headers, Code, Headers}, State) when is_integer(Code) ->
     {Headers0, State0} = session_cookie(Headers, State),
     forward(StreamID, {headers, Code, Headers0}, State0);
+%% A websocket upgrade: a session written in nova_websocket:init/1 gets its
+%% cookie on the 101.
+info(StreamID, {switch_protocol, Headers, Module, ModState}, State) when is_map(Headers) ->
+    {Headers0, State0} = session_cookie(Headers, State),
+    forward(StreamID, {switch_protocol, Headers0, Module, ModState}, State0);
 info(StreamID, Info, State) ->
     forward(StreamID, Info, State).
 
@@ -76,16 +81,20 @@ early_error(StreamID, Reason, PartialReq, {_, _Status, _Headers, _} = Resp, Opts
 %%% Sessions
 %%%===================================================================
 
+%% The request gets the id the client presented, if any, and a fresh one.
+%% nova_session checks the presented id against the backend when it is first
+%% used, in the request process, so a slow backend never blocks the
+%% connection.
 init_session(Req) ->
     case nova_session:enabled() of
         true ->
+            {ok, Pending} = nova_session:generate_session_id(),
             case presented_session_id(Req) of
                 undefined ->
-                    {ok, SessionId} = nova_session:generate_session_id(),
-                    {Req#{nova_session_id => SessionId}, #session{current = SessionId}};
-                SessionId ->
-                    {Req#{nova_session_id => SessionId},
-                     #session{presented = SessionId, current = SessionId}}
+                    {Req#{nova_session_id => Pending}, #session{current = Pending}};
+                Presented ->
+                    {Req#{nova_session_presented => Presented, nova_session_pending => Pending},
+                     #session{presented = Presented, current = Pending}}
             end;
         false ->
             {Req, undefined}
@@ -94,10 +103,7 @@ init_session(Req) ->
 presented_session_id(Req) ->
     try lists:keyfind(?COOKIE, 1, cowboy_req:parse_cookies(Req)) of
         {_, SessionId} when is_binary(SessionId), SessionId =/= <<>> ->
-            case nova_session:known(SessionId) of
-                true -> SessionId;
-                false -> undefined
-            end;
+            SessionId;
         _ ->
             undefined
     catch

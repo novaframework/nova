@@ -62,6 +62,7 @@ routes(_Environment) ->
                   {"/get", fun nova_test_app_session_controller:get/1, #{methods => [get]}},
                   {"/renew", fun nova_test_app_session_controller:renew/1, #{methods => [get]}},
                   {"/delete", fun nova_test_app_session_controller:delete/1, #{methods => [get]}},
-                  {"/untouched", fun nova_test_app_session_controller:untouched/1, #{methods => [get]}}
+                  {"/untouched", fun nova_test_app_session_controller:untouched/1, #{methods => [get]}},
+                  {"/ws", nova_test_app_session_ws_controller, #{protocol => ws}}
                  ]}
     ].

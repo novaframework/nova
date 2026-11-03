@@ -58,7 +58,19 @@ stream_req(SessionId) ->
                                   {{_Pid, 7}, Event} -> Self ! {stream_event, Event}
                               end
                       end),
-    #{nova_session_id => SessionId, pid => Conn, streamid => 7}.
+    #{nova_session_id => SessionId, pid => Conn, streamid => 7, nova_session_owner => self()}.
+
+%% The request as nova_stream_h hands it over when the client sent a cookie.
+presented_req(Presented, Pending) ->
+    (maps:remove(nova_session_id, stream_req(Pending)))#{nova_session_presented => Presented,
+                                                         nova_session_pending => Pending}.
+
+no_stream_event() ->
+    receive
+        {stream_event, Event} -> error({unexpected_stream_event, Event})
+    after 200 ->
+            ok
+    end.
 
 stream_event() ->
     receive
@@ -92,7 +104,13 @@ nova_session_ets_test_() ->
       fun renew_drops_old_session/0,
       fun renew_tells_stream_handler/0,
       fun renew_without_session/0,
-      fun use_sessions_read_from_nova_env/0,
+      fun use_sessions_bootstrap_app_wins/0,
+      fun known_presented_id_is_used/0,
+      fun unknown_presented_id_is_replaced/0,
+      fun renew_drops_presented_id/0,
+      fun spawned_process_does_not_notify/0,
+      fun request_without_owner_does_not_notify/0,
+      fun non_error_set_results_notify/0,
       fun delete_key_preserves_other_keys/0,
       fun set_overwrites_existing_key/0,
       fun generate_session_id_format/0
@@ -216,23 +234,83 @@ renew_tells_stream_handler() ->
     ?assertEqual({renewed, NewId}, stream_event()).
 
 renew_without_session() ->
-    {ok, #{nova_session_id := NewId}} = nova_session:renew(#{}),
+    {ok, #{nova_session_id := NewId}} = nova_session:renew(nova_test_helper:mock_req(~"GET", ~"/")),
     ?assert(is_binary(NewId)).
 
-use_sessions_read_from_nova_env() ->
+%% Same rule as json_lib: the bootstrap application wins, then nova.
+use_sessions_bootstrap_app_wins() ->
     application:set_env(nova, bootstrap_application, nova_session_tests_app),
     application:set_env(nova_session_tests_app, use_sessions, true),
     application:set_env(nova, use_sessions, false),
     try
+        ?assert(nova_session:enabled()),
+        application:unset_env(nova_session_tests_app, use_sessions),
         ?assertNot(nova_session:enabled()),
         application:unset_env(nova, use_sessions),
-        ?assert(nova_session:enabled()),
-        application:set_env(nova_session_tests_app, use_sessions, false),
-        ?assertNot(nova_session:enabled())
+        ?assert(nova_session:enabled())
     after
         application:unset_env(nova_session_tests_app, use_sessions),
         application:set_env(nova, bootstrap_application, nova),
         application:set_env(nova, use_sessions, true)
+    end.
+
+known_presented_id_is_used() ->
+    ok = nova_session_ets:set_value(~"known", ~"k", ~"v"),
+    Req = presented_req(~"known", ~"pending"),
+    ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")),
+    ok = nova_session:set(Req, ~"k2", ~"v2"),
+    ?assertEqual({written, ~"known"}, stream_event()).
+
+%% A client must not be able to pick its own session id.
+unknown_presented_id_is_replaced() ->
+    Req = presented_req(~"attacker-chosen", ~"pending"),
+    ok = nova_session:set(Req, ~"k", ~"v"),
+    ?assertEqual({written, ~"pending"}, stream_event()),
+    ?assertNot(nova_session_ets:session_exists(~"attacker-chosen")),
+    ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")).
+
+renew_drops_presented_id() ->
+    ok = nova_session_ets:set_value(~"before", ~"k", ~"v"),
+    {ok, Req1} = nova_session:renew(presented_req(~"before", ~"pending")),
+    ?assertNot(maps:is_key(nova_session_presented, Req1)),
+    ?assertNot(maps:is_key(nova_session_pending, Req1)),
+    ?assertMatch({renewed, _}, stream_event()),
+    ?assertEqual({error, not_found}, nova_session:get(Req1, ~"k")).
+
+%% Only the request process tells the stream handler. A message from anywhere
+%% else would reach whatever owns the connection by then, a websocket handler
+%% for instance.
+spawned_process_does_not_notify() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    Req = stream_req(SId),
+    Self = self(),
+    _ = spawn_link(fun() -> Self ! {spawned, nova_session:set(Req, ~"k", ~"v")} end),
+    receive {spawned, Result} -> ?assertEqual(ok, Result) after 1000 -> error(timeout) end,
+    no_stream_event(),
+    ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")).
+
+request_without_owner_does_not_notify() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    ok = nova_session:set(maps:remove(nova_session_owner, stream_req(SId)), ~"k", ~"v"),
+    no_stream_event().
+
+%% Backends that answer true or {ok, _} wrote the value too.
+non_error_set_results_notify() ->
+    meck:new(fake_session_backend, [non_strict]),
+    application:set_env(nova, session_manager, fake_session_backend),
+    try
+        meck:expect(fake_session_backend, set_value, fun(_, _, _) -> true end),
+        ?assertEqual(true, nova_session:set(stream_req(~"a"), ~"k", ~"v")),
+        ?assertEqual({written, ~"a"}, stream_event()),
+        meck:expect(fake_session_backend, set_value, fun(_, _, _) -> {ok, stored} end),
+        ?assertEqual({ok, stored}, nova_session:set(stream_req(~"b"), ~"k", ~"v")),
+        ?assertEqual({written, ~"b"}, stream_event()),
+        meck:expect(fake_session_backend, set_value, fun(_, _, _) -> {error, full} end),
+        ?assertEqual({error, full}, nova_session:set(stream_req(~"c"), ~"k", ~"v")),
+        no_stream_event()
+    after
+        application:set_env(nova, session_manager, nova_session_ets),
+        meck:unload(fake_session_backend)
     end.
 
 delete_key_preserves_other_keys() ->

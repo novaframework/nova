@@ -37,6 +37,8 @@
          custom_not_found/1,
          controller_crash_is_a_500/1,
          websocket_echo/1,
+         websocket_session_cookie_on_upgrade/1,
+         websocket_spawned_session_write_is_not_delivered/1,
          sub_app_mounted_under_prefix/1,
          add_and_remove_application/1
         ]).
@@ -91,7 +93,9 @@ groups() ->
                            controller_crash_is_a_500
                           ]},
      {websocket, [], [
-                      websocket_echo
+                      websocket_echo,
+                      websocket_session_cookie_on_upgrade,
+                      websocket_spawned_session_write_is_not_delivered
                      ]},
      {sub_apps, [parallel], [
                              sub_app_mounted_under_prefix
@@ -271,6 +275,21 @@ websocket_echo(Config) ->
     ?assertEqual(<<"echo:hello">>, ws_recv(Socket)),
     gen_tcp:close(Socket).
 
+%% nova_websocket:init/1 runs in the request process, so a session it writes
+%% gets its cookie on the 101.
+websocket_session_cookie_on_upgrade(Config) ->
+    {ok, Socket, Response} = ws_connect_response(Config, "/session/ws"),
+    ?assertMatch({_, _}, binary:match(Response, ~"set-cookie: session_id=")),
+    gen_tcp:close(Socket).
+
+%% A process spawned with the request must not message the connection, which
+%% runs the websocket by then.
+websocket_spawned_session_write_is_not_delivered(Config) ->
+    {ok, Socket, _Response} = ws_connect_response(Config, "/session/ws"),
+    ok = ws_send(Socket, ~"spawn-write"),
+    ?assertEqual(~"written", ws_recv(Socket)),
+    gen_tcp:close(Socket).
+
 %%====================================================================
 %% Sub-applications
 %%====================================================================
@@ -357,6 +376,12 @@ free_port() ->
 %%====================================================================
 
 ws_connect(Config, Path) ->
+    case ws_connect_response(Config, Path) of
+        {ok, Socket, _Response} -> {ok, Socket};
+        Error -> Error
+    end.
+
+ws_connect_response(Config, Path) ->
     Port = ?config(port, Config),
     {ok, Socket} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, raw}]),
     Key = base64:encode(crypto:strong_rand_bytes(16)),
@@ -372,7 +397,7 @@ ws_connect(Config, Path) ->
     {ok, Response} = gen_tcp:recv(Socket, 0, 5000),
     case binary:match(Response, <<"101">>) of
         nomatch -> {error, {handshake_failed, Response}};
-        _       -> {ok, Socket}
+        _       -> {ok, Socket, Response}
     end.
 
 ws_send(Socket, Payload) ->

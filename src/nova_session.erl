@@ -5,12 +5,23 @@ All kind of operations on sessions is handled by the nova_session-module. The mo
 
 The session id lives in the `session_id` cookie. `nova_stream_h` issues it with
 the response of the first request that writes to the session, so visitors that
-never store anything get no cookie. A presented id the backend does not know is
-ignored and replaced, so a client cannot choose its own session id.
+never store anything get no cookie.
 
 Call `renew/1` whenever the privilege level of the client changes (sign-in,
-sign-out, password change) so a session id planted or observed before that
-point stops working.
+sign-out, password change). That is the defence against session fixation: a
+session id planted or observed before that point stops working. As defence in
+depth, a presented id the backend does not know is ignored and replaced, so a
+client cannot simply choose its own session id.
+
+Session changes reach the cookie only when they are made from the process
+serving the request (where controllers, plugins and `nova_websocket:init/1`
+run). A process spawned with the request can read and write the session data,
+but the response will not carry a new cookie for it.
+
+Cookies are written by `nova_stream_h`. A `stream_handlers` configuration
+without it still stores session data, but `renew/1`, `delete/1` and new
+sessions no longer reach the client's cookie, and presented ids are used
+without the check above.
 """.
 -export([
          get/2,
@@ -23,8 +34,7 @@ point stops working.
 
 %% Used by nova_stream_h
 -export([
-         enabled/0,
-         known/1
+         enabled/0
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -70,8 +80,10 @@ point stops working.
 
 -doc """
 Tells whether the backend holds a session with this id. Nova calls it for the
-id a client presents and replaces ids that return `false`. A backend without
-it accepts every presented id, which leaves it open to session fixation.
+id a client presents and replaces ids that return `false`. It runs in the
+process calling `nova_session`, once for every `get/2`, `set/3` and `delete`
+on a request that presented a cookie, so keep it as cheap as a key lookup. A
+backend without it accepts every presented id.
 """.
 -callback session_exists(SessionId :: binary()) -> boolean().
 
@@ -98,11 +110,11 @@ set(Req, Key, Value) ->
         {ok, SessionId} ->
             Mod = get_session_module(),
             case Mod:set_value(SessionId, Key, Value) of
-                ok ->
+                {error, _} = Error ->
+                    Error;
+                Result ->
                     notify(Req, {written, SessionId}),
-                    ok;
-                Error ->
-                    Error
+                    Result
             end;
         _ ->
             {error, session_id_not_set}
@@ -122,7 +134,7 @@ delete(Req) ->
             Mod:delete_value(SessionId),
             {ok, NewSessionId} = generate_session_id(),
             notify(Req, {deleted, NewSessionId}),
-            {ok, Req#{nova_session_id => NewSessionId}};
+            {ok, with_session_id(NewSessionId, Req)};
         _ ->
             %% Session not found
             {ok, Req}
@@ -151,7 +163,7 @@ renew(Req) ->
     end,
     {ok, NewSessionId} = generate_session_id(),
     notify(Req, {renewed, NewSessionId}),
-    {ok, Req#{nova_session_id => NewSessionId}}.
+    {ok, with_session_id(NewSessionId, Req)}.
 
 -spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} |
           {error, Reason :: atom()} | no_return().
@@ -173,15 +185,11 @@ delete(Req, Key) ->
 -doc false.
 -spec enabled() -> boolean().
 enabled() ->
-    case application:get_env(nova, use_sessions) of
-        {ok, UseSessions} ->
-            UseSessions =:= true;
-        undefined ->
-            nova:get_env(use_sessions, true) =:= true
-    end.
+    nova_config:get_env(use_sessions, true) =:= true.
 
--doc false.
--spec known(SessionId :: binary()) -> boolean().
+%%%===================================================================
+%%% Private functions
+%%%===================================================================
 known(SessionId) ->
     Mod = get_session_module(),
     _ = code:ensure_loaded(Mod),
@@ -198,36 +206,46 @@ known(SessionId) ->
             true
     end.
 
-%%%===================================================================
-%%% Private functions
-%%%===================================================================
 get_session_module() ->
     application:get_env(nova, session_manager, nova_session_ets).
 
 get_session_id(Req) ->
     case enabled() of
         true ->
-            case maps:get(nova_session_id, Req, undefined) of
-                undefined ->
-                    #{session_id := SessionId} = cowboy_req:match_cookies([{session_id, [], undefined}], Req),
-                    case SessionId of
-                        undefined ->
-                            {error, not_found};
-                        _ ->
-                            {ok, SessionId}
-                    end;
-                SessionId ->
-                    {ok, SessionId}
-            end;
+            session_id(Req);
         _ ->
             ?LOG_ERROR(#{msg => <<"Session called but 'use_session' option is set to false">>}),
             throw({nova_session, unsupported_session_used})
     end.
 
-%% Tells nova_stream_h which session id the response has to hand out. The
-%% stream handler runs in the connection process; a websocket over HTTP/1.1
-%% runs there too, and must not be sent the message.
-notify(#{pid := Pid, streamid := StreamID}, Event) when is_pid(Pid), Pid =/= self() ->
+%% A new visitor's request carries its id in nova_session_id. When the client
+%% sent a cookie, nova_stream_h hands over the presented id and a fresh one,
+%% and the presented one is used only while the backend knows it, so a client
+%% cannot choose its own id. The check runs here, in the process calling
+%% nova_session, and not in the connection process.
+session_id(#{nova_session_id := SessionId}) ->
+    {ok, SessionId};
+session_id(#{nova_session_presented := Presented, nova_session_pending := Pending}) ->
+    case known(Presented) of
+        true -> {ok, Presented};
+        false -> {ok, Pending}
+    end;
+session_id(Req) ->
+    %% Without nova_stream_h there is only the cookie.
+    case cowboy_req:match_cookies([{session_id, [], undefined}], Req) of
+        #{session_id := SessionId} when is_binary(SessionId) -> {ok, SessionId};
+        _ -> {error, not_found}
+    end.
+
+with_session_id(SessionId, Req) ->
+    (maps:without([nova_session_presented, nova_session_pending], Req))#{nova_session_id => SessionId}.
+
+%% Tells nova_stream_h which session id the response has to hand out. Only
+%% the process serving the request (stamped by nova_router) does: a process
+%% spawned with the request, or a websocket running in the connection
+%% process after the upgrade, would deliver the message to whatever handles
+%% the connection by then.
+notify(#{pid := Pid, streamid := StreamID, nova_session_owner := Owner}, Event) when Owner =:= self() ->
     Pid ! {{Pid, StreamID}, {nova_session, Event}},
     ok;
 notify(_Req, _Event) ->
