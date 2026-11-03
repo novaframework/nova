@@ -363,7 +363,9 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     App = maps:get(app, Options),
     RouterFile = maps:get(router_file, Options),
 
-    Plugins = resolve_plugins(maps:get(plugin_strategy, Options, local_or_global), RouteInfo, RouterFile),
+    %% A route entry's own strategy wins over the one given for the app.
+    Strategy = maps:get(plugin_strategy, RouteInfo, maps:get(plugin_strategy, Options, local_or_global)),
+    Plugins = resolve_plugins(Strategy, RouteInfo, RouterFile),
 
     Secure =
         case maps:get(override_secure, Options, false) of

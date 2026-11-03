@@ -36,3 +36,32 @@ add_routes_registers_app_test_() ->
         Apps = nova_router:compiled_apps(),
         ?assertMatch({my_app, _}, lists:keyfind(my_app, 1, Apps))
     end}.
+
+%% guides/routing.md sets plugin_strategy on the route entry; it used to be
+%% read only from the per-application options.
+plugin_strategy_on_route_entry_test_() ->
+    {setup,
+     fun() ->
+             Prev = setup(),
+             application:set_env(nova, plugins, [{pre_request, nova_correlation_plugin, #{}}]),
+             Prev
+     end,
+     fun(S) -> application:unset_env(nova, plugins), cleanup(S) end,
+     fun() ->
+             Callback = fun(_) -> {json, #{}} end,
+             Routes = [#{plugin_strategy => global_first,
+                         plugins => [{pre_request, nova_request_plugin, #{}}],
+                         routes => [{"/both", Callback, #{methods => [get]}}]},
+                       #{plugins => [{pre_request, nova_request_plugin, #{}}],
+                         routes => [{"/local", Callback, #{methods => [get]}}]}],
+             nova_router:add_routes(strategy_app, Routes),
+             ?assertEqual([nova_correlation_plugin, nova_request_plugin], pre_request_modules(~"/both")),
+             ?assertEqual([nova_request_plugin], pre_request_modules(~"/local"))
+     end}.
+
+pre_request_modules(Path) ->
+    {ok, _, #nova_handler_value{plugins = Plugins}} = nova_router:lookup_url('_', Path, ~"GET"),
+    case proplists:get_value(pre_request, Plugins, []) of
+        PreRequest when is_list(PreRequest) ->
+            [element(2, erlang:fun_info(Fun, module)) || {Fun, _Opts} <- PreRequest, is_function(Fun)]
+    end.

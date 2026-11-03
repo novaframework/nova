@@ -12,8 +12,7 @@ get_file(#{extra_state := #{static := File, options := Options}, headers := Head
     MimeType =
         case maps:get(mimetype, Options, undefined) of
             undefined ->
-                {T, V, _} = cow_mimetypes:web(erlang:list_to_binary(Filepath)),
-                <<T/binary, "/", V/binary>>;
+                mimetype(unicode:characters_to_binary(Filepath));
             MType ->
                 MType
         end,
@@ -142,3 +141,12 @@ file_info(Filepath, Filename) ->
         _ ->
             undefined
     end.
+
+%% cow_mimetypes:web/1 only knows a handful of types (no .txt, .json, .xml,
+%% .woff2 or .webp), so fall back to the full table before octet-stream.
+mimetype(Path) ->
+    {T, V, _} = case cow_mimetypes:web(Path) of
+                    {~"application", ~"octet-stream", _} -> cow_mimetypes:all(Path);
+                    Type -> Type
+                end,
+    <<T/binary, "/", V/binary>>.

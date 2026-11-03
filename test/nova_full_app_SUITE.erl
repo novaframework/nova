@@ -37,6 +37,7 @@
          plugin_break_reaches_controller/1,
          plugin_stop_two_tuple_replies/1,
          plugin_error_is_a_500/1,
+         static_file_content_type/1,
          custom_not_found/1,
          controller_crash_is_a_500/1,
          websocket_echo/1,
@@ -78,6 +79,7 @@ groups() ->
      {static_files, [parallel], [
                                  static_file_from_priv,
                                  static_file_nested,
+                                 static_file_content_type,
                                  static_directory_index,
                                  static_file_missing
                                 ]},
@@ -209,6 +211,11 @@ host_scoped_route(Config) ->
 static_file_from_priv(Config) ->
     {200, _Headers, Body} = get(Config, "/assets/hello.txt"),
     ?assertEqual(<<"hello from priv\n">>, Body).
+
+%% cow_mimetypes:web/1 has no .txt entry; it used to go out as octet-stream.
+static_file_content_type(Config) ->
+    {200, Headers, _Body} = get(Config, "/assets/hello.txt"),
+    ?assertEqual(~"text/plain", header(~"content-type", Headers)).
 
 static_file_nested(Config) ->
     {200, _Headers, Body} = get(Config, "/assets/nested/deep.txt"),
