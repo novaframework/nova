@@ -209,10 +209,18 @@ In the example above we have enabled the *pre-request*-plugin `nova_json_schemas
 You can also include *post-request*-plugins in the same way.
 
 By default a route entry that declares `plugins` uses exactly those, and one
-that does not uses the plugins configured globally. Set `plugin_strategy` on
-the entry to combine them instead. It can also be set for a whole included
-application in its `nova_apps` options; like `override_secure`, that value
-wins over what the application's own route entries declare:
+that does not uses the plugins configured globally. Set `plugin_strategy` in
+the application's `nova_apps` options to combine them instead (available since
+0.17.0):
+
+```erlang
+{nova_apps, [{my_app, #{plugin_strategy => global_first}}]}
+```
+
+Releases after 0.18.1 also read `plugin_strategy` from a route entry, for
+the routes of that entry. The `nova_apps` value, like `override_secure`, wins
+over what the application's own route entries declare. On 0.17.0 to 0.18.1
+a route entry's `plugin_strategy` is ignored.
 
 | Value | Plugins used |
 |---|---|
