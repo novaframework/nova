@@ -84,6 +84,47 @@ of `{Module, Function}` in Nova.
   and `Access-Control-Request-Method`) itself, with a `204`. Other `OPTIONS`
   requests reach the application.
 
+- **`nova_cors_plugin` sends `access-control-allow-origin` only to a matching
+  `Origin`.** With one or more origins configured, the header is sent only
+  when the request's `Origin` is on the list, and never to a request without
+  `Origin`. Responses carry `vary: origin`, appended to any `vary` already
+  set. Header names are lowercase.
+
+- **Static files are sent with `x-content-type-options: nosniff`** (200 and
+  206). `.json`, `.txt`, `.woff2` and `.webp` files now get their real
+  content type instead of `application/octet-stream`. XML, HTML and `+xml`
+  types that only the full table knows (such as `.xhtml` and `.svgz`) are
+  served as `application/octet-stream`, so a browser does not run them as a
+  page; set `mimetype` on the route to serve one with its type.
+
+- **The `plugin_strategy` option in `nova_apps` wins over a route entry's.**
+  The route entry's `plugin_strategy` is now read too, and is used when the
+  including application sets none; `local_or_global` is the default.
+
+- **`terminate/3` is called with three arguments.** `nova_handler` checked
+  for `terminate/3` and called `terminate/2`. Controllers get
+  `terminate(Reason, Req, #{})`; plain Cowboy handlers get their own state. A
+  controller that only exports `terminate/2` is not called, as before.
+
+- **A handler registered as `{Module, Function}` is called with arity 3.**
+  `nova_handlers:register_handler/2` used to build `fun Module:Function/4`,
+  but handlers are called with three arguments. Export `Function/3`.
+
+- **`decode_json_body` decodes `application/json` only.** The content type is
+  matched exactly (in any case, with any parameters). Types that only began
+  with `application/json`, such as `application/json-seq` or
+  `application/json-patch+json`, are no longer decoded; neither were `+json`
+  types such as `application/problem+json`. Decode those in the controller
+  from the request body, or with a plugin of your own.
+  `read_urlencoded_body` likewise matches `application/x-www-form-urlencoded`
+  exactly.
+
+- **`nova_request_plugin` reads at most 8 MB of body.** With
+  `decode_json_body` or `read_urlencoded_body` set, a body longer than
+  `max_body_length` (default `8000000` bytes) gets a bare `413`: before it is
+  read when `Content-Length` says so, otherwise as soon as it passes the
+  limit. Set `max_body_length => infinity` for the old behaviour.
+
 - **`nova_router:lookup_url/1,2,3`** keep their return shapes, including
   `{error, comparator_not_found, AllowedMethods}` for a path that exists but
   does not accept the method.
