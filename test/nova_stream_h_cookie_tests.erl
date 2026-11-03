@@ -61,8 +61,7 @@ req(Cookie) ->
 
 -spec too_many_cookies() -> binary().
 too_many_cookies() ->
-    iolist_to_binary(lists:join(~"; ", [~"session_id=abc" |
-                                        [[~"c", integer_to_binary(N), ~"=v"] || N <- lists:seq(1, 100)]])).
+    iolist_to_binary([~"session_id=abc" | [[~"; c", integer_to_binary(N), ~"=v"] || N <- lists:seq(1, 100)]]).
 
 -spec start_listener() -> [atom()].
 start_listener() ->
@@ -76,7 +75,15 @@ start_listener() ->
 -spec stop_listener([atom()]) -> ok.
 stop_listener(Started) ->
     ok = cowboy:stop_listener(?MODULE),
-    _ = [application:stop(App) || App <- lists:reverse(Started)],
+    stop_apps(Started).
+
+%% Stops the applications in the reverse order of starting them.
+-spec stop_apps([atom()]) -> ok.
+stop_apps([]) ->
+    ok;
+stop_apps([App | Rest]) ->
+    ok = stop_apps(Rest),
+    _ = application:stop(App),
     ok.
 
 -spec port() -> inet:port_number().
@@ -96,7 +103,7 @@ init(_StreamID, Req, _Opts) ->
 %% request, so anything it logged has arrived by then.
 recv_until_closed(Socket, Acc) ->
     case gen_tcp:recv(Socket, 0, 5000) of
-        {ok, Data} -> recv_until_closed(Socket, <<Acc/binary, Data/binary>>);
+        {ok, Data} when is_binary(Data) -> recv_until_closed(Socket, <<Acc/binary, Data/binary>>);
         {error, closed} -> Acc
     end.
 
