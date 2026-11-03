@@ -219,7 +219,7 @@ the application's `nova_apps` options to combine them instead (available since
 
 `plugin_strategy` is a per-application option and applies to every route
 entry of that application. A `plugin_strategy` key on a single route entry is
-ignored.
+ignored, and a warning is logged once per application.
 
 | Value | Plugins used |
 |---|---|
