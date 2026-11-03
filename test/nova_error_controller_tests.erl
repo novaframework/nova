@@ -197,7 +197,7 @@ extra_msg_is_hidden_when_environment_is_unset_test_() ->
              CrashInfo = unsupported_return_crash_info(),
              {status, 500, _, Json} =
                  nova_error_controller:server_error((json_req())#{crash_info => CrashInfo}),
-             Decoded = json:decode(iolist_to_binary(Json)),
+             #{} = Decoded = json:decode(iolist_to_binary(Json)),
              ?assertNot(is_map_key(~"extra_msg", Decoded)),
              ?assertNot(is_map_key(~"stacktrace", Decoded)),
              ?assertEqual({status, 500},
