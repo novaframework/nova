@@ -54,11 +54,14 @@ of `{Module, Function}` in Nova.
 - **Plugins.** A route entry that declares `plugins` uses exactly those, and one
   that does not uses the globally configured ones - unchanged. The new
   `plugin_strategy` option lets you combine both; see the
-  [routing guide](routing.md).
+  [routing guide](routing.md). It is set per application in `nova_apps`. A
+  `plugin_strategy` key on a route entry, where the routing guide for 0.17.0
+  to 0.18.1 put it, is ignored and logs a warning once per application.
 
 - **`{stop, Req}` from a plugin is deprecated.** It still ends the request
-  like `{stop, Req, State}` and keeps the plugin's state as it was. It will be
-  removed in 1.0; return `{stop, Req, State}` instead.
+  like `{stop, Req, State}` and keeps the plugin's state as it was, and logs
+  a warning once per plugin module. It will be removed in 1.0; return
+  `{stop, Req, State}` instead.
 
 - **`{break, ...}` from a plugin is a deprecated alias of `stop`.** It ends the
   request and sends its reply, if it has one, and logs a warning once per
@@ -74,9 +77,6 @@ of `{Module, Function}` in Nova.
 - **The default error page shows crash details only in `dev`.** Details
   (the reason, extra messages and the stacktrace) are shown only when
   `{nova, [{environment, dev}]}` is set. An unset environment shows none.
-
-- **`decode_json_body` and `read_urlencoded_body` match the content type
-  case-insensitively,** so `Application/JSON` is decoded.
 
 - **`{json, Status, Headers, Req, JSON}` is deprecated.** Return
   `{json, Status, Headers, JSON, Req}`, the order the docs always gave. The old
@@ -115,7 +115,9 @@ of `{Module, Function}` in Nova.
   such as `application/vnd.api+json` are now decoded too (RFC 6839). Types
   that only began with `application/json`, such as `application/json-seq`,
   are no longer decoded. Decode those in the controller from the request
-  body, or with a plugin of your own.
+  body, or with a plugin of your own. An empty or invalid body with a `+json`
+  type now gets a `400` before the controller runs; such requests used to
+  pass through undecoded.
   `read_urlencoded_body` likewise matches `application/x-www-form-urlencoded`
   exactly.
 
