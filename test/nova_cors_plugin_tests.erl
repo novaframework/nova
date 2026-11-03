@@ -39,7 +39,7 @@ pre_request_string_origin_test() ->
 
 %% "*" does not cover Authorization, so the requested headers are allowed.
 pre_request_allows_requested_headers_test() ->
-    Req0 = with_origin(~"https://a.example", nova_test_helper:mock_req(~"OPTIONS", ~"/")),
+    Req0 = preflight(~"https://a.example"),
     Req = nova_test_helper:with_header(~"access-control-request-headers", ~"authorization, content-type", Req0),
     meck:new(cowboy_req, [passthrough]),
     meck:expect(cowboy_req, reply, fun(_Status, R) -> R end),
@@ -68,13 +68,36 @@ pre_request_options_stop_test() ->
     meck:new(cowboy_req, [passthrough]),
     meck:expect(cowboy_req, reply, fun(Status, R) -> R#{replied => Status} end),
     try
-        Req = nova_test_helper:mock_req(~"OPTIONS", ~"/"),
         Opts = #{allow_origins => ~"*"},
-        {stop, Req1, my_state} = nova_cors_plugin:pre_request(Req, #{}, Opts, my_state),
+        {stop, Req1, my_state} = nova_cors_plugin:pre_request(preflight(~"https://a.example"), #{}, Opts,
+                                                              my_state),
         ?assertEqual(204, maps:get(replied, Req1))
     after
         meck:unload(cowboy_req)
     end.
+
+%% An OPTIONS request without Origin and Access-Control-Request-Method is not
+%% a preflight; the application answers it.
+pre_request_plain_options_reaches_app_test() ->
+    Opts = #{allow_origins => ~"*"},
+    NoMethod = with_origin(~"https://a.example", nova_test_helper:mock_req(~"OPTIONS", ~"/")),
+    ?assertMatch({ok, _, state}, nova_cors_plugin:pre_request(NoMethod, #{}, Opts, state)),
+    NoOrigin = nova_test_helper:with_header(~"access-control-request-method", ~"POST",
+                                            nova_test_helper:mock_req(~"OPTIONS", ~"/")),
+    ?assertMatch({ok, _, state}, nova_cors_plugin:pre_request(NoOrigin, #{}, Opts, state)).
+
+%% A vary header set earlier keeps its value; origin is added once.
+pre_request_appends_to_vary_test() ->
+    Opts = #{allow_origins => [~"https://a.example"]},
+    Req = with_origin(~"https://a.example", nova_test_helper:mock_req(~"GET", ~"/")),
+    Set = fun(Vary) -> cowboy_req:set_resp_header(~"vary", Vary, Req) end,
+    ?assertEqual(~"accept-encoding, origin", maps:get(~"vary", cors_headers(Set(~"accept-encoding"), Opts))),
+    ?assertEqual(~"Origin", maps:get(~"vary", cors_headers(Set(~"Origin"), Opts))),
+    ?assertEqual(~"origin", maps:get(~"vary", cors_headers(Req, Opts))).
+
+preflight(Origin) ->
+    nova_test_helper:with_header(~"access-control-request-method", ~"POST",
+                                 with_origin(Origin, nova_test_helper:mock_req(~"OPTIONS", ~"/"))).
 
 cors_headers(Req, Opts) ->
     {ok, Req1, _} = nova_cors_plugin:pre_request(Req, #{}, Opts, state),

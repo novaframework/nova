@@ -51,17 +51,24 @@ plugin_info() ->
 %% Private functions
 %%%%%%%%%%%%%%%%%%%%%%
 
-continue(#{method := <<"OPTIONS">>} = Req, State) ->
-    Reply = cowboy_req:reply(204, Req),
-    {stop, Reply, State};
 continue(Req, State) ->
-    {ok, Req, State}.
+    case is_preflight(Req) of
+        true -> {stop, cowboy_req:reply(204, Req), State};
+        false -> {ok, Req, State}
+    end.
+
+%% Any other OPTIONS request is the application's to answer.
+is_preflight(#{method := ~"OPTIONS"} = Req) ->
+    cowboy_req:header(~"origin", Req) =/= undefined andalso
+        cowboy_req:header(~"access-control-request-method", Req) =/= undefined;
+is_preflight(_Req) ->
+    false.
 
 add_cors_headers(Req, ~"*", Options) ->
     preflight_headers(cowboy_req:set_resp_header(~"access-control-allow-origin", ~"*", Req), Options);
 add_cors_headers(Req, Origins, Options) ->
     %% The answer depends on the Origin header, so caches must key on it.
-    Req0 = cowboy_req:set_resp_header(~"vary", ~"origin", Req),
+    Req0 = vary_on_origin(Req),
     case cowboy_req:header(~"origin", Req) of
         undefined ->
             Req0;
@@ -73,6 +80,18 @@ add_cors_headers(Req, Origins, Options) ->
                 false ->
                     Req0
             end
+    end.
+
+vary_on_origin(Req) ->
+    case cowboy_req:resp_header(~"vary", Req, undefined) of
+        Vary when is_binary(Vary) ->
+            Listed = [string:lowercase(string:trim(V)) || V <- binary:split(Vary, ~",", [global])],
+            case lists:member(~"origin", Listed) orelse lists:member(~"*", Listed) of
+                true -> Req;
+                false -> cowboy_req:set_resp_header(~"vary", <<Vary/binary, ", origin">>, Req)
+            end;
+        _ ->
+            cowboy_req:set_resp_header(~"vary", ~"origin", Req)
     end.
 
 -spec values(binary() | [unicode:chardata()]) -> [binary()].
@@ -93,7 +112,8 @@ text(Value) ->
     end.
 
 %% "*" in Access-Control-Allow-Headers never covers Authorization, so the
-%% default is to allow what the preflight asks for.
+%% default is to allow what the preflight asks for. That is only safe because
+%% access-control-allow-origin is sent for allowed origins alone.
 preflight_headers(Req, Options) ->
     Headers = case maps:get(allow_headers, Options, undefined) of
                   undefined -> requested_headers(Req);
