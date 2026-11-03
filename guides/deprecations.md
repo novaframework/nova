@@ -119,11 +119,13 @@ of `{Module, Function}` in Nova.
   `read_urlencoded_body` likewise matches `application/x-www-form-urlencoded`
   exactly.
 
-- **`nova_request_plugin` reads at most 8 MB of body.** With
-  `decode_json_body` or `read_urlencoded_body` set, a body longer than
-  `max_body_length` (default `8000000` bytes) gets a bare `413`: before it is
+- **`nova_request_plugin` reads at most 1 MB of body, within 60 seconds.**
+  With `decode_json_body` or `read_urlencoded_body` set, a body longer than
+  `max_body_length` (default `1000000` bytes) gets a bare `413`: before it is
   read when `Content-Length` says so, otherwise as soon as it passes the
-  limit. Set `max_body_length => infinity` for the old behaviour.
+  limit. A body still arriving after `body_read_timeout` (default `60000`
+  ms) gets a bare `408`. Raise `max_body_length` on the routes that take
+  larger bodies; set both to `infinity` for the old behaviour.
 
 - **`nova_router:lookup_url/1,2,3`** keep their return shapes, including
   `{error, comparator_not_found, AllowedMethods}` for a path that exists but

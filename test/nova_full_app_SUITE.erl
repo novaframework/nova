@@ -41,6 +41,7 @@
          plugin_stop_two_tuple_replies/1,
          plugin_error_is_a_500/1,
          request_body_limit/1,
+         request_body_read_timeout/1,
          static_file_content_type/1,
          static_file_is_nosniff/1,
          static_document_types_are_octet_stream/1,
@@ -105,7 +106,8 @@ groups() ->
                     plugin_break_unknown_reply_is_a_500,
                     plugin_stop_two_tuple_replies,
                     plugin_error_is_a_500,
-                    request_body_limit
+                    request_body_limit,
+                    request_body_read_timeout
                    ]},
      {errors, [parallel], [
                            custom_not_found,
@@ -376,6 +378,32 @@ request_body_limit(Config) ->
     {ok, Response} = gen_tcp:recv(Socket, 0, 5000),
     gen_tcp:close(Socket),
     ?assertMatch(<<"HTTP/1.1 413", _/binary>>, Response).
+
+%% The route allows 300 ms for the body. A chunked body that trickles in one
+%% byte at a time gets a 408 at the deadline.
+request_body_read_timeout(Config) ->
+    Port = ?config(port, Config),
+    {ok, Socket} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, raw}]),
+    ok = gen_tcp:send(Socket, [~"POST /body-timeout/ HTTP/1.1\r\n",
+                               ~"Host: localhost:", integer_to_binary(Port), ~"\r\n",
+                               ~"Content-Type: application/json\r\n",
+                               ~"Transfer-Encoding: chunked\r\n\r\n"]),
+    Trickle = spawn_link(fun() -> trickle(Socket, 40) end),
+    T0 = erlang:monotonic_time(millisecond),
+    {ok, Response} = gen_tcp:recv(Socket, 0, 3000),
+    Elapsed = erlang:monotonic_time(millisecond) - T0,
+    unlink(Trickle),
+    exit(Trickle, kill),
+    gen_tcp:close(Socket),
+    ?assertMatch(<<"HTTP/1.1 408", _/binary>>, Response),
+    ?assert(Elapsed < 2000).
+
+trickle(_Socket, 0) ->
+    ok;
+trickle(Socket, N) ->
+    _ = gen_tcp:send(Socket, ~"1\r\n \r\n"),
+    timer:sleep(50),
+    trickle(Socket, N - 1).
 
 raw_post(Config, Path, Body) ->
     Port = ?config(port, Config),
