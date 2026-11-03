@@ -19,6 +19,9 @@
 
 -type erlydtl_vars() :: map() | [{Key :: atom() | binary() | string(), Value :: any()}].
 
+%% A Cowboy request, told apart from a JSON object by the keys Cowboy sets.
+-define(IS_REQ(Term), (is_map(Term) andalso is_map_key(streamid, Term) andalso is_map_key(pid, Term))).
+
 
 
 %%--------------------------------------------------------------------
@@ -29,16 +32,18 @@ Handler for JSON. It can take one of three different return objects:
 
 \{json, StatusCode :: integer(), Headers :: map(), JSON :: map()\} Same operation as the above except you can set custom status code and custom headers.
 
-\{json, StatusCode :: integer(), Headers :: map(), Req0 :: cowboy_req:req(), JSON :: map()\} This is the same as the above but you can also return the request object. This is particularly useful if you want to set cookies or other headers that are not supported by the handler.
+\{json, StatusCode :: integer(), Headers :: map(), JSON :: map(), Req0 :: cowboy_req:req()\} This is the same as the above but you can also return the request object. This is particularly useful if you want to set cookies or other headers that are not supported by the handler. Older releases only accepted the request before the JSON, \{json, StatusCode, Headers, Req0, JSON\}; that order still works.
 """.
 -spec handle_json({json, JSON :: map()} | {json, StatusCode :: integer(), Headers :: map(), JSON :: map()} |
-                  {json, StatusCode :: integer(), Headers :: map(), JSON :: map(), Req0 :: cowboy_req:req()},
+                  {json, StatusCode :: integer(), Headers :: map(), JSON :: map(), Req0 :: cowboy_req:req()} |
+                  {json, StatusCode :: integer(), Headers :: map(), Req0 :: cowboy_req:req(), JSON :: map()},
                   Callback :: function(), Req :: cowboy_req:req()) -> {ok, State :: cowboy_req:req()}.
+handle_json({json, StatusCode, Headers, JSON, Req0}, Callback, _Req) when not ?IS_REQ(JSON), ?IS_REQ(Req0) ->
+    handle_json({json, StatusCode, Headers, JSON}, Callback, Req0);
 handle_json({json, StatusCode, Headers, Req0, JSON}, Callback, _Req) ->
     handle_json({json, StatusCode, Headers, JSON}, Callback, Req0);
 handle_json({json, StatusCode, Headers, JSON}, _Callback, Req) ->
-    JsonLib = nova:get_env(json_lib, thoas),
-    EncodedJSON = JsonLib:encode(JSON),
+    EncodedJSON = nova_json:encode(JSON),
     Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, Headers),
     Req0 = cowboy_req:set_resp_headers(Headers0, Req),
     Req1 = cowboy_req:set_resp_body(EncodedJSON, Req0),
@@ -128,11 +133,10 @@ handle_status({status, Status, ExtraHeaders, JSON, Req0}, Callback, _Req) ->
     handle_status({status, Status, ExtraHeaders, JSON}, Callback, Req0);
 handle_status({status, Status, ExtraHeaders, JSON}, _Callback, Req) when is_map(JSON) ->
     %% We do not need to render a status page since we just return a JSON structure
-    JsonLib = nova:get_env(json_lib, thoas),
     Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, ExtraHeaders),
     Req0 = cowboy_req:set_resp_headers(Headers0, Req),
     Req1 = Req0#{resp_status_code => Status},
-    JSONStr = JsonLib:encode(JSON),
+    JSONStr = nova_json:encode(JSON),
     Req2 = cowboy_req:set_resp_body(JSONStr, Req1),
     {ok, Req2};
 handle_status({status, Status, ExtraHeaders, Body}, _Callback, Req) ->

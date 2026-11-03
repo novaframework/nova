@@ -43,6 +43,17 @@ handle_json_req_passthrough_test_() ->
         ?assertEqual(true, maps:get(custom_field, Req1))
     end}.
 
+%% The order the -doc and -spec give: JSON first, then the request.
+handle_json_documented_order_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Req = nova_test_helper:mock_req(~"GET", ~"/"),
+        CustomReq = Req#{custom_field => true},
+        {ok, Req1} = nova_basic_handler:handle_json({json, 201, #{}, #{data => 1}, CustomReq}, ?CALLBACK, Req),
+        ?assertEqual(true, maps:get(custom_field, Req1)),
+        ?assertEqual(201, maps:get(resp_status_code, Req1)),
+        ?assertEqual(#{~"data" => 1}, decoded_body(Req1))
+    end}.
+
 %%====================================================================
 %% handle_status/3
 %%====================================================================
@@ -327,3 +338,6 @@ handle_status_with_headers_test_() ->
             {status, 301, #{<<"location">> => <<"/new">>}}, ?CALLBACK, Req),
         ?assertEqual(301, maps:get(resp_status_code, Req1))
     end}.
+
+decoded_body(#{resp_body := Body}) when is_binary(Body) ->
+    json:decode(Body).

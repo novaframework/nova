@@ -189,3 +189,36 @@ terminate_with_callback_test_() ->
         ?assertEqual(ok, nova_handler:terminate(normal, #{}, fun erlang:date/0))
     end}.
 
+
+%% terminate/3 is checked for and called with three arguments.
+terminate_called_with_three_arguments_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Env = #{callback => fun nova_handler_test_controller:crash/1, app => test_app,
+                secure => false, controller_data => #{}},
+        {ok, Req1, _Env1} = nova_handler:execute(nova_test_helper:mock_req(~"GET", ~"/"), Env),
+        ?assertEqual(500, maps:get(resp_status_code, Req1)),
+        ?assertEqual({terminated, boom, #{}}, receive {terminated, _, _} = M -> M after 0 -> none end)
+    end}.
+
+cowboy_handler_terminate_gets_its_state_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        meck:new(test_cowboy_terminate, [non_strict, no_link]),
+        Self = self(),
+        meck:expect(test_cowboy_terminate, init, fun(Req, _Args) -> {ok, Req, handler_state} end),
+        meck:expect(test_cowboy_terminate, terminate,
+                    fun(Reason, _Req, State) -> Self ! {terminated, Reason, State}, ok end),
+        Env = #{cowboy_handler => test_cowboy_terminate, arguments => #{}, app => test_app},
+        {ok, _Req1, _Env1} = nova_handler:execute(nova_test_helper:mock_req(~"GET", ~"/"), Env),
+        ?assertEqual({terminated, normal, handler_state}, receive {terminated, _, _} = M -> M after 1000 -> none end),
+        meck:unload(test_cowboy_terminate)
+    end}.
+
+%% A non-tuple return used to raise badarg in element/2 and never reach the
+%% fallback controller.
+non_tuple_return_reaches_fallback_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Env = #{callback => fun nova_handler_test_controller:atom_return/1, app => test_app,
+                secure => false, controller_data => #{}},
+        {ok, Req1, _Env1} = nova_handler:execute(nova_test_helper:mock_req(~"GET", ~"/"), Env),
+        ?assertEqual(409, maps:get(resp_status_code, Req1))
+    end}.
