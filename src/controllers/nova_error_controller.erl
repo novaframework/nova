@@ -30,51 +30,50 @@ not_found(Req) ->
     end.
 
 server_error(#{crash_info := #{status_code := StatusCode} = CrashInfo} = Req) ->
-    Variables = #{status => maps:get(status, CrashInfo, ~"Internal Server Error"),
-                  title => maps:get(title, CrashInfo, ~"500 Internal Server Error"),
-                  message => maps:get(message, CrashInfo, ~"Something internal crashed. Please take a look!"),
-                  extra_msg => maps:get(extra_msg, CrashInfo, ~""),
-                  stacktrace => format_stacktrace(maps:get(stacktrace, CrashInfo, []))},
+    Variables = debug_details(#{status => maps:get(status, CrashInfo, ~"Internal Server Error"),
+                                title => maps:get(title, CrashInfo, ~"500 Internal Server Error"),
+                                message => maps:get(message, CrashInfo,
+                                                    ~"Something internal crashed. Please take a look!")},
+                              maps:get(extra_msg, CrashInfo, ~""),
+                              maps:get(stacktrace, CrashInfo, [])),
     case application:get_env(nova, render_error_pages, true) of
         true ->
-            case preferred_type(Req) of
-                json ->
-                    Json = nova_json:encode(Variables),
-                    {status, StatusCode, #{<<"content-type">> => <<"application/json">>}, Json};
-                html ->
-                    {ok, Body} = nova_error_dtl:render(Variables),
-                    {status, StatusCode, #{<<"content-type">> => <<"text/html">>}, Body};
-                none ->
-                    {status, StatusCode, #{<<"content-type">> => <<"text/html">>}, <<>>}
-            end;
+            render(StatusCode, Variables, Req);
         _ ->
             {status, StatusCode}
     end;
-server_error(#{crash_info := #{class := Class, reason := Reason}} = Req) ->
-    Stacktrace = maps:get(stacktrace, Req, []),
-    Variables = #{status => "Internal Server Error",
-                  title => "500 Internal Server Error",
-                  message => "Something internal crashed. Please take a look!",
-                  extra_msg => io_lib:format("Class: ~p<br /> Reason: ~p", [Class, Reason]),
-                  stacktrace => format_stacktrace(Stacktrace)},
-
+server_error(#{crash_info := #{class := Class, reason := Reason} = CrashInfo} = Req) ->
     case nova:get_environment() of
         dev ->
-            %% We do show a proper error response
-            case preferred_type(Req) of
-                json ->
-                    Json = nova_json:encode(Variables),
-                    {status, 500, #{<<"content-type">> => <<"application/json">>}, Json};
-                html ->
-                    {ok, Body} = nova_error_dtl:render(Variables),
-                    {status, 500, #{<<"content-type">> => <<"text/html">>}, Body};
-                none ->
-                    {status, 500, #{<<"content-type">> => <<"text/html">>}, <<>>}
-            end;
+            Variables = debug_details(#{status => ~"Internal Server Error",
+                                        title => ~"500 Internal Server Error",
+                                        message => ~"Something internal crashed. Please take a look!"},
+                                      iolist_to_binary(io_lib:format("Class: ~p~nReason: ~p", [Class, Reason])),
+                                      maps:get(stacktrace, CrashInfo, [])),
+            render(500, Variables, Req);
         _ ->
             {status, 500}
     end.
 
+render(StatusCode, Variables, Req) ->
+    case preferred_type(Req) of
+        json ->
+            Json = nova_json:encode(Variables),
+            {status, StatusCode, #{~"content-type" => ~"application/json"}, Json};
+        html ->
+            {ok, Body} = nova_error_dtl:render(Variables),
+            {status, StatusCode, #{~"content-type" => ~"text/html"}, Body};
+        none ->
+            {status, StatusCode, #{~"content-type" => ~"text/html"}, <<>>}
+    end.
+
+%% Crash details can carry anything a controller or plugin returned, so they
+%% are only shown while developing. An unset environment means dev.
+debug_details(Variables, ExtraMsg, Stacktrace) ->
+    case nova:get_environment() of
+        dev -> Variables#{extra_msg => ExtraMsg, stacktrace => format_stacktrace(Stacktrace)};
+        _ -> Variables
+    end.
 
 %% Media ranges as browsers and HTTP clients send them, for example
 %% "text/html,application/xhtml+xml;q=0.9" or "application/json; charset=utf-8".

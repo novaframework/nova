@@ -124,3 +124,65 @@ server_error_html_for_browsers_test_() ->
          ?assertEqual(~"text/html", maps:get(~"content-type", Headers)),
          ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Body), ~"500 Internal Server Error"))
      end}.
+
+%%====================================================================
+%% Crash details are escaped and only shown in dev
+%%====================================================================
+
+%% The payload nova_handler builds when a controller returns
+%% {error, #{x => <<"<script>x</script>">>}} and there is no fallback.
+unsupported_return_crash_info() ->
+    Response = {error, #{x => ~"<script>x</script>"}},
+    #{status_code => 500,
+      status => ~"Problems with controller",
+      title => ~"Controller returned unsupported data",
+      extra_msg => list_to_binary(io_lib:format("Controller returned unsupported data: ~p", [Response]))}.
+
+browser_req() ->
+    nova_test_helper:with_header(~"accept", ~"text/html,application/xhtml+xml;q=0.9",
+                                 nova_test_helper:mock_req(~"GET", ~"/")).
+
+json_req() ->
+    nova_test_helper:with_header(~"accept", ~"application/json", nova_test_helper:mock_req(~"GET", ~"/")).
+
+extra_msg_is_escaped_in_dev_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Req = (browser_req())#{crash_info => unsupported_return_crash_info()},
+         {status, 500, _Headers, Body0} = nova_error_controller:server_error(Req),
+         Body = iolist_to_binary(Body0),
+         ?assertEqual(nomatch, binary:match(Body, ~"<script>x")),
+         ?assertNotEqual(nomatch, binary:match(Body, ~"&lt;script&gt;x"))
+     end}.
+
+extra_msg_is_hidden_outside_dev_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         application:set_env(nova, environment, prod),
+         try
+             CrashInfo = unsupported_return_crash_info(),
+             {status, 500, _, Html} =
+                 nova_error_controller:server_error((browser_req())#{crash_info => CrashInfo}),
+             ?assertEqual(nomatch, binary:match(iolist_to_binary(Html), ~"script&gt;")),
+             {status, 500, _, Json} =
+                 nova_error_controller:server_error((json_req())#{crash_info => CrashInfo}),
+             Decoded = json:decode(iolist_to_binary(Json)),
+             ?assertMatch(#{~"title" := _}, Decoded),
+             ?assertNot(is_map_key(~"extra_msg", Decoded)),
+             ?assertNot(is_map_key(~"stacktrace", Decoded))
+         after
+             application:set_env(nova, environment, dev)
+         end
+     end}.
+
+%% The dev 500 for a crash used to encode its texts as charlists, which JSON
+%% turned into arrays of numbers.
+crash_details_are_strings_in_dev_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         CrashInfo = #{class => error, reason => boom, stacktrace => []},
+         {status, 500, _, Json} = nova_error_controller:server_error((json_req())#{crash_info => CrashInfo}),
+         #{~"status" := Status, ~"extra_msg" := ExtraMsg} = json:decode(iolist_to_binary(Json)),
+         ?assertEqual(~"Internal Server Error", Status),
+         ?assertEqual(~"Class: error\nReason: boom", ExtraMsg)
+     end}.
