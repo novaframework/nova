@@ -249,14 +249,25 @@ cookie_opts_for(Scheme) ->
 %% cow_cookie:setcookie/3 raises on a name that is not an RFC 6265 token or an
 %% attribute with control or non-ASCII bytes. Checked at boot so a bad setting
 %% stops the node instead of failing every response that sets the cookie.
+%% cookie_name/0 falls back to session_id for a name that is not a non-empty
+%% binary, so the configured value is checked here before that.
 -doc false.
 -spec validate_cookie_config() -> ok.
 validate_cookie_config() ->
-    Name = cookie_name(),
-    try cow_cookie:setcookie(Name, ~"x", cookie_opts_for(~"http")) of
-        _ -> ok
-    catch
-        error:_ -> erlang:error({invalid_session_cookie_config, #{name => Name}})
+    Opts = cookie_opts_for(~"http"),
+    Configured = nova_config:get_env(session_cookie_name, ~"session_id"),
+    Valid = is_binary(Configured) andalso Configured =/= <<>> andalso
+        try cow_cookie:setcookie(Configured, ~"x", Opts) of
+            _ -> true
+        catch
+            error:_ -> false
+        end,
+    case Valid of
+        true -> ok;
+        false ->
+            erlang:error({invalid_session_cookie_config,
+                          #{name => Configured, path => maps:get(path, Opts, undefined),
+                            domain => maps:get(domain, Opts, undefined)}})
     end.
 
 merge_cookie_opts([], Opts) ->

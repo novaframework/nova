@@ -370,3 +370,49 @@ generate_session_id_format() ->
     ?assertEqual(32, byte_size(Decoded)),
     {ok, Id2} = nova_session:generate_session_id(),
     ?assertNotEqual(Id, Id2).
+
+%%--------------------------------------------------------------------
+%% validate_cookie_config/0
+%%--------------------------------------------------------------------
+
+validate_cookie_config_test_() ->
+    {foreach,
+     fun() ->
+             application:set_env(nova, bootstrap_application, nova),
+             application:unset_env(nova, session_cookie_name),
+             application:unset_env(nova, session_cookie_opts)
+     end,
+     fun(_) ->
+             application:unset_env(nova, session_cookie_name),
+             application:unset_env(nova, session_cookie_opts),
+             application:unset_env(nova, bootstrap_application)
+     end,
+     [{"the default name is accepted",
+       fun() -> ?assertEqual(ok, nova_session:validate_cookie_config()) end},
+      {"an empty name is refused",
+       fun() ->
+               application:set_env(nova, session_cookie_name, <<>>),
+               ?assertError({invalid_session_cookie_config, #{name := <<>>}},
+                            nova_session:validate_cookie_config())
+       end},
+      {"a name that is not a binary is refused",
+       fun() ->
+               application:set_env(nova, session_cookie_name, "session"),
+               ?assertError({invalid_session_cookie_config, #{name := "session"}},
+                            nova_session:validate_cookie_config())
+       end},
+      {"the error names the cookie path and domain",
+       fun() ->
+               application:set_env(nova, session_cookie_name, ~"app:sid"),
+               application:set_env(nova, session_cookie_opts, #{path => ~"/app", domain => ~"example.com"}),
+               ?assertError({invalid_session_cookie_config,
+                             #{name := ~"app:sid", path := ~"/app", domain := ~"example.com"}},
+                            nova_session:validate_cookie_config())
+       end},
+      {"an invalid domain is refused and named",
+       fun() ->
+               application:set_env(nova, session_cookie_opts, #{domain => <<"a\nb">>}),
+               ?assertError({invalid_session_cookie_config,
+                             #{name := ~"session_id", path := ~"/", domain := <<"a\nb">>}},
+                            nova_session:validate_cookie_config())
+       end}]}.

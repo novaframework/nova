@@ -121,16 +121,27 @@ session_cookie(Headers, State) ->
     {Headers, State}.
 
 %% A raise here would make Cowboy send its 500 back through this handler and
-%% raise again, forever, so a cookie cow_cookie refuses is dropped instead.
+%% raise again, forever, so a cookie cow_cookie refuses is dropped instead,
+%% with one log line per cookie name rather than one per response.
 with_cookie(Value, Opts, Headers) ->
     Name = nova_session:cookie_name(),
     try cow_cookie:setcookie(Name, Value, Opts) of
         Cookie -> add_cookie(Cookie, Headers)
     catch
         error:_ ->
-            ?LOG_ERROR(#{msg => ~"Session cookie not set: session_cookie_name or session_cookie_opts is invalid",
-                         cookie => Name}),
+            log_invalid_cookie(Name),
             Headers
+    end.
+
+log_invalid_cookie(Name) ->
+    Key = {?MODULE, invalid_cookie_logged, Name},
+    case persistent_term:get(Key, false) of
+        true ->
+            ok;
+        false ->
+            persistent_term:put(Key, true),
+            ?LOG_ERROR(#{msg => ~"Session cookie not set: session_cookie_name or session_cookie_opts is invalid",
+                         cookie => Name})
     end.
 
 add_cookie(Cookie, Headers) ->

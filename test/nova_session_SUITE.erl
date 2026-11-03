@@ -151,15 +151,20 @@ delete_expires_cookie_without_stream_h(Config) ->
 %% cow_cookie raises on a name that is not a token. That used to loop on
 %% Cowboy's 500 path in nova_stream_h, logging the request on every pass.
 invalid_cookie_name_at_runtime_drops_the_cookie(Config) ->
+    persistent_term:erase({nova_stream_h, invalid_cookie_logged, ~"app:sid"}),
     ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
     application:set_env(nova, session_cookie_name, ~"app:sid"),
     try
-        {ok, {{_, Status, _}, Headers, _}} =
-            httpc:request(get, {?config(base, Config) ++ "/session/set/a",
-                                [{"authorization", "Bearer AUTH_SECRET"}]},
-                          [{timeout, 5000}], [{body_format, binary}]),
-        ?assertEqual(200, Status),
-        ?assertEqual([], set_cookies(Headers)),
+        Request = fun() ->
+                          {ok, {{_, Status, _}, Headers, _}} =
+                              httpc:request(get, {?config(base, Config) ++ "/session/set/a",
+                                                  [{"authorization", "Bearer AUTH_SECRET"}]},
+                                            [{timeout, 5000}], [{body_format, binary}]),
+                          ?assertEqual(200, Status),
+                          ?assertEqual([], set_cookies(Headers))
+                  end,
+        Request(),
+        Request(),
         timer:sleep(200),
         Logs = logged(),
         ?assertMatch([#{cookie := ~"app:sid"}],
@@ -167,7 +172,8 @@ invalid_cookie_name_at_runtime_drops_the_cookie(Config) ->
         ?assertEqual(nomatch, string:find(io_lib:format("~p", [Logs]), "AUTH_SECRET"))
     after
         application:unset_env(nova, session_cookie_name),
-        logger:remove_handler(?MODULE)
+        logger:remove_handler(?MODULE),
+        persistent_term:erase({nova_stream_h, invalid_cookie_logged, ~"app:sid"})
     end.
 
 %% Leaves Nova stopped; the next group starts it again.
