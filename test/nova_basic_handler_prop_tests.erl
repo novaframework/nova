@@ -43,13 +43,21 @@ prop_json_non_post_200() ->
 %% Control characters and invalid UTF-8 are refused; nova_basic_handler_tests
 %% covers those.
 prop_redirect_always_302() ->
-    ?FORALL(Route, ?LET(Chars, list(range(16#20, 16#7E)), list_to_binary(Chars)),
+    ?FORALL(Route, printable_route(),
             begin
                 Req = nova_test_helper:mock_req(<<"GET">>, <<"/">>),
                 {ok, Req1} = nova_basic_handler:handle_redirect({redirect, Route}, ?CALLBACK, Req),
                 maps:get(resp_status_code, Req1) =:= 302 andalso
                 maps:get(<<"location">>, maps:get(resp_headers, Req1)) =:= Route
             end).
+
+printable_route() ->
+    ?LET(Chars, list(range(16#20, 16#7E)), chars_to_binary(Chars)).
+
+%% Generated values are proper_gen:instance(), which eqwalizer reads as term().
+-spec chars_to_binary(dynamic()) -> binary().
+chars_to_binary(Chars) ->
+    list_to_binary(Chars).
 
 prop_ws_ok_preserves_data() ->
     ?FORALL(Data, ws_controller_data(),
