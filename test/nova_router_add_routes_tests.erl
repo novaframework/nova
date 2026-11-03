@@ -42,7 +42,7 @@ add_routes_registers_app_test_() ->
 %% The routing guide for 0.17.0 to 0.18.1 put plugin_strategy on the route
 %% entry, where it is ignored; that is warned about once per application.
 route_entry_plugin_strategy_is_warned_about_once_test_() ->
-    {setup, fun() -> setup() end, fun(S) -> cleanup(S) end, fun() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
         persistent_term:erase({nova_router, route_plugin_strategy_warned, strategy_app}),
         Callback = fun(_) -> {json, #{}} end,
         Routes = [#{plugin_strategy => global_first, routes => [{"/a", Callback, #{methods => [get]}}]},
