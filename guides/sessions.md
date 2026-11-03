@@ -83,7 +83,7 @@ An id the client presents that the backend does not know (never issued, deleted 
 
 A request that carries two or more different values for the session cookie, for example because a cookie of the same name was set for a parent domain or another path, is treated as having no session, and a warning is logged once per node.
 
-The cookie is sent with `Path=/`, `HttpOnly`, `SameSite=Lax`, `Max-Age` set to `session_max_age`, and with `Secure` unless `{nova, [{environment, dev}]}` is set (a dev request over HTTPS still gets `Secure`). Behind a proxy that terminates TLS Nova sees plain HTTP, which is why `Secure` does not depend on the scheme. A staging environment served over plain HTTP that is not marked `dev` gets a cookie the browser never sends back, so sessions do not work there until you set `secure => false` in `session_cookie_opts` or serve it over HTTPS:
+The cookie is sent with `Path=/`, `HttpOnly`, `SameSite=Lax`, `Max-Age` set to `session_max_age`, and with `Secure` unless `{nova, [{environment, dev}]}` is set (a dev request over HTTPS still gets `Secure`). An unset `environment` counts as not `dev` here, although `nova:get_environment/0` returns `dev` for it. Behind a proxy that terminates TLS Nova sees plain HTTP, which is why `Secure` does not depend on the scheme. A staging environment served over plain HTTP that is not marked `dev` gets a cookie the browser refuses to store, so sessions do not work there until you set `secure => false` in `session_cookie_opts` or serve it over HTTPS:
 
 ```erlang
 {nova, [
@@ -92,7 +92,7 @@ The cookie is sent with `Path=/`, `HttpOnly`, `SameSite=Lax`, `Max-Age` set to `
 ]}
 ```
 
-The same applies to local development. Over plain HTTP without `{nova, [{environment, dev}]}`, the browser gets a `Secure` session cookie it will not send back (some browsers make an exception for `localhost`). Every request then starts a new, empty session, and signing in seems to do nothing. Set the environment in your development config:
+The same applies to local development. Over plain HTTP without `{nova, [{environment, dev}]}`, the browser refuses to store the `Secure` session cookie Nova sets (some browsers make an exception for `localhost`). Every request then starts a new, empty session, and signing in seems to do nothing. Set the environment in your development config:
 
 ```erlang
 {nova, [{environment, dev}]}

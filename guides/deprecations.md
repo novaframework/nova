@@ -79,12 +79,14 @@ of `{Module, Function}` in Nova.
   default to no limit; it is now `1209600` seconds, which also sets the
   cookie's `Max-Age`. Set `{session_max_age, infinity}` for the old behaviour.
 
-- **The cookie is `Secure` unless the environment is `dev`.** It used to be
-  `Secure` only when the request came in over HTTPS, which a proxy that
-  terminates TLS hides. Local development over plain HTTP without
-  `{nova, [{environment, dev}]}` loses the session cookie, as does a staging
-  environment served over plain HTTP; set `{environment, dev}` or
-  `#{secure => false}` in `session_cookie_opts`.
+- **The cookie is `Secure` unless `{nova, [{environment, dev}]}` is set.**
+  It used to be `Secure` only when the request came in over HTTPS, which a
+  proxy that terminates TLS hides. An unset `environment` counts as not
+  `dev` for the cookie, although `nova:get_environment/0` returns `dev` for
+  it. Local development over plain HTTP without that setting loses the
+  session cookie, as does a staging environment served over plain HTTP; set
+  `{nova, [{environment, dev}]}` or `#{secure => false}` in
+  `session_cookie_opts`.
 
 - **Two different session cookies mean no session.** A request carrying two
   or more different session ids (for example one set for a parent domain) is
