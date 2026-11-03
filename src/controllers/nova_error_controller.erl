@@ -1,5 +1,6 @@
 -module(nova_error_controller).
 -moduledoc false.
+-include_lib("kernel/include/logger.hrl").
 -export([
          not_found/1,
          server_error/1,
@@ -115,7 +116,7 @@ format_stacktrace([#{module := Mod, function := Func, arity := Arity} = Frame|Tl
                  line => maps:get(line, Frame, undefined)},
     [Formated|format_stacktrace(Tl)];
 format_stacktrace([Hd|Tl]) ->
-    logger:warning(~"Could not format stacktrace line: ~p", [nova_redact:term(Hd)]),
+    ?LOG_WARNING(#{msg => ~"Could not format stacktrace line", frame => nova_redact:term(Hd)}),
     format_stacktrace(Tl).
 
 format_arity(Args) when is_list(Args) -> length(Args);
