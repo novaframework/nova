@@ -9,15 +9,15 @@ A plugin returns one of:
 
 `{ok, Req, State}` continues with the next plugin.
 
-`{ok, Reply, Req, State}` sets the reply on `Req` and continues.
+`{ok, Reply, Req, State}` sets the reply on `Req` and continues. `Reply` must be a `{reply, ...}` here: the controller answers later, so a redirect or a bare status would be overwritten. Any other reply renders the 500 status page and logs that `stop` is needed.
 
 `{stop, Req, State}` and `{stop, Req}` stop the execution. The plugin is responsible in this case for returning a proper response to the client. `{stop, Reply, Req, State}` stops and sends `Reply`.
 
-`{break, Req, State}` and `{break, Reply, Req, State}` are deprecated aliases of the matching `stop` returns and will be removed in 1.0. They log a warning; return `stop` instead.
+`{break, Req, State}` and `{break, Reply, Req, State}` are deprecated aliases of the matching `stop` returns and will be removed in 1.0. They log a warning, once per plugin module; return `stop` instead.
 
 `{error, Reason}` stops the execution and renders the 500 status page.
 
-`Reply` is `{reply, Body}`, `{reply, Status, Body}`, `{reply, Status, Headers, Body}`, `{redirect, Url}`, `{status, Status}` or `{status, Status, Headers}`. Any other reply renders the 500 status page.
+`Reply` is `{reply, Body}`, `{reply, Status, Body}`, `{reply, Status, Headers, Body}`, `{redirect, Url}`, `{status, Status}` or `{status, Status, Headers}`. `Headers` is a map or a list of `{Name, Value}` pairs. Any other reply renders the 500 status page.
 
 When a pre_request plugin stops the request, or the security function refuses it, the controller and the post_request plugins do not run.
 
@@ -32,10 +32,11 @@ These callbacks run for HTTP requests. Websocket handlers run their plugins thro
 
 -type reply() :: {reply, Body :: iodata()} |
                  {reply, Status :: integer(), Body :: iodata()} |
-                 {reply, Status :: integer(), Headers :: cowboy:http_headers(), Body :: iodata()} |
+                 {reply, Status :: integer(), Headers :: cowboy:http_headers() | [{binary(), iodata()}],
+                  Body :: iodata()} |
                  {redirect, Url :: binary() | string()} |
                  {status, Status :: integer()} |
-                 {status, Status :: integer(), Headers :: cowboy:http_headers()}.
+                 {status, Status :: integer(), Headers :: cowboy:http_headers() | [{binary(), iodata()}]}.
 
 -doc """
 Start function for the plugin. This function is called when the plugin is started

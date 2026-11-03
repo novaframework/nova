@@ -49,12 +49,20 @@ run_plugins([{Callback, Options}|Tl], CallbackType, Req, Env) when is_function(C
 handle_result({ok, Req0, State0}, Callback, State, Tl, CallbackType, _Req, Env) ->
     set_state(Callback, State, State0),
     run_plugins(Tl, CallbackType, Req0, Env);
-handle_result({ok, Reply, Req0, State0}, Callback, State, Tl, CallbackType, _Req, Env) ->
+%% Only a reply can be handed on: the controller answers after this, so a
+%% redirect or a bare status would be overwritten. Those need stop.
+handle_result({ok, Reply, Req0, State0}, Callback, State, Tl, CallbackType, _Req, Env)
+  when element(1, Reply) =:= reply ->
     set_state(Callback, State, State0),
     case handle_reply(Reply, Req0) of
         {ok, Req1} -> run_plugins(Tl, CallbackType, Req1, Env);
         error -> unsupported_reply(Callback, Reply, Req0, Env)
     end;
+handle_result({ok, Reply, Req0, State0}, Callback, State, _Tl, _CallbackType, _Req, Env) when is_tuple(Reply) ->
+    set_state(Callback, State, State0),
+    ?LOG_ERROR(#{msg => ~"Plugin returned {ok, Reply, Req, State} with a reply other than {reply, ...}. Return {stop, Reply, Req, State} to redirect or answer with a status",
+                 plugin => plugin_module(Callback), reply => nova_redact:term(Reply)}),
+    render_500(Req0, Env, #{class => error, reason => unsupported_plugin_reply});
 handle_result({break, Req0, State0}, Callback, State, Tl, CallbackType, Req, Env) ->
     deprecated_break(Callback),
     handle_result({stop, Req0, State0}, Callback, State, Tl, CallbackType, Req, Env);
@@ -89,7 +97,7 @@ handle_reply({reply, Body}, Req) ->
     handle_reply({reply, 200, #{}, Body}, Req);
 handle_reply({reply, Status, Body}, Req) ->
     handle_reply({reply, Status, #{}, Body}, Req);
-handle_reply({reply, Status, Headers, Body}, Req) when is_integer(Status), is_map(Headers) ->
+handle_reply({reply, Status, Headers, Body}, Req) when is_integer(Status), is_map(Headers) orelse is_list(Headers) ->
     Req0 = cowboy_req:set_resp_headers(Headers, Req),
     Req1 = cowboy_req:set_resp_body(Body, Req0),
     {ok, Req1#{resp_status_code => Status}};
@@ -98,7 +106,7 @@ handle_reply({redirect, Url}, Req) when is_binary(Url); is_list(Url) ->
     {ok, Req0#{resp_status_code => 302}};
 handle_reply({status, Status}, Req) ->
     handle_reply({status, Status, #{}}, Req);
-handle_reply({status, Status, Headers}, Req) when is_integer(Status), is_map(Headers) ->
+handle_reply({status, Status, Headers}, Req) when is_integer(Status), is_map(Headers) orelse is_list(Headers) ->
     {ok, (cowboy_req:set_resp_headers(Headers, Req))#{resp_status_code => Status}};
 handle_reply(_Reply, _Req) ->
     error.
@@ -115,9 +123,19 @@ render_500(Req, Env, CrashInfo) ->
     {ok, Req0, Env0} = nova_router:render_status_page('_', 500, #{}, Req#{crash_info => CrashInfo}, Env),
     {ok, Req0, Env0#{plugin_state => pre_request}}.
 
+%% Once per plugin module, so a plugin returning break on every request does
+%% not flood the log.
 deprecated_break(Callback) ->
-    ?LOG_WARNING(#{msg => ~"Plugin returned break, which is deprecated and behaves like stop. Return stop instead",
-                   plugin => plugin_module(Callback)}).
+    Module = plugin_module(Callback),
+    Key = {?MODULE, break_warned, Module},
+    case persistent_term:get(Key, false) of
+        true ->
+            ok;
+        false ->
+            persistent_term:put(Key, true),
+            ?LOG_WARNING(#{msg => ~"Plugin returned break, which is deprecated and behaves like stop. Return stop instead",
+                           plugin => Module})
+    end.
 
 plugin_module(Callback) ->
     {module, Module} = erlang:fun_info(Callback, module),

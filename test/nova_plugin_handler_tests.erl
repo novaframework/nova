@@ -20,7 +20,11 @@ setup() ->
     end),
     meck:expect(cowboy_req, set_resp_headers, fun(Headers, Req) ->
         Existing = maps:get(resp_headers, Req, #{}),
-        Req#{resp_headers => maps:merge(Existing, Headers)}
+        New = case is_list(Headers) of
+                  true -> maps:from_list(Headers);
+                  false -> Headers
+              end,
+        Req#{resp_headers => maps:merge(Existing, New)}
     end),
     meck:expect(cowboy_req, set_resp_body, fun(Body, Req) ->
         Req#{resp_body => Body}
@@ -444,6 +448,56 @@ unchanged_state_is_not_written_test_() ->
     end}.
 
 %%====================================================================
+%% {ok, Reply, Req, State} only hands on a reply
+%%====================================================================
+
+ok_redirect_is_a_500_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        P = fun(R, _Env, _Opts, _State) -> {ok, {redirect, ~"/login"}, R, #{}} end,
+        {ok, Req1, _} = nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env()),
+        ?assertEqual(500, maps:get(resp_status_code, Req1)),
+        ?assertNot(is_map_key(~"location", maps:get(resp_headers, Req1))),
+        ?assertMatch(#{class := error, reason := unsupported_plugin_reply}, maps:get(crash_info, Req1))
+    end}.
+
+ok_status_is_a_500_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        P = fun(R, _Env, _Opts, _State) -> {ok, {status, 401}, R, #{}} end,
+        {ok, Req1, _} = nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env()),
+        ?assertEqual(500, maps:get(resp_status_code, Req1))
+    end}.
+
+%%====================================================================
+%% Reply headers may be a map or a list
+%%====================================================================
+
+reply_with_list_headers_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        P = fun(R, _Env, _Opts, _State) -> {stop, {reply, 403, [{~"x-reason", ~"denied"}], ~"no"}, R, #{}} end,
+        {stop, Req1} = nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env()),
+        ?assertEqual(403, maps:get(resp_status_code, Req1)),
+        ?assertEqual(~"denied", maps:get(~"x-reason", maps:get(resp_headers, Req1)))
+    end}.
+
+ok_reply_with_list_headers_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        P = fun(R, _Env, _Opts, _State) -> {ok, {reply, 200, [{~"x-a", ~"1"}], ~"b"}, R, #{}} end,
+        {ok, Req1, _} = nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env()),
+        ?assertEqual(~"1", maps:get(~"x-a", maps:get(resp_headers, Req1)))
+    end}.
+
+status_with_map_and_list_headers_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Map = fun(R, _Env, _Opts, _State) -> {stop, {status, 401, #{~"www-authenticate" => ~"Bearer"}}, R, #{}} end,
+        List = fun(R, _Env, _Opts, _State) -> {stop, {status, 401, [{~"www-authenticate", ~"Bearer"}]}, R, #{}} end,
+        [begin
+             {stop, Req1} = nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env()),
+             ?assertEqual(401, maps:get(resp_status_code, Req1)),
+             ?assertEqual(~"Bearer", maps:get(~"www-authenticate", maps:get(resp_headers, Req1)))
+         end || P <- [Map, List]]
+    end}.
+
+%%====================================================================
 %% Every 500 carries crash_info the error page can render
 %%====================================================================
 
@@ -451,6 +505,7 @@ failures_carry_crash_info_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         Plugins = [fun(_R, _Env, _Opts, _State) -> what_is_this end,
                    fun(R, _Env, _Opts, _State) -> {stop, {not_a_reply, 1}, R, #{}} end,
+                   fun(R, _Env, _Opts, _State) -> {ok, {redirect, ~"/"}, R, #{}} end,
                    fun(_R, _Env, _Opts, _State) -> {error, boom} end,
                    fun(_R, _Env, _Opts, _State) -> error(boom) end],
         [begin
@@ -471,6 +526,7 @@ plugin_failures_are_redacted_test_() ->
         Plugins = [fun(_R, _Env, _Opts, _State) -> {error, #{password => ~"VICTIMCOOKIE"}} end,
                    fun(_R, _Env, _Opts, _State) -> {unexpected, Secret} end,
                    fun(R, _Env, _Opts, _State) -> {stop, {not_a_reply, Secret}, R, #{}} end,
+                   fun(R, _Env, _Opts, _State) -> {ok, {redirect, Secret}, R, #{}} end,
                    fun(#{this_key_is_missing := _}, _Env, _Opts, _State) -> ok end],
         ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
         try
@@ -481,6 +537,25 @@ plugin_failures_are_redacted_test_() ->
                  ?assertNotEqual([], Logs),
                  assert_not_leaked({Logs, maps:get(crash_info, Req1)})
              end || P <- Plugins]
+        after
+            logger:remove_handler(?MODULE)
+        end
+    end}.
+
+%%====================================================================
+%% break is warned about once per plugin module
+%%====================================================================
+
+break_is_warned_about_once_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        persistent_term:erase({nova_plugin_handler, break_warned, ?MODULE}),
+        P = fun(R, _Env, _Opts, _State) -> {break, R, #{}} end,
+        ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
+        try
+            {stop, _} = nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env()),
+            ?assertMatch([_], logged()),
+            {stop, _} = nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env()),
+            ?assertEqual([], logged())
         after
             logger:remove_handler(?MODULE)
         end

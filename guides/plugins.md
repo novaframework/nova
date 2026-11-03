@@ -46,13 +46,23 @@ This plugin injects a UUID into the headers.
 | Return | Effect |
 |--------|--------|
 | `{ok, Req, State}` | Carry on with the next plugin. |
-| `{ok, Reply, Req, State}` | Set the reply's status, headers and body on `Req` and carry on. |
+| `{ok, Reply, Req, State}` | Set the reply's status, headers and body on `Req` and carry on. Only `{reply, ...}` is accepted here; see below. |
 | `{stop, Req, State}` or `{stop, Req}` | End the request here. The plugin has replied itself, for example with `cowboy_req:reply/4`. |
 | `{stop, Reply, Req, State}` | End the request and send `Reply`. |
-| `{break, Req, State}`, `{break, Reply, Req, State}` | Deprecated aliases of the matching `stop` returns, removed in 1.0. They log a warning. |
+| `{break, Req, State}`, `{break, Reply, Req, State}` | Deprecated aliases of the matching `stop` returns, removed in 1.0. They log a warning, once per plugin module. |
 | `{error, Reason}` | End the request with the 500 status page. |
 
-`Reply` is one of `{reply, Body}`, `{reply, Status, Body}`, `{reply, Status, Headers, Body}`, `{redirect, Url}`, `{status, Status}` or `{status, Status, Headers}`. `{status, ...}` sends the bare status without rendering a status-code route. Any other reply renders the 500 status page.
+`Reply` is one of `{reply, Body}`, `{reply, Status, Body}`, `{reply, Status, Headers, Body}`, `{redirect, Url}`, `{status, Status}` or `{status, Status, Headers}`. `Headers` is a map or a list of `{Name, Value}` pairs. `{status, ...}` sends the bare status without rendering a status-code route. Any other reply renders the 500 status page.
+
+With `ok` the controller still runs and answers, so a redirect or a bare status set there would be overwritten. `{ok, {redirect, ...}, Req, State}` and `{ok, {status, ...}, Req, State}` therefore render the 500 status page and log that `stop` is needed. To send them, return `{stop, Reply, Req, State}`:
+
+```erlang
+pre_request(Req, _Env, _Options, State) ->
+    case nova_session:get(Req, <<"user_id">>) of
+        {ok, _} -> {ok, Req, State};
+        {error, _} -> {stop, {redirect, "/login"}, Req, State}
+    end.
+```
 
 Once a `pre_request` plugin stops the request or the security function refuses it, the controller and the `post_request` plugins do not run. Keep access logging and similar work that has to see every request in a stream handler or in a `pre_request` plugin.
 
