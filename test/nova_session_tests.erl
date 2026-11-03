@@ -448,6 +448,8 @@ valid_cookie_test_() ->
     [?_assert(nova_session:valid_cookie(~"__Host-session_id", #{path => ~"/", domain => ~"example.com"})),
      ?_assert(nova_session:valid_cookie(~"a!#$%&'*+-.^_`|~9", #{})),
      ?_assertNot(nova_session:valid_cookie(<<>>, #{})),
+     ?_assertNot(nova_session:valid_cookie("session_id", #{})),
+     ?_assertNot(nova_session:valid_cookie(session_id, #{})),
      ?_assertNot(nova_session:valid_cookie(~"app:sid", #{})),
      ?_assertNot(nova_session:valid_cookie(~"a/b", #{})),
      ?_assertNot(nova_session:valid_cookie(~"a\"b", #{})),

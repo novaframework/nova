@@ -270,7 +270,7 @@ validate_cookie_config() ->
 %% characters or ";". cowlib 2.21 refuses anything else, older versions only
 %% some of it, so Nova checks it itself.
 -doc false.
--spec valid_cookie(binary(), cow_cookie:cookie_opts()) -> boolean().
+-spec valid_cookie(term(), cow_cookie:cookie_opts()) -> boolean().
 valid_cookie(Name, Opts) ->
     Name =/= <<>> andalso is_token(Name) andalso
         is_av_value(maps:get(path, Opts, <<>>)) andalso
@@ -285,7 +285,9 @@ is_token(<<C, Rest/binary>>) when C >= $a, C =< $z; C >= $A, C =< $Z; C >= $0, C
 is_token(<<C, Rest/binary>>) ->
     lists:member(C, "!#$%&'*+-.^_`|~") andalso is_token(Rest);
 is_token(<<>>) ->
-    true.
+    true;
+is_token(_) ->
+    false.
 
 is_av_value(<<C, Rest/binary>>) when C >= 16#20, C =< 16#7E, C =/= $; ->
     is_av_value(Rest);
