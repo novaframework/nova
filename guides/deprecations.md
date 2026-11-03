@@ -71,7 +71,9 @@ of `{Module, Function}` in Nova.
 
 - **Presented ids the backend does not know are replaced**, for backends that
   implement `session_exists/1` (`nova_session_ets` does). Sessions held by
-  another node, for example during a rolling deploy, are among them.
+  another node, for example during a rolling deploy, are among them. With
+  `nova_session_ets` on several nodes without sticky sessions, or across a
+  restart, users are signed out; use a shared session store there.
 
 - **Sessions expire after 14 days by default.** `session_max_age` used to
   default to no limit; it is now `1209600` seconds, which also sets the
@@ -79,8 +81,10 @@ of `{Module, Function}` in Nova.
 
 - **The cookie is `Secure` unless the environment is `dev`.** It used to be
   `Secure` only when the request came in over HTTPS, which a proxy that
-  terminates TLS hides. A staging environment served over plain HTTP needs
-  `{environment, dev}` or `#{secure => false}` in `session_cookie_opts`.
+  terminates TLS hides. Local development over plain HTTP without
+  `{nova, [{environment, dev}]}` loses the session cookie, as does a staging
+  environment served over plain HTTP; set `{environment, dev}` or
+  `#{secure => false}` in `session_cookie_opts`.
 
 - **Two different session cookies mean no session.** A request carrying two
   or more different session ids (for example one set for a parent domain) is

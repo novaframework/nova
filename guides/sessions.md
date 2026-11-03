@@ -92,6 +92,12 @@ The cookie is sent with `Path=/`, `HttpOnly`, `SameSite=Lax`, `Max-Age` set to `
 ]}
 ```
 
+The same applies to local development. Over plain HTTP without `{nova, [{environment, dev}]}`, the browser gets a `Secure` session cookie it will not send back (some browsers make an exception for `localhost`). Every request then starts a new, empty session, and signing in seems to do nothing. Set the environment in your development config:
+
+```erlang
+{nova, [{environment, dev}]}
+```
+
 ### The `__Host-` cookie name
 
 A cookie named with the `__Host-` prefix is only accepted by browsers when it is `Secure`, has `Path=/` and no `Domain`, so a sibling or parent domain cannot set or shadow it. New applications should use it:
@@ -106,7 +112,13 @@ With a `__Host-` name Nova always sends `Secure` and `Path=/` and drops `domain`
 
 `session_max_age` (seconds, 14 days by default) limits how long a session lives from the moment it was created, whatever happens in between. It sets `Max-Age` on the cookie, and the default `nova_session_ets` backend drops the session once it has passed. With `infinity` the cookie has no `Max-Age` and sessions live until they are deleted or the node restarts.
 
-The default `nova_session_ets` backend keeps sessions in memory, replicated to the nodes connected at the time of the write. They do not survive a restart, and a node that joins later does not have the sessions written before it joined. Because unknown ids are replaced, a client that reaches such a node (during a rolling deploy, or behind a load balancer without sticky sessions) gets a fresh, empty session and is signed out. Use a shared backend when sessions have to outlive a node.
+The default `nova_session_ets` backend keeps sessions in memory, replicated to the nodes connected at the time of the write. They do not survive a restart, and a node that joins later does not have the sessions written before it joined. Because unknown ids are replaced, a client that reaches such a node gets a fresh, empty session and is signed out. That happens:
+
+- behind a load balancer without sticky sessions;
+- during a rolling deploy;
+- after a restart.
+
+To run several nodes without sticky sessions, or to keep sessions across restarts, use a shared session store: a `nova_session` backend over a database or cache, set with `session_manager` (see [Backend](#backend)).
 
 ## Enabling Sessions
 
