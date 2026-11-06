@@ -23,13 +23,15 @@ init(StreamID, Req, Opts) ->
     Req0 =
         case nova:get_env(use_sessions, true) of
             true ->
-                Cookies = cowboy_req:parse_cookies(Req),
-                case lists:keyfind(<<"session_id">>, 1, Cookies) of
-                    {_, _} -> Req;
-                    _ ->
+                case session_cookie(Req) of
+                    present -> Req;
+                    absent ->
                         {ok, SessionId} = nova_session:generate_session_id(),
-                        ReqWithCookie = cowboy_req:set_resp_cookie(<<"session_id">>, SessionId, Req),
-                        ReqWithCookie#{nova_session_id => SessionId}
+                        ReqWithCookie = cowboy_req:set_resp_cookie(~"session_id", SessionId, Req),
+                        ReqWithCookie#{nova_session_id => SessionId};
+                    unparsable ->
+                        {ok, SessionId} = nova_session:generate_session_id(),
+                        Req#{nova_session_id => SessionId}
                 end;
             _ ->
                 Req
@@ -38,6 +40,18 @@ init(StreamID, Req, Opts) ->
     Req1 = cowboy_req:set_resp_header(<<"server">>, <<"Cowboy/Nova">>, Req0),
     {Commands, Next} = cowboy_stream:init(StreamID, Req1, Opts),
     {Commands, #state{req = Req0, next = Next}}.
+
+%% parse_cookies/1 exits on a malformed Cookie header, and Cowboy would then
+%% log the whole request, Authorization included. Such a request gets a session
+%% id but no cookie: the client may hold a valid session cookie Nova cannot
+%% read, and a new one would overwrite it on every request.
+session_cookie(Req) ->
+    try lists:keymember(~"session_id", 1, cowboy_req:parse_cookies(Req)) of
+        true -> present;
+        false -> absent
+    catch
+        exit:{request_error, _, _} -> unparsable
+    end.
 
 -spec data(cowboy_stream:streamid(), cowboy_stream:fin(), cowboy_req:resp_body(), State)
           -> {cowboy_stream:commands(), State} when State::state().
