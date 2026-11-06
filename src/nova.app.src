@@ -1,5 +1,5 @@
 {application,nova,
- [{description,"Nova is a web application framework"},
+ [{description,"Web framework for the BEAM: Erlang, Elixir and LFE"},
   {vsn, git},
   {registered,[]},
   {mod,{nova_app,[]}},
