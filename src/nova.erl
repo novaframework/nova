@@ -72,18 +72,21 @@ use_stacktrace(_) ->
 
 
 %%--------------------------------------------------------------------
--doc "Formats a stacktrace into a list of maps. Each map contains the module, function, arity, file, and line number of the function call.".
--spec format_stacktrace(Stacktrace :: [{M :: atom(), F :: atom(), A :: integer(), Info :: list()}])
+-doc "Formats a stacktrace into a list of maps. Each map contains the module, function, arity, file, and line number of the function call. A frame that carries its argument list (the first frame of a `function_clause`) is reported with the arity only, so the request never ends up in a log or an error page.".
+-spec format_stacktrace(Stacktrace :: [{M :: atom(), F :: atom(), A :: arity() | [term()], Info :: list()}])
                        -> [map()].
 format_stacktrace(Stacktrace) ->
     SingleFun = fun({M, F, A, Info}) ->
                         #{module => M,
                           function => F,
-                          arity => A,
+                          arity => arity(A),
                           file => proplists:get_value(file, Info, <<"unknown">>),
                           line => proplists:get_value(line, Info, -1)}
                 end,
     [SingleFun(S) || S <- Stacktrace].
+
+arity(Args) when is_list(Args) -> length(Args);
+arity(Arity) -> Arity.
 
 
 %%--------------------------------------------------------------------
