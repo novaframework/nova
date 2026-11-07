@@ -2,6 +2,20 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("../include/nova_router.hrl").
 
+%% Logger handler callback: forwards every event to the test process.
+-export([log/2]).
+
+log(#{msg := Msg}, #{config := #{test_pid := Pid}}) ->
+    Pid ! {logged, Msg},
+    ok.
+
+logged() ->
+    receive
+        {logged, Msg} -> [Msg | logged()]
+    after 50 ->
+            []
+    end.
+
 -define(SETUP, fun() -> setup() end).
 -define(CLEANUP, fun(S) -> cleanup(S) end).
 
@@ -153,6 +167,40 @@ callback_redirect_test_() ->
         {stop, Req1} = nova_security_handler:execute(Req, Env),
         ?assertEqual(302, maps:get(resp_status_code, Req1)),
         ?assertEqual(<<"/login">>, maps:get(<<"location">>, maps:get(resp_headers, Req1)))
+    end}.
+
+%% The routing guide documents the redirect target as a binary.
+callback_redirect_binary_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Callback = fun(_) -> {redirect, ~"/login"} end,
+        {stop, Req1} = nova_security_handler:execute(req(), (env())#{secure => Callback}),
+        ?assertEqual(302, maps:get(resp_status_code, Req1)),
+        ?assertEqual(~"/login", maps:get(~"location", maps:get(resp_headers, Req1)))
+    end}.
+
+callback_redirect_with_control_bytes_is_a_401_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
+        try
+            [begin
+                 Callback = fun(_) -> {redirect, Url} end,
+                 {stop, Req1} = nova_security_handler:execute(req(), (env())#{secure => Callback}),
+                 ?assertEqual(401, maps:get(resp_status_code, Req1)),
+                 ?assertNot(maps:is_key(~"location", maps:get(resp_headers, Req1, #{}))),
+                 ?assertMatch([{report, #{msg := ~"Security callback redirected to an invalid location"}} | _],
+                              logged())
+             end || Url <- [<<"/a", 0, "b">>, ~"/a\r\nset-cookie: x=1", <<"/x", 255>>]]
+        after
+            logger:remove_handler(?MODULE)
+        end
+    end}.
+
+callback_redirect_invalid_location_is_a_401_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Callback = fun(_) -> {redirect, [16#D800]} end,
+        {stop, Req1} = nova_security_handler:execute(req(), (env())#{secure => Callback}),
+        ?assertEqual(401, maps:get(resp_status_code, Req1)),
+        ?assertNot(maps:is_key(~"location", maps:get(resp_headers, Req1, #{})))
     end}.
 
 %%====================================================================

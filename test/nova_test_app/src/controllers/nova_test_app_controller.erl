@@ -3,6 +3,7 @@
 -export([
          index/1,
          json/1,
+         body/1,
          echo/1,
          literal/1,
          method/1,
@@ -21,6 +22,9 @@ index(_Req) ->
 
 json(_Req) ->
     {json, #{ok => true, from => <<"nova_test_app">>}}.
+
+body(#{json := JSON}) ->
+    {json, JSON}.
 
 echo(#{bindings := Bindings}) ->
     {json, Bindings}.

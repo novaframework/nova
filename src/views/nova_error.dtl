@@ -64,7 +64,7 @@
         {{ message }}
         {% if extra_msg %}
         <pre>
-          {{ extra_msg|safe }}
+          {{ extra_msg }}
           {% if stacktrace %}
           <code class="erlang">
             {% for s in stacktrace %}

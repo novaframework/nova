@@ -10,6 +10,31 @@
 
 routes(_Environment) ->
     [
+     %% One group per plugin return, driven by nova_full_app_SUITE.
+     #{prefix => "/plugin-break-redirect",
+       plugins => [{pre_request, nova_test_app_return_plugin, #{return => break_redirect}},
+                   {pre_request, nova_test_app_plugin, #{}}],
+       routes => [{"/", fun nova_test_app_controller:json/1, #{methods => [get]}}]},
+     #{prefix => "/plugin-break-status",
+       plugins => [{pre_request, nova_test_app_return_plugin, #{return => break_status}}],
+       routes => [{"/", fun nova_test_app_controller:json/1, #{methods => [get]}}]},
+     #{prefix => "/plugin-break-unknown",
+       plugins => [{pre_request, nova_test_app_return_plugin, #{return => break_unknown}}],
+       routes => [{"/", fun nova_test_app_controller:json/1, #{methods => [get]}}]},
+     #{prefix => "/plugin-stop",
+       plugins => [{pre_request, nova_test_app_return_plugin, #{return => stop_two_tuple}}],
+       routes => [{"/", fun nova_test_app_controller:json/1, #{methods => [get]}}]},
+     #{prefix => "/plugin-error",
+       plugins => [{pre_request, nova_test_app_plugin, #{}},
+                   {pre_request, nova_test_app_return_plugin, #{return => error}}],
+       routes => [{"/", fun nova_test_app_controller:json/1, #{methods => [get]}}]},
+     #{prefix => "/body-limit",
+       plugins => [{pre_request, nova_request_plugin, #{decode_json_body => true, max_body_length => 64}}],
+       routes => [{"/", fun nova_test_app_controller:body/1, #{methods => [post]}}]},
+     #{prefix => "/body-timeout",
+       plugins => [{pre_request, nova_request_plugin, #{decode_json_body => true, body_read_timeout => 300}}],
+       routes => [{"/", fun nova_test_app_controller:body/1, #{methods => [post]}}]},
+
      %% Plain routes, bindings, methods, plugins and a catch-all static dir.
      #{prefix => "",
        security => false,

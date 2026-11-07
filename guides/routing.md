@@ -94,7 +94,7 @@ One can also define static files to be served by nova. This is done by adding a 
 *Note*! The notation `[...]` can be used as a wildcard (Zero or many occurences) in the url-section.
 Valid options is;
 
-- `mimetype` - which mimetype the file should be served as. If not defined nova will try to guess the mimetype based on the file extension.
+- `mimetype` - which mimetype the file should be served as. If not defined nova will try to guess the mimetype based on the file extension. XML, XHTML, compressed SVG (`.svgz`) and other `+xml` types are served as `application/octet-stream` unless set here, since a browser would run scripts in them on your origin. Static files are sent with `x-content-type-options: nosniff`.
 - `index_files` - a list of filenames that can be used as an index. This is relevant if a directory is served.
 - `list_dir` - Set to true if allowing the requester to list the content of a directory (if such is served)
 
@@ -153,13 +153,13 @@ The most simple way to implement a security function is to return a boolean valu
 | ---------------- | --------------- |
 | `true` | The request will continue to the controller. |
 | `{true, Data :: term()}` | The request will continue to the controller and the data will be available in the `Req` object under the `auth_data` key. |
-| `{redirect, Url :: binary()}` | The request will be redirected to the specified URL with HTTP status 302. |
+| `{redirect, Url :: binary() \| string()}` | The request will be redirected to the specified URL with HTTP status 302. |
 | `false` | The request will be stopped and a `401` status code will be returned. |
 | `{false, Headers :: map()}` | Same as above but also adds additional headers to the response. |
 | `{false, StatusCode :: integer(), Headers :: map()}` | Same as above but uses a custom status code. |
 | `{false, StatusCode :: integer(), Headers :: map(), Body :: iodata()}` | Same as above but also adds a custom body to the response. |
 
-*Note* If `false` is returned in any form the request will be stopped from executing the controller.
+*Note* If `false` is returned in any form the request will be stopped from executing the controller. The reply has an empty body unless you return one with `{false, StatusCode, Headers, Body}`: status-code routes (below) are not rendered for a refused request, and the `post_request` plugins do not run for it.
 
 
 ```erlang
@@ -209,8 +209,17 @@ In the example above we have enabled the *pre-request*-plugin `nova_json_schemas
 You can also include *post-request*-plugins in the same way.
 
 By default a route entry that declares `plugins` uses exactly those, and one
-that does not uses the plugins configured globally. Set `plugin_strategy` on
-the entry to combine them instead:
+that does not uses the plugins configured globally. Set `plugin_strategy` in
+the application's `nova_apps` options to combine them instead (available since
+0.17.0):
+
+```erlang
+{nova_apps, [{my_app, #{plugin_strategy => global_first}}]}
+```
+
+`plugin_strategy` is a per-application option and applies to every route
+entry of that application. A `plugin_strategy` key on a single route entry is
+ignored, and a warning is logged once per application.
 
 | Value | Plugins used |
 |---|---|
@@ -262,6 +271,17 @@ registered wins and the second is logged and ignored. Set
 `use_strict_routing` to `true` in the `nova` application environment to make
 Nova refuse to start on a conflict instead, which also reports overlapping
 literal and binding routes.
+
+## Status-code routes
+
+A route whose path is an integer handles that status code:
+
+```erlang
+#{routes => [{404, fun my_error_controller:not_found/1, #{}},
+             {500, fun my_error_controller:server_error/1, #{}}]}
+```
+
+Nova registers its own 404 and 500 handlers; an application's routes for the same codes replace them. A status-code route is rendered when no route matches (404), when the method is not allowed (405), when a controller or plugin crashes or a plugin returns `{error, Reason}` (500), when a controller throws `{Status, Reason}`, and when a controller returns something no handler understands. It is *not* rendered for a `{status, Code}` returned by a controller, nor for a request the security function refuses or a plugin stops.
 
 ## Adding routes programatically
 

@@ -4,23 +4,25 @@
 %%%-------------------------------------------------------------------
 -module(nova_handlers).
 -moduledoc """
-This module is responsible for all the different return types a controller have. *Nova* is constructed in such way that it's really easy to extend it by using *handlers*. A handler is basically a module consisting of a function of arity 4. We will show an example of this.
+This module is responsible for all the different return types a controller have. *Nova* is constructed in such way that it's really easy to extend it by using *handlers*. A handler is a function of arity 3 that gets the controller's return value, the controller callback and the request. We will show an example of this.
 
 If you implement the following module:
 
-\-module(my_handler). -export(\[init/0, handle_console]).
+```erlang
+-module(my_handler).
+-export([init/0, handle_console/3]).
 
-init() -> nova_handlers:register_handler(console, \{my_handler, handle_console\}).
+init() ->
+    nova_handlers:register_handler(console, fun my_handler:handle_console/3).
 
-handle_console(\{console, Format, Args\}, \{Module, Function\}, State) -> io:format("~n=====================~n", []). io:format("~p:~p was called.~n", []), io:format("State: ~p~n", \[State]), io:format(Format, Args), io:format("~n=====================~n", []), \{ok, 200, #\{\}, EmptyBinary\}.
+handle_console({console, Format, Args}, _Callback, Req) ->
+    io:format(Format, Args),
+    {ok, Req#{resp_status_code => 204}}.
+```
 
-The init/0 should be invoked from your applications *supervisor* and will register the module my_handler as handler of the return type \{console, Format, Args\}. This means that you can return this tuple in a controller which invokes my_handler:handle_console/4.
+The init/0 should be invoked from your applications *supervisor* and will register handle_console/3 as handler of the return type `{console, Format, Args}`. This means that you can return this tuple in a controller which invokes `my_handler:handle_console/3`. `{my_handler, handle_console}` registers the same function.
 
-__A handler can return two different types__
-
-\{ok, StatusCode, Headers, Body\} - This will return a proper reply to the requester.
-
-\{error, Reason\} - This will render a 500 page to the user.
+A handler returns `{ok, Req}`; Nova replies with `resp_status_code` (200 if unset) and whatever body and headers the handler set on `Req`.
 """.
 
 -behaviour(gen_server).
@@ -163,7 +165,7 @@ handle_cast({register_handler, Handle, Callback}, State) ->
     Callback0 =
         case Callback of
             Callback when is_function(Callback) -> Callback;
-            {Module, Function} -> fun Module:Function/4
+            {Module, Function} -> fun Module:Function/3
         end,
     case ets:lookup(?HANDLERS_TABLE, Handle) of
         [] ->
