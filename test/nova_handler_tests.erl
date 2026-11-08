@@ -80,6 +80,17 @@ execute_controller_crash_test_() ->
         ?assertEqual(500, maps:get(resp_status_code, Req1))
     end}.
 
+execute_controller_crash_keeps_route_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Callback = fun(_Req) -> error(intentional_crash) end,
+        Req = (nova_test_helper:mock_req(<<"GET">>, <<"/users/1">>))#{nova_route => ~"/users/:id"},
+        Env = #{callback => Callback, app => test_app, secure => false,
+                controller_data => #{}},
+        {ok, Req1, _Env1} = nova_handler:execute(Req, Env),
+        ?assertEqual(500, maps:get(resp_status_code, Req1)),
+        ?assertEqual(~"/users/:id", maps:get(nova_route, Req1))
+    end}.
+
 execute_controller_throw_status_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         Callback = fun(_Req) -> throw({403, forbidden}) end,

@@ -2,5 +2,5 @@
 
 -export([hello/1]).
 
-hello(_Req) ->
-    {json, #{app => <<"nova_test_sub_app">>}}.
+hello(Req) ->
+    {json, #{app => <<"nova_test_sub_app">>, route => maps:get(nova_route, Req, null)}}.

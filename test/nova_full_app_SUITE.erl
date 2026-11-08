@@ -39,7 +39,12 @@
          handler_init_crash_is_a_500/1,
          websocket_echo/1,
          sub_app_mounted_under_prefix/1,
-         add_and_remove_application/1
+         add_and_remove_application/1,
+         route_template_controller/1,
+         route_template_static/1,
+         route_template_sub_app/1,
+         route_template_absent_on_404/1,
+         route_template_websocket/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -54,7 +59,8 @@ all() ->
      {group, errors},
      {group, websocket},
      {group, sub_apps},
-     {group, runtime_routes}
+     {group, runtime_routes},
+     {group, route_template}
     ].
 
 groups() ->
@@ -100,7 +106,14 @@ groups() ->
                             ]},
      {runtime_routes, [], [
                            add_and_remove_application
-                          ]}
+                          ]},
+     {route_template, [parallel], [
+                                   route_template_controller,
+                                   route_template_static,
+                                   route_template_sub_app,
+                                   route_template_absent_on_404,
+                                   route_template_websocket
+                                  ]}
     ].
 
 %%====================================================================
@@ -283,7 +296,7 @@ websocket_echo(Config) ->
 
 sub_app_mounted_under_prefix(Config) ->
     {200, _Headers, Body} = get(Config, "/sub/hello"),
-    ?assertEqual(#{<<"app">> => <<"nova_test_sub_app">>}, json(Body)).
+    ?assertEqual(<<"nova_test_sub_app">>, maps:get(<<"app">>, json(Body))).
 
 %%====================================================================
 %% Runtime route changes
@@ -308,6 +321,33 @@ add_and_remove_application(Config) ->
     {200, _H3, _B3} = get(Config, "/json"),
     {200, _H4, _B4} = get(Config, "/sub/hello"),
     {200, _H5, _B5} = get(Config, "/assets/hello.txt").
+
+%%====================================================================
+%% Route template
+%%====================================================================
+
+route_template_controller(Config) ->
+    {200, Headers, _Body} = get(Config, "/echo/42/comments/7"),
+    ?assertEqual(<<"/echo/:id/comments/:comment_id">>, header(<<"x-nova-route">>, Headers)).
+
+route_template_static(Config) ->
+    {200, Headers, _Body} = get(Config, "/assets/nested/deep.txt"),
+    ?assertEqual(<<"/assets/[...]">>, header(<<"x-nova-route">>, Headers)).
+
+route_template_sub_app(Config) ->
+    {200, _Headers, Body} = get(Config, "/sub/hello"),
+    ?assertEqual(<<"/sub/hello">>, maps:get(<<"route">>, json(Body))).
+
+route_template_absent_on_404(Config) ->
+    {404, Headers, _Body} = get(Config, "/no-such-route"),
+    ?assertEqual(undefined, header(<<"x-nova-route">>, Headers)).
+
+route_template_websocket(Config) ->
+    {ok, Socket} = ws_connect(Config, "/ws"),
+    ?assertEqual(<<"connected">>, ws_recv(Socket)),
+    ok = ws_send(Socket, <<"route">>),
+    ?assertEqual(<<"/ws">>, ws_recv(Socket)),
+    gen_tcp:close(Socket).
 
 %%====================================================================
 %% HTTP helpers

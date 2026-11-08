@@ -70,7 +70,7 @@ second_application_gets_its_own_port(_Config) ->
         nova_sup:add_application(nova_test_sub_app, #{port => Port}),
     try
         {200, Body} = get(Port, "/hello"),
-        ?assertEqual(#{<<"app">> => <<"nova_test_sub_app">>}, json(Body))
+        ?assertEqual(#{<<"app">> => <<"nova_test_sub_app">>, <<"route">> => <<"/hello">>}, json(Body))
     after
         nova_sup:remove_application(nova_test_sub_app)
     end.

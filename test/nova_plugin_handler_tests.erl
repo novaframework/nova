@@ -194,6 +194,14 @@ plugin_crash_test_() ->
         ?assert(is_map(maps:get(crash_info, Req1)))
     end}.
 
+plugin_crash_keeps_route_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        P = fun(_R, _Env, _Opts, _State) -> error(boom) end,
+        Req = (req([{pre_request, [plugin(P)]}]))#{nova_route => ~"/users/:id"},
+        {ok, Req1, _Env1} = nova_plugin_handler:execute(Req, env()),
+        ?assertEqual(~"/users/:id", maps:get(nova_route, Req1))
+    end}.
+
 %%====================================================================
 %% Multiple plugins chain in order
 %%====================================================================

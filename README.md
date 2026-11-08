@@ -81,7 +81,7 @@ routes(_Environment) ->
 
 | Feature | Details |
 |---------|---------|
-| **Routing** | Path parameters, prefixes, per-route security, environment-based routing |
+| **Routing** | Path parameters, prefixes, per-route security, environment-based routing, matched route template in `Req` (`nova_route`) |
 | **Controllers** | Return `{json, Map}`, `{ok, Variables}`, `{status, Code}`, `{redirect, Path}`, `{sendfile, ...}` |
 | **Plugins** | Pre/post request hooks — built-in CORS, CSRF, correlation ID, or write your own |
 | **WebSockets** | Full WebSocket support via `nova_websocket` behaviour |
