@@ -123,18 +123,10 @@ handle_ws(Mod, Func, Args, State) ->
 
 
 start_connection(State) ->
-    StartTime = erlang:monotonic_time(),
-    Metadata = (connection_metadata(State))#{telemetry_span_context => erlang:make_ref()},
-    telemetry:execute([nova, websocket, connection, start],
-                      #{monotonic_time => StartTime, system_time => erlang:system_time()},
-                      Metadata),
-    State#{telemetry => {Metadata, StartTime}}.
+    State#{nova_telemetry => nova_telemetry:start([nova, websocket, connection], connection_metadata(State))}.
 
-stop_connection(Reason, #{telemetry := {Metadata, StartTime}}) ->
-    StopTime = erlang:monotonic_time(),
-    telemetry:execute([nova, websocket, connection, stop],
-                      #{monotonic_time => StopTime, duration => StopTime - StartTime},
-                      Metadata#{reason => Reason});
+stop_connection(Reason, #{nova_telemetry := Span}) ->
+    nova_telemetry:stop(Span, #{reason => Reason});
 stop_connection(_Reason, _State) ->
     ok.
 
@@ -143,13 +135,11 @@ connection_metadata(State) ->
       app => maps:get(app, State, undefined),
       route => maps:get(route, State, undefined)}.
 
-%% The span sits inside the try so a crash still emits the exception event
-%% before it is turned into {stop, State}.
 invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData}) ->
-    Metadata = (connection_metadata(State))#{callback => Func, module => Mod},
-    try telemetry:span([nova, websocket, handle], Metadata,
-                       fun() -> {erlang:apply(Mod, Func, Args ++ [ControllerData]), Metadata} end) of
+    Span = nova_telemetry:start([nova, websocket, handle], (connection_metadata(State))#{callback => Func}),
+    try erlang:apply(Mod, Func, Args ++ [ControllerData]) of
         RetObj ->
+            nova_telemetry:stop(Span, #{}),
             case nova_handlers:get_handler(ws) of
                 {ok, Callback} ->
                     Callback(RetObj, State);
@@ -161,6 +151,7 @@ invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData})
             end
     catch
         Class:Reason:Stacktrace ->
+            nova_telemetry:exception(Span, Class, Reason, Stacktrace),
             ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class,
                            reason => Reason, stacktrace => Stacktrace}),
             {stop, State}

@@ -38,8 +38,8 @@ redirect(_Req) ->
 teapot(_Req) ->
     {status, 418, #{}, <<"short and stout">>}.
 
-crash(_Req) ->
-    erlang:error(deliberate_crash).
+crash(Req) ->
+    erlang:error(deliberate_crash, [Req]).
 
 forbidden(_Req) ->
     throw({403, not_allowed}).

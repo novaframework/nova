@@ -40,7 +40,9 @@ handler for it.
 - Every event of a span carries the same `telemetry_span_context`, so a
   handler can pair a `start` with its `stop` or `exception`.
 - `exception` events add `kind`, `reason` and `stacktrace` to the start
-  metadata.
+  metadata. Argument lists in the stacktrace are replaced by their arity, so
+  a crash never exports the request, plugin options or state, or a frame
+  through it. Nova's own crash handling still sees the original stacktrace.
 - `route` is the matched route template, as described in
   [The matched route](routing.md#the-matched-route). It is `undefined` when no
   route matched, for example on a `404` rendered by the router.

@@ -371,13 +371,15 @@ plugin_telemetry_results() ->
 
 plugin_telemetry_exception() ->
     Id = attach(),
-    P = fun(_R, _Env, _Opts, _State) -> error(boom) end,
+    P = fun(R, Env, Opts, State) -> error(boom, [R, Env, Opts, State]) end,
     {ok, Req1, _Env1} = nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env()),
     ?assertEqual(500, maps:get(resp_status_code, Req1)),
     {_, _Start} = next_event([nova, plugin, start]),
     {_, Exception} = next_event([nova, plugin, exception]),
     ?assertMatch(#{kind := error, reason := boom, plugin := ?MODULE, callback := pre_request,
                    route := undefined, stacktrace := [_ | _]}, Exception),
+    ?assertEqual([], [Entry || {_, _, Arguments, _} = Entry <- maps:get(stacktrace, Exception),
+                               not is_integer(Arguments)]),
     ?assertNot(maps:is_key(options, Exception)),
     telemetry:detach(Id).
 

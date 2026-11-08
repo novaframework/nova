@@ -412,6 +412,7 @@ telemetry_controller_exception(Config) ->
     assert_keys(?EXCEPTION_META ++ ?CONTROLLER_META, Exc),
     ?assertMatch(#{kind := error, reason := deliberate_crash, action := crash,
                    app := nova_test_app}, Exc),
+    assert_no_arguments(Exc),
     {_ErrorPageM, ErrorPage} = next_event([nova, controller, stop], <<"/crash">>),
     ?assertMatch(#{app := nova, status := 500}, ErrorPage),
     telemetry:detach(Id).
@@ -471,6 +472,7 @@ telemetry_websocket_exception(Config) ->
     assert_keys([duration, monotonic_time], ExcM),
     assert_keys(?EXCEPTION_META ++ ?WS_HANDLE_META, Exc),
     ?assertMatch(#{kind := error, reason := deliberate_ws_crash, callback := websocket_handle}, Exc),
+    assert_no_arguments(Exc),
     {_StopM, _Stop} = next_event([nova, websocket, connection, stop], <<"/ws">>),
     gen_tcp:close(Socket),
     telemetry:detach(Id).
@@ -490,6 +492,10 @@ next_event(Event, Route) ->
     after 5000 ->
             ct:fail({no_event, Event, Route})
     end.
+
+assert_no_arguments(#{stacktrace := Stacktrace}) ->
+    ?assertMatch([_ | _], Stacktrace),
+    ?assertEqual([], [Entry || {_, _, Arguments, _} = Entry <- Stacktrace, not is_integer(Arguments)]).
 
 assert_keys(Expected, Map) ->
     ?assertEqual(lists:sort(Expected), lists:sort(maps:keys(Map))).

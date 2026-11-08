@@ -35,16 +35,14 @@ run_plugins([{Callback, Options}|Tl], CallbackType, Req, Env) when is_function(C
                 undefined
         end,
 
-    Metadata = #{plugin => plugin_module(Callback),
-                 callback => CallbackType,
-                 app => maps:get(app, Env, undefined),
-                 route => maps:get(nova_route, Req, undefined)},
-    try telemetry:span([nova, plugin], Metadata,
-                       fun() ->
-                               Return = Callback(Req, Env, Options, State),
-                               {Return, Metadata#{result => plugin_result(Return)}}
-                       end) of
+    Span = nova_telemetry:start([nova, plugin],
+                                #{plugin => plugin_module(Callback),
+                                  callback => CallbackType,
+                                  app => maps:get(app, Env, undefined),
+                                  route => maps:get(nova_route, Req, undefined)}),
+    try Callback(Req, Env, Options, State) of
         Result ->
+            nova_telemetry:stop(Span, #{result => plugin_result(Result)}),
             set_state(Callback, Result),
             case Result of
                 {ok, Req0, _State0} ->
@@ -68,6 +66,7 @@ run_plugins([{Callback, Options}|Tl], CallbackType, Req, Env) when is_function(C
             end
     catch
         Class:Reason:Stacktrace ->
+            nova_telemetry:exception(Span, Class, Reason, Stacktrace),
             ?LOG_ERROR(#{msg => <<"Plugin crashed">>, class => Class, reason => Reason, stacktrace => Stacktrace}),
             Req0 = Req#{crash_info => #{class => Class,
                                         reason => Reason,
