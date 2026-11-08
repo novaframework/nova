@@ -1,4 +1,5 @@
 -module(nova_error_controller).
+-moduledoc false.
 -export([
          not_found/1,
          server_error/1,

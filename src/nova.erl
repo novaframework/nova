@@ -1,9 +1,7 @@
-%%% @author Niclas Axelsson <niclas@burbas.se>
-%%% @doc
-%%% Interface module for nova
-%%% @end
+%%% Author: Niclas Axelsson <niclas@burbas.se>
 
 -module(nova).
+-moduledoc "Interface module for nova".
 
 -include_lib("kernel/include/logger.hrl").
 
@@ -22,48 +20,26 @@
 -export_type([state/0]).
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Returns the name of the main bw-application (The one that started
-%% everything)
-%%
-%% @end
-%%--------------------------------------------------------------------
+-doc "Returns the name of the main bw-application (The one that started everything)".
 -spec get_main_app() -> {ok, Application :: atom()} | undefined.
 get_main_app() ->
     application:get_env(nova, bootstrap_application).
 
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Returns a proplist with all nova applications and their prefix. This
-%% function is useful when calulating dynamic routes.
-%%
-%% @end
-%%--------------------------------------------------------------------
+-doc "Returns a proplist with all nova applications and their prefix. This function is useful when calulating dynamic routes.".
 -spec get_apps() -> [{App :: atom(), Prefix :: list()}].
 get_apps() ->
     nova_router:compiled_apps().
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Returns which environment nova is started in. This fetches the
-%% environment-variable in sys.config for Nova and returns the value found.
-%% Defaults to: dev
-%%
-%% @end
-%%--------------------------------------------------------------------
+-doc "Returns which environment nova is started in. This fetches the environment-variable in sys.config for Nova and returns the value found. Defaults to: dev".
 -spec get_environment() -> any().
 get_environment() ->
     application:get_env(nova, environment, dev).
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Works as the regular application:get_env/3 but instead of giving
-%% a specific application we target the application that started
-%% nova.
-%%
-%% @end
-%%--------------------------------------------------------------------
+-doc "Works as the regular application:get_env/3 but instead of giving a specific application we target the application that started nova.".
 -spec get_env(Parameter :: atom(), Default :: any()) -> term() | undefined.
 get_env(Parameter, Default) ->
     case get_main_app() of
@@ -75,11 +51,7 @@ get_env(Parameter, Default) ->
 
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Sets an environment variable for the main application.
-%%
-%% @end
-%%--------------------------------------------------------------------
+-doc "Sets an environment variable for the main application.".
 -spec set_env(Key :: atom(), Value :: any()) -> ok | {error, main_app_not_found}.
 set_env(Key, Value) ->
     case get_main_app() of
@@ -91,12 +63,7 @@ set_env(Key, Value) ->
 
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Enables or disables stacktraces. This is a global setting and
-%% affects all requests. If stacktraces are enabled, nova will
-%% try to print a stacktrace when an exception is thrown.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Enables or disables stacktraces. This is a global setting and affects all requests. If stacktraces are enabled, nova will try to print a stacktrace when an exception is thrown.".
 -spec use_stacktrace(Enable :: boolean()) -> ok.
 use_stacktrace(true) ->
     persistent_term:put(nova_use_stacktrace, true);
@@ -105,12 +72,7 @@ use_stacktrace(_) ->
 
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Formats a stacktrace into a list of maps. Each map contains
-%% the module, function, arity, file, and line number of the
-%% function call.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Formats a stacktrace into a list of maps. Each map contains the module, function, arity, file, and line number of the function call.".
 -spec format_stacktrace(Stacktrace :: [{M :: atom(), F :: atom(), A :: integer(), Info :: list()}])
                        -> [map()].
 format_stacktrace(Stacktrace) ->
@@ -125,11 +87,7 @@ format_stacktrace(Stacktrace) ->
 
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Detects the language Nova is running in. It checks for the presence
-%% of the Elixir and LFE modules, and returns the language.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Detects the language Nova is running in. It checks for the presence of the Elixir and LFE modules, and returns the language.".
 -spec detect_language() -> elixir | lfe | erlang.
 detect_language() ->
     case {code:which('Elixir.System'), code:which(lfe_eval)} of

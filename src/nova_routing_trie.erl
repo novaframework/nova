@@ -1,31 +1,20 @@
 %%%-------------------------------------------------------------------
-%%% @author Niclas Axelsson <niclas@burbas.se>
-%%% @doc
-%%% Host-aware routing trie. This is Nova's dispatch table: a map from
-%%% host to a tree of path segments, where each terminal node holds one
-%%% payload per comparator (HTTP method).
-%%%
-%%% Paths are declared with three kinds of segment:
-%%%
-%%% <ul>
-%%%   <li>`"/users"' - a literal segment.</li>
-%%%   <li>`"/users/:id"' - a binding. Matches one segment and binds it
-%%%       under `&lt;&lt;"id"&gt;&gt;' in the returned bindings map.</li>
-%%%   <li>`"/assets/[...]"' - a catch-all. Matches zero or more trailing
-%%%       segments, which are returned as `PathInfo'. Only valid as the
-%%%       last segment of a path.</li>
-%%% </ul>
-%%%
-%%% A path may also be an integer, in which case it denotes an HTTP status
-%%% code rather than a URL. Nova uses this to register error pages.
-%%%
-%%% Matching is deterministic: at each depth a literal segment is tried
-%%% first, then each binding in name order, then the catch-all. Matching
-%%% backtracks, so `"/a/:x/c"' still matches `"/a/b/c"' even when a
-%%% `"/a/b/d"' route exists.
-%%% @end
+%%% Author: Niclas Axelsson <niclas@burbas.se>
 %%%-------------------------------------------------------------------
 -module(nova_routing_trie).
+-moduledoc """
+Host-aware routing trie. This is Nova's dispatch table: a map from host to a tree of path segments, where each terminal node holds one payload per comparator (HTTP method).
+
+Paths are declared with three kinds of segment:
+
+* `"/users"` \- a literal segment.
+* `"/users/:id"` \- a binding. Matches one segment and binds it under `&lt;&lt;"id"&gt;&gt;` in the returned bindings map.
+* `"/assets/[...]"` \- a catch-all. Matches zero or more trailing segments, which are returned as `PathInfo`. Only valid as the last segment of a path.
+
+A path may also be an integer, in which case it denotes an HTTP status code rather than a URL. Nova uses this to register error pages.
+
+Matching is deterministic: at each depth a literal segment is tried first, then each binding in name order, then the catch-all. Matching backtracks, so `"/a/:x/c"` still matches `"/a/b/c"` even when a `"/a/b/d"` route exists.
+""".
 
 -export([
          new/0,
@@ -112,26 +101,17 @@ new() ->
     new(#{}).
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Create an empty trie. Recognised options are `strict' (also accepted
-%% as `use_strict' for compatibility) and `on_duplicate', which is either
-%% `keep_first' (the default) or `overwrite'.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Create an empty trie. Recognised options are `strict` (also accepted as `use_strict` for compatibility) and `on_duplicate`, which is either `keep_first` (the default) or `overwrite`.".
 -spec new(map()) -> trie().
 new(Opts) when is_map(Opts) ->
     #{options => norm_options(Opts), hosts => #{}}.
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Insert a route. `Path' is a URL or an HTTP status code, `Comparator'
-%% is an HTTP method or `'_'' to match any method.
-%%
-%% Returns `{error, conflict, Conflict}' when the trie is in strict mode
-%% and the route clashes with an existing one. In non-strict mode a clash
-%% is logged and resolved according to the `on_duplicate' option.
-%% @end
-%%--------------------------------------------------------------------
+-doc """
+Insert a route. `Path` is a URL or an HTTP status code, `Comparator` is an HTTP method or \`_'' to match any method.
+
+Returns `{error, conflict, Conflict}` when the trie is in strict mode and the route clashes with an existing one. In non-strict mode a clash is logged and resolved according to the `on_duplicate` option.
+""".
 -spec insert(path(), comparator_in(), payload(), trie()) ->
           {ok, trie()} | {error, conflict, conflict()}.
 insert(Path, Comparator, Payload, Trie) ->
@@ -158,17 +138,13 @@ insert(HostIn, Path, ComparatorIn, Payload, Trie = #{options := RootOpts, hosts 
     end.
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Look up a route.
-%%
-%% A host-specific tree is consulted when one exists for `Host', and the
-%% `'_'' tree otherwise. `PathInfo' is only returned when the match was
-%% made by a `[...]' catch-all and there were trailing segments to report.
-%%
-%% `{error, comparator_not_found, AllowedMethods}' means the path matched
-%% but the method did not, which is what Nova turns into a 405.
-%% @end
-%%--------------------------------------------------------------------
+-doc """
+Look up a route.
+
+A host-specific tree is consulted when one exists for `Host`, and the \`_'' tree otherwise. `PathInfo` is only returned when the match was made by a `[...]` catch-all and there were trailing segments to report.
+
+`{error, comparator_not_found, AllowedMethods}` means the path matched but the method did not, which is what Nova turns into a 405.
+""".
 -spec find(host_in(), path(), comparator_in(), trie()) ->
           {ok, bindings(), payload()} |
           {ok, bindings(), payload(), PathInfo :: [binary()]} |
@@ -207,23 +183,13 @@ member(HostIn, Path, Comparator, Trie) ->
     end.
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Every route in the trie, as `{Host, Path, Comparator, Payload}'. This
-%% is the supported way to introspect a dispatch table; the trie itself is
-%% opaque. The result can be fed straight back into {@link from_list/1}.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Every route in the trie, as `{Host, Path, Comparator, Payload}`. This is the supported way to introspect a dispatch table; the trie itself is opaque. The result can be fed straight back into `from_list/1`.".
 -spec routes(trie()) -> [route()].
 routes(#{hosts := Hosts}) ->
     gather_routes(maps:to_list(Hosts), []).
 
 %%--------------------------------------------------------------------
-%% @doc
-%% A flat, human-readable listing of the routing table, one entry per
-%% method and path. Payloads are not included - use {@link routes/1} when
-%% you need them.
-%% @end
-%%--------------------------------------------------------------------
+-doc "A flat, human-readable listing of the routing table, one entry per method and path. Payloads are not included - use `routes/1` when you need them.".
 -spec to_list(trie()) -> [binary()].
 to_list(Trie) ->
     [render_route(Comparator, Path) || {_Host, Path, Comparator, _Payload} <- routes(Trie)].
@@ -237,13 +203,7 @@ from_list(Routes, RootOpts) when is_list(Routes), is_map(RootOpts) ->
     insert_routes(Routes, new(RootOpts)).
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Rebuild the trie from a transformation of its routes. `Fun' is handed
-%% every route in the table and returns the routes the new table should
-%% contain, which makes it the way to filter or rewrite the dispatch table
-%% wholesale.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Rebuild the trie from a transformation of its routes. `Fun` is handed every route in the table and returns the routes the new table should contain, which makes it the way to filter or rewrite the dispatch table wholesale.".
 -spec foldl(trie(), fun(([route()]) -> [route()])) ->
           {ok, trie()} | {error, conflict, conflict()}.
 foldl(Trie = #{options := Options}, Fun) when is_function(Fun, 1) ->

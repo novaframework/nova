@@ -1,14 +1,10 @@
 %%%-------------------------------------------------------------------
-%%% @doc
-%%% Behaviour for a `nova_multipart_plugin' file sink, configured as
-%%% `{Mod, InitArgs}'. Chunks arrive straight off the socket, so a handler
-%%% that writes each one away keeps memory flat regardless of upload size.
-%%%
-%%% Every field of `part_info()' is client controlled. Never build a
-%%% filesystem path from `filename' and never trust `content_type'.
-%%% @end
-%%%-------------------------------------------------------------------
 -module(nova_multipart_handler).
+-moduledoc """
+Behaviour for a `nova_multipart_plugin` file sink, configured as `{Mod, InitArgs}`. Chunks arrive straight off the socket, so a handler that writes each one away keeps memory flat regardless of upload size.
+
+Every field of `part_info()` is client controlled. Never build a filesystem path from `filename` and never trust `content_type`.
+""".
 
 -export_type([part_info/0]).
 

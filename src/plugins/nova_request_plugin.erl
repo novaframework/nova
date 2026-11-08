@@ -1,4 +1,5 @@
 -module(nova_request_plugin).
+-moduledoc false.
 -behaviour(nova_plugin).
 
 -export([
@@ -8,10 +9,7 @@
         ]).
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Pre-request callback
-%% @end
-%%--------------------------------------------------------------------
+-doc "Pre-request callback".
 -spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
                          {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
                          {stop, Req0 :: cowboy_req:req(), NewState :: any()}.
@@ -20,10 +18,7 @@ pre_request(Req, _Env, Options, State) ->
     modulate_state(read_request_body(Req, ListOptions), ListOptions, State).
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Post-request callback
-%% @end
-%%--------------------------------------------------------------------
+-doc "Post-request callback".
 -spec post_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
           {ok, Req0 :: cowboy_req:req(), NewState :: any()}.
 post_request(Req, _Env, _Options, State) ->
@@ -31,10 +26,7 @@ post_request(Req, _Env, _Options, State) ->
 
 
 %%--------------------------------------------------------------------
-%% @doc
-%% nova_plugin callback. Returns information about the plugin.
-%% @end
-%%--------------------------------------------------------------------
+-doc "nova_plugin callback. Returns information about the plugin.".
 -spec plugin_info() -> #{title := binary(),
                          version := binary(),
                          url := binary(),

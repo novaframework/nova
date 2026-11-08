@@ -1,4 +1,5 @@
 -module(nova_handler).
+-moduledoc false.
 -behaviour(cowboy_middleware).
 
 %% Callbacks

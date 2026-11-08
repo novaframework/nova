@@ -1,4 +1,5 @@
 -module(nova_stream_h).
+-moduledoc false.
 -behavior(cowboy_stream).
 
 -export([

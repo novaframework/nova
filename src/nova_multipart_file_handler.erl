@@ -1,21 +1,12 @@
 %%%-------------------------------------------------------------------
-%%% @doc
-%%% `nova_multipart_handler' that streams a file part to disk under a random
-%%% name in `InitArgs' `dir'. The client filename is never used in the path.
-%%% The part is written as `<name>.part' and renamed on handle_end/1, so a
-%%% file at its final name is always complete. Sweep `dir' for stale
-%%% `*.part' files left by a process crash.
-%%%
-%%% Only a client extension listed in `extensions' is kept on the stored
-%%% name, lowercased. It is an allowlist because `dir' may be served by a
-%%% web server, where a stored `.html' or `.svg' is stored XSS. Anything
-%%% else is dropped, not rejected: the extension is client controlled and
-%%% says nothing about the bytes.
-%%%
-%%% Result: `#{path => Path}'.
-%%% @end
-%%%-------------------------------------------------------------------
 -module(nova_multipart_file_handler).
+-moduledoc """
+`nova_multipart_handler` that streams a file part to disk under a random name in `InitArgs``dir`. The client filename is never used in the path. The part is written as `<name>.part` and renamed on handle_end/1, so a file at its final name is always complete. Sweep `dir` for stale `*.part` files left by a process crash.
+
+Only a client extension listed in `extensions` is kept on the stored name, lowercased. It is an allowlist because `dir` may be served by a web server, where a stored `.html` or `.svg` is stored XSS. Anything else is dropped, not rejected: the extension is client controlled and says nothing about the bytes.
+
+Result: `#{path => Path}`.
+""".
 -behaviour(nova_multipart_handler).
 
 -export([init/2, handle_data/2, handle_end/1, handle_abort/2]).

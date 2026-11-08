@@ -1,10 +1,6 @@
-%%% @author Niclas Axelsson <niclas@burbas.se>
-%%% @doc
-%%% All kind of operations on sessions is handled by the nova_session-module. The module also
-%%% presents a behaviour that can be used to create customized backends for the session-data.
-%%%
-%%% @end
+%%% Author: Niclas Axelsson <niclas@burbas.se>
 -module(nova_session).
+-moduledoc "All kind of operations on sessions is handled by the nova_session-module. The module also presents a behaviour that can be used to create customized backends for the session-data.".
 -export([
          get/2,
          set/3,

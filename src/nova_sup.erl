@@ -1,19 +1,13 @@
-%%% @author Niclas Axelsson <niclas@burbas.se>
-%%% @doc
-%%% Nova supervisor.
-%%%
-%%% Owns the Cowboy listeners. The bootstrap application gets one at startup
-%%% from the `cowboy_configuration' key, and further applications can be
-%%% started and stopped at runtime with {@link add_application/2} and
-%%% {@link remove_application/1}.
-%%%
-%%% Each listener owns its own routing table, so an application started on a
-%%% second port serves only its own routes. Applications added to a listener
-%%% that is already bound to the same host and port share that listener's
-%%% table instead.
-%%% @end
+%%% Author: Niclas Axelsson <niclas@burbas.se>
 
 -module(nova_sup).
+-moduledoc """
+Nova supervisor.
+
+Owns the Cowboy listeners. The bootstrap application gets one at startup from the `cowboy_configuration` key, and further applications can be started and stopped at runtime with `add_application/2` and `remove_application/1`.
+
+Each listener owns its own routing table, so an application started on a second port serves only its own routes. Applications added to a listener that is already bound to the same host and port share that listener's table instead.
+""".
 
 -behaviour(supervisor).
 
@@ -55,25 +49,17 @@
 %%%===================================================================
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Starts the supervisor
-%%
-%% @end
-%%--------------------------------------------------------------------
+-doc "Starts the supervisor".
 -spec start_link() -> {ok, Pid :: pid()} | ignore | {error, Error :: any()}.
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Start a Nova application at runtime.
-%%
-%% `Configuration' takes the same shape as the `cowboy_configuration'
-%% environment key. If a listener is already bound to the requested host and
-%% port, the application's routes are added to that listener's routing table.
-%% Otherwise a new listener is started with a routing table of its own.
-%% @end
-%%--------------------------------------------------------------------
+-doc """
+Start a Nova application at runtime.
+
+`Configuration` takes the same shape as the `cowboy_configuration` environment key. If a listener is already bound to the requested host and port, the application's routes are added to that listener's routing table. Otherwise a new listener is started with a routing table of its own.
+""".
 -spec add_application(App :: atom(), Configuration :: map()) ->
           {ok, App :: atom(), Host :: inet:ip_address() | string(), Port :: inet:port_number()} |
           {error, Reason :: any()}.
@@ -88,11 +74,7 @@ add_application(App, Configuration) ->
     end.
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Stop a Nova application. Its routes are removed from the listener serving
-%% it, and the listener itself is stopped once no applications are left on it.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Stop a Nova application. Its routes are removed from the listener serving it, and the listener itself is stopped once no applications are left on it.".
 -spec remove_application(App :: atom()) -> ok | {error, not_found}.
 remove_application(App) ->
     case [L || L = #nova_listener{apps = Apps} <- all_listeners(), lists:member(App, Apps)] of
@@ -105,10 +87,7 @@ remove_application(App) ->
     end.
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Every started Nova application, with the listener serving it.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Every started Nova application, with the listener serving it.".
 -spec get_started_applications() -> [#{app := atom(),
                                        host := inet:ip_address() | string(),
                                        port := inet:port_number(),
@@ -119,11 +98,7 @@ get_started_applications() ->
         App <- Apps].
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Every Cowboy listener Nova has started. Used by the graceful shutdown in
-%% nova_app, which has to drain all of them and not just the first.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Every Cowboy listener Nova has started. Used by the graceful shutdown in nova_app, which has to drain all of them and not just the first.".
 -spec listeners() -> [ranch:ref()].
 listeners() ->
     [Ref || #nova_listener{ref = Ref} <- all_listeners()].
@@ -133,15 +108,11 @@ listeners() ->
 %%%===================================================================
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Whenever a supervisor is started using supervisor:start_link/[2,3],
 %% this function is called by the new process to find out about
 %% restart strategy, maximum restart intensity, and child
 %% specifications.
-%%
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 init([]) ->
     %% This is a bit ugly, but we need to do this anyhow(?)
     SupFlags = #{strategy => one_for_one,
@@ -433,11 +404,7 @@ get_version(Application) ->
             not_found
     end.
 
-%% @doc Recursively resolve nested nova_apps.
-%% Each nova_app can declare its own nova_apps dependencies.
-%% Dependencies are resolved depth-first so child app routes
-%% are registered before the parent. An application already resolved is
-%% skipped, so a cycle terminates.
+-doc "Recursively resolve nested nova_apps. Each nova_app can declare its own nova_apps dependencies. Dependencies are resolved depth-first so child app routes are registered before the parent. An application already resolved is skipped, so a cycle terminates.".
 -spec resolve_nova_apps([nova_app()]) -> [nova_app()].
 resolve_nova_apps(Apps) ->
     {Resolved, _Seen} = resolve_nova_apps(Apps, [], []),

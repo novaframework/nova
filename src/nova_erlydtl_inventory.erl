@@ -1,4 +1,5 @@
 -module(nova_erlydtl_inventory).
+-moduledoc false.
 -behaviour(erlydtl_library).
 
 -include_lib("kernel/include/logger.hrl").

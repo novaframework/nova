@@ -1,11 +1,9 @@
 %%%-------------------------------------------------------------------
-%%% @author Niclas Axelsson <niclas@burbas.se>
-%%% @doc
-%%% Main manager for handling plugins
-%%% @end
+%%% Author: Niclas Axelsson <niclas@burbas.se>
 %%% Created : 10 Aug 2024 by Niclas Axelsson <niclas@burbas.se>
 %%%-------------------------------------------------------------------
 -module(nova_plugin_manager).
+-moduledoc "Main manager for handling plugins".
 
 -behaviour(gen_server).
 
@@ -47,10 +45,7 @@
 %%%===================================================================
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Starts the server
-%% @end
-%%--------------------------------------------------------------------
+-doc "Starts the server".
 -spec start_link() -> {ok, Pid :: pid()} |
           {error, Error :: {already_started, pid()}} |
           {error, Error :: term()} |
@@ -59,13 +54,9 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Adds a plugin to the manager. The plugin module must implement
-%% the plugin_info/0 function returning #{title := Title, version := Version}.
-%% Optionally it can implement init/0 returning the initial state
-%% for the plugin, and stop/0 for cleaning up when the manager
-%% terminates.
-%% @end
+-doc """
+Adds a plugin to the manager. The plugin module must implement the plugin_info/0 function returning #\{title := Title, version := Version\}. Optionally it can implement init/0 returning the initial state for the plugin, and stop/0 for cleaning up when the manager terminates.
+""".
 -spec add_plugin({Class :: atom(), Module :: atom(), Opts :: map()} |
                  Module :: atom() | Callback :: function()) ->
             ok | {error, Reason :: term()}.
@@ -94,12 +85,7 @@ add_plugin(Module, Name, Version) ->
     end.
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Gets the state of a plugin. The plugin can be specified
-%% either as a module or as a callback function. The callback function
-%% is used to extract the module name in order to retrieve the state.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Gets the state of a plugin. The plugin can be specified either as a module or as a callback function. The callback function is used to extract the module name in order to retrieve the state.".
 -spec get_state(Module :: atom() | Callback :: function()) ->
           {ok, State :: nova:state()} | {error, not_found}.
 get_state(Module) when is_atom(Module) ->
@@ -117,12 +103,7 @@ get_state(Callback) when is_function(Callback) ->
 
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Sets the state of a plugin. The plugin can be specified
-%% either as a module or as a callback function. The callback function
-%% is used to extract the module name in order to set the state.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Sets the state of a plugin. The plugin can be specified either as a module or as a callback function. The callback function is used to extract the module name in order to set the state.".
 -spec set_state(Module :: atom() | Callback :: function(),
                           NewState :: term()) ->
           ok | {error, not_found}.
@@ -144,11 +125,8 @@ set_state(Callback, NewState) when is_function(Callback) ->
 %%%===================================================================
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Initializes the server
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec init(Args :: term()) -> {ok, State :: term()} |
           {ok, State :: term(), Timeout :: timeout()} |
           {ok, State :: term(), hibernate} |
@@ -162,11 +140,8 @@ init([]) ->
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Handling call messages
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec handle_call(Request :: term(), From :: {pid(), term()}, State :: term()) ->
           {reply, Reply :: term(), NewState :: term()} |
           {reply, Reply :: term(), NewState :: term(), Timeout :: timeout()} |
@@ -185,11 +160,8 @@ handle_call(_Request, _From, State) ->
     {reply, Reply, State}.
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Handling cast messages
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec handle_cast(Request :: term(), State :: term()) ->
           {noreply, NewState :: term()} |
           {noreply, NewState :: term(), Timeout :: timeout()} |
@@ -211,11 +183,8 @@ handle_cast(_Request, State) ->
     {noreply, State}.
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Handling all non call/cast messages
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec handle_info(Info :: timeout() | term(), State :: term()) ->
           {noreply, NewState :: term()} |
           {noreply, NewState :: term(), Timeout :: timeout()} |
@@ -225,14 +194,11 @@ handle_info(_Info, State) ->
     {noreply, State}.
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% This function is called by a gen_server when it is about to
 %% terminate. It should be the opposite of Module:init/1 and do any
 %% necessary cleaning up. When it returns, the gen_server terminates
 %% with Reason. The return value is ignored.
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
                 State :: term()) -> any().
 terminate(_Reason, _State) ->
@@ -244,11 +210,8 @@ terminate(_Reason, _State) ->
     ok.
 
 %%--------------------------------------------------------------------
-%% @private
-%% @doc
 %% Convert process state when code is changed
-%% @end
-%%--------------------------------------------------------------------
+-doc false.
 -spec code_change(OldVsn :: term() | {down, term()},
                   State :: term(),
                   Extra :: term()) -> {ok, NewState :: term()} |

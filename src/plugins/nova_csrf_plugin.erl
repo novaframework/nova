@@ -1,19 +1,18 @@
-%% @doc CSRF protection plugin for Nova using the synchronizer token pattern.
-%%
-%% Generates a random token per session, stores it server-side, and validates
-%% it on state-changing requests (POST, PUT, PATCH, DELETE).
-%%
-%% <b>Important:</b> `nova_request_plugin' must run before this plugin so that
-%% form params are parsed into the `params' key of the request map.
-%%
-%% == Options ==
-%% <ul>
-%%   <li>`field_name' — form field name (default `<<"_csrf_token">>')</li>
-%%   <li>`header_name' — header name (default `<<"x-csrf-token">>')</li>
-%%   <li>`session_key' — session storage key (default `<<"_csrf_token">>')</li>
-%%   <li>`excluded_paths' — list of path prefixes to skip (default `[]')</li>
-%% </ul>
 -module(nova_csrf_plugin).
+-moduledoc """
+CSRF protection plugin for Nova using the synchronizer token pattern.
+
+Generates a random token per session, stores it server-side, and validates it on state-changing requests (POST, PUT, PATCH, DELETE).
+
+__Important:__`nova_request_plugin` must run before this plugin so that form params are parsed into the `params` key of the request map.
+
+### Options
+
+* `field_name` — form field name (default `<<"_csrf_token">>`)
+* `header_name` — header name (default `<<"x-csrf-token">>`)
+* `session_key` — session storage key (default `<<"_csrf_token">>`)
+* `excluded_paths` — list of path prefixes to skip (default `[]`)
+""".
 -behaviour(nova_plugin).
 
 -export([
@@ -33,12 +32,7 @@
 -endif.
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Pre-request callback. On safe methods, ensures a CSRF token exists
-%% in the session and injects it into the Req map. On unsafe methods,
-%% validates the submitted token against the session token.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Pre-request callback. On safe methods, ensures a CSRF token exists in the session and injects it into the Req map. On unsafe methods, validates the submitted token against the session token.".
 -spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
     {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
     {stop, nova_plugin:reply(), Req0 :: cowboy_req:req(), NewState :: any()}.
@@ -55,20 +49,14 @@ pre_request(Req = #{method := Method, path := Path}, _Env, Options, State) ->
     end.
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Post-request callback. Pass-through.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Post-request callback. Pass-through.".
 -spec post_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
     {ok, Req0 :: cowboy_req:req(), NewState :: any()}.
 post_request(Req, _Env, _Options, State) ->
     {ok, Req, State}.
 
 %%--------------------------------------------------------------------
-%% @doc
-%% Plugin info callback.
-%% @end
-%%--------------------------------------------------------------------
+-doc "Plugin info callback.".
 -spec plugin_info() -> #{title := binary(),
                          version := binary(),
                          url := binary(),
