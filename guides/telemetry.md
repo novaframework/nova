@@ -3,8 +3,9 @@
 Nova emits [`telemetry`](https://hex.pm/packages/telemetry) events for the
 work it does on top of Cowboy: controllers, plugins, websocket controllers and
 pubsub broadcasts. Attach a handler to turn them into metrics, traces or logs.
-[opentelemetry_nova](https://github.com/novaframework/opentelemetry_nova) is
-built on these events.
+Instrumentation libraries such as
+[opentelemetry_nova](https://github.com/novaframework/opentelemetry_nova) can
+consume them.
 
 ```erlang
 ok = telemetry:attach(my_app_controller_stop,
@@ -75,8 +76,8 @@ Plugins and the security callback are outside it.
   - A crash emits `exception` for the controller, followed by a `stop` for
     the `500` page with `status_page => true`.
   - A status raised as `{Status, Reason}` emits `stop` for the controller,
-    followed by a `stop` for the status page when the application routes
-    that status code.
+    followed by a `stop` for the status page when a route exists for that
+    status code. Nova routes `404` and `500` itself.
   - A controller that returns something Nova cannot handle emits the status
     page `stop` nested inside its own span.
 
@@ -102,15 +103,17 @@ A span around each `pre_request` and `post_request` plugin call.
 
 - `plugin` is the plugin module.
 - `callback` is `pre_request` or `post_request`.
-- `result` is `ok`, `break` or `stop`: the first element of what the plugin
-  returned.
+- `result` is `ok`, `break` or `stop`, the first element of what the plugin
+  returned, or `invalid` when the plugin returned anything else.
 - A crashing plugin still renders a `500` page after the `exception` event.
 
 ## Websocket
 
 `[nova, websocket, handle, start | stop | exception]`
 
-A span around each call into a websocket controller.
+A span around each `websocket_init/1`, `websocket_handle/2` and
+`websocket_info/2` call into a websocket controller. The controller's
+`init/1`, which runs before the upgrade, and `terminate/3` are not wrapped.
 
 | Event | Measurements | Metadata |
 |-------|--------------|----------|

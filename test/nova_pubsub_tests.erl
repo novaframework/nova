@@ -171,18 +171,27 @@ broadcast_emits_telemetry() ->
     Channel = make_channel(),
     Pid = spawn_member(Channel),
     nova_pubsub:join(Channel),
-    ok = nova_pubsub:broadcast(Channel, <<"t">>, secret_payload),
-    ?assertEqual({#{receivers => 2}, #{channel => Channel, topic => <<"t">>, scope => global}},
-                 telemetry_event()),
-    ok = nova_pubsub:local_broadcast(Channel, <<"t">>, secret_payload),
-    ?assertEqual({#{receivers => 2}, #{channel => Channel, topic => <<"t">>, scope => local}},
-                 telemetry_event()),
-    telemetry:detach(Id),
-    cleanup_pids([Pid]),
-    nova_pubsub:leave(Channel).
+    try
+        ok = nova_pubsub:broadcast(Channel, ~"t", secret_payload),
+        ?assertEqual({#{receivers => 2}, #{channel => Channel, topic => ~"t", scope => global}},
+                     telemetry_event()),
+        ok = nova_pubsub:local_broadcast(Channel, ~"t", secret_payload),
+        ?assertEqual({#{receivers => 2}, #{channel => Channel, topic => ~"t", scope => local}},
+                     telemetry_event())
+    after
+        telemetry:detach(Id),
+        cleanup_pids([Pid]),
+        nova_pubsub:leave(Channel),
+        flush_envelopes()
+    end.
 
 forward_event(Event, Measurements, Metadata, Pid) ->
     Pid ! {telemetry, Event, Measurements, Metadata}.
+
+flush_envelopes() ->
+    receive #nova_pubsub{} -> flush_envelopes()
+    after 0 -> ok
+    end.
 
 telemetry_event() ->
     receive
