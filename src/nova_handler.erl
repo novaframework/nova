@@ -105,16 +105,16 @@ terminate(Reason, Req, Callback) ->
 run_controller(Callback, Req, Env) ->
     {module, Module} = erlang:fun_info(Callback, module),
     {name, Action} = erlang:fun_info(Callback, name),
+    Metadata = request_metadata(Req),
     Span = nova_telemetry:start([nova, controller],
-                                #{app => maps:get(app, Env, undefined),
-                                  controller => Module,
-                                  action => Action,
-                                  route => maps:get(nova_route, Req, undefined),
-                                  req => Req}),
+                                Metadata#{app => maps:get(app, Env, undefined),
+                                          controller => Module,
+                                          action => Action,
+                                          route => maps:get(nova_route, Req, undefined)}),
     try
         RetObj = Callback(Req),
         {ok, Req0, _Env0} = HandlerReturn = call_handler(Callback, Req, RetObj, Env, false),
-        nova_telemetry:stop(Span, #{req => Req0, status => maps:get(resp_status_code, Req0, 200)}),
+        nova_telemetry:stop(Span, #{status => maps:get(resp_status_code, Req0, 200)}),
         HandlerReturn
     catch
         throw:{Status, _} = Reason:Stacktrace when is_integer(Status) ->
@@ -124,6 +124,14 @@ run_controller(Callback, Req, Env) ->
             nova_telemetry:exception(Span, Class, Reason, Stacktrace),
             erlang:raise(Class, Reason, Stacktrace)
     end.
+
+request_metadata(Req) ->
+    #{method => maps:get(method, Req, undefined),
+      path => maps:get(path, Req, undefined),
+      host => maps:get(host, Req, undefined),
+      scheme => maps:get(scheme, Req, undefined),
+      version => maps:get(version, Req, undefined),
+      peer => maps:get(peer, Req, undefined)}.
 
 -spec execute_fallback(Callback :: function(), Req :: cowboy_req:req(), Response :: any(), Env :: map()) ->
           {ok, Req0 :: cowboy_req:req(), Env :: map()}.

@@ -367,7 +367,8 @@ route_template_websocket(Config) ->
 %% Telemetry
 %%====================================================================
 
--define(CONTROLLER_META, [app, controller, action, route, req, telemetry_span_context]).
+-define(CONTROLLER_META, [app, controller, action, route, method, path, host, scheme, version, peer,
+                          telemetry_span_context]).
 -define(PLUGIN_META, [plugin, callback, app, route, telemetry_span_context]).
 -define(WS_HANDLE_META, [callback, module, app, route, telemetry_span_context]).
 -define(WS_CONNECTION_META, [module, app, route, telemetry_span_context]).
@@ -382,13 +383,16 @@ telemetry_controller_and_plugins(Config) ->
     {StartM, Start} = next_event([nova, controller, start], Route),
     assert_keys([monotonic_time, system_time], StartM),
     assert_keys(?CONTROLLER_META, Start),
-    ?assertMatch(#{app := nova_test_app, controller := nova_test_app_controller,
-                   action := echo, req := #{path := <<"/echo/42">>}}, Start),
+    ?assertMatch(#{app := nova_test_app, controller := nova_test_app_controller, action := echo,
+                   method := <<"GET">>, path := <<"/echo/42">>, host := <<"localhost">>,
+                   scheme := <<"http">>, version := 'HTTP/1.1', peer := {_, _}}, Start),
+    ?assertNot(maps:is_key(req, Start)),
 
     {StopM, Stop} = next_event([nova, controller, stop], Route),
     assert_keys([duration, monotonic_time], StopM),
     assert_keys([status | ?CONTROLLER_META], Stop),
     ?assertMatch(#{status := 200, action := echo}, Stop),
+    ?assertNot(maps:is_key(req, Stop)),
 
     [begin
          {PStartM, PStart} = next_event([nova, plugin, start], Route),

@@ -25,12 +25,6 @@ request as a whole belongs to Cowboy; use
 [cowboy_telemetry](https://hex.pm/packages/cowboy_telemetry) or a Cowboy stream
 handler for it.
 
-> #### Do not log `req` wholesale {: .warning}
->
-> The `req` in controller metadata is the full Cowboy request map. It carries
-> headers, including `authorization` and `cookie`. Pick the fields a handler
-> needs and never log or export the whole map.
-
 ## Conventions
 
 - Measurements are in `native` time units. Convert with
@@ -47,8 +41,10 @@ handler for it.
   [The matched route](routing.md#the-matched-route). It is `undefined` when no
   route matched, for example on a `404` rendered by the router.
 
-Metadata never contains plugin options or plugin state, websocket frame
-payloads or pubsub payloads. Those can hold secrets.
+Metadata never contains the request map, request or response bodies, plugin
+options or plugin state, websocket frame payloads or pubsub payloads. Those
+can hold credentials (`authorization` and `cookie` headers, decoded form and
+JSON bodies, uploaded files) and other secrets.
 
 The catalogue below is a public contract. New metadata keys may be added in a
 minor release; renaming or removing an event or a key is a breaking change.
@@ -62,12 +58,14 @@ Plugins and the security callback are outside it.
 
 | Event | Measurements | Metadata |
 |-------|--------------|----------|
-| `start` | `monotonic_time`, `system_time` | `app`, `controller`, `action`, `route`, `req` |
-| `stop` | `duration`, `monotonic_time` | start metadata, `status`; `req` is the request after the controller ran |
+| `start` | `monotonic_time`, `system_time` | `app`, `controller`, `action`, `route`, `method`, `path`, `host`, `scheme`, `version`, `peer` |
+| `stop` | `duration`, `monotonic_time` | start metadata, `status` |
 | `exception` | `duration`, `monotonic_time` | start metadata, `kind`, `reason`, `stacktrace` |
 
 - `controller` is the module and `action` the function name of the route's
   callback.
+- `method`, `path`, `host`, `scheme`, `version` and `peer` are copied from
+  the Cowboy request. `path` is the raw path; use `route` as a label.
 - `status` is the response status code.
 - A controller that throws `{Status, Reason}` is asking Nova for a status
   page. That ends the span with `stop` and `status => Status`, not with
