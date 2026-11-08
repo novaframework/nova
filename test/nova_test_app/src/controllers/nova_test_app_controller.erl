@@ -10,6 +10,7 @@
          teapot/1,
          crash/1,
          forbidden/1,
+         gone/1,
          extra/1,
          secret/1,
          auth_data/1,
@@ -43,6 +44,9 @@ crash(Req) ->
 
 forbidden(_Req) ->
     throw({403, not_allowed}).
+
+gone(_Req) ->
+    erlang:error({410, gone}).
 
 extra(#{extra_state := ExtraState}) ->
     {json, #{answer => maps:get(answer, ExtraState, undefined)}}.

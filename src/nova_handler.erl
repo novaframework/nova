@@ -99,9 +99,8 @@ terminate(Reason, Req, Callback) ->
 %% INTERNAL FUNCTIONS %%
 %%%%%%%%%%%%%%%%%%%%%%%%
 
-%% throw:{Status, Reason} is how a controller asks for a status page, so it
-%% ends the span as a stop with that status. Everything is re-raised unchanged
-%% for execute/2 to render.
+%% {Status, Reason} raised in any class is how a controller asks execute/2 for
+%% a status page, so it ends the span as a stop with that status.
 run_controller(Callback, Req, Env) ->
     {module, Module} = erlang:fun_info(Callback, module),
     {name, Action} = erlang:fun_info(Callback, name),
@@ -117,9 +116,9 @@ run_controller(Callback, Req, Env) ->
         nova_telemetry:stop(Span, #{status => maps:get(resp_status_code, Req0, 200)}),
         HandlerReturn
     catch
-        throw:{Status, _} = Reason:Stacktrace when is_integer(Status) ->
+        Class:{Status, _} = Reason:Stacktrace when is_integer(Status) ->
             nova_telemetry:stop(Span, #{status => Status}),
-            erlang:raise(throw, Reason, Stacktrace);
+            erlang:raise(Class, Reason, Stacktrace);
         Class:Reason:Stacktrace ->
             nova_telemetry:exception(Span, Class, Reason, Stacktrace),
             erlang:raise(Class, Reason, Stacktrace)

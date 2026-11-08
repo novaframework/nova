@@ -48,7 +48,7 @@
          route_template_websocket/1,
          telemetry_controller_and_plugins/1,
          telemetry_controller_exception/1,
-         telemetry_controller_throw_is_a_stop/1,
+         telemetry_controller_status_is_a_stop/1,
          telemetry_websocket/1,
          telemetry_websocket_exception/1
         ]).
@@ -124,7 +124,7 @@ groups() ->
      {telemetry, [], [
                       telemetry_controller_and_plugins,
                       telemetry_controller_exception,
-                      telemetry_controller_throw_is_a_stop,
+                      telemetry_controller_status_is_a_stop,
                       telemetry_websocket,
                       telemetry_websocket_exception
                      ]}
@@ -421,18 +421,23 @@ telemetry_controller_exception(Config) ->
     ?assertMatch(#{app := nova, status := 500}, ErrorPage),
     telemetry:detach(Id).
 
-telemetry_controller_throw_is_a_stop(Config) ->
+telemetry_controller_status_is_a_stop(Config) ->
     Id = attach([[nova, controller, stop], [nova, controller, exception]]),
-    {403, _Headers, _Body} = get(Config, "/forbidden"),
-    {_StopM, Stop} = next_event([nova, controller, stop], <<"/forbidden">>),
-    ?assertMatch(#{action := forbidden, status := 403}, Stop),
-    receive
-        {telemetry, [nova, controller, exception], _, #{route := <<"/forbidden">>}} = Unexpected ->
-            ct:fail({unexpected_exception, Unexpected})
-    after 200 ->
-            ok
-    end,
-    telemetry:detach(Id).
+    try
+        [begin
+             {Status, _Headers, _Body} = get(Config, Path),
+             {_StopM, Stop} = next_event([nova, controller, stop], list_to_binary(Path)),
+             ?assertMatch(#{action := Action, status := Status}, Stop)
+         end || {Path, Action, Status} <- [{"/forbidden", forbidden, 403}, {"/gone", gone, 410}]],
+        %% Events are sent from the request process before it replies, so an
+        %% exception for these spans would already be in the mailbox.
+        ?assertEqual(none, receive
+                               {telemetry, [nova, controller, exception], _, _} = Unexpected -> Unexpected
+                           after 0 -> none
+                           end)
+    after
+        telemetry:detach(Id)
+    end.
 
 telemetry_websocket(Config) ->
     Id = attach([[nova, websocket, connection, start], [nova, websocket, connection, stop],

@@ -1,5 +1,7 @@
 -module(nova_handler_tests).
 -include_lib("eunit/include/eunit.hrl").
+
+-export([forward_event/4]).
 -include("../include/nova_router.hrl").
 
 -define(SETUP, fun() -> setup() end).
@@ -201,3 +203,40 @@ terminate_with_callback_test_() ->
         ?assertEqual(ok, nova_handler:terminate(normal, #{}, fun erlang:date/0))
     end}.
 
+
+%%====================================================================
+%% Telemetry
+%%====================================================================
+
+controller_status_telemetry_test_() ->
+    {setup,
+     fun() ->
+             {ok, _} = application:ensure_all_started(telemetry),
+             setup()
+     end,
+     fun cleanup/1,
+     fun() ->
+             Id = make_ref(),
+             ok = telemetry:attach_many(Id, [[nova, controller, stop], [nova, controller, exception]],
+                                        fun ?MODULE:forward_event/4, self()),
+             try
+                 [begin
+                      Callback = fun(_Req) -> erlang:raise(Class, {Status, nope}, []) end,
+                      Env = #{callback => Callback, app => test_app, secure => false, controller_data => #{}},
+                      {ok, Req1, _Env1} = nova_handler:execute(nova_test_helper:mock_req(~"GET", ~"/"), Env),
+                      ?assertEqual(Status, maps:get(resp_status_code, Req1)),
+                      receive
+                          {telemetry, Event, _Measurements, Metadata} ->
+                              ?assertEqual([nova, controller, stop], Event),
+                              ?assertEqual(Status, maps:get(status, Metadata))
+                      after 1000 ->
+                              error(no_event)
+                      end
+                  end || {Class, Status} <- [{throw, 403}, {error, 404}, {exit, 410}]]
+             after
+                 telemetry:detach(Id)
+             end
+     end}.
+
+forward_event(Event, Measurements, Metadata, Pid) ->
+    Pid ! {telemetry, Event, Measurements, Metadata}.

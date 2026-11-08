@@ -67,9 +67,9 @@ Plugins and the security callback are outside it.
 - `method`, `path`, `host`, `scheme`, `version` and `peer` are copied from
   the Cowboy request. `path` is the raw path; use `route` as a label.
 - `status` is the response status code.
-- A controller that throws `{Status, Reason}` is asking Nova for a status
-  page. That ends the span with `stop` and `status => Status`, not with
-  `exception`.
+- A controller that raises `{Status, Reason}` with an integer `Status`, as a
+  throw, error or exit, is asking Nova for a status page. That ends the span
+  with `stop` and `status => Status`, not with `exception`.
 - An error page Nova renders after a controller is a controller span of its
   own, with `app => nova`. When a controller crashes, the failing span ends
   with `exception` and the `500` page follows as a separate span. When a
