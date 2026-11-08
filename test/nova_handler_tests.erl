@@ -126,7 +126,7 @@ execute_cowboy_handler_crash_test_() ->
         Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
         Env = #{cowboy_handler => test_cowboy_handler2, arguments => #{}, app => test_app},
         {ok, Req1, _Env1} = nova_handler:execute(Req, Env),
-        ?assertEqual(404, maps:get(resp_status_code, Req1)),
+        ?assertEqual(500, maps:get(resp_status_code, Req1)),
         meck:unload(test_cowboy_handler2)
     end}.
 
@@ -138,9 +138,10 @@ execute_cowboy_handler_crash_with_stacktrace_test_() ->
         Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
         Env = #{cowboy_handler => test_cowboy_handler3, arguments => #{}, app => test_app},
         {ok, Req1, _Env1} = nova_handler:execute(Req, Env),
-        ?assertEqual(404, maps:get(resp_status_code, Req1)),
+        ?assertEqual(500, maps:get(resp_status_code, Req1)),
         CrashInfo = maps:get(crash_info, Req1),
         ?assert(maps:is_key(stacktrace, CrashInfo)),
+        ?assertEqual(500, maps:get(status_code, CrashInfo)),
         meck:unload(test_cowboy_handler3)
     end}.
 

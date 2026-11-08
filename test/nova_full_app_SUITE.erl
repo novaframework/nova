@@ -36,6 +36,7 @@
          pre_and_post_request_plugins_run/1,
          custom_not_found/1,
          controller_crash_is_a_500/1,
+         handler_init_crash_is_a_500/1,
          websocket_echo/1,
          sub_app_mounted_under_prefix/1,
          add_and_remove_application/1
@@ -88,7 +89,8 @@ groups() ->
                    ]},
      {errors, [parallel], [
                            custom_not_found,
-                           controller_crash_is_a_500
+                           controller_crash_is_a_500,
+                           handler_init_crash_is_a_500
                           ]},
      {websocket, [], [
                       websocket_echo
@@ -257,6 +259,10 @@ custom_not_found(Config) ->
 
 controller_crash_is_a_500(Config) ->
     {500, _Headers, _Body} = get(Config, "/crash").
+
+%% A Cowboy handler route whose init crashes is a server error, not a 404.
+handler_init_crash_is_a_500(Config) ->
+    {500, _Headers, _Body} = get(Config, "/ws-crash").
 
 %%====================================================================
 %% WebSocket

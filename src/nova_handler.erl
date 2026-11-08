@@ -33,18 +33,18 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
     catch
         Class:Reason:Stacktrace when UseStacktrace == true ->
             FormattedStacktrace = nova:format_stacktrace(Stacktrace),
-            Payload = #{status_code => 404,
+            Payload = #{status_code => 500,
                         stacktrace => FormattedStacktrace,
                         class => Class,
                         reason => Reason},
             ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class, reason => Reason, stacktrace => FormattedStacktrace}),
-            render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 404);
+            render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 500);
         Class:Reason ->
-            Payload = #{status_code => 404,
+            Payload = #{status_code => 500,
                         class => Class,
                         reason => Reason},
             ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class, reason => Reason}),
-            render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 404)
+            render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 500)
     end;
 execute(Req, Env = #{callback := Callback}) ->
     %% Ensure that the module exists and have the correct function exported
