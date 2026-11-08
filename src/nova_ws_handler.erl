@@ -60,7 +60,7 @@ websocket_info(Msg, State = #{mod := Mod}) ->
     handle_ws(Mod, websocket_info, [Msg], State).
 
 terminate(Reason, PartialReq, State) ->
-    stop_connection(Reason, State),
+    ok = stop_connection(Reason, State),
     terminate_controller(Reason, PartialReq, State).
 
 terminate_controller(Reason, PartialReq, State = #{controller_data := ControllerData, mod := Mod,
@@ -133,7 +133,7 @@ stop_connection(_Reason, _State) ->
 %% Only the tag: {remote, Code, Payload} carries what the client sent.
 reason_tag(Reason) when is_atom(Reason) ->
     Reason;
-reason_tag(Reason) when is_tuple(Reason), tuple_size(Reason) > 0, is_atom(element(1, Reason)) ->
+reason_tag(Reason) when is_atom(element(1, Reason)) ->
     element(1, Reason);
 reason_tag(_Reason) ->
     unknown.

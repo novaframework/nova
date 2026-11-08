@@ -91,8 +91,8 @@ plugin_module(Callback) ->
     {module, Module} = erlang:fun_info(Callback, module),
     Module.
 
-plugin_result(Return) when is_tuple(Return), tuple_size(Return) > 0 ->
-    result_tag(element(1, Return));
+plugin_result({Tag, _Req, _State})        -> result_tag(Tag);
+plugin_result({Tag, _Reply, _Req, _State}) -> result_tag(Tag);
 plugin_result(_Return) ->
     invalid.
 
