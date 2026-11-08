@@ -358,7 +358,10 @@ plugin_telemetry_results() ->
     Id = attach(),
     try
         [begin
-             P = fun(R, _Env, _Opts, _State) -> {Result, R, #{}} end,
+             P = case Shape of
+                     plain -> fun(R, _Env, _Opts, _State) -> {Result, R, #{}} end;
+                     reply -> fun(R, _Env, _Opts, _State) -> {Result, {reply, ~"body"}, R, #{}} end
+                 end,
              Req = (req([{pre_request, [plugin(P)]}]))#{nova_route => ~"/telemetry"},
              _ = nova_plugin_handler:execute(Req, env()),
              {_, Start} = next_event([nova, plugin, start]),
@@ -368,7 +371,7 @@ plugin_telemetry_results() ->
              {StopM, Stop} = next_event([nova, plugin, stop]),
              ?assert(is_integer(maps:get(duration, StopM))),
              ?assertEqual(Result, maps:get(result, Stop))
-         end || Result <- [ok, break, stop]]
+         end || Result <- [ok, break, stop], Shape <- [plain, reply]]
     after
         telemetry:detach(Id)
     end.
@@ -376,11 +379,13 @@ plugin_telemetry_results() ->
 plugin_telemetry_invalid_result() ->
     Id = attach(),
     try
-        P = fun(R, _Env, _Opts, _State) -> {error, R, #{}} end,
-        ?assertError({case_clause, _}, nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env())),
-        {_, _Start} = next_event([nova, plugin, start]),
-        {_, Stop} = next_event([nova, plugin, stop]),
-        ?assertEqual(invalid, maps:get(result, Stop))
+        [begin
+             P = fun(_R, _Env, _Opts, _State) -> Return end,
+             ?assertError(_, nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env())),
+             {_, _Start} = next_event([nova, plugin, start]),
+             {_, Stop} = next_event([nova, plugin, stop]),
+             ?assertEqual(invalid, maps:get(result, Stop))
+         end || Return <- [{error, #{}, #{}}, {ok}, {ok, a, b, c, d}, {}]]
     after
         telemetry:detach(Id)
     end.

@@ -416,6 +416,8 @@ connection_stop_reason_is_a_tag_test_() ->
                   end || {Reason, Expected} <- [{normal, normal},
                                                 {{remote, 1000, ~"client secret"}, remote},
                                                 {{crash, error, boom}, crash},
+                                                {{closed}, closed},
+                                                {{~"not an atom", 1}, unknown},
                                                 {~"odd", unknown}]]
              after
                  telemetry:detach(Id)
@@ -424,3 +426,66 @@ connection_stop_reason_is_a_tag_test_() ->
 
 forward_event(Event, Measurements, Metadata, Pid) ->
     Pid ! {telemetry, Event, Measurements, Metadata}.
+
+init_stores_route_from_req_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Req = (make_req())#{nova_route => ~"/ws"},
+        {cowboy_websocket, _Req1, State} = nova_ws_handler:init(Req, make_state()),
+        ?assertEqual(~"/ws", maps:get(route, State)),
+        {cowboy_websocket, _Req2, Unrouted} = nova_ws_handler:init(make_req(), make_state()),
+        ?assertEqual(undefined, maps:get(route, Unrouted))
+    end}.
+
+-define(WS_EVENTS, [[nova, websocket, connection, start], [nova, websocket, connection, stop],
+                    [nova, websocket, handle, start], [nova, websocket, handle, stop],
+                    [nova, websocket, handle, exception]]).
+
+ws_telemetry_metadata_test_() ->
+    {setup,
+     fun() ->
+             {ok, _} = application:ensure_all_started(telemetry),
+             setup()
+     end,
+     fun cleanup/1,
+     fun() ->
+             Id = make_ref(),
+             ok = telemetry:attach_many(Id, ?WS_EVENTS, fun ?MODULE:forward_event/4, self()),
+             try
+                 Connection = #{module => test_ws_mod, app => test_app, route => ~"/ws"},
+                 State = (make_ws_state())#{app => test_app, route => ~"/ws"},
+                 {_Cmds, State1} = nova_ws_handler:websocket_init(State),
+                 {[nova, websocket, connection, start], ConnStart} = next_event(),
+                 ?assertEqual(Connection, maps:remove(telemetry_span_context, ConnStart)),
+                 {[nova, websocket, handle, start], _} = next_event(),
+                 {[nova, websocket, handle, stop], InitStop} = next_event(),
+                 ?assertEqual(Connection#{callback => websocket_init},
+                              maps:remove(telemetry_span_context, InitStop)),
+
+                 _ = nova_ws_handler:websocket_handle({text, ~"hi"}, State1),
+                 {[nova, websocket, handle, start], HandleStart} = next_event(),
+                 ?assertEqual(Connection#{callback => websocket_handle},
+                              maps:remove(telemetry_span_context, HandleStart)),
+                 {[nova, websocket, handle, stop], _} = next_event(),
+
+                 meck:expect(test_ws_mod, websocket_info, fun(_Msg, _CD) -> error(info_crash) end),
+                 {stop, _} = nova_ws_handler:websocket_info(tick, State1),
+                 {[nova, websocket, handle, start], _} = next_event(),
+                 {[nova, websocket, handle, exception], Exception} = next_event(),
+                 ?assertMatch(#{kind := error, reason := info_crash, callback := websocket_info,
+                                module := test_ws_mod, app := test_app, route := ~"/ws"}, Exception),
+
+                 nova_ws_handler:terminate(normal, #{}, State1),
+                 {[nova, websocket, connection, stop], ConnStop} = next_event(),
+                 ?assertEqual(maps:get(telemetry_span_context, ConnStart),
+                              maps:get(telemetry_span_context, ConnStop))
+             after
+                 telemetry:detach(Id)
+             end
+     end}.
+
+next_event() ->
+    receive
+        {telemetry, Event, _Measurements, Metadata} -> {Event, Metadata}
+    after 1000 ->
+            error(no_event)
+    end.
