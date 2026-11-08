@@ -92,9 +92,14 @@ plugin_module(Callback) ->
     Module.
 
 plugin_result(Return) when is_tuple(Return), tuple_size(Return) > 0 ->
-    element(1, Return);
+    result_tag(element(1, Return));
 plugin_result(_Return) ->
     invalid.
+
+result_tag(ok)    -> ok;
+result_tag(break) -> break;
+result_tag(stop)  -> stop;
+result_tag(_Tag)  -> invalid.
 
 set_state(Callback, Return) when is_function(Callback) ->
     ReturnList = erlang:tuple_to_list(Return),

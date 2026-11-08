@@ -346,42 +346,61 @@ stop_reply_default_status_test_() ->
 plugin_telemetry_test_() ->
     {setup,
      fun() ->
-             {ok, Apps} = application:ensure_all_started(telemetry),
-             {setup(), Apps}
+             {ok, _} = application:ensure_all_started(telemetry),
+             setup()
      end,
-     fun({S, _Apps}) -> cleanup(S) end,
+     fun cleanup/1,
      [fun plugin_telemetry_results/0,
+      fun plugin_telemetry_invalid_result/0,
       fun plugin_telemetry_exception/0]}.
 
 plugin_telemetry_results() ->
     Id = attach(),
-    [begin
-         P = fun(R, _Env, _Opts, _State) -> {Result, R, #{}} end,
-         Req = (req([{pre_request, [plugin(P)]}]))#{nova_route => ~"/telemetry"},
-         _ = nova_plugin_handler:execute(Req, env()),
-         {_, Start} = next_event([nova, plugin, start]),
-         ?assertEqual(#{plugin => ?MODULE, callback => pre_request, app => test_app,
-                        route => ~"/telemetry"},
-                      maps:remove(telemetry_span_context, Start)),
-         {StopM, Stop} = next_event([nova, plugin, stop]),
-         ?assert(is_integer(maps:get(duration, StopM))),
-         ?assertEqual(Result, maps:get(result, Stop))
-     end || Result <- [ok, break, stop]],
-    telemetry:detach(Id).
+    try
+        [begin
+             P = fun(R, _Env, _Opts, _State) -> {Result, R, #{}} end,
+             Req = (req([{pre_request, [plugin(P)]}]))#{nova_route => ~"/telemetry"},
+             _ = nova_plugin_handler:execute(Req, env()),
+             {_, Start} = next_event([nova, plugin, start]),
+             ?assertEqual(#{plugin => ?MODULE, callback => pre_request, app => test_app,
+                            route => ~"/telemetry"},
+                          maps:remove(telemetry_span_context, Start)),
+             {StopM, Stop} = next_event([nova, plugin, stop]),
+             ?assert(is_integer(maps:get(duration, StopM))),
+             ?assertEqual(Result, maps:get(result, Stop))
+         end || Result <- [ok, break, stop]]
+    after
+        telemetry:detach(Id)
+    end.
+
+plugin_telemetry_invalid_result() ->
+    Id = attach(),
+    try
+        P = fun(R, _Env, _Opts, _State) -> {error, R, #{}} end,
+        ?assertError({case_clause, _}, nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env())),
+        {_, _Start} = next_event([nova, plugin, start]),
+        {_, Stop} = next_event([nova, plugin, stop]),
+        ?assertEqual(invalid, maps:get(result, Stop))
+    after
+        telemetry:detach(Id)
+    end.
 
 plugin_telemetry_exception() ->
     Id = attach(),
-    P = fun(R, Env, Opts, State) -> error(boom, [R, Env, Opts, State]) end,
-    {ok, Req1, _Env1} = nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env()),
-    ?assertEqual(500, maps:get(resp_status_code, Req1)),
-    {_, _Start} = next_event([nova, plugin, start]),
-    {_, Exception} = next_event([nova, plugin, exception]),
-    ?assertMatch(#{kind := error, reason := boom, plugin := ?MODULE, callback := pre_request,
-                   route := undefined, stacktrace := [_ | _]}, Exception),
-    ?assertEqual([], [Entry || {_, _, Arguments, _} = Entry <- maps:get(stacktrace, Exception),
-                               not is_integer(Arguments)]),
-    ?assertNot(maps:is_key(options, Exception)),
-    telemetry:detach(Id).
+    try
+        P = fun(R, Env, Opts, State) -> error(boom, [R, Env, Opts, State]) end,
+        {ok, Req1, _Env1} = nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env()),
+        ?assertEqual(500, maps:get(resp_status_code, Req1)),
+        {_, _Start} = next_event([nova, plugin, start]),
+        {_, Exception} = next_event([nova, plugin, exception]),
+        ?assertMatch(#{kind := error, reason := boom, plugin := ?MODULE, callback := pre_request,
+                       route := undefined, stacktrace := [_ | _]}, Exception),
+        ?assertEqual([], [Entry || {_, _, Arguments, _} = Entry <- maps:get(stacktrace, Exception),
+                                   not is_integer(Arguments)]),
+        ?assertNot(maps:is_key(options, Exception))
+    after
+        telemetry:detach(Id)
+    end.
 
 attach() ->
     Id = make_ref(),
