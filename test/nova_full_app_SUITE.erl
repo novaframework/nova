@@ -11,7 +11,9 @@
 %%% and a case here.
 -module(nova_full_app_SUITE).
 
--export([all/0, groups/0, init_per_suite/1, end_per_suite/1]).
+-export([all/0, groups/0, init_per_suite/1, end_per_suite/1,
+         init_per_testcase/2, end_per_testcase/2]).
+-export([forward_event/4]).
 
 -export([
          root_route/1,
@@ -36,13 +38,34 @@
          pre_and_post_request_plugins_run/1,
          custom_not_found/1,
          controller_crash_is_a_500/1,
+         handler_init_crash_is_a_500/1,
          websocket_echo/1,
          sub_app_mounted_under_prefix/1,
-         add_and_remove_application/1
+         add_and_remove_application/1,
+         route_template_controller/1,
+         route_template_static/1,
+         route_template_sub_app/1,
+         route_template_absent_on_404/1,
+         route_template_websocket/1,
+         telemetry_controller_and_plugins/1,
+         telemetry_controller_exception/1,
+         telemetry_controller_status_is_a_stop/1,
+         telemetry_websocket/1,
+         telemetry_websocket_exception/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
+
+-define(TELEMETRY_EVENTS, [[nova, Kind, Phase] || Kind <- [controller, plugin], Phase <- [start, stop, exception]]
+        ++ [[nova, websocket, handle, Phase] || Phase <- [start, stop, exception]]
+        ++ [[nova, websocket, connection, Phase] || Phase <- [start, stop]]).
+-define(CONTROLLER_META, [app, controller, action, route, status_page, method, path, host, scheme,
+                          version, peer, telemetry_span_context]).
+-define(PLUGIN_META, [plugin, callback, app, route, telemetry_span_context]).
+-define(WS_HANDLE_META, [callback, module, app, route, telemetry_span_context]).
+-define(WS_CONNECTION_META, [module, app, route, telemetry_span_context]).
+-define(EXCEPTION_META, [kind, reason, stacktrace]).
 
 all() ->
     [
@@ -53,7 +76,9 @@ all() ->
      {group, errors},
      {group, websocket},
      {group, sub_apps},
-     {group, runtime_routes}
+     {group, runtime_routes},
+     {group, route_template},
+     {group, telemetry}
     ].
 
 groups() ->
@@ -88,7 +113,8 @@ groups() ->
                    ]},
      {errors, [parallel], [
                            custom_not_found,
-                           controller_crash_is_a_500
+                           controller_crash_is_a_500,
+                           handler_init_crash_is_a_500
                           ]},
      {websocket, [], [
                       websocket_echo
@@ -98,7 +124,21 @@ groups() ->
                             ]},
      {runtime_routes, [], [
                            add_and_remove_application
-                          ]}
+                          ]},
+     {route_template, [parallel], [
+                                   route_template_controller,
+                                   route_template_static,
+                                   route_template_sub_app,
+                                   route_template_absent_on_404,
+                                   route_template_websocket
+                                  ]},
+     {telemetry, [], [
+                      telemetry_controller_and_plugins,
+                      telemetry_controller_exception,
+                      telemetry_controller_status_is_a_stop,
+                      telemetry_websocket,
+                      telemetry_websocket_exception
+                     ]}
     ].
 
 %%====================================================================
@@ -118,6 +158,22 @@ init_per_suite(Config) ->
     {ok, _Started} = application:ensure_all_started(nova_test_app),
     {ok, _} = application:ensure_all_started(inets),
     [{port, Port}, {base, "http://localhost:" ++ integer_to_list(Port)} | Config].
+
+init_per_testcase(Case, Config) ->
+    case lists:prefix("telemetry_", atom_to_list(Case)) of
+        true ->
+            Id = make_ref(),
+            ok = telemetry:attach_many(Id, ?TELEMETRY_EVENTS, fun ?MODULE:forward_event/4, self()),
+            [{telemetry_handler, Id} | Config];
+        false ->
+            Config
+    end.
+
+end_per_testcase(_Case, Config) ->
+    case ?config(telemetry_handler, Config) of
+        undefined -> ok;
+        Id        -> telemetry:detach(Id)
+    end.
 
 end_per_suite(_Config) ->
     persistent_term:erase(nova_test_app_plugin),
@@ -258,6 +314,9 @@ custom_not_found(Config) ->
 controller_crash_is_a_500(Config) ->
     {500, _Headers, _Body} = get(Config, "/crash").
 
+handler_init_crash_is_a_500(Config) ->
+    {500, _Headers, _Body} = get(Config, "/ws-crash").
+
 %%====================================================================
 %% WebSocket
 %%====================================================================
@@ -277,7 +336,7 @@ websocket_echo(Config) ->
 
 sub_app_mounted_under_prefix(Config) ->
     {200, _Headers, Body} = get(Config, "/sub/hello"),
-    ?assertEqual(#{<<"app">> => <<"nova_test_sub_app">>}, json(Body)).
+    ?assertEqual(<<"nova_test_sub_app">>, maps:get(<<"app">>, json(Body))).
 
 %%====================================================================
 %% Runtime route changes
@@ -302,6 +361,149 @@ add_and_remove_application(Config) ->
     {200, _H3, _B3} = get(Config, "/json"),
     {200, _H4, _B4} = get(Config, "/sub/hello"),
     {200, _H5, _B5} = get(Config, "/assets/hello.txt").
+
+%%====================================================================
+%% Route template
+%%====================================================================
+
+route_template_controller(Config) ->
+    {200, Headers, _Body} = get(Config, "/echo/42/comments/7"),
+    ?assertEqual(~"/echo/:id/comments/:comment_id", header(~"x-nova-route", Headers)).
+
+route_template_static(Config) ->
+    {200, Headers, _Body} = get(Config, "/assets/nested/deep.txt"),
+    ?assertEqual(~"/assets/[...]", header(~"x-nova-route", Headers)).
+
+route_template_sub_app(Config) ->
+    {200, _Headers, Body} = get(Config, "/sub/hello"),
+    ?assertEqual(~"/sub/hello", maps:get(~"route", json(Body))).
+
+route_template_absent_on_404(Config) ->
+    {404, Headers, _Body} = get(Config, "/no-such-route"),
+    ?assertEqual(undefined, header(~"x-nova-route", Headers)).
+
+route_template_websocket(Config) ->
+    {ok, Socket} = ws_connect(Config, "/ws"),
+    ?assertEqual(~"connected", ws_recv(Socket)),
+    ok = ws_send(Socket, ~"route"),
+    ?assertEqual(~"/ws", ws_recv(Socket)),
+    gen_tcp:close(Socket).
+
+%%====================================================================
+%% Telemetry
+%%====================================================================
+
+telemetry_controller_and_plugins(Config) ->
+    {200, _Headers, _Body} = get(Config, "/echo/42"),
+    Route = ~"/echo/:id",
+
+    {StartM, Start} = next_event([nova, controller, start], Route),
+    assert_keys([monotonic_time, system_time], StartM),
+    assert_keys(?CONTROLLER_META, Start),
+    ?assertMatch(#{app := nova_test_app, controller := nova_test_app_controller, action := echo,
+                   status_page := false, method := ~"GET", path := ~"/echo/42",
+                   host := ~"localhost", scheme := ~"http", version := 'HTTP/1.1',
+                   peer := {_, _}}, Start),
+
+    {StopM, Stop} = next_event([nova, controller, stop], Route),
+    assert_keys([duration, monotonic_time], StopM),
+    assert_keys([status | ?CONTROLLER_META], Stop),
+    ?assertMatch(#{status := 200, action := echo}, Stop),
+
+    [begin
+         {PStartM, PStart} = next_event([nova, plugin, start], Route),
+         assert_keys([monotonic_time, system_time], PStartM),
+         assert_keys(?PLUGIN_META, PStart),
+         ?assertMatch(#{plugin := nova_test_app_plugin, callback := Phase, app := nova_test_app}, PStart),
+         {PStopM, PStop} = next_event([nova, plugin, stop], Route),
+         assert_keys([duration, monotonic_time], PStopM),
+         assert_keys([result | ?PLUGIN_META], PStop),
+         ?assertMatch(#{callback := Phase, result := ok}, PStop)
+     end || Phase <- [pre_request, post_request]].
+
+telemetry_controller_exception(Config) ->
+    {500, _Headers, _Body} = get(Config, "/crash"),
+    {ExcM, Exc} = next_event([nova, controller, exception], ~"/crash"),
+    assert_keys([duration, monotonic_time], ExcM),
+    assert_keys(?EXCEPTION_META ++ ?CONTROLLER_META, Exc),
+    ?assertMatch(#{kind := error, reason := deliberate_crash, action := crash,
+                   app := nova_test_app, status_page := false}, Exc),
+    assert_no_arguments(Exc),
+    {_ErrorPageM, ErrorPage} = next_event([nova, controller, stop], ~"/crash"),
+    ?assertMatch(#{app := nova, status := 500, status_page := true,
+                   controller := nova_error_controller}, ErrorPage).
+
+telemetry_controller_status_is_a_stop(Config) ->
+    [begin
+         {Status, _Headers, _Body} = get(Config, Path),
+         {_StopM, Stop} = next_event([nova, controller, stop], list_to_binary(Path)),
+         ?assertMatch(#{action := Action, status := Status}, Stop)
+     end || {Path, Action, Status} <- [{"/forbidden", forbidden, 403}, {"/gone", gone, 410}]],
+    %% Events are sent from the request process before it replies, so an
+    %% exception for these spans would already be in the mailbox.
+    ?assertEqual(none, receive
+                           {telemetry, [nova, controller, exception], _, _} = Unexpected -> Unexpected
+                       after 0 -> none
+                       end).
+
+telemetry_websocket(Config) ->
+    {ok, Socket} = ws_connect(Config, "/ws"),
+    ?assertEqual(~"connected", ws_recv(Socket)),
+    ok = ws_send(Socket, ~"ping"),
+    ?assertEqual(~"pong", ws_recv(Socket)),
+
+    {ConnM, Conn} = next_event([nova, websocket, connection, start], ~"/ws"),
+    assert_keys([monotonic_time, system_time], ConnM),
+    assert_keys(?WS_CONNECTION_META, Conn),
+    ?assertMatch(#{module := nova_test_app_ws_controller, app := nova_test_app}, Conn),
+
+    [begin
+         {HStartM, HStart} = next_event([nova, websocket, handle, start], ~"/ws"),
+         assert_keys([monotonic_time, system_time], HStartM),
+         assert_keys(?WS_HANDLE_META, HStart),
+         ?assertMatch(#{callback := Callback, module := nova_test_app_ws_controller,
+                        app := nova_test_app}, HStart),
+         {HStopM, HStop} = next_event([nova, websocket, handle, stop], ~"/ws"),
+         assert_keys([duration, monotonic_time], HStopM),
+         ?assertMatch(#{callback := Callback}, HStop)
+     end || Callback <- [websocket_init, websocket_handle]],
+
+    gen_tcp:close(Socket),
+    {StopM, Stop} = next_event([nova, websocket, connection, stop], ~"/ws"),
+    assert_keys([duration, monotonic_time], StopM),
+    assert_keys([reason | ?WS_CONNECTION_META], Stop),
+    ?assert(is_atom(maps:get(reason, Stop))),
+    ?assertEqual(maps:get(telemetry_span_context, Conn), maps:get(telemetry_span_context, Stop)).
+
+telemetry_websocket_exception(Config) ->
+    {ok, Socket} = ws_connect(Config, "/ws"),
+    ?assertEqual(~"connected", ws_recv(Socket)),
+    ok = ws_send(Socket, ~"crash"),
+    {ExcM, Exc} = next_event([nova, websocket, handle, exception], ~"/ws"),
+    assert_keys([duration, monotonic_time], ExcM),
+    assert_keys(?EXCEPTION_META ++ ?WS_HANDLE_META, Exc),
+    ?assertMatch(#{kind := error, reason := deliberate_ws_crash, callback := websocket_handle}, Exc),
+    assert_no_arguments(Exc),
+    {_StopM, _Stop} = next_event([nova, websocket, connection, stop], ~"/ws"),
+    gen_tcp:close(Socket).
+
+forward_event(Event, Measurements, Metadata, Pid) ->
+    Pid ! {telemetry, Event, Measurements, Metadata}.
+
+next_event(Event, Route) ->
+    receive
+        {telemetry, Event, Measurements, Metadata = #{route := Route}} ->
+            {Measurements, Metadata}
+    after 5000 ->
+            ct:fail({no_event, Event, Route})
+    end.
+
+assert_no_arguments(#{stacktrace := Stacktrace}) ->
+    ?assertMatch([_ | _], Stacktrace),
+    ?assertEqual([], [Entry || {_, _, Arguments, _} = Entry <- Stacktrace, not is_integer(Arguments)]).
+
+assert_keys(Expected, Map) ->
+    ?assertEqual(lists:sort(Expected), lists:sort(maps:keys(Map))).
 
 %%====================================================================
 %% HTTP helpers
@@ -369,10 +571,19 @@ ws_connect(Config, Path) ->
                  "Sec-WebSocket-Version: 13\r\n\r\n"
                 ],
     ok = gen_tcp:send(Socket, Handshake),
-    {ok, Response} = gen_tcp:recv(Socket, 0, 5000),
+    Response = recv_handshake(Socket, <<>>),
     case binary:match(Response, <<"101">>) of
         nomatch -> {error, {handshake_failed, Response}};
         _       -> {ok, Socket}
+    end.
+
+%% Read byte by byte so a frame sent right after the 101 stays in the socket.
+recv_handshake(Socket, Acc) ->
+    case binary:longest_common_suffix([Acc, <<"\r\n\r\n">>]) of
+        4 -> Acc;
+        _ ->
+            {ok, Byte} = gen_tcp:recv(Socket, 1, 5000),
+            recv_handshake(Socket, <<Acc/binary, Byte/binary>>)
     end.
 
 ws_send(Socket, Payload) ->

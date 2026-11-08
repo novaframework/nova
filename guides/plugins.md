@@ -40,6 +40,23 @@ plugin_info() ->
 This plugin injects a UUID into the headers.
 
 
+## Reading the matched route
+
+A plugin can read the template of the route that matched from `Req` under
+`nova_route`, for example `<<"/users/:id">>`. It is absent when no route
+matched, so match on it rather than assume it:
+
+```erlang
+pre_request(Req = #{nova_route := Route}, _Env, _Opts, State) ->
+    {ok, Req#{metric_label => Route}, State};
+pre_request(Req, _Env, _Opts, State) ->
+    {ok, Req, State}.
+```
+
+The template does not include the host, and two applications can share one,
+so pair it with the application (`app` in `Env`) when you aggregate on it. See
+[The matched route](routing.md#the-matched-route) for the full rules.
+
 ## Optional callbacks
 
 There's two optional callbacks for a plugin that can be used for storing a global long-lived state. This can be useful if you want to keep track of something like a `pid` or similar.

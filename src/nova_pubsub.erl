@@ -79,7 +79,7 @@ broadcast(Channel, Topic, Message) ->
     Members = get_members(Channel),
     Envelope = create_envelope(Channel, self(), Topic, Message),
     [ Receiver ! Envelope || Receiver <- Members ],
-    ok.
+    emit_broadcast(Channel, Topic, global, Members).
 
 
 %%--------------------------------------------------------------------
@@ -89,7 +89,7 @@ local_broadcast(Channel, Topic, Message) ->
     Members = get_local_members(Channel),
     Envelope = create_envelope(Channel, self(), Topic, Message),
     [ Receiver ! Envelope || Receiver <- Members ],
-    ok.
+    emit_broadcast(Channel, Topic, local, Members).
 
 
 %%--------------------------------------------------------------------
@@ -103,6 +103,11 @@ get_members(Channel) ->
 -spec get_local_members(Channel :: channel()) -> [pid()].
 get_local_members(Channel) ->
     pg:get_local_members(?SCOPE, Channel).
+
+emit_broadcast(Channel, Topic, Scope, Members) ->
+    telemetry:execute([nova, pubsub, broadcast],
+                      #{receivers => length(Members)},
+                      #{channel => Channel, topic => Topic, scope => Scope}).
 
 create_envelope(Channel, Sender, Topic, Payload) ->
     #nova_pubsub{channel = Channel,

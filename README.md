@@ -81,7 +81,7 @@ routes(_Environment) ->
 
 | Feature | Details |
 |---------|---------|
-| **Routing** | Path parameters, prefixes, per-route security, environment-based routing |
+| **Routing** | Path parameters, prefixes, per-route security, environment-based routing, matched route template in `Req` (`nova_route`) |
 | **Controllers** | Return `{json, Map}`, `{ok, Variables}`, `{status, Code}`, `{redirect, Path}`, `{sendfile, ...}` |
 | **Plugins** | Pre/post request hooks — built-in CORS, CSRF, correlation ID, or write your own |
 | **WebSockets** | Full WebSocket support via `nova_websocket` behaviour |
@@ -90,7 +90,7 @@ routes(_Environment) ->
 | **Templates** | ErlyDTL (Django-style) with hot reload via `rebar3 nova serve` |
 | **Security** | Per-route security functions for authentication and authorization |
 | **Static files** | Built-in file controller with range request support |
-| **Observability** | [OpenTelemetry integration](https://github.com/novaframework/opentelemetry_nova) for tracing and metrics |
+| **Observability** | `telemetry` events for controllers, plugins, websockets and pubsub; [OpenTelemetry integration](https://github.com/novaframework/opentelemetry_nova) for tracing and metrics |
 | **Database** | [Kura](https://github.com/novaframework/kura) — an Ecto-inspired database layer for Erlang |
 
 ## Request pipeline

@@ -30,10 +30,13 @@ routes(_Environment) ->
                   {"/redirect", fun nova_test_app_controller:redirect/1, #{methods => [get]}},
                   {"/teapot", fun nova_test_app_controller:teapot/1, #{methods => [get]}},
                   {"/crash", fun nova_test_app_controller:crash/1, #{methods => [get]}},
+                  {"/forbidden", fun nova_test_app_controller:forbidden/1, #{methods => [get]}},
+                  {"/gone", fun nova_test_app_controller:gone/1, #{methods => [get]}},
                   {"/extra", fun nova_test_app_controller:extra/1,
                    #{methods => [get], extra_state => #{answer => 42}}},
                   {"/assets/[...]", "assets"},
                   {"/ws", nova_test_app_ws_controller, #{protocol => ws}},
+                  {"/ws-crash", nova_test_app_ws_crash_controller, #{protocol => ws}},
 
                   %% Status-code routes. Nova registers its own 404 and 500,
                   %% and an application may override them.

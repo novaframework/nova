@@ -426,3 +426,61 @@ apply_callback_missing_module_test_() ->
         Result = nova_router:apply_callback(totally_fake_module_xyz, foo, []),
         ?assertEqual([], Result)
     end}.
+
+%%====================================================================
+%% Route template
+%%====================================================================
+
+route_template_controller_and_ws_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Callback = fun(_) -> {json, #{}} end,
+        ok = nova_router:add_routes(route_app,
+                                    #{prefix => "/api",
+                                      plugins => [{pre_request, nova_request_plugin, #{}}],
+                                      routes => [{"/users/:id", Callback, #{methods => [get]}},
+                                                 {"/socket", route_ws_mod, #{protocol => ws}}]}),
+
+        {ok, Req, _Env} = nova_router:execute(nova_test_helper:mock_req(~"GET", ~"/api/users/7"), #{}),
+        ?assertEqual(~"/api/users/:id", maps:get(nova_route, Req)),
+        ?assertEqual([{pre_request, [{fun nova_request_plugin:pre_request/4, #{}}]}],
+                     maps:get(plugins, Req)),
+
+        {ok, WsReq, WsEnv} = nova_router:execute(nova_test_helper:mock_req(~"GET", ~"/api/socket"), #{}),
+        ?assertEqual(~"/api/socket", maps:get(nova_route, WsReq)),
+        ?assertEqual([{pre_request, [{fun nova_request_plugin:pre_request/4, #{}}]}],
+                     maps:get(plugins, WsReq)),
+        ?assertEqual(#{module => route_ws_mod, app => route_app}, maps:get(arguments, WsEnv))
+    end}.
+
+route_template_static_dir_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        ok = nova_router:add_routes(nova, #{prefix => "/p", plugins => [],
+                                            routes => [{"/files/[...]", "static"}]}),
+        {ok, Req, Env} = nova_router:execute(nova_test_helper:mock_req(~"GET", ~"/p/files/a/b.txt"), #{}),
+        ?assertEqual(~"/p/files/[...]", maps:get(nova_route, Req)),
+        ?assertEqual([], maps:get(plugins, Req)),
+        ?assertMatch(#{static := {priv_dir, nova, "static"}, pathinfo := [_ | _]}, maps:get(extra_state, Req)),
+        ?assertEqual(fun nova_file_controller:get_dir/1, maps:get(callback, Env))
+    end}.
+
+route_template_absent_without_template_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        {ok, Req, _} = nova_router:execute(nova_test_helper:mock_req(~"GET", ~"/users"), #{}),
+        ?assertNot(maps:is_key(nova_route, Req)),
+        ?assertEqual([{pre_request, [{fun nova_request_plugin:pre_request/4, #{}}]}], maps:get(plugins, Req)),
+        {ok, StaticReq, _} = nova_router:execute(nova_test_helper:mock_req(~"GET", ~"/static/x"), #{}),
+        ?assertNot(maps:is_key(nova_route, StaticReq))
+    end}.
+
+route_template_absent_on_404_and_405_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        {ok, NotFound, _} = nova_router:execute(nova_test_helper:mock_req(~"GET", ~"/missing"), #{}),
+        ?assertNot(maps:is_key(nova_route, NotFound)),
+        {ok, NotAllowed, _} = nova_router:execute(nova_test_helper:mock_req(~"DELETE", ~"/users"), #{}),
+        ?assertEqual(405, maps:get(resp_status_code, NotAllowed)),
+        ?assertNot(maps:is_key(nova_route, NotAllowed))
+    end}.
+
+route_template_record_arity_test() ->
+    ?assertEqual(8, tuple_size(#nova_handler_value{})),
+    ?assertEqual(6, tuple_size(#cowboy_handler_value{})).

@@ -1,6 +1,8 @@
 -module(nova_plugin_handler_tests).
 -include_lib("eunit/include/eunit.hrl").
 
+-export([forward_event/4]).
+
 -define(SETUP, fun() -> setup() end).
 -define(CLEANUP, fun(S) -> cleanup(S) end).
 
@@ -194,6 +196,14 @@ plugin_crash_test_() ->
         ?assert(is_map(maps:get(crash_info, Req1)))
     end}.
 
+plugin_crash_keeps_route_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        P = fun(_R, _Env, _Opts, _State) -> error(boom) end,
+        Req = (req([{pre_request, [plugin(P)]}]))#{nova_route => ~"/users/:id"},
+        {ok, Req1, _Env1} = nova_plugin_handler:execute(Req, env()),
+        ?assertEqual(~"/users/:id", maps:get(nova_route, Req1))
+    end}.
+
 %%====================================================================
 %% Multiple plugins chain in order
 %%====================================================================
@@ -326,3 +336,88 @@ stop_reply_default_status_test_() ->
         ?assertEqual(200, maps:get(resp_status_code, Req1)),
         ?assert(meck:called(cowboy_req, reply, [200, '_']))
     end}.
+
+%%====================================================================
+%% Telemetry
+%%====================================================================
+
+-define(PLUGIN_EVENTS, [[nova, plugin, start], [nova, plugin, stop], [nova, plugin, exception]]).
+
+plugin_telemetry_test_() ->
+    {setup,
+     fun() ->
+             {ok, _} = application:ensure_all_started(telemetry),
+             setup()
+     end,
+     fun cleanup/1,
+     [fun plugin_telemetry_results/0,
+      fun plugin_telemetry_invalid_result/0,
+      fun plugin_telemetry_exception/0]}.
+
+plugin_telemetry_results() ->
+    Id = attach(),
+    try
+        [begin
+             P = case Shape of
+                     plain -> fun(R, _Env, _Opts, _State) -> {Result, R, #{}} end;
+                     reply -> fun(R, _Env, _Opts, _State) -> {Result, {reply, ~"body"}, R, #{}} end
+                 end,
+             Req = (req([{pre_request, [plugin(P)]}]))#{nova_route => ~"/telemetry"},
+             _ = nova_plugin_handler:execute(Req, env()),
+             {_, Start} = next_event([nova, plugin, start]),
+             ?assertEqual(#{plugin => ?MODULE, callback => pre_request, app => test_app,
+                            route => ~"/telemetry"},
+                          maps:remove(telemetry_span_context, Start)),
+             {StopM, Stop} = next_event([nova, plugin, stop]),
+             ?assert(is_integer(maps:get(duration, StopM))),
+             ?assertEqual(Result, maps:get(result, Stop))
+         end || Result <- [ok, break, stop], Shape <- [plain, reply]]
+    after
+        telemetry:detach(Id)
+    end.
+
+plugin_telemetry_invalid_result() ->
+    Id = attach(),
+    try
+        [begin
+             P = fun(_R, _Env, _Opts, _State) -> Return end,
+             ?assertError(_, nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env())),
+             {_, _Start} = next_event([nova, plugin, start]),
+             {_, Stop} = next_event([nova, plugin, stop]),
+             ?assertEqual(invalid, maps:get(result, Stop))
+         end || Return <- [{error, #{}, #{}}, {ok}, {ok, a, b, c, d}, {}]]
+    after
+        telemetry:detach(Id)
+    end.
+
+plugin_telemetry_exception() ->
+    Id = attach(),
+    try
+        P = fun(R, Env, Opts, State) -> error(boom, [R, Env, Opts, State]) end,
+        {ok, Req1, _Env1} = nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env()),
+        ?assertEqual(500, maps:get(resp_status_code, Req1)),
+        {_, _Start} = next_event([nova, plugin, start]),
+        {_, Exception} = next_event([nova, plugin, exception]),
+        ?assertMatch(#{kind := error, reason := boom, plugin := ?MODULE, callback := pre_request,
+                       route := undefined, stacktrace := [_ | _]}, Exception),
+        ?assertEqual([], [Entry || {_, _, Arguments, _} = Entry <- maps:get(stacktrace, Exception),
+                                   not is_integer(Arguments)]),
+        ?assertNot(maps:is_key(options, Exception))
+    after
+        telemetry:detach(Id)
+    end.
+
+attach() ->
+    Id = make_ref(),
+    ok = telemetry:attach_many(Id, ?PLUGIN_EVENTS, fun ?MODULE:forward_event/4, self()),
+    Id.
+
+forward_event(Event, Measurements, Metadata, Pid) ->
+    Pid ! {telemetry, Event, Measurements, Metadata}.
+
+next_event(Event) ->
+    receive
+        {telemetry, Event, Measurements, Metadata} -> {Measurements, Metadata}
+    after 1000 ->
+            error({no_event, Event})
+    end.

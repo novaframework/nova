@@ -35,8 +35,14 @@ run_plugins([{Callback, Options}|Tl], CallbackType, Req, Env) when is_function(C
                 undefined
         end,
 
+    Span = nova_telemetry:start([nova, plugin],
+                                #{plugin => plugin_module(Callback),
+                                  callback => CallbackType,
+                                  app => maps:get(app, Env, undefined),
+                                  route => maps:get(nova_route, Req, undefined)}),
     try Callback(Req, Env, Options, State) of
         Result ->
+            nova_telemetry:stop(Span, #{result => plugin_result(Result)}),
             set_state(Callback, Result),
             case Result of
                 {ok, Req0, _State0} ->
@@ -60,6 +66,7 @@ run_plugins([{Callback, Options}|Tl], CallbackType, Req, Env) when is_function(C
             end
     catch
         Class:Reason:Stacktrace ->
+            nova_telemetry:exception(Span, Class, Reason, Stacktrace),
             ?LOG_ERROR(#{msg => <<"Plugin crashed">>, class => Class, reason => Reason, stacktrace => Stacktrace}),
             Req0 = Req#{crash_info => #{class => Class,
                                         reason => Reason,
@@ -79,6 +86,20 @@ handle_reply(_, Req) ->
     Req.
 
 
+
+plugin_module(Callback) ->
+    {module, Module} = erlang:fun_info(Callback, module),
+    Module.
+
+plugin_result({Tag, _Req, _State})        -> result_tag(Tag);
+plugin_result({Tag, _Reply, _Req, _State}) -> result_tag(Tag);
+plugin_result(_Return) ->
+    invalid.
+
+result_tag(ok)    -> ok;
+result_tag(break) -> break;
+result_tag(stop)  -> stop;
+result_tag(_Tag)  -> invalid.
 
 set_state(Callback, Return) when is_function(Callback) ->
     ReturnList = erlang:tuple_to_list(Return),

@@ -33,25 +33,40 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
     catch
         Class:Reason:Stacktrace when UseStacktrace == true ->
             FormattedStacktrace = nova:format_stacktrace(Stacktrace),
-            Payload = #{status_code => 404,
+            Payload = #{status_code => 500,
                         stacktrace => FormattedStacktrace,
                         class => Class,
                         reason => Reason},
             ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class, reason => Reason, stacktrace => FormattedStacktrace}),
-            render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 404);
+            render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 500);
         Class:Reason ->
-            Payload = #{status_code => 404,
+            Payload = #{status_code => 500,
                         class => Class,
                         reason => Reason},
             ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class, reason => Reason}),
-            render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 404)
+            render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 500)
     end;
-execute(Req, Env = #{callback := Callback}) ->
-    %% Ensure that the module exists and have the correct function exported
+execute(Req, Env = #{callback := _Callback}) ->
+    execute_controller(Req, Env, false).
+
+-spec terminate(any(), Req :: cowboy_req:req() | undefined, function()) -> ok.
+terminate(Reason, Req, Callback) ->
+    {module, Module} = erlang:fun_info(Callback, module),
+    case function_exported(Module, terminate, 3) of
+        true ->
+            Module:terminate(Reason, Req);
+        false ->
+            ok
+    end.
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%
+%% INTERNAL FUNCTIONS %%
+%%%%%%%%%%%%%%%%%%%%%%%%
+
+execute_controller(Req, Env = #{callback := Callback}, StatusPage) ->
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
-    try RetObj = Callback(Req),
-         call_handler(Callback, Req, RetObj, Env, false)
-    of
+    try run_controller(Callback, Req, Env, StatusPage) of
         HandlerReturn ->
             HandlerReturn
     catch
@@ -86,20 +101,40 @@ execute(Req, Env = #{callback := Callback}) ->
             render_response(Req#{crash_info => Payload}, Env, 500)
     end.
 
--spec terminate(any(), Req :: cowboy_req:req() | undefined, function()) -> ok.
-terminate(Reason, Req, Callback) ->
+%% {Status, Reason} raised in any class is how a controller asks execute/2 for
+%% a status page, so it ends the span as a stop with that status.
+run_controller(Callback, Req, Env, StatusPage) ->
     {module, Module} = erlang:fun_info(Callback, module),
-    case function_exported(Module, terminate, 3) of
-        true ->
-            Module:terminate(Reason, Req);
-        false ->
-            ok
+    {name, Action} = erlang:fun_info(Callback, name),
+    Metadata = request_metadata(Req),
+    Span = nova_telemetry:start([nova, controller],
+                                Metadata#{app => maps:get(app, Env, undefined),
+                                          controller => Module,
+                                          action => Action,
+                                          route => maps:get(nova_route, Req, undefined),
+                                          status_page => StatusPage}),
+    try
+        RetObj = Callback(Req),
+        {ok, Req0, _Env0} = HandlerReturn = call_handler(Callback, Req, RetObj, Env, false),
+        nova_telemetry:stop(Span, #{status => maps:get(resp_status_code, Req0, 200)}),
+        HandlerReturn
+    catch
+        Class:{Status, _} = Reason:Stacktrace when is_integer(Status) ->
+            nova_telemetry:stop(Span, #{status => Status}),
+            erlang:raise(Class, Reason, Stacktrace);
+        Class:Reason:Stacktrace ->
+            nova_telemetry:exception(Span, Class, Reason, Stacktrace),
+            erlang:raise(Class, Reason, Stacktrace)
     end.
 
+request_metadata(Req) ->
+    #{method => maps:get(method, Req, undefined),
+      path => maps:get(path, Req, undefined),
+      host => maps:get(host, Req, undefined),
+      scheme => maps:get(scheme, Req, undefined),
+      version => maps:get(version, Req, undefined),
+      peer => maps:get(peer, Req, undefined)}.
 
-%%%%%%%%%%%%%%%%%%%%%%%%
-%% INTERNAL FUNCTIONS %%
-%%%%%%%%%%%%%%%%%%%%%%%%
 -spec execute_fallback(Callback :: function(), Req :: cowboy_req:req(), Response :: any(), Env :: map()) ->
           {ok, Req0 :: cowboy_req:req(), Env :: map()}.
 execute_fallback(Callback, Req, Response, Env) ->
@@ -176,8 +211,7 @@ render_response(Req, Env, StatusCode) ->
                     {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, fun erlang:date/0, Req),
                     render_response(Req0, Env);
                 {ok, _Bindings, #nova_handler_value{callback = Callback}} ->
-                    %% Recurse to the execute function to render error page
-                    execute(Req, Env#{app => nova, callback => Callback})
+                    execute_controller(Req, Env#{app => nova, callback => Callback}, true)
             end;
         false ->
             {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, fun(_) -> ok end, Req),

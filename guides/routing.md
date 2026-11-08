@@ -263,6 +263,40 @@ registered wins and the second is logged and ignored. Set
 Nova refuse to start on a conflict instead, which also reports overlapping
 literal and binding routes.
 
+## The matched route
+
+When a request matches a route, Nova stores the route's template in the
+request map under `nova_route`. Controllers, plugins, Cowboy handlers and
+websocket controllers (through `req` in their controller data) can all read
+it:
+
+```erlang
+show(Req = #{nova_route := Route}) ->
+    %% Route is <<"/api/users/:id">> for a request to /api/users/42
+    {json, #{route => Route}}.
+```
+
+The template is:
+
+- A binary, in Nova's own route syntax: `:name` for bindings and `[...]` for
+  a catch-all, for example `<<"/users/:id">>` or `<<"/assets/[...]">>`.
+- The declared path joined with every prefix above it: the route group's
+  `prefix` and, for an included application, the prefix it is mounted under.
+  An application mounted under `/sub` with a route `/hello` gives
+  `<<"/sub/hello">>`.
+- Set for controller routes, static file routes and websocket routes.
+- Not set when nothing matched, so it is absent on `404` and `405` responses
+  rendered by the router.
+- Kept when a plugin or controller crashes and Nova renders a status page, so
+  an error page or a `post_request` plugin still sees the route that failed.
+
+The host is not part of the template. Two route groups on different hosts, or
+two applications mounted under prefixes that produce the same path, share a
+template, so pair it with `app` when you need to tell them apart.
+
+The template has low cardinality, which makes it the right label for metrics
+and trace span names. Use it instead of the raw path, which carries IDs.
+
 ## Adding routes programatically
 
 You can also add routes programatically by calling `nova_router:add_routes/2`. This is useful if you want to add routes dynamically. The spec for it is:

@@ -3,7 +3,8 @@
 %%% pre_request can still set response headers, but post_request runs after
 %%% nova_handler has already replied, so it counts through a shared counter
 %%% instead. The suite installs the counter under nova_test_app_plugin in
-%%% persistent_term; without it the plugin is a no-op.
+%%% persistent_term; without it the plugin is a no-op. It also echoes the
+%%% matched route template in an x-nova-route response header.
 -module(nova_test_app_plugin).
 -behaviour(nova_plugin).
 
@@ -19,11 +20,17 @@
 
 pre_request(Req, _Env, _Options, State) ->
     bump(?PRE_REQUEST),
-    {ok, cowboy_req:set_resp_header(<<"x-nova-pre-request">>, <<"1">>, Req), State}.
+    Req0 = cowboy_req:set_resp_header(<<"x-nova-pre-request">>, <<"1">>, Req),
+    {ok, echo_route(Req0), State}.
 
 post_request(Req, _Env, _Options, State) ->
     bump(?POST_REQUEST),
     {ok, Req, State}.
+
+echo_route(Req = #{nova_route := Route}) ->
+    cowboy_req:set_resp_header(<<"x-nova-route">>, Route, Req);
+echo_route(Req) ->
+    Req.
 
 bump(Index) ->
     case persistent_term:get(?COUNTERS, undefined) of
