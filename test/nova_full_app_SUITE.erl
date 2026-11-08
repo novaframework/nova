@@ -577,10 +577,19 @@ ws_connect(Config, Path) ->
                  "Sec-WebSocket-Version: 13\r\n\r\n"
                 ],
     ok = gen_tcp:send(Socket, Handshake),
-    {ok, Response} = gen_tcp:recv(Socket, 0, 5000),
+    Response = recv_handshake(Socket, <<>>),
     case binary:match(Response, <<"101">>) of
         nomatch -> {error, {handshake_failed, Response}};
         _       -> {ok, Socket}
+    end.
+
+%% Read byte by byte so a frame sent right after the 101 stays in the socket.
+recv_handshake(Socket, Acc) ->
+    case binary:longest_common_suffix([Acc, <<"\r\n\r\n">>]) of
+        4 -> Acc;
+        _ ->
+            {ok, Byte} = gen_tcp:recv(Socket, 1, 5000),
+            recv_handshake(Socket, <<Acc/binary, Byte/binary>>)
     end.
 
 ws_send(Socket, Payload) ->
