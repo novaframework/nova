@@ -469,6 +469,7 @@ telemetry_websocket(Config) ->
     {StopM, Stop} = next_event([nova, websocket, connection, stop], <<"/ws">>),
     assert_keys([duration, monotonic_time], StopM),
     assert_keys([reason | ?WS_CONNECTION_META], Stop),
+    ?assert(is_atom(maps:get(reason, Stop))),
     ?assertEqual(maps:get(telemetry_span_context, Conn), maps:get(telemetry_span_context, Stop)),
     telemetry:detach(Id).
 

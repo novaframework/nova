@@ -1,6 +1,8 @@
 -module(nova_ws_handler_tests).
 -include_lib("eunit/include/eunit.hrl").
 
+-export([forward_event/4]).
+
 -define(SETUP, fun() -> setup() end).
 -define(CLEANUP, fun(S) -> cleanup(S) end).
 
@@ -385,3 +387,40 @@ ws_handler_not_registered_returns_stop_test_() ->
         %% Re-register for other tests
         nova_handlers:register_handler(ws, fun nova_basic_handler:handle_ws/2)
     end}.
+
+%%====================================================================
+%% Telemetry
+%%====================================================================
+
+connection_stop_reason_is_a_tag_test_() ->
+    {setup,
+     fun() ->
+             {ok, _} = application:ensure_all_started(telemetry),
+             setup()
+     end,
+     fun cleanup/1,
+     fun() ->
+             Id = make_ref(),
+             ok = telemetry:attach(Id, [nova, websocket, connection, stop],
+                                   fun ?MODULE:forward_event/4, self()),
+             try
+                 [begin
+                      {_Cmds, State} = nova_ws_handler:websocket_init(make_ws_state()),
+                      nova_ws_handler:terminate(Reason, #{}, State),
+                      receive
+                          {telemetry, _Event, _Measurements, #{reason := Tag}} ->
+                              ?assertEqual(Expected, Tag)
+                      after 1000 ->
+                              error(no_event)
+                      end
+                  end || {Reason, Expected} <- [{normal, normal},
+                                                {{remote, 1000, ~"client secret"}, remote},
+                                                {{crash, error, boom}, crash},
+                                                {~"odd", unknown}]]
+             after
+                 telemetry:detach(Id)
+             end
+     end}.
+
+forward_event(Event, Measurements, Metadata, Pid) ->
+    Pid ! {telemetry, Event, Measurements, Metadata}.

@@ -126,9 +126,17 @@ start_connection(State) ->
     State#{nova_telemetry => nova_telemetry:start([nova, websocket, connection], connection_metadata(State))}.
 
 stop_connection(Reason, #{nova_telemetry := Span}) ->
-    nova_telemetry:stop(Span, #{reason => Reason});
+    nova_telemetry:stop(Span, #{reason => reason_tag(Reason)});
 stop_connection(_Reason, _State) ->
     ok.
+
+%% Only the tag: {remote, Code, Payload} carries what the client sent.
+reason_tag(Reason) when is_atom(Reason) ->
+    Reason;
+reason_tag(Reason) when is_tuple(Reason), tuple_size(Reason) > 0, is_atom(element(1, Reason)) ->
+    element(1, Reason);
+reason_tag(_Reason) ->
+    unknown.
 
 connection_metadata(State) ->
     #{module => maps:get(mod, State, undefined),

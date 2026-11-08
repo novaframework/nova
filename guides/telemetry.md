@@ -132,7 +132,11 @@ The lifetime of a websocket connection, from `websocket_init` to `terminate`.
 | `start` | `monotonic_time`, `system_time` | `module`, `app`, `route` |
 | `stop` | `duration`, `monotonic_time` | start metadata, `reason` |
 
-- `reason` is the termination reason Cowboy passes to `terminate/3`.
+- `reason` is the tag of the termination reason Cowboy passes to
+  `terminate/3`: the reason itself when it is an atom (`normal`, `stop`,
+  `timeout`, `remote`), otherwise the first element of the tuple (`remote`
+  for `{remote, Code, Payload}`, `error`, `crash`), or `unknown`. The rest of
+  the reason is left out because it can carry what the client sent.
 
 ## Pubsub
 
@@ -147,3 +151,5 @@ A single event for each `nova_pubsub:broadcast/3` and
 
 - `receivers` is the number of processes the message was sent to.
 - `scope` is `global` for `broadcast/3` and `local` for `local_broadcast/3`.
+- `topic` is whatever the caller passed and is unbounded, so it is not safe
+  as a metric label.
