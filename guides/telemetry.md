@@ -58,7 +58,7 @@ Plugins and the security callback are outside it.
 
 | Event | Measurements | Metadata |
 |-------|--------------|----------|
-| `start` | `monotonic_time`, `system_time` | `app`, `controller`, `action`, `route`, `method`, `path`, `host`, `scheme`, `version`, `peer` |
+| `start` | `monotonic_time`, `system_time` | `app`, `controller`, `action`, `route`, `status_page`, `method`, `path`, `host`, `scheme`, `version`, `peer` |
 | `stop` | `duration`, `monotonic_time` | start metadata, `status` |
 | `exception` | `duration`, `monotonic_time` | start metadata, `kind`, `reason`, `stacktrace` |
 
@@ -70,13 +70,23 @@ Plugins and the security callback are outside it.
 - A controller that raises `{Status, Reason}` with an integer `Status`, as a
   throw, error or exit, is asking Nova for a status page. That ends the span
   with `stop` and `status => Status`, not with `exception`.
-- An error page Nova renders after a controller is a controller span of its
-  own, with `app => nova`. When a controller crashes, the failing span ends
-  with `exception` and the `500` page follows as a separate span. When a
-  controller returns something Nova cannot handle, the error page span is
-  nested inside the controller span.
-- A `404` or `405` rendered by the router is a controller span for the status
-  page, with `route => undefined`.
+- `status_page` is `true` for the span of an error page Nova renders after a
+  controller failed, and `false` otherwise. Those spans have `app => nova`.
+  - A crash emits `exception` for the controller, followed by a `stop` for
+    the `500` page with `status_page => true`.
+  - A status raised as `{Status, Reason}` emits `stop` for the controller,
+    followed by a `stop` for the status page when the application routes
+    that status code.
+  - A controller that returns something Nova cannot handle emits the status
+    page `stop` nested inside its own span.
+
+  One request can therefore produce two controller spans. To count requests,
+  filter out `status_page => true`.
+- A `404` or `405` rendered by the router and the `500` after a plugin crash
+  are the only controller span of their request. They have
+  `status_page => false`, and `route` is `undefined` for `404` and `405`.
+  A request the security callback rejects never reaches a controller and
+  emits no controller span.
 
 ## Plugin
 

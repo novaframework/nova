@@ -367,8 +367,8 @@ route_template_websocket(Config) ->
 %% Telemetry
 %%====================================================================
 
--define(CONTROLLER_META, [app, controller, action, route, method, path, host, scheme, version, peer,
-                          telemetry_span_context]).
+-define(CONTROLLER_META, [app, controller, action, route, status_page, method, path, host, scheme,
+                          version, peer, telemetry_span_context]).
 -define(PLUGIN_META, [plugin, callback, app, route, telemetry_span_context]).
 -define(WS_HANDLE_META, [callback, module, app, route, telemetry_span_context]).
 -define(WS_CONNECTION_META, [module, app, route, telemetry_span_context]).
@@ -384,6 +384,7 @@ telemetry_controller_and_plugins(Config) ->
     assert_keys([monotonic_time, system_time], StartM),
     assert_keys(?CONTROLLER_META, Start),
     ?assertMatch(#{app := nova_test_app, controller := nova_test_app_controller, action := echo,
+                   status_page := false,
                    method := <<"GET">>, path := <<"/echo/42">>, host := <<"localhost">>,
                    scheme := <<"http">>, version := 'HTTP/1.1', peer := {_, _}}, Start),
     ?assertNot(maps:is_key(req, Start)),
@@ -415,10 +416,11 @@ telemetry_controller_exception(Config) ->
     assert_keys([duration, monotonic_time], ExcM),
     assert_keys(?EXCEPTION_META ++ ?CONTROLLER_META, Exc),
     ?assertMatch(#{kind := error, reason := deliberate_crash, action := crash,
-                   app := nova_test_app}, Exc),
+                   app := nova_test_app, status_page := false}, Exc),
     assert_no_arguments(Exc),
     {_ErrorPageM, ErrorPage} = next_event([nova, controller, stop], <<"/crash">>),
-    ?assertMatch(#{app := nova, status := 500}, ErrorPage),
+    ?assertMatch(#{app := nova, status := 500, status_page := true,
+                   controller := nova_error_controller}, ErrorPage),
     telemetry:detach(Id).
 
 telemetry_controller_status_is_a_stop(Config) ->
