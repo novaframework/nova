@@ -49,9 +49,7 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
 execute(Req, Env = #{callback := Callback}) ->
     %% Ensure that the module exists and have the correct function exported
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
-    try RetObj = Callback(Req),
-         call_handler(Callback, Req, RetObj, Env, false)
-    of
+    try run_controller(Callback, Req, Env) of
         HandlerReturn ->
             HandlerReturn
     catch
@@ -100,6 +98,36 @@ terminate(Reason, Req, Callback) ->
 %%%%%%%%%%%%%%%%%%%%%%%%
 %% INTERNAL FUNCTIONS %%
 %%%%%%%%%%%%%%%%%%%%%%%%
+
+%% throw:{Status, Reason} is how a controller asks for a status page, so the
+%% span ends as a stop carrying that status and the throw is re-raised after
+%% the span for execute/2 to render.
+run_controller(Callback, Req, Env) ->
+    {module, Module} = erlang:fun_info(Callback, module),
+    {name, Action} = erlang:fun_info(Callback, name),
+    Metadata = #{app => maps:get(app, Env, undefined),
+                 controller => Module,
+                 action => Action,
+                 route => maps:get(nova_route, Req, undefined),
+                 req => Req},
+    case telemetry:span([nova, controller], Metadata,
+                        fun() -> controller_span(Callback, Req, Env, Metadata) end) of
+        {thrown, Status, Reason} ->
+            throw({Status, Reason});
+        HandlerReturn ->
+            HandlerReturn
+    end.
+
+controller_span(Callback, Req, Env, Metadata) ->
+    try
+        RetObj = Callback(Req),
+        {ok, Req0, _Env0} = HandlerReturn = call_handler(Callback, Req, RetObj, Env, false),
+        {HandlerReturn, Metadata#{req => Req0, status => maps:get(resp_status_code, Req0, 200)}}
+    catch
+        throw:{Status, Reason} when is_integer(Status) ->
+            {{thrown, Status, Reason}, Metadata#{status => Status}}
+    end.
+
 -spec execute_fallback(Callback :: function(), Req :: cowboy_req:req(), Response :: any(), Env :: map()) ->
           {ok, Req0 :: cowboy_req:req(), Env :: map()}.
 execute_fallback(Callback, Req, Response, Env) ->

@@ -30,6 +30,7 @@ routes(_Environment) ->
                   {"/redirect", fun nova_test_app_controller:redirect/1, #{methods => [get]}},
                   {"/teapot", fun nova_test_app_controller:teapot/1, #{methods => [get]}},
                   {"/crash", fun nova_test_app_controller:crash/1, #{methods => [get]}},
+                  {"/forbidden", fun nova_test_app_controller:forbidden/1, #{methods => [get]}},
                   {"/extra", fun nova_test_app_controller:extra/1,
                    #{methods => [get], extra_state => #{answer => 42}}},
                   {"/assets/[...]", "assets"},

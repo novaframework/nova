@@ -90,7 +90,7 @@ routes(_Environment) ->
 | **Templates** | ErlyDTL (Django-style) with hot reload via `rebar3 nova serve` |
 | **Security** | Per-route security functions for authentication and authorization |
 | **Static files** | Built-in file controller with range request support |
-| **Observability** | [OpenTelemetry integration](https://github.com/novaframework/opentelemetry_nova) for tracing and metrics |
+| **Observability** | `telemetry` events for controllers, plugins, websockets and pubsub; [OpenTelemetry integration](https://github.com/novaframework/opentelemetry_nova) for tracing and metrics |
 | **Database** | [Kura](https://github.com/novaframework/kura) — an Ecto-inspired database layer for Erlang |
 
 ## Request pipeline

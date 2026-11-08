@@ -12,6 +12,7 @@
 -module(nova_full_app_SUITE).
 
 -export([all/0, groups/0, init_per_suite/1, end_per_suite/1]).
+-export([forward_event/4]).
 
 -export([
          root_route/1,
@@ -44,7 +45,12 @@
          route_template_static/1,
          route_template_sub_app/1,
          route_template_absent_on_404/1,
-         route_template_websocket/1
+         route_template_websocket/1,
+         telemetry_controller_and_plugins/1,
+         telemetry_controller_exception/1,
+         telemetry_controller_throw_is_a_stop/1,
+         telemetry_websocket/1,
+         telemetry_websocket_exception/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -60,7 +66,8 @@ all() ->
      {group, websocket},
      {group, sub_apps},
      {group, runtime_routes},
-     {group, route_template}
+     {group, route_template},
+     {group, telemetry}
     ].
 
 groups() ->
@@ -113,7 +120,14 @@ groups() ->
                                    route_template_sub_app,
                                    route_template_absent_on_404,
                                    route_template_websocket
-                                  ]}
+                                  ]},
+     {telemetry, [], [
+                      telemetry_controller_and_plugins,
+                      telemetry_controller_exception,
+                      telemetry_controller_throw_is_a_stop,
+                      telemetry_websocket,
+                      telemetry_websocket_exception
+                     ]}
     ].
 
 %%====================================================================
@@ -348,6 +362,137 @@ route_template_websocket(Config) ->
     ok = ws_send(Socket, <<"route">>),
     ?assertEqual(<<"/ws">>, ws_recv(Socket)),
     gen_tcp:close(Socket).
+
+%%====================================================================
+%% Telemetry
+%%====================================================================
+
+-define(CONTROLLER_META, [app, controller, action, route, req, telemetry_span_context]).
+-define(PLUGIN_META, [plugin, callback, app, route, telemetry_span_context]).
+-define(WS_HANDLE_META, [callback, module, app, route, telemetry_span_context]).
+-define(WS_CONNECTION_META, [module, app, route, telemetry_span_context]).
+-define(EXCEPTION_META, [kind, reason, stacktrace]).
+
+telemetry_controller_and_plugins(Config) ->
+    Id = attach([[nova, controller, start], [nova, controller, stop],
+                 [nova, plugin, start], [nova, plugin, stop]]),
+    {200, _Headers, _Body} = get(Config, "/echo/42"),
+    Route = <<"/echo/:id">>,
+
+    {StartM, Start} = next_event([nova, controller, start], Route),
+    assert_keys([monotonic_time, system_time], StartM),
+    assert_keys(?CONTROLLER_META, Start),
+    ?assertMatch(#{app := nova_test_app, controller := nova_test_app_controller,
+                   action := echo, req := #{path := <<"/echo/42">>}}, Start),
+
+    {StopM, Stop} = next_event([nova, controller, stop], Route),
+    assert_keys([duration, monotonic_time], StopM),
+    assert_keys([status | ?CONTROLLER_META], Stop),
+    ?assertMatch(#{status := 200, action := echo}, Stop),
+
+    [begin
+         {PStartM, PStart} = next_event([nova, plugin, start], Route),
+         assert_keys([monotonic_time, system_time], PStartM),
+         assert_keys(?PLUGIN_META, PStart),
+         ?assertMatch(#{plugin := nova_test_app_plugin, callback := Phase, app := nova_test_app}, PStart),
+         {PStopM, PStop} = next_event([nova, plugin, stop], Route),
+         assert_keys([duration, monotonic_time], PStopM),
+         assert_keys([result | ?PLUGIN_META], PStop),
+         ?assertMatch(#{callback := Phase, result := ok}, PStop)
+     end || Phase <- [pre_request, post_request]],
+    telemetry:detach(Id).
+
+%% The crash is an exception on the failing span; the error page Nova renders
+%% for it is a controller span of its own, owned by app nova.
+telemetry_controller_exception(Config) ->
+    Id = attach([[nova, controller, stop], [nova, controller, exception]]),
+    {500, _Headers, _Body} = get(Config, "/crash"),
+    {ExcM, Exc} = next_event([nova, controller, exception], <<"/crash">>),
+    assert_keys([duration, monotonic_time], ExcM),
+    assert_keys(?EXCEPTION_META ++ ?CONTROLLER_META, Exc),
+    ?assertMatch(#{kind := error, reason := deliberate_crash, action := crash,
+                   app := nova_test_app}, Exc),
+    {_ErrorPageM, ErrorPage} = next_event([nova, controller, stop], <<"/crash">>),
+    ?assertMatch(#{app := nova, status := 500}, ErrorPage),
+    telemetry:detach(Id).
+
+telemetry_controller_throw_is_a_stop(Config) ->
+    Id = attach([[nova, controller, stop], [nova, controller, exception]]),
+    {403, _Headers, _Body} = get(Config, "/forbidden"),
+    {_StopM, Stop} = next_event([nova, controller, stop], <<"/forbidden">>),
+    ?assertMatch(#{action := forbidden, status := 403}, Stop),
+    receive
+        {telemetry, [nova, controller, exception], _, #{route := <<"/forbidden">>}} = Unexpected ->
+            ct:fail({unexpected_exception, Unexpected})
+    after 200 ->
+            ok
+    end,
+    telemetry:detach(Id).
+
+telemetry_websocket(Config) ->
+    Id = attach([[nova, websocket, connection, start], [nova, websocket, connection, stop],
+                 [nova, websocket, handle, start], [nova, websocket, handle, stop]]),
+    {ok, Socket} = ws_connect(Config, "/ws"),
+    ?assertEqual(<<"connected">>, ws_recv(Socket)),
+    ok = ws_send(Socket, <<"ping">>),
+    ?assertEqual(<<"pong">>, ws_recv(Socket)),
+
+    {ConnM, Conn} = next_event([nova, websocket, connection, start], <<"/ws">>),
+    assert_keys([monotonic_time, system_time], ConnM),
+    assert_keys(?WS_CONNECTION_META, Conn),
+    ?assertMatch(#{module := nova_test_app_ws_controller, app := nova_test_app}, Conn),
+
+    [begin
+         {HStartM, HStart} = next_event([nova, websocket, handle, start], <<"/ws">>),
+         assert_keys([monotonic_time, system_time], HStartM),
+         assert_keys(?WS_HANDLE_META, HStart),
+         ?assertMatch(#{callback := Callback, module := nova_test_app_ws_controller,
+                        app := nova_test_app}, HStart),
+         {HStopM, HStop} = next_event([nova, websocket, handle, stop], <<"/ws">>),
+         assert_keys([duration, monotonic_time], HStopM),
+         ?assertMatch(#{callback := Callback}, HStop)
+     end || Callback <- [websocket_init, websocket_handle]],
+
+    gen_tcp:close(Socket),
+    {StopM, Stop} = next_event([nova, websocket, connection, stop], <<"/ws">>),
+    assert_keys([duration, monotonic_time], StopM),
+    assert_keys([reason | ?WS_CONNECTION_META], Stop),
+    ?assertEqual(maps:get(telemetry_span_context, Conn), maps:get(telemetry_span_context, Stop)),
+    telemetry:detach(Id).
+
+%% nova_ws_handler turns a crash into {stop, State}; the exception event must
+%% still fire, and the connection still ends with a stop.
+telemetry_websocket_exception(Config) ->
+    Id = attach([[nova, websocket, handle, exception], [nova, websocket, connection, stop]]),
+    {ok, Socket} = ws_connect(Config, "/ws"),
+    ?assertEqual(<<"connected">>, ws_recv(Socket)),
+    ok = ws_send(Socket, <<"crash">>),
+    {ExcM, Exc} = next_event([nova, websocket, handle, exception], <<"/ws">>),
+    assert_keys([duration, monotonic_time], ExcM),
+    assert_keys(?EXCEPTION_META ++ ?WS_HANDLE_META, Exc),
+    ?assertMatch(#{kind := error, reason := deliberate_ws_crash, callback := websocket_handle}, Exc),
+    {_StopM, _Stop} = next_event([nova, websocket, connection, stop], <<"/ws">>),
+    gen_tcp:close(Socket),
+    telemetry:detach(Id).
+
+attach(Events) ->
+    Id = make_ref(),
+    ok = telemetry:attach_many(Id, Events, fun ?MODULE:forward_event/4, self()),
+    Id.
+
+forward_event(Event, Measurements, Metadata, Pid) ->
+    Pid ! {telemetry, Event, Measurements, Metadata}.
+
+next_event(Event, Route) ->
+    receive
+        {telemetry, Event, Measurements, Metadata = #{route := Route}} ->
+            {Measurements, Metadata}
+    after 5000 ->
+            ct:fail({no_event, Event, Route})
+    end.
+
+assert_keys(Expected, Map) ->
+    ?assertEqual(lists:sort(Expected), lists:sort(maps:keys(Map))).
 
 %%====================================================================
 %% HTTP helpers

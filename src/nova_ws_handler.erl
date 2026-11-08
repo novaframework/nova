@@ -26,7 +26,8 @@ init(Req = #{method := _Method, plugins := Plugins}, State = #{module := Module}
     %% Call the http-handler in order to correctly handle potential plugins for the http-request
     ControllerData = maps:get(controller_data, State, #{}),
     State0 = State#{mod => Module,
-                    plugins => Plugins},
+                    plugins => Plugins,
+                    route => maps:get(nova_route, Req, undefined)},
     ControllerData2 = ControllerData#{req => Req},
     upgrade_ws(Module, Req, State0, ControllerData2).
 
@@ -43,7 +44,7 @@ upgrade_ws(Module, Req, State, ControllerData) ->
 websocket_init(State = #{mod := Mod}) ->
     %% Inject the websocket process into the state
     ControllerData = maps:get(controller_data, State, #{}),
-    NewState = State#{controller_data => ControllerData#{ws_handler_process => self()}},
+    NewState = start_connection(State#{controller_data => ControllerData#{ws_handler_process => self()}}),
 
     case erlang:function_exported(Mod, websocket_init, 1) of
         true ->
@@ -58,7 +59,12 @@ websocket_handle(Frame, State = #{mod := Mod}) ->
 websocket_info(Msg, State = #{mod := Mod}) ->
     handle_ws(Mod, websocket_info, [Msg], State).
 
-terminate(Reason, PartialReq, State = #{controller_data := ControllerData, mod := Mod, plugins := Plugins}) ->
+terminate(Reason, PartialReq, State) ->
+    stop_connection(Reason, State),
+    terminate_controller(Reason, PartialReq, State).
+
+terminate_controller(Reason, PartialReq, State = #{controller_data := ControllerData, mod := Mod,
+                                                   plugins := Plugins}) ->
     case erlang:function_exported(Mod, terminate, 3) of
         true ->
             erlang:apply(Mod, terminate, [Reason, PartialReq, ControllerData]),
@@ -71,7 +77,7 @@ terminate(Reason, PartialReq, State = #{controller_data := ControllerData, mod :
         _ ->
             ok
     end;
-terminate(Reason, PartialReq, State) ->
+terminate_controller(Reason, PartialReq, State) ->
     ?LOG_ERROR(#{msg => <<"Terminate called">>, reason => Reason, partial_req => PartialReq, state => State}),
     ok.
 
@@ -116,8 +122,33 @@ handle_ws(Mod, Func, Args, State) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 
+start_connection(State) ->
+    StartTime = erlang:monotonic_time(),
+    Metadata = (connection_metadata(State))#{telemetry_span_context => erlang:make_ref()},
+    telemetry:execute([nova, websocket, connection, start],
+                      #{monotonic_time => StartTime, system_time => erlang:system_time()},
+                      Metadata),
+    State#{telemetry => {Metadata, StartTime}}.
+
+stop_connection(Reason, #{telemetry := {Metadata, StartTime}}) ->
+    StopTime = erlang:monotonic_time(),
+    telemetry:execute([nova, websocket, connection, stop],
+                      #{monotonic_time => StopTime, duration => StopTime - StartTime},
+                      Metadata#{reason => Reason});
+stop_connection(_Reason, _State) ->
+    ok.
+
+connection_metadata(State) ->
+    #{module => maps:get(mod, State, undefined),
+      app => maps:get(app, State, undefined),
+      route => maps:get(route, State, undefined)}.
+
+%% The span sits inside the try so a crash still emits the exception event
+%% before it is turned into {stop, State}.
 invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData}) ->
-    try erlang:apply(Mod, Func, Args ++ [ControllerData]) of
+    Metadata = (connection_metadata(State))#{callback => Func, module => Mod},
+    try telemetry:span([nova, websocket, handle], Metadata,
+                       fun() -> {erlang:apply(Mod, Func, Args ++ [ControllerData]), Metadata} end) of
         RetObj ->
             case nova_handlers:get_handler(ws) of
                 {ok, Callback} ->

@@ -495,7 +495,7 @@ parse_url(Host,
     Value0 =  #cowboy_handler_value{
                   app = App,
                   handler = nova_ws_handler,
-                  arguments = #{module => Mod},
+                  arguments = #{module => Mod, app => App},
                   plugins = with_route(RealPath, Value#nova_handler_value.plugins),
                   secure = Secure},
 

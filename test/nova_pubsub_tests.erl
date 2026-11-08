@@ -2,6 +2,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("../include/nova_pubsub.hrl").
 
+-export([forward_event/4]).
+
 setup() ->
     ?assertEqual(ok, nova_pubsub:start()),
     ok.
@@ -24,7 +26,8 @@ nova_pubsub_test_() ->
       fun multiple_processes_same_channel/0,
       fun envelope_structure/0,
       fun binary_channel_join_and_broadcast/0,
-      fun start_returns_ok/0
+      fun start_returns_ok/0,
+      fun broadcast_emits_telemetry/0
      ]}.
 
 join_and_get_members() ->
@@ -160,3 +163,29 @@ recv() ->
 
 cleanup_pids(Pids) ->
     [P ! stop || P <- Pids].
+
+broadcast_emits_telemetry() ->
+    {ok, _} = application:ensure_all_started(telemetry),
+    Id = make_ref(),
+    ok = telemetry:attach(Id, [nova, pubsub, broadcast], fun ?MODULE:forward_event/4, self()),
+    Channel = make_channel(),
+    Pid = spawn_member(Channel),
+    nova_pubsub:join(Channel),
+    ok = nova_pubsub:broadcast(Channel, <<"t">>, secret_payload),
+    ?assertEqual({#{receivers => 2}, #{channel => Channel, topic => <<"t">>, scope => global}},
+                 telemetry_event()),
+    ok = nova_pubsub:local_broadcast(Channel, <<"t">>, secret_payload),
+    ?assertEqual({#{receivers => 2}, #{channel => Channel, topic => <<"t">>, scope => local}},
+                 telemetry_event()),
+    telemetry:detach(Id),
+    cleanup_pids([Pid]),
+    nova_pubsub:leave(Channel).
+
+forward_event(Event, Measurements, Metadata, Pid) ->
+    Pid ! {telemetry, Event, Measurements, Metadata}.
+
+telemetry_event() ->
+    receive
+        {telemetry, [nova, pubsub, broadcast], Measurements, Metadata} -> {Measurements, Metadata}
+    after 1000 -> error(no_telemetry_event)
+    end.

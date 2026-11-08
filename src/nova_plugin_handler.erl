@@ -35,7 +35,15 @@ run_plugins([{Callback, Options}|Tl], CallbackType, Req, Env) when is_function(C
                 undefined
         end,
 
-    try Callback(Req, Env, Options, State) of
+    Metadata = #{plugin => plugin_module(Callback),
+                 callback => CallbackType,
+                 app => maps:get(app, Env, undefined),
+                 route => maps:get(nova_route, Req, undefined)},
+    try telemetry:span([nova, plugin], Metadata,
+                       fun() ->
+                               Return = Callback(Req, Env, Options, State),
+                               {Return, Metadata#{result => plugin_result(Return)}}
+                       end) of
         Result ->
             set_state(Callback, Result),
             case Result of
@@ -79,6 +87,15 @@ handle_reply(_, Req) ->
     Req.
 
 
+
+plugin_module(Callback) ->
+    {module, Module} = erlang:fun_info(Callback, module),
+    Module.
+
+plugin_result(Return) when is_tuple(Return), tuple_size(Return) > 0 ->
+    element(1, Return);
+plugin_result(_Return) ->
+    invalid.
 
 set_state(Callback, Return) when is_function(Callback) ->
     ReturnList = erlang:tuple_to_list(Return),
