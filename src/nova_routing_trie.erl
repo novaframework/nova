@@ -79,6 +79,10 @@ Matching is deterministic: at each depth a literal segment is tried first, then 
         {host_in(), path(), comparator_in(), payload()} |
         {host_in(), path(), comparator_in(), payload(), map()}.
 
+%% A normalized route returned by routes/1 and passed to foldl/2 callbacks.
+-type route_out() ::
+        {host_key(), binary() | integer(), comparator(), payload()}.
+
 -type conflict() :: #{
                       reason           := atom(),
                       at               := [child_key()],
@@ -90,7 +94,7 @@ Matching is deterministic: at each depth a literal segment is tried first, then 
                       existing_methods := [comparator()]
                      }.
 
--export_type([trie/0, trie_node/0, route/0, path/0, bindings/0, comparator/0, conflict/0]).
+-export_type([trie/0, trie_node/0, route/0, route_out/0, path/0, bindings/0, comparator/0, conflict/0]).
 
 %%====================================================================
 %% API
@@ -184,7 +188,7 @@ member(HostIn, Path, Comparator, Trie) ->
 
 %%--------------------------------------------------------------------
 -doc "Every route in the trie, as `{Host, Path, Comparator, Payload}`. This is the supported way to introspect a dispatch table; the trie itself is opaque. The result can be fed straight back into `from_list/1`.".
--spec routes(trie()) -> [route()].
+-spec routes(trie()) -> [route_out()].
 routes(#{hosts := Hosts}) ->
     gather_routes(maps:to_list(Hosts), []).
 
@@ -204,7 +208,7 @@ from_list(Routes, RootOpts) when is_list(Routes), is_map(RootOpts) ->
 
 %%--------------------------------------------------------------------
 -doc "Rebuild the trie from a transformation of its routes. `Fun` is handed every route in the table and returns the routes the new table should contain, which makes it the way to filter or rewrite the dispatch table wholesale.".
--spec foldl(trie(), fun(([route()]) -> [route()])) ->
+-spec foldl(trie(), fun(([route_out()]) -> [route()])) ->
           {ok, trie()} | {error, conflict, conflict()}.
 foldl(Trie = #{options := Options}, Fun) when is_function(Fun, 1) ->
     case Fun(routes(Trie)) of
