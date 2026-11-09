@@ -52,6 +52,11 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
     application:stop(nova_test_app),
     application:stop(nova),
+    %% See the matching comment in nova_cowboy_handler_SUITE: the default
+    %% nova_dispatch table outlives application:stop/1, so it must be
+    %% cleared by hand to avoid leaking routes into the next suite.
+    catch persistent_term:erase(nova_dispatch),
+    catch persistent_term:erase(nova_apps),
     ok.
 
 %%====================================================================
