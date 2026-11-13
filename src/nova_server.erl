@@ -60,9 +60,9 @@ so code written against `nova_req` runs on any server:
   (`length`, `period`) and exit with `{request_error, Reason, Message}` (or
   `timeout`) when the body can't be read, as Cowboy does. `read_part/2`
   returns the part's headers as a map.
-- `upgrade/6` gets the module a handler's `init/2` named (`cowboy_websocket`
-  for a WebSocket) and runs that handler's callbacks the way that module
-  does.
+- `upgrade/5` and `upgrade/6` get the module a handler's `init/2` named
+  (`cowboy_websocket` for a WebSocket) and run that handler's callbacks the
+  way that module does, as Cowboy's `upgrade/4` and `upgrade/5` do.
 """.
 
 -export([
@@ -122,11 +122,17 @@ afterwards with `stop_listener/1`.
 -doc """
 Upgrade the request to the protocol a handler's `init/2` asked for with
 `{Mod, Req, State}` (as `cowboy_websocket` for a WebSocket), running
-`Handler`'s callbacks for it. `Opts` is `{opts, Opts}` when the handler
-returned them (`{Mod, Req, State, Opts}`), `none` otherwise.
+`Handler`'s callbacks for it.
+""".
+-callback upgrade(Mod :: module(), Req, Env, Handler :: module(), State :: term()) ->
+    {ok, Req, Env} | {stop, Req} when Req :: cowboy_req:req(), Env :: map().
+
+-doc """
+As `upgrade/5`, for a handler whose `init/2` returned options too:
+`{Mod, Req, State, Opts}`.
 """.
 -callback upgrade(Mod :: module(), Req, Env, Handler :: module(), State :: term(),
-                  Opts :: none | {opts, term()}) -> {ok, Req, Env} | {stop, Req}
+                  Opts :: term()) -> {ok, Req, Env} | {stop, Req}
                                          when Req :: cowboy_req:req(), Env :: map().
 
 %%--------------------------------------------------------------------

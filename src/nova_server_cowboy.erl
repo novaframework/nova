@@ -20,6 +20,7 @@ callbacks are Cowboy's own `cowboy_req` functions.
          read_body/2,
          read_part/2,
          read_part_body/2,
+         upgrade/5,
          upgrade/6
         ]).
 
@@ -152,7 +153,9 @@ read_part_body(Req, Opts) ->
     cowboy_req:read_part_body(Req, Opts).
 
 -doc false.
-upgrade(Mod, Req, Env, Handler, State, none) ->
-    Mod:upgrade(Req, Env, Handler, State);
-upgrade(Mod, Req, Env, Handler, State, {opts, Opts}) ->
+upgrade(Mod, Req, Env, Handler, State) ->
+    Mod:upgrade(Req, Env, Handler, State).
+
+-doc false.
+upgrade(Mod, Req, Env, Handler, State, Opts) ->
     Mod:upgrade(Req, Env, Handler, State, Opts).

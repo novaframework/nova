@@ -27,9 +27,9 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
             Result = terminate(normal, Req2, fun Handler:dummy/1),
             {ok, Req2, Env#{result => Result}};
         {Mod, Req2, State} ->
-            (nova_server:of_req(Req2)):upgrade(Mod, Req2, Env, Handler, State, none);
+            (nova_server:of_req(Req2)):upgrade(Mod, Req2, Env, Handler, State);
         {Mod, Req2, State, Opts} ->
-            (nova_server:of_req(Req2)):upgrade(Mod, Req2, Env, Handler, State, {opts, Opts})
+            (nova_server:of_req(Req2)):upgrade(Mod, Req2, Env, Handler, State, Opts)
     catch
         Class:Reason:Stacktrace when UseStacktrace == true ->
             FormattedStacktrace = nova:format_stacktrace(Stacktrace),
