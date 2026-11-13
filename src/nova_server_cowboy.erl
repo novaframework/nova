@@ -27,8 +27,6 @@ callbacks are Cowboy's own `cowboy_req` functions.
 -include_lib("kernel/include/logger.hrl").
 -include("../include/nova.hrl").
 
--define(NOVA_STD_PORT, 8080).
--define(NOVA_STD_SSL_PORT, 8443).
 -define(DRAIN_POLL_INTERVAL, 500).
 
 %%--------------------------------------------------------------------
@@ -36,15 +34,13 @@ callbacks are Cowboy's own `cowboy_req` functions.
 %%--------------------------------------------------------------------
 
 -doc false.
-start_listener(Ref, Configuration, Env) ->
+start_listener(Ref, #{ip := Host, port := Port} = Configuration, Env) ->
     Options = cowboy_options(Configuration, Env),
     case maps:get(use_ssl, Configuration, false) of
         false ->
-            Port = maps:get(port, Configuration, ?NOVA_STD_PORT),
-            Host = maps:get(ip, Configuration, {0, 0, 0, 0}),
             cowboy:start_clear(Ref, [{port, Port}, {ip, Host}], Options);
         _ ->
-            start_tls(Ref, Configuration, Options)
+            start_tls(Ref, Host, Port, Configuration, Options)
     end.
 
 -doc false.
@@ -68,9 +64,7 @@ cowboy_options(Configuration, Env0) ->
              stream_handlers => StreamHandlers,
              env => Env}.
 
-start_tls(Ref, Configuration, Options) ->
-    Port = maps:get(ssl_port, Configuration, ?NOVA_STD_SSL_PORT),
-    Host = maps:get(ip, Configuration, {0, 0, 0, 0}),
+start_tls(Ref, Host, Port, Configuration, Options) ->
     TransportOpts =
         case maps:get(ca_cert, Configuration, undefined) of
             undefined ->

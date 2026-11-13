@@ -354,12 +354,16 @@ listener_env(Configuration, DispatchKey, Dispatch) ->
     end.
 
 %% Returns {ok, IsTls} so the caller can record how the listener was bound.
+%% The server gets the configuration with `ip' and `port' resolved, `port'
+%% being the one to bind (`ssl_port' for TLS), so Nova's defaults live here.
 bind(Ref, Configuration, Env) ->
     Tls = maps:get(use_ssl, Configuration, false) =/= false,
-    case (nova_server:module()):start_listener(Ref, Configuration, Env) of
+    Port = effective_port(Configuration),
+    Resolved = Configuration#{ip => maps:get(ip, Configuration, {0, 0, 0, 0}), port => Port},
+    case (nova_server:module()):start_listener(Ref, Resolved, Env) of
         {ok, _Pid} ->
             case Tls of
-                true -> ?LOG_NOTICE(#{msg => <<"Nova starting SSL">>, port => effective_port(Configuration)});
+                true -> ?LOG_NOTICE(#{msg => <<"Nova starting SSL">>, port => Port});
                 false -> ok
             end,
             {ok, Tls};

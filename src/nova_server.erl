@@ -80,7 +80,8 @@ so code written against `nova_req` runs on any server:
 
 -doc """
 Start a listener named `Ref` from `Configuration` (the shape of the
-`cowboy_configuration` environment key). Every request it serves runs
+`cowboy_configuration` environment key), with `ip` and `port` resolved:
+`port` is the one to bind, `ssl_port` for TLS. Every request it serves runs
 Nova's pipeline with `Env` as the pipeline's starting environment.
 """.
 -callback start_listener(Ref :: listener_ref(), Configuration :: map(), Env :: map()) ->
