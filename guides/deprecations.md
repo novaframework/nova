@@ -13,6 +13,25 @@ of `{Module, Function}` in Nova.
 
 ## Unreleased
 
+- The listener's settings move from the `cowboy_configuration` key to
+  `server_configuration`, now that the HTTP server is pluggable (see
+  `nova_server`). `cowboy_configuration` is still read when
+  `server_configuration` is not set, so existing applications keep working
+  unchanged.
+
+- Some log messages and fields name the listener rather than Cowboy, since
+  the server can be another one:
+  - "Cowboy could not start" is now "Nova's listener could not start".
+  - "Stopping cowboy listener" and "Could not stop cowboy listener" are now
+    "Stopping listener" and "Could not stop listener".
+  - Graceful shutdown logs "Draining listeners" where it logged "Suspending
+    listeners" and "Draining connections".
+  - "Could not start cowboy with SSL" is no longer logged: a TLS listener
+    that fails to start is logged as one without TLS is.
+
+  "Nova is running" keeps its `cowboy_version` field on Cowboy, and on
+  another server has `server` and `server_version` instead.
+
 - `routing_tree` is no longer a dependency. Nova's dispatch table is now built
   by the in-tree `nova_routing_trie`. If you introspected the routing table by
   including `routing_tree.hrl` and matching on `#host_tree{}`, `#routing_tree{}`,

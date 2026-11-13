@@ -214,9 +214,8 @@ setup_listener(Configuration) ->
             NovaVersion = get_version(nova),
             UseStacktrace = application:get_env(nova, use_stacktrace, false),
             persistent_term:put(nova_use_stacktrace, UseStacktrace),
-            ?LOG_NOTICE(#{msg => <<"Nova is running">>,
+            ?LOG_NOTICE((server_log_fields(Server))#{msg => <<"Nova is running">>,
                           url => unicode:characters_to_binary(io_lib:format("http://~s:~B", [Host0, Port])),
-                          server => Server, server_version => server_version(Server),
                           nova_version => NovaVersion, app => App});
         {error, Error} ->
             ?LOG_ERROR(#{msg => <<"Nova's listener could not start">>, reason => Error})
@@ -249,14 +248,14 @@ start_bootstrap_listener(Configuration) ->
     DispatchKey = nova_dispatch,
     Env = listener_env(Configuration, DispatchKey, Dispatch),
 
-    case bind(?NOVA_LISTENER, Configuration, Env) of
-        {ok, Tls} ->
+    case bind(?NOVA_LISTENER, Host, Port, Configuration, Env) of
+        {ok, Tls, Server} ->
             register_listener(#nova_listener{bind = {Host, Port},
                                              ref = ?NOVA_LISTENER,
                                              apps = [BootstrapApp],
                                              dispatch_key = DispatchKey,
                                              tls = Tls,
-                                             server = nova_server:module()}),
+                                             server = Server}),
             {ok, BootstrapApp, Host, Port};
         {error, Reason} ->
             {error, Reason}
@@ -272,14 +271,14 @@ start_listener(App, Host, Port, Configuration) ->
     ExtraApps = application:get_env(App, nova_apps, []),
     Dispatch = nova_router:compile(resolve_nova_apps([App | ExtraApps] ++ [nova]), DispatchKey),
     Env = listener_env(Configuration, DispatchKey, Dispatch),
-    case bind(Ref, Configuration, Env) of
-        {ok, Tls} ->
+    case bind(Ref, Host, Port, Configuration, Env) of
+        {ok, Tls, Server} ->
             register_listener(#nova_listener{bind = {Host, Port},
                                              ref = Ref,
                                              apps = [App],
                                              dispatch_key = DispatchKey,
                                              tls = Tls,
-                                             server = nova_server:module()}),
+                                             server = Server}),
             ?LOG_NOTICE(#{msg => <<"Started Nova application on a new listener">>,
                           app => App, port => Port, listener => Ref}),
             {ok, App, Host, Port};
@@ -353,20 +352,20 @@ listener_env(Configuration, DispatchKey, Dispatch) ->
         _    -> Env#{dispatch => Dispatch}
     end.
 
-%% Returns {ok, IsTls} so the caller can record how the listener was bound.
-%% The server gets the configuration with `ip' and `port' resolved, `port'
-%% being the one to bind (`ssl_port' for TLS), so Nova's defaults live here.
-bind(Ref, Configuration, Env) ->
+%% Returns {ok, IsTls, Server} so the caller records how the listener was
+%% bound and the server that started it. The server gets the configuration
+%% with `ip' and `port' resolved by the caller, `port' being the one to bind
+%% (`ssl_port' for TLS), so Nova's defaults live here.
+bind(Ref, Host, Port, Configuration, Env) ->
     Tls = maps:get(use_ssl, Configuration, false) =/= false,
-    Port = effective_port(Configuration),
-    Resolved = Configuration#{ip => maps:get(ip, Configuration, {0, 0, 0, 0}), port => Port},
-    case (nova_server:module()):start_listener(Ref, Resolved, Env) of
+    Server = nova_server:module(),
+    case Server:start_listener(Ref, Configuration#{ip => Host, port => Port}, Env) of
         {ok, _Pid} ->
             case Tls of
                 true -> ?LOG_NOTICE(#{msg => <<"Nova starting SSL">>, port => Port});
                 false -> ok
             end,
-            {ok, Tls};
+            {ok, Tls, Server};
         {error, Reason} ->
             {error, Reason}
     end.
@@ -384,13 +383,18 @@ server_configuration() ->
 format_host(Host) when is_tuple(Host) -> inet:ntoa(Host);
 format_host(Host)                     -> Host.
 
-%% The version of the application the server module belongs to, when that
-%% application is loaded.
-server_version(Server) ->
-    case application:get_application(Server) of
-        {ok, App} -> get_version(App);
-        undefined -> not_found
-    end.
+%% What the startup log says about the server: Cowboy's version as before,
+%% or another server's module and the version of the application it belongs
+%% to, when that application is loaded.
+server_log_fields(nova_server_cowboy) ->
+    #{cowboy_version => get_version(cowboy)};
+server_log_fields(Server) ->
+    Version =
+        case application:get_application(Server) of
+            {ok, App} -> get_version(App);
+            undefined -> not_found
+        end,
+    #{server => Server, server_version => Version}.
 
 get_version(Application) ->
     case lists:keyfind(Application, 1, application:loaded_applications()) of

@@ -40,7 +40,14 @@ graceful_shutdown() ->
     DrainTimeout = application:get_env(nova, shutdown_drain_timeout, 15000),
     ?LOG_NOTICE(#{msg => <<"Draining listeners">>, listeners => nova_sup:listeners(),
                   timeout_ms => DrainTimeout}),
-    maps:foreach(fun(Server, Refs) -> ok = Server:drain_listeners(Refs, DrainTimeout) end, ByServer),
+    %% Each server drains its own listeners, side by side, so the whole
+    %% drain takes at most the timeout however many servers there are.
+    Self = self(),
+    Drains = [spawn_link(fun() ->
+                                 ok = Server:drain_listeners(Refs, DrainTimeout),
+                                 Self ! {drained, self()}
+                         end) || Server := Refs <- ByServer],
+    [receive {drained, Drain} -> ok end || Drain <- Drains],
     ?LOG_NOTICE(#{msg => <<"Stopping listeners">>}),
     maps:foreach(fun(Server, Refs) -> [Server:stop_listener(Ref) || Ref <- Refs] end, ByServer),
     ok.

@@ -9,6 +9,15 @@ same arguments and return the same values as the `cowboy_req` functions of
 the same name. Use them instead of `cowboy_req` in controllers, plugins and
 security callbacks, and your code runs on Cowboy and on any other server.
 
+It has most of `cowboy_req`'s functions, with the same arguments and
+results, with these differences:
+
+- `binding/2,3` take the binding's name as a binary (`<<"id">>`), as
+  Nova's router binds it, where `cowboy_req` takes an atom.
+- `host_info/1` and `path_info/1` are not here: Nova's router does not set
+  them (a catch-all route's path info is in the request's `extra_state`).
+- `push/3,4` (HTTP/2 server push) and `cast/2` are not here.
+
 ```erlang
 show(Req0) ->
     Lang = nova_req:header(<<"accept-language">>, Req0, <<"en">>),
@@ -41,9 +50,14 @@ done by the server serving the request.
          parse_header/2,
          parse_header/3,
          parse_qs/1,
+         parse_qs/2,
          match_qs/2,
+         match_qs/3,
+         filter_cookies/2,
          parse_cookies/1,
+         parse_cookies/2,
          match_cookies/2,
+         match_cookies/3,
          binding/2,
          binding/3,
          bindings/1
@@ -57,6 +71,8 @@ done by the server serving the request.
          read_body/2,
          read_urlencoded_body/1,
          read_urlencoded_body/2,
+         read_and_match_urlencoded_body/2,
+         read_and_match_urlencoded_body/3,
          read_part/1,
          read_part/2,
          read_part_body/1,
@@ -67,6 +83,9 @@ done by the server serving the request.
 -export([
          set_resp_cookie/3,
          set_resp_cookie/4,
+         resp_header/2,
+         resp_header/3,
+         resp_headers/1,
          set_resp_header/3,
          set_resp_headers/2,
          has_resp_header/2,
@@ -164,17 +183,37 @@ parse_header(Name, Req, Default) -> cowboy_req:parse_header(Name, Req, Default).
 -spec parse_qs(req()) -> [{binary(), binary() | true}].
 parse_qs(Req) -> cowboy_req:parse_qs(Req).
 
+-doc "The query string as a list of `{Key, Value}`, with options (`max_keys`), as `cowboy_req:parse_qs/2`.".
+-spec parse_qs(req(), map()) -> [{binary(), binary() | true}].
+parse_qs(Req, Opts) -> cowboy_req:parse_qs(Req, Opts).
+
 -doc "Query string values matched against constraints, as `cowboy_req:match_qs/2`.".
 -spec match_qs(cowboy:fields(), req()) -> map().
 match_qs(Fields, Req) -> cowboy_req:match_qs(Fields, Req).
+
+-doc "Query string values matched against constraints, with options, as `cowboy_req:match_qs/3`.".
+-spec match_qs(cowboy:fields(), req(), map()) -> map().
+match_qs(Fields, Req, Opts) -> cowboy_req:match_qs(Fields, Req, Opts).
+
+-doc "The request with only the cookies named in `Names` kept, as `cowboy_req:filter_cookies/2`.".
+-spec filter_cookies([atom() | binary()], Req) -> Req when Req :: req().
+filter_cookies(Names, Req) -> cowboy_req:filter_cookies(Names, Req).
 
 -doc "The request cookies as a list of `{Name, Value}`.".
 -spec parse_cookies(req()) -> [{binary(), binary()}].
 parse_cookies(Req) -> cowboy_req:parse_cookies(Req).
 
+-doc "The request cookies, with options (`max_keys`), as `cowboy_req:parse_cookies/2`.".
+-spec parse_cookies(req(), map()) -> [{binary(), binary()}].
+parse_cookies(Req, Opts) -> cowboy_req:parse_cookies(Req, Opts).
+
 -doc "Cookies matched against constraints, as `cowboy_req:match_cookies/2`.".
 -spec match_cookies(cowboy:fields(), req()) -> map().
 match_cookies(Fields, Req) -> cowboy_req:match_cookies(Fields, Req).
+
+-doc "Cookies matched against constraints, with options, as `cowboy_req:match_cookies/3`.".
+-spec match_cookies(cowboy:fields(), req(), map()) -> map().
+match_cookies(Fields, Req, Opts) -> cowboy_req:match_cookies(Fields, Req, Opts).
 
 -doc """
 A route binding's value, or `undefined`. `Name` is the binding's name as
@@ -218,18 +257,19 @@ read_body(Req, Opts) -> (nova_server:of_req(Req)):read_body(Req, Opts).
 -doc "Read and decode an urlencoded body, as `cowboy_req:read_urlencoded_body/1`.".
 -spec read_urlencoded_body(req()) -> {ok, [{binary(), binary() | true}], req()}.
 read_urlencoded_body(Req) ->
-    read_urlencoded_body(Req, #{length => 64000, period => 5000}).
+    read_urlencoded_body(Req, #{}).
 
 -doc "Read and decode an urlencoded body, as `cowboy_req:read_urlencoded_body/2`.".
 -spec read_urlencoded_body(req(), cowboy_req:read_body_opts()) ->
           {ok, [{binary(), binary() | true}], req()}.
-read_urlencoded_body(Req0, Opts) ->
+read_urlencoded_body(Req0, Opts0) ->
+    Opts = maps:merge(#{length => 64000, period => 5000}, Opts0),
     case read_body(Req0, Opts) of
         {ok, Body, Req} ->
             try
-                {ok, cow_qs:parse_qs(Body), Req}
+                {ok, cow_qs:parse_qs(Body, maps:with([max_keys], Opts)), Req}
             catch _:_:Stacktrace ->
-                erlang:raise(exit, {request_error, urlencoded,
+                erlang:raise(exit, {request_error, urlencoded_body,
                                     'Malformed body; application/x-www-form-urlencoded expected.'},
                              Stacktrace)
             end;
@@ -243,6 +283,26 @@ read_urlencoded_body(Req0, Opts) ->
                     exit({request_error, payload_too_large,
                           'The request body is larger than allowed by configuration.'})
             end
+    end.
+
+-doc "Read an urlencoded body and match it against constraints, as `cowboy_req:read_and_match_urlencoded_body/2`.".
+-spec read_and_match_urlencoded_body(cowboy:fields(), Req) -> {ok, map(), Req} when Req :: req().
+read_and_match_urlencoded_body(Fields, Req) ->
+    read_and_match_urlencoded_body(Fields, Req, #{}).
+
+-doc "Read an urlencoded body and match it against constraints, as `cowboy_req:read_and_match_urlencoded_body/3`.".
+-spec read_and_match_urlencoded_body(cowboy:fields(), Req, cowboy_req:read_body_opts()) ->
+          {ok, map(), Req} when Req :: req().
+read_and_match_urlencoded_body(Fields, Req0, Opts) ->
+    {ok, Qs, Req} = read_urlencoded_body(Req0, Opts),
+    %% Cowboy's own matching, run on the decoded body re-encoded as a query
+    %% string, with its error named as Cowboy names it for a body.
+    try cowboy_req:match_qs(Fields, Req#{qs := cow_qs:qs(Qs)}) of
+        Map -> {ok, Map, Req}
+    catch
+        exit:{request_error, {match_qs, Errors}, _} ->
+            exit({request_error, {read_and_match_urlencoded_body, Errors},
+                  'Urlencoded request body validation constraints failed for the reasons provided.'})
     end.
 
 -doc "Read the next multipart part's headers, as `cowboy_req:read_part/1`.".
@@ -274,6 +334,18 @@ set_resp_cookie(Name, Value, Req) -> cowboy_req:set_resp_cookie(Name, Value, Req
 -doc "Set a cookie on the response, with its attributes (`cow_cookie:cookie_opts()`).".
 -spec set_resp_cookie(binary(), iodata(), Req, cow_cookie:cookie_opts()) -> Req when Req :: req().
 set_resp_cookie(Name, Value, Req, Opts) -> cowboy_req:set_resp_cookie(Name, Value, Req, Opts).
+
+-doc "A response header set on the request, or `undefined`.".
+-spec resp_header(binary(), req()) -> binary() | undefined.
+resp_header(Name, Req) -> cowboy_req:resp_header(Name, Req).
+
+-doc "A response header set on the request, or `Default`.".
+-spec resp_header(binary(), req(), Default) -> binary() | Default.
+resp_header(Name, Req, Default) -> cowboy_req:resp_header(Name, Req, Default).
+
+-doc "The response headers set on the request.".
+-spec resp_headers(req()) -> cowboy:http_headers().
+resp_headers(Req) -> cowboy_req:resp_headers(Req).
 
 -doc "Set a response header. `Name` is lowercase.".
 -spec set_resp_header(binary(), iodata(), Req) -> Req when Req :: req().

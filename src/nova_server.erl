@@ -47,6 +47,17 @@ Nova's pipeline adds its own keys (`bindings`, `plugins`, `extra_state`,
 response keys: `resp_headers` (a map), `resp_cookies` (a map of names to
 complete `set-cookie` values) and `resp_body`.
 
+## What stays with Cowboy
+
+A few settings are Cowboy's alone, and another server leaves them out:
+
+- `stream_handlers` in the configuration, and with them `nova_stream_h`,
+  which sets the `server: Cowboy/Nova` response header. Another server
+  sends its own `server` header, if any.
+- `env` in the configuration's `options`, which Cowboy merges into the
+  pipeline's starting environment. The environment `start_listener/3`
+  gets is Nova's whole.
+
 ## The request callbacks
 
 They take and return what the `cowboy_req` functions of the same name do,
@@ -76,6 +87,10 @@ so code written against `nova_req` runs on any server:
 
 -export_type([listener_ref/0]).
 
+-doc """
+The name Nova gives a listener: `nova_listener` for the bootstrap
+application's, `{nova_listener, App, Port}` for one started at runtime.
+""".
 -type listener_ref() :: term().
 
 %% Listeners

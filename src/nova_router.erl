@@ -62,7 +62,7 @@
 -define(NOVA_PLUGINS, nova_plugins).
 -define(NOVA_DISPATCH, nova_dispatch).
 
-%% Each Cowboy listener owns a routing table, addressed by a dispatch key.
+%% Each listener owns a routing table, addressed by a dispatch key.
 %% Listeners started by nova_sup:add_application/2 get their own, so two
 %% listeners on different ports do not serve each other's routes. The default
 %% listener uses nova_dispatch, which is also what every existing caller and
