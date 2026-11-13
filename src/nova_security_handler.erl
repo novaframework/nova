@@ -27,7 +27,7 @@ execute(Req = #{host := Host}, Env = #{secure := Callback}) ->
                         class => Class,
                         reason => Reason},
             {ok, Req0, _Env} = nova_router:render_status_page(Host, 500, #{}, Req#{crash_info => Payload}, Env),
-            Req1 = cowboy_req:reply(500, Req0),
+            Req1 = nova_req:reply(500, Req0),
             {stop, Req1};
         Class:Reason ->
             ?LOG_ERROR(#{msg => <<"Security handler crashed">>,
@@ -37,7 +37,7 @@ execute(Req = #{host := Host}, Env = #{secure := Callback}) ->
                         class => Class,
                         reason => Reason},
             {ok, Req0, _Env} = nova_router:render_status_page(Host, 500, #{}, Req#{crash_info => Payload}, Env),
-            Req1 = cowboy_req:reply(500, Req0),
+            Req1 = nova_req:reply(500, Req0),
             {stop, Req1}
     end.
 
@@ -63,17 +63,17 @@ handle_response({false, StatusCode, Headers, Body}, Req = #{host := Host}, Env) 
             false ->
                 {ok, _Req0, _Env0} = nova_router:render_status_page(Host, StatusCode, #{}, Req, Env);
             _ ->
-                Req0 = cowboy_req:set_resp_body(Body, Req),
+                Req0 = nova_req:set_resp_body(Body, Req),
                 {ok, Req0, Env}
         end,
-    Req2 = cowboy_req:set_resp_headers(Headers, Req1),
-    Req3 = cowboy_req:reply(StatusCode, Req2),
+    Req2 = nova_req:set_resp_headers(Headers, Req1),
+    Req3 = nova_req:reply(StatusCode, Req2),
     {stop, Req3};
 handle_response({redirect, Route}, Req, _Env) ->
-    Req0 = cowboy_req:set_resp_headers(#{<<"location">> => list_to_binary(Route)}, Req),
-    Req1 = cowboy_req:reply(302, Req0),
+    Req0 = nova_req:set_resp_headers(#{<<"location">> => list_to_binary(Route)}, Req),
+    Req1 = nova_req:reply(302, Req0),
     {stop, Req1};
 handle_response(_, Req = #{host := Host}, Env) ->
     {ok, Req0, _Env0} = nova_router:render_status_page(Host, 401, #{}, Req, Env),
-    Req1 = cowboy_req:reply(401, Req0),
+    Req1 = nova_req:reply(401, Req0),
     {stop, Req1}.

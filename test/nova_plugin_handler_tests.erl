@@ -13,7 +13,7 @@ setup() ->
     persistent_term:put(nova_use_stacktrace, false),
     {ok, Pid} = nova_plugin_manager:start_link(),
     meck:new(cowboy_req, [passthrough, no_link]),
-    meck:expect(cowboy_req, reply, fun(Status, Req) ->
+    meck:expect(cowboy_req, reply, fun(Status, _Headers, _Body, Req) ->
         Req#{resp_status_code => Status}
     end),
     meck:expect(cowboy_req, set_resp_headers, fun(Headers, Req) ->
@@ -160,7 +160,7 @@ pre_plugin_stop_reply_test_() ->
         {stop, Req1} = nova_plugin_handler:execute(Req, env()),
         ?assertEqual(503, maps:get(resp_status_code, Req1)),
         ?assertEqual(<<"unavailable">>, maps:get(resp_body, Req1)),
-        ?assert(meck:called(cowboy_req, reply, [503, '_']))
+        ?assert(meck:called(cowboy_req, reply, [503, '_', '_', '_']))
     end}.
 
 %%====================================================================
@@ -324,5 +324,5 @@ stop_reply_default_status_test_() ->
         Req = req([{pre_request, [plugin(P)]}]),
         {stop, Req1} = nova_plugin_handler:execute(Req, env()),
         ?assertEqual(200, maps:get(resp_status_code, Req1)),
-        ?assert(meck:called(cowboy_req, reply, [200, '_']))
+        ?assert(meck:called(cowboy_req, reply, [200, '_', '_', '_']))
     end}.

@@ -12,7 +12,7 @@ status_code(Req) ->
 
 not_found(Req) ->
     %% Check the accept-headers
-    Accept = cowboy_req:header(<<"accept">>, Req),
+    Accept = nova_req:header(<<"accept">>, Req),
     AcceptList = case Accept of
                      undefined ->
                          [<<"application/json">>];
@@ -46,7 +46,7 @@ server_error(#{crash_info := #{status_code := StatusCode} = CrashInfo} = Req) ->
                   stacktrace => format_stacktrace(maps:get(stacktrace, CrashInfo, []))},
     case application:get_env(nova, render_error_pages, true) of
         true ->
-            case cowboy_req:header(<<"accept">>, Req) of
+            case nova_req:header(<<"accept">>, Req) of
                 <<"application/json">> ->
                     JsonLib = nova:get_env(json_lib, thoas),
                     Json = JsonLib:encode(Variables),
@@ -71,7 +71,7 @@ server_error(#{crash_info := #{class := Class, reason := Reason}} = Req) ->
     case nova:get_environment() of
         dev ->
             %% We do show a proper error response
-            case cowboy_req:header(<<"accept">>, Req) of
+            case nova_req:header(<<"accept">>, Req) of
                 <<"application/json">> ->
                     JsonLib = nova:get_env(json_lib, thoas),
                     Json = JsonLib:encode(Variables),

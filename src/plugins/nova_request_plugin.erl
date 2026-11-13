@@ -56,7 +56,7 @@ modulate_state(Req, [], State) ->
 modulate_state( Req = #{method := Method}, [{decode_json_body, true}|Tail], State) when Method =:= <<"GET">>; Method =:= <<"DELETE">> ->
     modulate_state(Req, Tail, State);
 modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}, body := <<>>}, [{decode_json_body, true}|_Tl], State) ->
-    Req400 = cowboy_req:reply(400, Req),
+    Req400 = nova_req:reply(400, Req),
     logger:warning(#{status_code => 400,
                      msg => "Failed to decode json.",
                      error => "No body to decode."}),
@@ -68,7 +68,7 @@ modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", 
         {ok, JSON} ->
             modulate_state(Req#{json => JSON}, Tl, State);
         Error ->
-            Req400 = cowboy_req:reply(400, Req),
+            Req400 = nova_req:reply(400, Req),
             logger:warning(#{status_code => 400,
                              msg => "Failed to decode json.",
                              error => Error}),
@@ -81,7 +81,7 @@ modulate_state(#{headers := #{<<"content-type">> := <<"application/x-www-form-ur
     Params = maps:from_list(Data),
     modulate_state(Req#{params => Params}, Tl, State);
 modulate_state(Req, [{parse_qs, Type}|T1], State) ->
-    Qs = cowboy_req:parse_qs(Req),
+    Qs = nova_req:parse_qs(Req),
     case Type of
         true -> MapQs = maps:from_list(Qs),
                 modulate_state(Req#{parsed_qs => MapQs}, T1, State);
@@ -93,13 +93,13 @@ modulate_state(Req, [_|Tl], State) ->
 %% A multipart body is never buffered here; nova_multipart_plugin or the
 %% controller reads the parts from the stream.
 read_request_body(Req, Options) ->
-    case not is_multipart(Req) andalso should_read_body(Options) andalso cowboy_req:has_body(Req) of
+    case not is_multipart(Req) andalso should_read_body(Options) andalso nova_req:has_body(Req) of
         true -> read_body(Req, <<>>);
         false -> Req#{body => <<>>}
     end.
 
 is_multipart(Req) ->
-    try cowboy_req:parse_header(<<"content-type">>, Req) of
+    try nova_req:parse_header(<<"content-type">>, Req) of
         {<<"multipart">>, <<"form-data">>, _Params} -> true;
         _ -> false
     catch
@@ -107,7 +107,7 @@ is_multipart(Req) ->
     end.
 
 read_body(Req, Acc) ->
-    case cowboy_req:read_body(Req) of
+    case nova_req:read_body(Req) of
         {ok, Data, Req0} -> Req0#{body => <<Acc/binary, Data/binary>>};
         {more, Data, Req0} -> read_body(Req0, <<Acc/binary, Data/binary>>)
     end.

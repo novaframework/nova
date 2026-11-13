@@ -48,15 +48,15 @@ plugin_info() ->
 %%%%%%%%%%%%%%%%%%%%%%
 
 continue(#{method := <<"OPTIONS">>} = Req, State) ->
-    Reply = cowboy_req:reply(200, Req),
+    Reply = nova_req:reply(200, Req),
     {stop, Reply, State};
 continue(Req, State) ->
     {ok, Req, State}.
 
 add_cors_headers(Req, Origins) ->
-    OriginsReq = cowboy_req:set_resp_header(
+    OriginsReq = nova_req:set_resp_header(
         <<"Access-Control-Allow-Origin">>, Origins, Req),
-    HeadersReq = cowboy_req:set_resp_header(
+    HeadersReq = nova_req:set_resp_header(
         <<"Access-Control-Allow-Headers">>, <<"*">>, OriginsReq),
-    cowboy_req:set_resp_header(
+    nova_req:set_resp_header(
         <<"Access-Control-Allow-Methods">>, <<"*">>, HeadersReq).

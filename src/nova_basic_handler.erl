@@ -40,8 +40,8 @@ handle_json({json, StatusCode, Headers, JSON}, _Callback, Req) ->
     JsonLib = nova:get_env(json_lib, thoas),
     EncodedJSON = JsonLib:encode(JSON),
     Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, Headers),
-    Req0 = cowboy_req:set_resp_headers(Headers0, Req),
-    Req1 = cowboy_req:set_resp_body(EncodedJSON, Req0),
+    Req0 = nova_req:set_resp_headers(Headers0, Req),
+    Req1 = nova_req:set_resp_body(EncodedJSON, Req0),
     Req2 = Req1#{resp_status_code => StatusCode},
     {ok, Req2};
 handle_json({json, JSON}, Callback, Req = #{method := Method}) ->
@@ -130,19 +130,19 @@ handle_status({status, Status, ExtraHeaders, JSON}, _Callback, Req) when is_map(
     %% We do not need to render a status page since we just return a JSON structure
     JsonLib = nova:get_env(json_lib, thoas),
     Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, ExtraHeaders),
-    Req0 = cowboy_req:set_resp_headers(Headers0, Req),
+    Req0 = nova_req:set_resp_headers(Headers0, Req),
     Req1 = Req0#{resp_status_code => Status},
     JSONStr = JsonLib:encode(JSON),
-    Req2 = cowboy_req:set_resp_body(JSONStr, Req1),
+    Req2 = nova_req:set_resp_body(JSONStr, Req1),
     {ok, Req2};
 handle_status({status, Status, ExtraHeaders, Body}, _Callback, Req) ->
     %% Body is a binary - just send it out
-    Req0 = cowboy_req:set_resp_headers(ExtraHeaders, Req),
+    Req0 = nova_req:set_resp_headers(ExtraHeaders, Req),
     Req1 = Req0#{resp_status_code => Status},
-    Req2 = cowboy_req:set_resp_body(Body, Req1),
+    Req2 = nova_req:set_resp_body(Body, Req1),
     {ok, Req2};
 handle_status({status, Status, ExtraHeaders}, _Callback, Req) ->
-    Req0 = cowboy_req:set_resp_headers(ExtraHeaders, Req),
+    Req0 = nova_req:set_resp_headers(ExtraHeaders, Req),
     Req1 = Req0#{resp_status_code => Status},
     {ok, Req2, _Env} =  nova_router:render_status_page(Status, #{}, Req1),
     {ok, Req2};
@@ -164,7 +164,7 @@ handle_redirect({redirect, Route}, Callback, Req) when is_list(Route) ->
     handle_redirect({redirect, list_to_binary(Route)}, Callback, Req);
 handle_redirect({redirect, Route}, _Callback, Req) ->
     Headers = #{<<"location">> => Route},
-    Req0 = cowboy_req:set_resp_headers(Headers, Req),
+    Req0 = nova_req:set_resp_headers(Headers, Req),
     Req1 = Req0#{resp_status_code => 302},
     {ok, Req1}.
 
@@ -198,8 +198,8 @@ handle_sendfile({sendfile, StatusCode, Headers, FileInfo, Mime, Req0}, Callback,
     handle_sendfile({sendfile, StatusCode, Headers, FileInfo, Mime}, Callback, Req0);
 handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _Callback, Req) ->
     Headers0 = maps:merge(#{<<"content-type">> => Mime}, Headers),
-    Req0 = cowboy_req:set_resp_headers(Headers0, Req),
-    Req1 = cowboy_req:set_resp_body({sendfile, Offset, Length, Path}, Req0),
+    Req0 = nova_req:set_resp_headers(Headers0, Req),
+    Req1 = nova_req:set_resp_body({sendfile, Offset, Length, Path}, Req0),
     Req2 = Req1#{resp_status_code => StatusCode},
     {ok, Req2}.
 
@@ -280,8 +280,8 @@ handle_view(View, Variables, Options, Req) ->
                 UserHeaders
         end,
     StatusCode = maps:get(status_code, Options, 200),
-    Req0 = cowboy_req:set_resp_headers(Headers, Req),
-    Req1 = cowboy_req:set_resp_body(HTML, Req0),
+    Req0 = nova_req:set_resp_headers(Headers, Req),
+    Req1 = nova_req:set_resp_body(HTML, Req0),
     Req2 = Req1#{resp_status_code => StatusCode},
     {ok, Req2}.
 

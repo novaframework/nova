@@ -20,20 +20,7 @@
 -spec init(cowboy_stream:streamid(), cowboy_req:req(), cowboy:opts())
           -> {cowboy_stream:commands(), state()}.
 init(StreamID, Req, Opts) ->
-    Req0 =
-        case nova:get_env(use_sessions, true) of
-            true ->
-                Cookies = cowboy_req:parse_cookies(Req),
-                case lists:keyfind(<<"session_id">>, 1, Cookies) of
-                    {_, _} -> Req;
-                    _ ->
-                        {ok, SessionId} = nova_session:generate_session_id(),
-                        ReqWithCookie = cowboy_req:set_resp_cookie(<<"session_id">>, SessionId, Req),
-                        ReqWithCookie#{nova_session_id => SessionId}
-                end;
-            _ ->
-                Req
-        end,
+    Req0 = nova_session:start_request(Req),
     %% Set the correct server-header information
     Req1 = cowboy_req:set_resp_header(<<"server">>, <<"Cowboy/Nova">>, Req0),
     {Commands, Next} = cowboy_stream:init(StreamID, Req1, Opts),

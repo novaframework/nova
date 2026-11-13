@@ -118,7 +118,7 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
             logger:debug(<<"Method not allowed: ~p for ~p. Allowed methods: ~p">>, [Method, Path, AllowedMethods]),
             AllowHeader = iolist_to_binary(lists:join(<<", ">>, AllowedMethods)),
             %% Set the 'allow'-header
-            Req1 = cowboy_req:set_resp_header(<<"allow">>, AllowHeader, Req),
+            Req1 = nova_req:set_resp_header(<<"allow">>, AllowHeader, Req),
             render_status_page('_', 405, #{error => "Method not allowed"}, Req1, Env);
         {ok, Bindings, #nova_handler_value{app = App, callback = Callback, secure = Secure, plugins = Plugins,
                                            extra_state = ExtraState}} ->
