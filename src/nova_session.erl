@@ -6,7 +6,8 @@
          set/3,
          delete/1,
          delete/2,
-         generate_session_id/0
+         generate_session_id/0,
+         start_request/1
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -52,6 +53,29 @@
 
 -optional_callbacks([start_link/0]).
 
+-doc """
+Prepare a request's session as the server starts serving it: when sessions
+are on (`use_sessions`, the default) and the request has no `session_id`
+cookie, generate a session ID, set its cookie on the response and keep it on
+the request as `nova_session_id`. A server module calls this before running
+Nova's pipeline.
+""".
+-spec start_request(Req) -> Req when Req :: cowboy_req:req().
+start_request(Req) ->
+    case nova:get_env(use_sessions, true) of
+        true ->
+            case lists:keyfind(<<"session_id">>, 1, nova_req:parse_cookies(Req)) of
+                {_, _} ->
+                    Req;
+                false ->
+                    {ok, SessionId} = generate_session_id(),
+                    ReqWithCookie = nova_req:set_resp_cookie(<<"session_id">>, SessionId, Req),
+                    ReqWithCookie#{nova_session_id => SessionId}
+            end;
+        _ ->
+            Req
+    end.
+
 %%%===================================================================
 %%% Public functions
 %%%===================================================================
@@ -84,7 +108,7 @@ delete(Req) ->
         {ok, SessionId} ->
             Mod = get_session_module(),
             Mod:delete_value(SessionId),
-            Req1 = cowboy_req:set_resp_cookie(<<"session_id">>, SessionId, Req,
+            Req1 = nova_req:set_resp_cookie(<<"session_id">>, SessionId, Req,
                                               #{max_age => 0}),
             {ok, Req1};
         _ ->
@@ -117,7 +141,7 @@ get_session_id(Req) ->
         true ->
             case maps:get(nova_session_id, Req, undefined) of
                 undefined ->
-                    #{session_id := SessionId} = cowboy_req:match_cookies([{session_id, [], undefined}], Req),
+                    #{session_id := SessionId} = nova_req:match_cookies([{session_id, [], undefined}], Req),
                     case SessionId of
                         undefined ->
                             {error, not_found};

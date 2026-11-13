@@ -130,7 +130,7 @@ is_excluded_path(Path, [Prefix | Rest]) ->
     end.
 
 get_submitted_token(Req, FieldName, HeaderName) ->
-    case cowboy_req:header(HeaderName, Req) of
+    case nova_req:header(HeaderName, Req) of
         undefined ->
             case Req of
                 #{params := Params} when is_map(Params) ->

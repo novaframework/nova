@@ -72,7 +72,7 @@ decode our message so that we can process it. To do that we need to add `decode_
  ```erlang
      {nova, [
          {environment, dev},
-         {cowboy_configuration, #{
+         {server_configuration, #{
                                   port => 8080
                                  }},
          {dev_mode, true},

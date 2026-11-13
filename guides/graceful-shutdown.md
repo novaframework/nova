@@ -3,7 +3,7 @@
 Nova includes built-in graceful shutdown support for safe deployments. When the BEAM VM receives a `SIGTERM` signal (or the application is stopped), Nova will:
 
 1. Wait an optional delay for load balancers to stop routing traffic
-2. Suspend the Cowboy listener (stop accepting new connections)
+2. Stop the listeners accepting new connections
 3. Wait for in-flight requests to complete
 4. Stop the listener
 

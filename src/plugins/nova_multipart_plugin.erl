@@ -29,7 +29,7 @@ pre_request(Req, _Env, #{handler := {Mod, InitArgs}} = Options, State) when is_a
             {ok, Req#{params => maps:get(params, Req, #{}), files => []}, State};
         {multipart, no_boundary} ->
             warn(400, <<"multipart/form-data without a boundary parameter.">>, #{}),
-            {stop, cowboy_req:reply(400, Req), State};
+            {stop, nova_req:reply(400, Req), State};
         multipart ->
             Limits = limits(Options),
             Deadline = erlang:monotonic_time(millisecond) + maps:get(read_timeout, Limits),
@@ -44,7 +44,7 @@ pre_request(Req, _Env, #{handler := {Mod, InitArgs}} = Options, State) when is_a
 pre_request(Req, _Env, Options, State) ->
     ?LOG_ERROR(#{msg => <<"nova_multipart_plugin needs handler => {Mod, InitArgs}.">>,
                  options => Options}),
-    {stop, cowboy_req:reply(500, Req), State}.
+    {stop, nova_req:reply(500, Req), State}.
 
 -spec post_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
           {ok, Req0 :: cowboy_req:req(), NewState :: any()}.
@@ -78,7 +78,7 @@ plugin_info() ->
 %%%%%%%%%%%%%%%%%%%%%%
 
 content_type(Req) ->
-    try cowboy_req:parse_header(<<"content-type">>, Req) of
+    try nova_req:parse_header(<<"content-type">>, Req) of
         {<<"multipart">>, <<"form-data">>, Params} ->
             case has_boundary(Params) of
                 true -> multipart;
@@ -108,12 +108,12 @@ stream_parts(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params,
     case deadline_expired(Deadline) of
         true ->
             warn(408, <<"Multipart read deadline exceeded.">>, #{}),
-            {stop, cowboy_req:reply(408, Req)};
+            {stop, nova_req:reply(408, Req)};
         false ->
             case PartCount >= maps:get(max_parts, Limits) of
                 true ->
                     warn(413, <<"Too many multipart parts.">>, #{max_parts => maps:get(max_parts, Limits)}),
-                    {stop, cowboy_req:reply(413, Req)};
+                    {stop, nova_req:reply(413, Req)};
                 false ->
                     read_next_part(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params, Files)
             end
@@ -127,7 +127,7 @@ read_next_part(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Param
             case part_info(Headers) of
                 error ->
                     warn(400, <<"Malformed content-disposition in part.">>, #{}),
-                    {stop, cowboy_req:reply(400, Req0)};
+                    {stop, nova_req:reply(400, Req0)};
                 {data, FieldName} ->
                     read_field(Req0, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params, Files, FieldName);
                 {file, FieldName, Filename, ContentType} ->
@@ -137,7 +137,7 @@ read_next_part(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Param
         {error, Reason, Req0} ->
             Status = error_status(Reason),
             warn(Status, <<"Failed to read multipart headers.">>, #{error => safe_label(Reason)}),
-            {stop, cowboy_req:reply(Status, Req0)}
+            {stop, nova_req:reply(Status, Req0)}
     end.
 
 read_field(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params, Files, FieldName) ->
@@ -148,7 +148,7 @@ read_field(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params, F
             case NewTotal > maps:get(max_total_size, Limits) of
                 true ->
                     warn(413, <<"Multipart request exceeded max_total_size.">>, #{}),
-                    {stop, cowboy_req:reply(413, Req0)};
+                    {stop, nova_req:reply(413, Req0)};
                 false ->
                     stream_parts(Req0, Mod, InitArgs, Limits, Deadline, PartCount + 1, NewTotal,
                                  Params#{FieldName => Body}, Files)
@@ -156,15 +156,15 @@ read_field(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params, F
         {too_large, Req0} ->
             warn(413, <<"Multipart field exceeded max_field_size.">>,
                  #{field => safe_label(FieldName), max_field_size => MaxFieldSize}),
-            {stop, cowboy_req:reply(413, Req0)};
+            {stop, nova_req:reply(413, Req0)};
         {timeout, Req0} ->
             warn(408, <<"Multipart field read deadline exceeded.">>, #{field => safe_label(FieldName)}),
-            {stop, cowboy_req:reply(408, Req0)};
+            {stop, nova_req:reply(408, Req0)};
         {error, Reason, Req0} ->
             Status = error_status(Reason),
             warn(Status, <<"Failed to read a multipart field.">>,
                  #{field => safe_label(FieldName), error => safe_label(Reason)}),
-            {stop, cowboy_req:reply(Status, Req0)}
+            {stop, nova_req:reply(Status, Req0)}
     end.
 
 read_bounded_body(Req, MaxSize, Deadline, Acc) ->
@@ -198,14 +198,14 @@ read_file_part(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Param
                     File = PartInfo#{result => Result},
                     stream_parts(Req0, Mod, InitArgs, Limits, Deadline, PartCount + 1, NewTotal, Params, [File|Files]);
                 {aborted, Status, Req0} ->
-                    {stop, cowboy_req:reply(Status, Req0)}
+                    {stop, nova_req:reply(Status, Req0)}
             end;
         {reject, Reason} ->
             warn(400, <<"Handler rejected part.">>, #{error => safe_label(Reason)}),
-            {stop, cowboy_req:reply(400, Req)};
+            {stop, nova_req:reply(400, Req)};
         {error, Reason} ->
             warn(500, <<"Handler failed to init.">>, #{error => safe_label(Reason)}),
-            {stop, cowboy_req:reply(500, Req)}
+            {stop, nova_req:reply(500, Req)}
     end.
 
 stream_part_body(Req, Mod, HandlerState, Limits, Deadline, PartSize, TotalSize) ->
@@ -262,14 +262,14 @@ finish_part(Req, Mod, HandlerState, TotalSize) ->
 %% read, and raise error:badmatch on duplicate part headers. Both are turned
 %% into {error, Reason, Req} so every caller cleans up through one path.
 safe_read_part(Req) ->
-    try cowboy_req:read_part(Req)
+    try nova_req:read_part(Req)
     catch
         exit:Reason -> {error, Reason, Req};
         error:Reason -> {error, Reason, Req}
     end.
 
 safe_read_part_body(Req, Opts) ->
-    try cowboy_req:read_part_body(Req, Opts)
+    try nova_req:read_part_body(Req, Opts)
     catch
         exit:Reason -> {error, Reason, Req};
         error:Reason -> {error, Reason, Req}

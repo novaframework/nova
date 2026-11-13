@@ -188,3 +188,37 @@ generate_session_id_format() ->
     ?assertEqual(32, byte_size(Decoded)),
     {ok, Id2} = nova_session:generate_session_id(),
     ?assertNotEqual(Id, Id2).
+
+%%--------------------------------------------------------------------
+%% start_request/1: the session a server sets up before Nova's pipeline
+%%--------------------------------------------------------------------
+
+start_request_test_() ->
+    {foreach,
+     %% nova:get_env/2 reads the bootstrap application's environment.
+     fun() ->
+             application:set_env(nova, bootstrap_application, nova),
+             application:set_env(nova, use_sessions, true)
+     end,
+     fun(_) ->
+             application:unset_env(nova, use_sessions),
+             application:unset_env(nova, bootstrap_application)
+     end,
+     [fun start_request_sets_a_session_cookie/0,
+      fun start_request_keeps_an_existing_session/0,
+      fun start_request_without_sessions/0]}.
+
+start_request_sets_a_session_cookie() ->
+    Req = nova_session:start_request(#{headers => #{}}),
+    #{nova_session_id := SessionId, resp_cookies := #{<<"session_id">> := Cookie}} = Req,
+    ?assertMatch({_, _}, binary:match(iolist_to_binary(Cookie), SessionId)).
+
+start_request_keeps_an_existing_session() ->
+    Req = #{headers => #{<<"cookie">> => <<"session_id=abc">>}},
+    ?assertEqual(Req, nova_session:start_request(Req)).
+
+start_request_without_sessions() ->
+    application:set_env(nova, use_sessions, false),
+    Req = #{headers => #{}},
+    ?assertEqual(Req, nova_session:start_request(Req)).
+

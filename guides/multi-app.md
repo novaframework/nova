@@ -47,7 +47,7 @@ declares `nova_apps` of its own has those registered too.
 ## Starting an application at runtime
 
 `nova_sup:add_application/2` starts a Nova application while the node is
-running. The second argument takes the same shape as the `cowboy_configuration`
+running. The second argument takes the same shape as the `server_configuration`
 environment key.
 
 ```erlang
@@ -56,7 +56,7 @@ environment key.
 
 What happens depends on whether the host and port are already bound:
 
-- **A free port.** A new Cowboy listener is started with a routing table of its
+- **A free port.** A new listener is started with a routing table of its
   own, holding that application, anything in its `nova_apps`, and Nova's own
   error pages. The listener serves only those routes.
 - **A port Nova already listens on.** The application's routes are added to

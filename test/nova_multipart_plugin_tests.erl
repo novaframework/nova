@@ -21,7 +21,7 @@ non_multipart_req_test() ->
 missing_boundary_test_() ->
     {setup,
      fun() -> meck:new(cowboy_req, [passthrough]),
-              meck:expect(cowboy_req, reply, fun(Status, Req) -> Req#{replied => Status} end) end,
+              meck:expect(cowboy_req, reply, fun(Status, _Headers, _Body, Req) -> Req#{replied => Status} end) end,
      fun(_) -> meck:unload(cowboy_req) end,
      fun() ->
          Req = nova_test_helper:mock_req(<<"POST">>, <<"/upload">>),
@@ -34,7 +34,7 @@ missing_boundary_test_() ->
 misconfigured_handler_test_() ->
     {setup,
      fun() -> meck:new(cowboy_req, [passthrough]),
-              meck:expect(cowboy_req, reply, fun(Status, Req) -> Req#{replied => Status} end) end,
+              meck:expect(cowboy_req, reply, fun(Status, _Headers, _Body, Req) -> Req#{replied => Status} end) end,
      fun(_) -> meck:unload(cowboy_req) end,
      [fun() ->
           Req = nova_test_helper:mock_req(<<"POST">>, <<"/upload">>),
@@ -81,7 +81,7 @@ mock_cowboy_req(Parts) ->
     meck:new(cowboy_req, [passthrough]),
     Pid = spawn(fun() -> part_server(Parts) end),
     meck:expect(cowboy_req, read_part,
-                fun(Req) ->
+                fun(Req, _Opts) ->
                     case call(Pid, next_part) of
                         done -> {done, Req};
                         {part, {raise, Class, Reason}} -> erlang:Class(Reason);
@@ -97,7 +97,7 @@ mock_cowboy_req(Parts) ->
                         {more, Data} -> {more, Data, Req}
                     end
                 end),
-    meck:expect(cowboy_req, reply, fun(Status, Req) -> Req#{replied => Status} end).
+    meck:expect(cowboy_req, reply, fun(Status, _Headers, _Body, Req) -> Req#{replied => Status} end).
 
 call(Pid, Msg) ->
     Pid ! {self(), Msg},

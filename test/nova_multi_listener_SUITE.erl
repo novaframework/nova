@@ -42,7 +42,11 @@ init_per_suite(Config) ->
     Port = free_port(),
     application:load(nova),
     application:set_env(nova, bootstrap_application, nova_test_app),
-    application:set_env(nova, cowboy_configuration, #{port => Port}),
+    %% The listener's configuration under its current name. The earlier name
+    %% points at another port, which no case reaches: server_configuration
+    %% wins when both are set.
+    application:set_env(nova, server_configuration, #{port => Port}),
+    application:set_env(nova, cowboy_configuration, #{port => free_port()}),
     application:set_env(nova, environment, test),
     application:set_env(nova, plugins, []),
     {ok, _Started} = application:ensure_all_started(nova_test_app),
@@ -52,6 +56,8 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
     application:stop(nova_test_app),
     application:stop(nova),
+    application:unset_env(nova, server_configuration),
+    application:unset_env(nova, cowboy_configuration),
     ok.
 
 %%====================================================================

@@ -2,15 +2,17 @@
 
 There's a lot of parameters that can be configured in Nova. This document will try to explain them all.
 
-## Cowboy configuration
+## Server configuration
 
-Nova uses Cowboy as the webserver. Cowboy is a very flexible webserver and Nova tries to expose as much of this flexibility as possible. This means that you can configure Cowboy in a lot of different ways. The configuration is done in the `nova`-application under `cowboy_configuration`-key in your *sys.config*.
+Nova runs on Cowboy by default, and another server can be set with the `server` key (see `nova_server`). The listener is configured in the `nova`-application under the `server_configuration`-key in your *sys.config*. The earlier name of that key, `cowboy_configuration`, is still read when `server_configuration` is not set.
+
+`ip`, `port`, the SSL keys and `middleware_handlers` mean the same for every server, and `options` holds the server's own options. `stream_handlers` are Cowboy's, and other servers ignore them.
 
 | Key | Description | Value | Default |
 |-----|-------------|-------|---------|
 | `stream_handlers` | Stream handlers are used to handle streaming requests. You can configure multiple stream handlers. Read more in the subsection *Stream handlers* | `list()` | `[nova_stream_h, cowboy_compress_h, cowboy_stream_h]` |
 | `middleware_handlers` | Middleware handlers are used to handle middleware requests. You can configure multiple middleware handlers. Read more in the subsection *Middleware handlers* | `list()` | `[nova_router, nova_plugin_handler, nova_security_handler, nova_handler, nova_plugin_handler]` |
-| `options` | Cowboy options. Read more in the subsection *Cowboy options* | `map()` | `#{compress => true}` |
+| `options` | The server's own options: Cowboy's options for the default server. Read more in the subsection *Cowboy options* | `map()` | `#{compress => true}` |
 | `ip` | IP to bind to | `tuple` | `{0, 0, 0, 0}` |
 | `port` | Port to bind to | `integer()` | `8080` |
 | `use_ssl` | If SSL should be used | `boolean()` | `false` |
@@ -33,7 +35,9 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 | `session_manager` | Specifify a module to use as the session manager. Defaults to `nova_session_ets` | `atom()` | `nova_session_ets` |
 | `use_strict_routing`    | If the routing module should work under the strict mode. Using strict mode will cause errors if non-deterministic paths are detected. This is a beta-function so use with caution. | `boolean()` | `false` |
 | `bootstrap_application` | Define which application to bootstrap with Nova. This should be the name of your application. | `atom()` | *Will crash if not defined* |
-| `cowboy_configuration` | If you need some additional configuration done to Cowboy this is the place. Check `nova_sup` module to learn which keys that can be defined. | `map()` | `#{}` |
+| `server` | The module of the server Nova runs on (`nova_server`) | `module()` | `nova_server_cowboy` |
+| `server_configuration` | The listener's configuration, as described in *Server configuration* above. | `map()` | `#{}` |
+| `cowboy_configuration` | The earlier name of `server_configuration`, read when that is not set. | `map()` | `#{}` |
 | `shutdown_delay` | Milliseconds to wait before suspending the listener during shutdown. Useful for letting load balancers drain traffic. See the [Graceful shutdown](graceful-shutdown.md) guide. | `integer()` | `0` |
 | `shutdown_drain_timeout` | Maximum milliseconds to wait for active connections to finish during shutdown. See the [Graceful shutdown](graceful-shutdown.md) guide. | `integer()` | `15000` |
 

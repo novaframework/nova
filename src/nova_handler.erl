@@ -27,9 +27,9 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
             Result = terminate(normal, Req2, fun Handler:dummy/1),
             {ok, Req2, Env#{result => Result}};
         {Mod, Req2, State} ->
-            Mod:upgrade(Req2, Env, Handler, State);
+            (nova_server:of_req(Req2)):upgrade(Mod, Req2, Env, Handler, State);
         {Mod, Req2, State, Opts} ->
-            Mod:upgrade(Req2, Env, Handler, State, Opts)
+            (nova_server:of_req(Req2)):upgrade(Mod, Req2, Env, Handler, State, Opts)
     catch
         Class:Reason:Stacktrace when UseStacktrace == true ->
             FormattedStacktrace = nova:format_stacktrace(Stacktrace),
@@ -160,10 +160,10 @@ call_handler(Callback, Req, RetObj, Env, IsFallbackController) ->
 
 -spec render_response(Req :: cowboy_req:req(), Env :: map()) -> {ok, Req :: cowboy_req:req(), State :: map()}.
 render_response(Req = #{resp_status_code := StatusCode}, Env) ->
-    Req0 = cowboy_req:reply(StatusCode, Req),
+    Req0 = nova_req:reply(StatusCode, Req),
     {ok, Req0, Env};
 render_response(Req, Env) ->
-    Req0 = cowboy_req:reply(200, Req),
+    Req0 = nova_req:reply(200, Req),
     {ok, Req0, Env}.
 
 
