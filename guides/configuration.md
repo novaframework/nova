@@ -6,7 +6,7 @@ There's a lot of parameters that can be configured in Nova. This document will t
 
 Nova runs on Cowboy by default, and another server can be set with the `server` key (see `nova_server`). The listener is configured in the `nova`-application under the `server_configuration`-key in your *sys.config*. The earlier name of that key, `cowboy_configuration`, is still read when `server_configuration` is not set.
 
-`ip`, `port` and the SSL keys mean the same for every server, and `options` holds the server's own options. The stream and middleware handlers are Cowboy's.
+`ip`, `port`, the SSL keys and `middleware_handlers` mean the same for every server, and `options` holds the server's own options. `stream_handlers` are Cowboy's, and other servers ignore them.
 
 | Key | Description | Value | Default |
 |-----|-------------|-------|---------|
