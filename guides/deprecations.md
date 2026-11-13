@@ -32,6 +32,13 @@ of `{Module, Function}` in Nova.
   "Nova is running" keeps its `cowboy_version` field on Cowboy, and on
   another server has `server` and `server_version` instead.
 
+- Nova's handlers and plugins now send responses with `cowboy_req:reply/4`
+  and read multipart parts with `cowboy_req:read_part/2`, through `nova_req`,
+  where they called `reply/2` and `read_part/1`. Running applications behave
+  as before, but a test suite that mocks `cowboy_req:reply/2` or
+  `read_part/1` while running Nova's handlers or plugins needs to mock
+  `reply/4` and `read_part/2` instead.
+
 - `routing_tree` is no longer a dependency. Nova's dispatch table is now built
   by the in-tree `nova_routing_trie`. If you introspected the routing table by
   including `routing_tree.hrl` and matching on `#host_tree{}`, `#routing_tree{}`,
