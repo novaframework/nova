@@ -9,14 +9,16 @@ module that implements it.
 ```erlang
 {nova, [
     {server, my_server},
-    {cowboy_configuration, #{port => 8080}}
+    {server_configuration, #{port => 8080}}
 ]}
 ```
 
 A server module does three things:
 
 - It starts, stops and drains the listeners `nova_sup` asks for, from the
-  same configuration map as the `cowboy_configuration` key.
+  same configuration map as the `server_configuration` key. Its shared
+  keys (`ip`, `port`, `use_ssl`, `ssl_port`, `ssl_options`) mean the same
+  for every server, and `options` holds the server's own options.
 - It runs Nova's pipeline on each request with `execute/2`, after
   `nova_session:start_request/1`, handing it a request map shaped like
   Cowboy's, described below.
@@ -80,7 +82,7 @@ so code written against `nova_req` runs on any server:
 
 -doc """
 Start a listener named `Ref` from `Configuration` (the shape of the
-`cowboy_configuration` environment key), with `ip` and `port` resolved:
+`server_configuration` environment key), with `ip` and `port` resolved:
 `port` is the one to bind, `ssl_port` for TLS. Every request it serves runs
 Nova's pipeline with `Env` as the pipeline's starting environment.
 """.

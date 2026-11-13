@@ -4,7 +4,7 @@
 -moduledoc """
 Nova supervisor.
 
-Owns the listeners. The bootstrap application gets one at startup from the `cowboy_configuration` key, and further applications can be started and stopped at runtime with `add_application/2` and `remove_application/1`. The listeners run on the server Nova's `server` key names (`nova_server`), Cowboy by default.
+Owns the listeners. The bootstrap application gets one at startup from the `server_configuration` key (`cowboy_configuration` before Nova's server was pluggable, still read when `server_configuration` is not set), and further applications can be started and stopped at runtime with `add_application/2` and `remove_application/1`. The listeners run on the server Nova's `server` key names (`nova_server`), Cowboy by default.
 
 Each listener owns its own routing table, so an application started on a second port serves only its own routes. Applications added to a listener that is already bound to the same host and port share that listener's table instead.
 """.
@@ -60,7 +60,7 @@ start_link() ->
 -doc """
 Start a Nova application at runtime.
 
-`Configuration` takes the same shape as the `cowboy_configuration` environment key. If a listener is already bound to the requested host and port, the application's routes are added to that listener's routing table. Otherwise a new listener is started with a routing table of its own.
+`Configuration` takes the same shape as the `server_configuration` environment key. If a listener is already bound to the requested host and port, the application's routes are added to that listener's routing table. Otherwise a new listener is started with a routing table of its own.
 """.
 -spec add_application(App :: atom(), Configuration :: map()) ->
           {ok, App :: atom(), Host :: inet:ip_address() | string(), Port :: inet:port_number()} |
@@ -136,7 +136,7 @@ init([]) ->
 
     ensure_listener_table(),
 
-    Configuration = application:get_env(nova, cowboy_configuration, #{}),
+    Configuration = server_configuration(),
 
     SessionManager = application:get_env(nova, session_manager, nova_session_ets),
 
@@ -369,6 +369,14 @@ bind(Ref, Configuration, Env) ->
             {ok, Tls};
         {error, Reason} ->
             {error, Reason}
+    end.
+
+%% The listener configuration, under its earlier name `cowboy_configuration'
+%% when `server_configuration' is not set, so existing applications keep it.
+server_configuration() ->
+    case application:get_env(nova, server_configuration) of
+        {ok, Configuration} -> Configuration;
+        undefined -> application:get_env(nova, cowboy_configuration, #{})
     end.
 
 %% The ip configuration key is an address tuple in practice, but ranch also

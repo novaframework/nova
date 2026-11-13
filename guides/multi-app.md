@@ -47,7 +47,7 @@ declares `nova_apps` of its own has those registered too.
 ## Starting an application at runtime
 
 `nova_sup:add_application/2` starts a Nova application while the node is
-running. The second argument takes the same shape as the `cowboy_configuration`
+running. The second argument takes the same shape as the `server_configuration`
 environment key.
 
 ```erlang
