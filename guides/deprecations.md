@@ -66,6 +66,11 @@ of `{Module, Function}` in Nova.
   Move the file into the directory, or set `follow_external_symlinks => true`
   in the options of the route.
 
+- **A `Range` that is not valid, or is sent with `If-Range`, gets the whole
+  file.** A static file answered a byte range that is not valid, such as
+  `bytes=5-2`, with `416`, and took no notice of `If-Range`. Both now get the
+  whole file with `200`, as RFC 9110 asks for.
+
 - **An invalid `security` value stops the boot.** `security => true` was logged
   and the group left open, and any other value that is not `false`, a `fun/1`
   or `{Module, Function}` crashed on every request. Both now fail the start

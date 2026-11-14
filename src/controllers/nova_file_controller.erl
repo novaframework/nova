@@ -26,8 +26,10 @@ directory_state(Dir, Options) ->
     Root = get_filepath(Dir),
     #{static => Dir, options => Options, static_root => {Root, resolve_root(Root, Options)}}.
 
+%% No ETag or Last-Modified is sent with a file, so an If-Range has nothing
+%% to match and the range it guards is not used (RFC 9110 section 13.1.5).
 get_file(#{headers := #{<<"range">> := Range} = Headers} = Req) ->
-    case ignored_range(Range) of
+    case is_map_key(~"if-range", Headers) orelse ignored_range(Range) of
         true -> serve_file(Req#{headers => maps:remove(<<"range">>, Headers)});
         false -> serve_file(Req)
     end;
@@ -64,8 +66,9 @@ serve_file(#{extra_state := #{static := File, options := Options}, headers := He
                                                              (integer_to_binary(Size))/binary>>,
                                     <<"content-length">> => integer_to_binary(Length)},
                     {sendfile, 206, RespHeaders, {Start, Length, Filepath}, MimeType};
+                error ->
+                    {sendfile, 200, #{}, {0, Size, Filepath}, MimeType};
                 _ ->
-                    %% Invalid range request
                     {status, 416, #{<<"content-range">> => <<"bytes */", (integer_to_binary(Size))/binary>>}}
             end
     end;
@@ -224,13 +227,19 @@ ignored_range(<<"bytes=", RangeSpec/binary>>) ->
 ignored_range(_OtherUnit) ->
     true.
 
+%% RFC 9110 section 14.1.1: a range that is not written as one, or whose
+%% last position is before its first, is invalid and gives error, which
+%% sends the whole file. A valid range that no part of the file answers,
+%% a suffix of no bytes included, is unsatisfiable.
 parse_range(RangeSpec, FileSize) ->
     case binary:split(RangeSpec, <<"-">>, [global]) of
         [<<>>, SuffixLength] ->
             case digits(SuffixLength) of
-                {ok, Length} when Length > 0 ->
+                {ok, 0} ->
+                    unsatisfiable;
+                {ok, Length} ->
                     {ok, {max(FileSize - Length, 0), FileSize - 1}};
-                _ ->
+                error ->
                     error
             end;
         [First, <<>>] ->
