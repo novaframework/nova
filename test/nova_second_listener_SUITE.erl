@@ -10,7 +10,8 @@
          not_found_renders_the_listeners_own_page/1,
          bootstrap_listener_keeps_its_pages/1,
          lookup_by_dispatch_key/1,
-         dispatch_key_of_a_request/1
+         dispatch_key_of_a_request/1,
+         dispatch_key_is_not_looked_up_by_listener/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -23,7 +24,8 @@ all() ->
      not_found_renders_the_listeners_own_page,
      bootstrap_listener_keeps_its_pages,
      lookup_by_dispatch_key,
-     dispatch_key_of_a_request
+     dispatch_key_of_a_request,
+     dispatch_key_is_not_looked_up_by_listener
     ].
 
 init_per_suite(Config) ->
@@ -73,3 +75,8 @@ dispatch_key_of_a_request(Config) ->
     Expected = iolist_to_binary(io_lib:format("~0p", [{nova_dispatch, nova_test_sub_app, SecondPort}])),
     ?assertEqual({200, ~"nova_dispatch"}, nova_test_listener:get(?config(first_port, Config), "/key")),
     ?assertEqual({200, Expected}, nova_test_listener:get(SecondPort, "/key")).
+
+dispatch_key_is_not_looked_up_by_listener(Config) ->
+    Listener = {nova_listener, nova_test_sub_app, ?config(second_port, Config)},
+    ?assert(lists:member(Listener, nova_sup:listeners())),
+    ?assertEqual(nova_dispatch, nova_router:dispatch_key(#{ref => Listener})).

@@ -124,9 +124,11 @@ compile_fresh(Apps, DispatchKey) ->
 -spec execute(Req, Env :: cowboy_middleware:env()) -> {ok, Req, Env0} | {stop, Req}
                                                           when Req::cowboy_req:req(),
                                                                Env0::cowboy_middleware:env().
-execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
+execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
     StorageBackend = storage_backend(),
-    Dispatch = StorageBackend:get(dispatch_key(Env)),
+    DispatchKey = dispatch_key(Env),
+    Req = Req0#{nova_dispatch_key => DispatchKey},
+    Dispatch = StorageBackend:get(DispatchKey),
     case nova_routing_trie:find(Host, Path, Method, Dispatch) of
         {error, not_found} ->
             logger:debug(<<"Path ~p not found for ~p in ~p">>, [Path, Method, Host]),
@@ -607,17 +609,10 @@ storage_backend() ->
     end.
 
 %%--------------------------------------------------------------------
--doc "The key of the routing table serving a request, for the functions that take a `DispatchKey`. Takes the request, or the middleware environment where that is at hand. Anything that does not belong to a listener gives the key of the default listener.".
+-doc "The key of the routing table serving a request, for the functions that take a `DispatchKey`. Takes the request, which carries the key once it has passed the router, or the middleware environment where that is at hand. Anything else gives the key of the default listener.".
 -spec dispatch_key(ReqOrEnv :: cowboy_req:req() | cowboy_middleware:env()) -> dispatch_key().
 dispatch_key(#{nova_dispatch_key := DispatchKey}) ->
     DispatchKey;
-dispatch_key(#{ref := Listener}) ->
-    try ranch:get_protocol_options(Listener) of
-        #{env := #{nova_dispatch_key := DispatchKey}} -> DispatchKey;
-        _ -> ?NOVA_DISPATCH
-    catch
-        error:badarg -> ?NOVA_DISPATCH
-    end;
 dispatch_key(_) ->
     ?NOVA_DISPATCH.
 
