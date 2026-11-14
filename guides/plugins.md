@@ -298,7 +298,7 @@ return tuple:
 ```erlang
 upload(Req) ->
     {Files, Req1} = read_parts(Req, []),
-    {json, 200, #{}, Req1, #{uploaded => length(Files)}}.
+    {json, 200, #{}, #{uploaded => length(Files)}, Req1}.
 
 read_parts(Req0, Acc) ->
     case cowboy_req:read_part(Req0) of
