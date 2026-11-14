@@ -92,6 +92,7 @@ nova_session_ets_test_() ->
      fun cleanup/1,
      [
       fun set_and_get_value/0,
+      fun value_of_any_type_is_kept_as_it_is/0,
       fun get_missing_session/0,
       fun get_missing_key/0,
       fun set_multiple_keys/0,
@@ -135,6 +136,14 @@ set_and_get_value() ->
     ok = nova_session:set(Req, <<"username">>, <<"alice">>),
     sync(),
     ?assertEqual({ok, <<"alice">>}, nova_session:get(Req, <<"username">>)).
+
+value_of_any_type_is_kept_as_it_is() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    Req = req_with_session(SId),
+    Cart = #{items => [{~"book", 2}], total => 12.5},
+    ok = nova_session:set(Req, ~"cart", Cart),
+    sync(),
+    ?assertEqual({ok, Cart}, nova_session:get(Req, ~"cart")).
 
 get_missing_session() ->
     Req = nova_test_helper:mock_req(~"GET", ~"/"),
