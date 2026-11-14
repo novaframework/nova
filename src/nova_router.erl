@@ -46,7 +46,7 @@
 
 -ifdef(TEST).
 -export([add_plugin/1, apply_callback/3, concat_strings/2, insert/6, method_to_binary/1, normalize_plugins/2,
-         normalize_secure/2, plugins_after_security/2, resolve_secure/3]).
+         normalize_secure/2, plugins_after_security/2, resolve_secure/3, router_module/1]).
 -endif.
 
 -include_lib("kernel/include/logger.hrl").
@@ -446,22 +446,51 @@ router_module(App) ->
         {ok, RouterModule} ->
             RouterModule;
         undefined ->
-            Name = case nova:detect_language() of
-                       elixir ->
-                           %% We build the router as App.Router
-                           atom_to_list(App) ++ ".Router";
-                       _ ->
-                           %% All other languages are using the app_router convention
-                           atom_to_list(App) ++ "_router"
-                   end,
-            case nova_code:module_named(Name) of
+            Names = router_names(nova:detect_language(), atom_to_list(App)),
+            case first_module(Names) of
                 {ok, RouterModule} ->
                     RouterModule;
                 error ->
                     ?LOG_ERROR(#{reason => <<"Could not find the router module of the application">>,
-                                 app => App, router_module => Name}),
+                                 app => App, router_module => Names}),
                     throw({error, {router_module_not_found, App}})
             end
+    end.
+
+%% An Elixir router is App.Router. `mix nova.new` names the application by
+%% its module, 'Elixir.MyApp', and an application named as OTP names it,
+%% my_app, has its router in the module Elixir derives from that name.
+%% All other languages use the app_router convention.
+router_names(elixir, App) ->
+    [App ++ ".Router", "Elixir." ++ camelised(App) ++ ".Router"];
+router_names(_Language, App) ->
+    [App ++ "_router"].
+
+%% my_app is MyApp.
+camelised([]) ->
+    [];
+camelised([$_ | Rest]) ->
+    camelised(Rest);
+camelised([First | Rest]) ->
+    {Part, Parts} = lists:splitwith(fun(Char) -> Char =/= $_ end, Rest),
+    [upper(First) | Part] ++ camelised(Parts).
+
+upper(Char) when Char >= $a, Char =< $z -> Char - ($a - $A);
+upper(Char) -> Char.
+
+%% A name can be an atom without being a module, so the module is loaded
+%% before it is taken for the router.
+first_module([]) ->
+    error;
+first_module([Name | Names]) ->
+    case nova_code:module_named(Name) of
+        {ok, Module} ->
+            case code:ensure_loaded(Module) of
+                {module, Module} -> {ok, Module};
+                {error, _Reason} -> first_module(Names)
+            end;
+        error ->
+            first_module(Names)
     end.
 
 compile_paths([], Dispatch, Options) -> {ok, Dispatch, Options};
