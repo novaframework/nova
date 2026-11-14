@@ -76,22 +76,26 @@ set_env(Key, Value) ->
 use_stacktrace(true) ->
     persistent_term:put(nova_use_stacktrace, true);
 use_stacktrace(_) ->
-    persistent_term:erase(nova_use_stacktrace).
+    _ = persistent_term:erase(nova_use_stacktrace),
+    ok.
 
 
 %%--------------------------------------------------------------------
 -doc "Formats a stacktrace into a list of maps. Each map contains the module, function, arity, file, and line number of the function call. A frame that carries its argument list (the first frame of a `function_clause`) is reported with the arity only, so the request never ends up in a log or an error page.".
--spec format_stacktrace(Stacktrace :: [{M :: atom(), F :: atom(), A :: arity() | [term()], Info :: list()}])
-                       -> [map()].
+-spec format_stacktrace(Stacktrace :: erlang:stacktrace()) -> [map()].
 format_stacktrace(Stacktrace) ->
-    SingleFun = fun({M, F, A, Info}) ->
-                        #{module => M,
-                          function => F,
-                          arity => arity(A),
-                          file => proplists:get_value(file, Info, <<"unknown">>),
-                          line => proplists:get_value(line, Info, -1)}
-                end,
-    [SingleFun(S) || S <- Stacktrace].
+    [format_frame(Frame) || Frame <- Stacktrace].
+
+format_frame({M, F, A, Info}) ->
+    #{module => M,
+      function => F,
+      arity => arity(A),
+      file => proplists:get_value(file, Info, <<"unknown">>),
+      line => proplists:get_value(line, Info, -1)};
+format_frame({Fun, A, Info}) when is_function(Fun) ->
+    {module, M} = erlang:fun_info(Fun, module),
+    {name, F} = erlang:fun_info(Fun, name),
+    format_frame({M, F, A, Info}).
 
 arity(Args) when is_list(Args) -> length(Args);
 arity(Arity) -> Arity.
