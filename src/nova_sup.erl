@@ -280,11 +280,10 @@ start_cowboy(Configuration) ->
                 ?LOG_ERROR(#{msg => <<"You need to define bootstrap_application option in configuration">>}),
                 throw({error, no_nova_app_defined});
             App ->
-                ExtraApps = application:get_env(App, nova_apps, []),
                 %% Routes are first-wins. The bootstrap application comes
                 %% first so nothing it mounts can take over one of its routes,
                 %% and nova last so its 404/500 routes are only defaults.
-                nova_router:compile_fresh(resolve_nova_apps([App | ExtraApps] ++ [nova]), nova_dispatch)
+                nova_router:compile_fresh(resolve_nova_apps(with_nova_apps(App) ++ [nova]), nova_dispatch)
         end,
 
     Host = maps:get(ip, Configuration, {0, 0, 0, 0}),
@@ -314,8 +313,7 @@ start_cowboy(Configuration) ->
 start_listener(App, Host, Port, Configuration) ->
     Ref = {?NOVA_LISTENER, App, Port},
     DispatchKey = {nova_dispatch, App, Port},
-    ExtraApps = application:get_env(App, nova_apps, []),
-    Dispatch = nova_router:compile_fresh(resolve_nova_apps([App | ExtraApps] ++ [nova]), DispatchKey),
+    Dispatch = nova_router:compile_fresh(resolve_nova_apps(with_nova_apps(App) ++ [nova]), DispatchKey),
     CowboyOptions = cowboy_options(Configuration, DispatchKey, Dispatch),
     case bind(Ref, Host, Port, Configuration, CowboyOptions) of
         {ok, Tls} ->
@@ -340,8 +338,7 @@ attach_application(App, Listener = #nova_listener{ref = Ref, apps = Apps, bind =
         true ->
             {error, {already_started, App}};
         false ->
-            ExtraApps = application:get_env(App, nova_apps, []),
-            nova_router:compile(resolve_nova_apps([App | ExtraApps]), DispatchKey),
+            nova_router:compile(resolve_nova_apps(with_nova_apps(App)), DispatchKey),
             register_listener(Listener#nova_listener{apps = Apps ++ [App]}),
             ?LOG_NOTICE(#{msg => <<"Added Nova application to an existing listener">>,
                           app => App, port => Port, listener => Ref}),
@@ -501,6 +498,17 @@ resolve_nova_apps([App | Rest], Acc, Seen) ->
         false ->
             {Acc0, Seen0} = resolve_nova_apps(nested_nova_apps(App), [App | Acc], [Name | Seen]),
             resolve_nova_apps(Rest, Acc0, Seen0)
+    end.
+
+%% An application that starts on a listener, followed by its nova_apps. No
+%% entry mounts it, so the options it is compiled with are those of the
+%% entry it has written for itself there, if any.
+-spec with_nova_apps(atom()) -> [nova_app()].
+with_nova_apps(App) ->
+    Mounted = configured_nova_apps(App),
+    case [Entry || Entry <- Mounted, nova_app_name(Entry) =:= App] of
+        [Own | _] -> [Own | Mounted];
+        []        -> [App | Mounted]
     end.
 
 %% The nova_apps of a mounted application. An override_secure covers every
