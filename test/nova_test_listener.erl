@@ -36,7 +36,8 @@ configure(Options) ->
     application:set_env(nova, plugins, []),
     application:set_env(nova_test_app, router_module, nova_test_host_router),
     application:set_env(nova_test_app, nova_apps,
-                        [{nova_test_sub_app, maps:get(mounted_options, Options, #{prefix => "/mounted"})}]),
+                        maps:get(nova_apps, Options,
+                                 [{nova_test_sub_app, maps:get(mounted_options, Options, #{prefix => "/mounted"})}])),
     application:set_env(nova_test_sub_app, router_module, nova_test_mounted_router).
 
 %% Unloading puts the environment of both test applications back to what

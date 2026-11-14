@@ -18,6 +18,8 @@
          lookup_url/1,
          lookup_url/2,
          lookup_url/3,
+         lookup_url/4,
+         dispatch_key/1,
          canonical_path/1,
          render_status_page/2,
          render_status_page/3,
@@ -188,6 +190,8 @@ execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
             render_status_page(Host, 404, #{error => Error}, Req, Env)
     end.
 
+%%--------------------------------------------------------------------
+-doc "Look up a path in the routing table of the default listener, for any host and method. Use lookup_url/4 for the table of another listener.".
 -spec lookup_url(Path :: nova_routing_trie:path()) -> lookup_result().
 lookup_url(Path) ->
     lookup_url('_', Path).
@@ -199,16 +203,16 @@ lookup_url(Host, Path) ->
 -spec lookup_url(Host :: binary() | atom(), Path :: nova_routing_trie:path(),
                  Method :: nova_routing_trie:comparator()) -> lookup_result().
 lookup_url(Host, Path, Method) ->
-    StorageBackend = storage_backend(),
-    Dispatch = StorageBackend:get(?NOVA_DISPATCH),
-    lookup_url(Host, Path, Method, Dispatch).
+    lookup_url(Host, Path, Method, ?NOVA_DISPATCH).
 
+%%--------------------------------------------------------------------
+-doc "As lookup_url/3, but in the routing table addressed by `DispatchKey`. dispatch_key/1 gives the key of the listener a request came in on.".
 -spec lookup_url(Host :: binary() | atom(), Path :: nova_routing_trie:path(),
                  Method :: nova_routing_trie:comparator(),
-                 Dispatch :: nova_routing_trie:trie()) -> lookup_result().
-lookup_url(Host, Path, Method, Dispatch) ->
-    nova_routing_trie:find(Host, Path, Method, Dispatch).
-
+                 DispatchKey :: dispatch_key()) -> lookup_result().
+lookup_url(Host, Path, Method, DispatchKey) ->
+    StorageBackend = storage_backend(),
+    nova_routing_trie:find(Host, Path, Method, StorageBackend:get(DispatchKey)).
 
 %%--------------------------------------------------------------------
 -doc """
@@ -542,7 +546,7 @@ render_status_page(StatusCode, Req) ->
 -spec render_status_page(StatusCode :: integer(), Data :: map(), Req :: cowboy_req:req()) ->
                                 {ok, Req0 :: cowboy_req:req(), Env :: map()}.
 render_status_page(StatusCode, Data, Req) ->
-    render_status_page('_', StatusCode, Data, Req, #{}).
+    render_status_page('_', StatusCode, Data, Req, #{nova_dispatch_key => dispatch_key(Req)}).
 
 -spec render_status_page(Host :: binary() | atom(),
                          StatusCode :: integer(),
@@ -602,10 +606,20 @@ storage_backend() ->
             persistent_term
     end.
 
-%% The listener's dispatch key, defaulting to the one the bootstrap listener
-%% uses so an Env built before multi-listener support still resolves.
-dispatch_key(Env) ->
-    maps:get(nova_dispatch_key, Env, ?NOVA_DISPATCH).
+%%--------------------------------------------------------------------
+-doc "The key of the routing table serving a request, for the functions that take a `DispatchKey`. Takes the request, or the middleware environment where that is at hand. Anything that does not belong to a listener gives the key of the default listener.".
+-spec dispatch_key(ReqOrEnv :: cowboy_req:req() | cowboy_middleware:env()) -> dispatch_key().
+dispatch_key(#{nova_dispatch_key := DispatchKey}) ->
+    DispatchKey;
+dispatch_key(#{ref := Listener}) ->
+    try ranch:get_protocol_options(Listener) of
+        #{env := #{nova_dispatch_key := DispatchKey}} -> DispatchKey;
+        _ -> ?NOVA_DISPATCH
+    catch
+        error:badarg -> ?NOVA_DISPATCH
+    end;
+dispatch_key(_) ->
+    ?NOVA_DISPATCH.
 
 %% Each dispatch table keeps its own list of compiled applications.
 apps_key(?NOVA_DISPATCH)  -> ?NOVA_APPS;

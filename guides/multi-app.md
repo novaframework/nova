@@ -132,7 +132,15 @@ nova_sup:get_started_applications().
 
 `nova_router:compiled_apps/0` lists the applications compiled into the default
 listener's routing table, and `nova_router:compiled_apps/1` does the same for
-any other.
+any other. `nova_router:lookup_url/1,2,3` and `nova:get_apps/0` also read the
+default table. Inside a request, `nova_router:dispatch_key(Req)` gives the key
+of the listener it came in on, for `nova_router:compiled_apps/1` and
+`nova_router:lookup_url/4`.
+
+The page for a status code is looked up in the routing table of the listener
+the request came in on, also when a controller crashes or throws
+`{Status, Reason}`. Earlier releases rendered the default listener's page for
+those on every listener.
 
 ## Graceful shutdown
 
