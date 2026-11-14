@@ -76,6 +76,8 @@ The routing object consists of three or four fields.
 
 As you saw in the initial example in the [Basic components](#basic-components) section, we defined a route for the root path `/`.
 
+A route ending in `[...]` matches any number of trailing segments. They reach the controller as a list of binaries under `pathinfo` in the `extra_state` of the `Req`. If the route declares an `extra_state` that is not a map it is passed on as it is, without `pathinfo`. A websocket controller finds the same under `req` in its controller data.
+
 ### Websocket routing ###
 
 ```
