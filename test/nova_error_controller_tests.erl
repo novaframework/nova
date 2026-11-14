@@ -1,8 +1,8 @@
 -module(nova_error_controller_tests).
 -include_lib("eunit/include/eunit.hrl").
 
--define(SETUP, fun() -> nova_test_helper:setup_nova_env() end).
--define(CLEANUP, fun(Prev) -> nova_test_helper:cleanup_nova_env(Prev) end).
+-define(SETUP, fun nova_test_helper:setup_nova_env/0).
+-define(CLEANUP, fun nova_test_helper:cleanup_nova_env/1).
 
 %%====================================================================
 %% status_code/1
@@ -45,7 +45,11 @@ format_stacktrace_multiple_entries_test() ->
     ?assertEqual(2, length(Result)).
 
 format_stacktrace_not_enabled_test() ->
-    ?assertEqual([], nova_error_controller:format_stacktrace(not_enabled)).
+    {Frames, Events} = nova_test_log:collect(fun() -> nova_error_controller:format_stacktrace(not_enabled) end),
+    ?assertEqual([], Frames),
+    [{warning, {report, #{msg := <<Message/binary>>}}}] = Events,
+    ?assertNotEqual(nomatch, binary:match(Message, ~"nova:use_stacktrace(true)")),
+    ?assertNotEqual(nomatch, binary:match(Message, ~"{use_stacktrace, true}")).
 
 %%====================================================================
 %% format_arity/1
@@ -136,6 +140,28 @@ server_error_without_a_crash_map_test_() ->
               {status, 500, _Headers, Body} = nova_error_controller:server_error(Req0),
               ?assertMatch(#{~"title" := ~"500 Internal Server Error"}, json:decode(iolist_to_binary(Body)))
           end || Req0 <- [Req, Req#{crash_info => not_a_map}]]
+     end}.
+
+%% Without an accept header the 500 page is JSON, as the 404 page is.
+server_error_no_accept_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Req = nova_test_helper:mock_req(~"GET", ~"/"),
+         [begin
+              {status, 500, Headers, Body} = nova_error_controller:server_error(Req0),
+              ?assertEqual(~"application/json", maps:get(~"content-type", Headers)),
+              ?assertMatch(#{~"title" := ~"500 Internal Server Error"}, json:decode(iolist_to_binary(Body)))
+          end || Req0 <- [Req, Req#{crash_info => #{status_code => 500, class => error, reason => boom}}]]
+     end}.
+
+%% An accept header that asks for neither JSON nor HTML gets no body, on
+%% both pages.
+unknown_accept_has_no_body_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Req = nova_test_helper:with_header(~"accept", ~"image/png", nova_test_helper:mock_req(~"GET", ~"/")),
+         ?assertMatch({status, 404, _, <<>>}, nova_error_controller:not_found(Req)),
+         ?assertMatch({status, 500, _, <<>>}, nova_error_controller:server_error(Req))
      end}.
 
 server_error_html_for_browsers_test_() ->

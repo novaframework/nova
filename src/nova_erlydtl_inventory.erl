@@ -17,12 +17,11 @@ inventory(tags) -> [url].
 
 url([Url|Variables], _Options) ->
     App = proplists:get_value(application, Variables),
-    Apps = nova:get_apps(),
-    case proplists:get_value(binary_to_atom(App, utf8), Apps) of
-        undefined ->
+    case [Prefix || {Name, Prefix} <- nova:get_apps(), atom_to_binary(Name) =:= App] of
+        [] ->
             ?LOG_WARNING(#{msg => <<"Template could not find application">>, application => App}),
             <<"#">>;
-        Prefix ->
+        [Prefix | _] ->
             PrefixBin = list_to_binary(Prefix),
             maybe_remove_starting_slash(<< PrefixBin/binary, Url/binary >>)
     end.

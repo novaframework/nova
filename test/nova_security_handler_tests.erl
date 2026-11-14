@@ -1,6 +1,5 @@
 -module(nova_security_handler_tests).
 -include_lib("eunit/include/eunit.hrl").
--include("../include/nova_router.hrl").
 
 %% Logger handler callback: forwards every event to the test process.
 -export([log/2]).
@@ -16,8 +15,8 @@ logged() ->
             []
     end.
 
--define(SETUP, fun() -> setup() end).
--define(CLEANUP, fun(S) -> cleanup(S) end).
+-define(SETUP, fun setup/0).
+-define(CLEANUP, fun cleanup/1).
 
 setup() ->
     Prev = nova_test_helper:setup_nova_env(),

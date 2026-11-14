@@ -1,6 +1,5 @@
 -module(nova_session_tests).
 -include_lib("eunit/include/eunit.hrl").
--include("../include/nova_pubsub.hrl").
 
 %%====================================================================
 %% Integration tests for nova_session + nova_session_ets
@@ -93,6 +92,7 @@ nova_session_ets_test_() ->
      fun cleanup/1,
      [
       fun set_and_get_value/0,
+      fun value_of_any_type_is_kept_as_it_is/0,
       fun get_missing_session/0,
       fun get_missing_key/0,
       fun set_multiple_keys/0,
@@ -137,8 +137,16 @@ set_and_get_value() ->
     sync(),
     ?assertEqual({ok, <<"alice">>}, nova_session:get(Req, <<"username">>)).
 
+value_of_any_type_is_kept_as_it_is() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    Req = req_with_session(SId),
+    Cart = #{items => [{~"book", 2}], total => 12.5},
+    ok = nova_session:set(Req, ~"cart", Cart),
+    sync(),
+    ?assertEqual({ok, Cart}, nova_session:get(Req, ~"cart")).
+
 get_missing_session() ->
-    Req = #{},
+    Req = nova_test_helper:mock_req(~"GET", ~"/"),
     ?assertEqual({error, not_found}, nova_session:get(Req, <<"key">>)).
 
 get_missing_key() ->
@@ -185,7 +193,7 @@ cookie_fallback() ->
     ?assertEqual({ok, <<"works">>}, nova_session:get(Req, <<"via_cookie">>)).
 
 no_session_returns_error() ->
-    Req = #{},
+    Req = nova_test_helper:mock_req(~"GET", ~"/"),
     ?assertEqual({error, not_found}, nova_session:get(Req, <<"key">>)),
     ?assertEqual({error, session_id_not_set}, nova_session:set(Req, <<"k">>, <<"v">>)).
 
@@ -196,7 +204,7 @@ unparsable_cookie_is_no_session_without_stream_handler() ->
     ?assertEqual({error, session_id_not_set}, nova_session:set(Req, ~"k", ~"v")).
 
 no_session_delete_returns_ok() ->
-    Req = #{},
+    Req = nova_test_helper:mock_req(~"GET", ~"/"),
     ?assertEqual({ok, Req}, nova_session:delete(Req)),
     ?assertEqual({ok, Req}, nova_session:delete(Req, <<"key">>)).
 

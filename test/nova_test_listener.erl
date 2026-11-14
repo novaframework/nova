@@ -189,7 +189,7 @@ after_handshake(Socket, Acc) ->
         [<<"HTTP/1.1 101", _/binary>>, Rest] ->
             Rest;
         [_Incomplete] ->
-            {ok, Data} = gen_tcp:recv(Socket, 0, 5000),
+            {ok, <<Data/binary>>} = gen_tcp:recv(Socket, 0, 5000),
             after_handshake(Socket, <<Acc/binary, Data/binary>>)
     end.
 
@@ -202,7 +202,7 @@ receive_texts(_Socket, <<1:1, 0:3, 8:4, _/binary>>, _Count) ->
     [closed];
 receive_texts(Socket, Buffer, Count) ->
     case gen_tcp:recv(Socket, 0, 5000) of
-        {ok, Data} -> receive_texts(Socket, <<Buffer/binary, Data/binary>>, Count);
+        {ok, <<Data/binary>>} -> receive_texts(Socket, <<Buffer/binary, Data/binary>>, Count);
         {error, closed} -> [closed]
     end.
 
@@ -223,7 +223,7 @@ exchange(Port, Request, Read) ->
 
 receive_until_closed(Socket, Acc) ->
     case gen_tcp:recv(Socket, 0, 10000) of
-        {ok, Data} -> receive_until_closed(Socket, <<Acc/binary, Data/binary>>);
+        {ok, <<Data/binary>>} -> receive_until_closed(Socket, <<Acc/binary, Data/binary>>);
         {error, closed} -> Acc
     end.
 

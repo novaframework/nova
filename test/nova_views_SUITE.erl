@@ -9,8 +9,10 @@
          view_option_names_another_template/1,
          view_option_can_be_a_string/1,
          status_code_and_headers_options_are_used/1,
+         headers_option_without_a_content_type_keeps_the_default/1,
          request_from_the_controller_is_used/1,
          missing_template_is_a_404/1,
+         unknown_view_name_does_not_become_an_atom/1,
          template_output_is_escaped/1,
          url_tag_adds_the_prefix_of_a_mounted_application/1,
          url_tag_of_an_unknown_application_is_a_hash/1]).
@@ -25,8 +27,10 @@ all() ->
      view_option_names_another_template,
      view_option_can_be_a_string,
      status_code_and_headers_options_are_used,
+     headers_option_without_a_content_type_keeps_the_default,
      request_from_the_controller_is_used,
      missing_template_is_a_404,
+     unknown_view_name_does_not_become_an_atom,
      template_output_is_escaped,
      url_tag_adds_the_prefix_of_a_mounted_application,
      url_tag_of_an_unknown_application_is_a_hash].
@@ -49,8 +53,11 @@ init_per_suite(Config) ->
                            Page("/other", fun nova_views_pages:other_view/1),
                            Page("/string", fun nova_views_pages:string_view/1),
                            Page("/options", fun nova_views_pages:with_options/1),
+                           Page("/one-header", fun nova_views_pages:with_one_header/1),
+                           Page("/header-list", fun nova_views_pages:with_header_list/1),
                            Page("/request", fun nova_views_pages:with_request/1),
                            Page("/no-template", fun nova_views_pages:no_template/1),
+                           Page("/named", fun nova_views_pages:named_view/1),
                            Page("/links", fun nova_views_pages:links/1)]}],
     [{port, nova_test_listener:start(#{host => Routes})} | Config].
 
@@ -92,6 +99,13 @@ status_code_and_headers_options_are_used(Config) ->
     ?assertEqual(~"text/html; charset=utf-8", maps:get(~"content-type", Headers)),
     ?assertEqual(~"yes", maps:get(~"x-view", Headers)).
 
+headers_option_without_a_content_type_keeps_the_default(Config) ->
+    [begin
+         {200, Headers, _Body} = response(Config, Path),
+         ?assertEqual(~"text/html", maps:get(~"content-type", Headers)),
+         ?assertEqual(~"no-store", maps:get(~"cache-control", Headers))
+     end || Path <- ["/views/one-header", "/views/header-list"]].
+
 request_from_the_controller_is_used(Config) ->
     {Status, Headers, Body} = response(Config, "/views/request"),
     ?assertEqual({200, ~"<h1>request</h1>"}, {Status, Body}),
@@ -99,6 +113,13 @@ request_from_the_controller_is_used(Config) ->
 
 missing_template_is_a_404(Config) ->
     ?assertMatch({404, _, _}, response(Config, "/views/no-template")).
+
+%% A controller that takes the view from the request must not let a client
+%% add an atom for every name it thinks of.
+unknown_view_name_does_not_become_an_atom(Config) ->
+    ?assertMatch({200, _, ~"<p>other: named in the request</p>"}, response(Config, "/views/named?view=nova_views_other")),
+    ?assertMatch({404, _, _}, response(Config, "/views/named?view=nova_views_unheard_of_91c2")),
+    ?assertError(badarg, binary_to_existing_atom(<<"nova_views_unheard_of_91c2", "_dtl">>)).
 
 template_output_is_escaped(Config) ->
     ?assertMatch({201, _, ~"<h1>&lt;b&gt;created&lt;/b&gt;</h1>"}, response(Config, "/views/options")).

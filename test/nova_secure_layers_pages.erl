@@ -27,11 +27,13 @@ decide(Layer, Req) ->
     case proplists:get_value(Name, cowboy_req:parse_qs(Req), ~"allow") of
         ~"allow" -> true;
         ~"data" -> {true, Layer};
+        ~"data-seen" -> {true, {Layer, saw, maps:get(auth_data, Req, none)}};
         ~"deny" -> false;
         ~"deny-headers" -> {false, #{~"x-refused-by" => Name}};
         ~"deny-status" -> {false, 403, #{~"x-refused-by" => Name}};
         ~"deny-body" -> {false, 403, #{~"x-refused-by" => Name}, Name};
         ~"redirect" -> {redirect, "/login-of-" ++ atom_to_list(Layer)};
+        ~"redirect-binary" -> {redirect, <<"/login-of-", Name/binary>>};
         ~"raise" -> error({raised_by, Layer});
         ~"unexpected" -> {ok, Layer}
     end.

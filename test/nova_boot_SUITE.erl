@@ -11,6 +11,7 @@
          invalid_security_fails_the_boot/1,
          invalid_security_of_a_mounted_application_fails_the_boot/1,
          invalid_security_of_a_mounted_application_fails_the_boot_next_to_a_group_callback/1,
+         invalid_security_replaced_by_an_override_fails_the_boot/1,
          pubsub_scope_is_restarted/1,
          restarted_pubsub_scope_has_no_members/1,
          pubsub_scope_started_elsewhere_is_left_alone/1,
@@ -30,6 +31,7 @@ all() ->
      invalid_security_fails_the_boot,
      invalid_security_of_a_mounted_application_fails_the_boot,
      invalid_security_of_a_mounted_application_fails_the_boot_next_to_a_group_callback,
+     invalid_security_replaced_by_an_override_fails_the_boot,
      pubsub_scope_is_restarted,
      restarted_pubsub_scope_has_no_members,
      pubsub_scope_started_elsewhere_is_left_alone,
@@ -101,6 +103,20 @@ invalid_security_of_a_mounted_application_fails_the_boot_next_to_a_group_callbac
                  nova_test_listener:try_start(#{mounted => [#{security => fun nova_boot_pages:allow/1,
                                                               routes => Routes}],
                                                 mounted_options => #{prefix => "/mounted", secure => yes}})),
+    ?assertEqual(undefined, whereis(nova_sup)).
+
+%% override_secure replaces the callbacks, which have to be usable all the
+%% same: the routes would be open the day the override is taken away.
+invalid_security_replaced_by_an_override_fails_the_boot(_Config) ->
+    Routes = [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}],
+    Override = #{prefix => "/mounted", override_secure => fun nova_boot_pages:allow/1},
+    ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener, {invalid_security, true}}}, _}}},
+                 nova_test_listener:try_start(#{mounted => [#{security => true, routes => Routes}],
+                                                mounted_options => Override})),
+    ?assertEqual(undefined, whereis(nova_sup)),
+    ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener, {invalid_security, yes}}}, _}}},
+                 nova_test_listener:try_start(#{mounted => [#{routes => Routes}],
+                                                mounted_options => Override#{secure => yes}})),
     ?assertEqual(undefined, whereis(nova_sup)).
 
 pubsub_scope_is_restarted(_Config) ->

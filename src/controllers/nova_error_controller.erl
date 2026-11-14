@@ -7,6 +7,10 @@
 	 status_code/1
         ]).
 
+-ifdef(TEST).
+-export([format_arity/1, format_stacktrace/1, preferred_type/1, trim_ows/1]).
+-endif.
+
 -define(MAX_ACCEPT, 1024).
 
 
@@ -14,11 +18,7 @@ status_code(Req) ->
     {status, maps:get(resp_status_code, Req, 200)}.
 
 not_found(Req) ->
-    Type = case cowboy_req:header(~"accept", Req) of
-               undefined -> json;
-               Accept -> preferred_type(Accept)
-           end,
-    case Type of
+    case response_type(Req) of
         json ->
             Json = nova_json:encode(#{message => ~"Resource not found"}),
             {status, 404, #{<<"content-type">> => <<"application/json">>}, Json};
@@ -26,7 +26,7 @@ not_found(Req) ->
             Variables = #{status => "Could not find the page you were looking for",
                           title => "404 Not found",
                           message => "We could not find the page you were looking for"},
-            {ok, Body} = nova_error_dtl:render(Variables),
+            {ok, Body} = nova_basic_handler:render_dtl(nova_error_dtl, Variables, []),
             {status, 404, #{<<"content-type">> => <<"text/html">>}, Body};
         none ->
             {status, 404, #{<<"content-type">> => <<"text/html">>}, <<>>}
@@ -61,15 +61,23 @@ server_error(Req) ->
     server_error(Req#{crash_info => #{status_code => 500}}).
 
 render(StatusCode, Variables, Req) ->
-    case preferred_type(cowboy_req:header(~"accept", Req)) of
+    case response_type(Req) of
         json ->
             Json = nova_json:encode(Variables),
             {status, StatusCode, #{~"content-type" => ~"application/json"}, Json};
         html ->
-            {ok, Body} = nova_error_dtl:render(Variables),
+            {ok, Body} = nova_basic_handler:render_dtl(nova_error_dtl, Variables, []),
             {status, StatusCode, #{~"content-type" => ~"text/html"}, Body};
         none ->
             {status, StatusCode, #{~"content-type" => ~"text/html"}, <<>>}
+    end.
+
+%% A client that sends no accept header gets JSON. One that sends a header
+%% naming neither JSON nor HTML gets no body.
+response_type(Req) ->
+    case cowboy_req:header(~"accept", Req) of
+        undefined -> json;
+        Accept -> preferred_type(Accept)
     end.
 
 %% Crash details can carry anything a controller or plugin returned, so they
@@ -88,8 +96,6 @@ show_details() ->
 %% "text/html,application/xhtml+xml;q=0.9" or "application/json; charset=utf-8".
 %% Cowboy joins repeated accept headers, so only the first ?MAX_ACCEPT bytes
 %% are looked at, and every step is linear in them.
-preferred_type(undefined) ->
-    none;
 preferred_type(Accept) ->
     Head = binary:part(Accept, 0, min(byte_size(Accept), ?MAX_ACCEPT)),
     Types = [media_type(Range) || Range <- binary:split(Head, ~",", [global])],
@@ -118,7 +124,7 @@ trim_trailing_ows(Bin, Size) ->
     end.
 
 format_stacktrace(not_enabled) ->
-    logger:warning(<<"Stacktrace disabled. If you want to enable stacktraces call nova:stracktrace(true) or update your sys.config - Read more in the docs">>),
+    ?LOG_WARNING(#{msg => ~"Stacktraces are disabled. Call nova:use_stacktrace(true) or set {use_stacktrace, true} for nova in sys.config to have them"}),
     [];
 format_stacktrace([]) -> [];
 format_stacktrace([{Mod, Func, Arity, TraceOpts}|Tl]) ->
@@ -150,7 +156,3 @@ format_stacktrace([Hd|Tl]) ->
 
 format_arity(Args) when is_list(Args) -> length(Args);
 format_arity(Arity) -> Arity.
-
--ifdef(TEST).
--compile(export_all).
--endif.

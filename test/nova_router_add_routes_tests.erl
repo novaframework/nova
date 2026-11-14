@@ -22,7 +22,7 @@ cleanup(Prev) ->
 %% Regression: add_routes/2 crashed with {badkey, router_file}
 %% because Options did not include router_file
 add_routes_no_crash_test_() ->
-    {setup, fun() -> setup() end, fun(S) -> cleanup(S) end, fun() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
         Callback = fun(_) -> {json, #{ok => true}} end,
         Routes = [#{routes => [{"/test", Callback, #{methods => [get]}}]}],
         nova_router:add_routes(test_app, [Routes]),
@@ -59,7 +59,7 @@ static_directory_is_resolved_when_the_route_is_compiled_test_() ->
     end}.
 
 add_routes_registers_app_test_() ->
-    {setup, fun() -> setup() end, fun(S) -> cleanup(S) end, fun() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
         Callback = fun(_) -> {json, #{}} end,
         Routes = [#{routes => [{"/x", Callback, #{methods => [get]}}]}],
         nova_router:add_routes(my_app, [Routes]),
@@ -86,6 +86,54 @@ route_entry_plugin_strategy_is_warned_about_once_test_() ->
             logger:remove_handler(?MODULE),
             persistent_term:erase({nova_router, route_plugin_strategy_warned, strategy_app})
         end
+    end}.
+
+%% A route that sets no extra_state gets the one of its route group, as a
+%% websocket route does. One in a group that declares none has undefined.
+route_takes_the_extra_state_of_its_group_test_() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
+        Callback = fun(_) -> {json, #{}} end,
+        Routes = [#{prefix => "/group", extra_state => #{role => admin},
+                    routes => [{"/inherits", Callback, #{methods => [get]}},
+                               {"/bare", Callback},
+                               {"/own", Callback, #{methods => [get], extra_state => #{role => guest}}},
+                               {"/files/[...]", Callback, #{methods => [get]}}]},
+                  #{prefix => "/plain", routes => [{"/none", Callback, #{methods => [get]}}]}],
+        ok = nova_router:add_routes(extra_state_app, Routes),
+        ?assertEqual(#{role => admin}, extra_state(~"/group/inherits")),
+        ?assertEqual(#{role => admin}, extra_state(~"/group/bare")),
+        ?assertEqual(#{role => guest}, extra_state(~"/group/own")),
+        ?assertEqual(#{role => admin, pathinfo => [~"a", ~"b"]}, extra_state(~"/group/files/a/b")),
+        ?assertEqual(undefined, extra_state(~"/plain/none"))
+    end}.
+
+extra_state(Path) ->
+    {ok, Req, _Env} = nova_router:execute(nova_test_helper:mock_req(~"GET", Path), #{}),
+    maps:get(extra_state, Req).
+
+%% A security callback is declared with `security` on a route group.
+%% Written on a single route, or as `secure` on the group, it is not read:
+%% the routes are added as before, and each misplaced key is named.
+misplaced_security_key_is_warned_about_test_() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
+        Callback = fun(_) -> {json, #{}} end,
+        Check = fun(_) -> false end,
+        Routes = [#{prefix => "/admin", secure => Check,
+                    routes => [{"/users", Callback, #{methods => [get], security => Check}},
+                               {"/roles", Callback, #{methods => [get], secure => Check}},
+                               {"/socket", nova_router_add_routes_tests_ws, #{protocol => ws, security => Check}},
+                               {404, Callback, #{secure => Check}},
+                               {"/open", Callback, #{methods => [get]}}]},
+                  #{prefix => "/guarded", security => Check,
+                    routes => [{"/page", Callback, #{methods => [get]}}]}],
+        {ok, Events} = nova_test_log:collect(fun() -> nova_router:add_routes(misplaced_app, Routes) end),
+        ?assertEqual([{secure, "/admin"}, {security, "/admin/users"}, {secure, "/admin/roles"},
+                      {security, "/admin/socket"}, {secure, 404}],
+                     [{Key, Path} || {warning, {report, #{app := misplaced_app, key := Key, path := Path}}} <- Events]),
+        ?assertMatch({ok, _, #nova_handler_value{secure = false}},
+                     nova_router:lookup_url('_', ~"/admin/users", ~"GET")),
+        ?assertMatch({ok, _, #nova_handler_value{secure = Check}},
+                     nova_router:lookup_url('_', ~"/guarded/page", ~"GET"))
     end}.
 
 log(#{msg := {report, #{msg := <<"plugin_strategy on a route entry", _/binary>>} = Report}},

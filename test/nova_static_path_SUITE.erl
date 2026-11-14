@@ -18,7 +18,9 @@
          root_that_is_a_symlink/1,
          index_file/1,
          relative_root_after_the_working_directory_changed/1,
-         root_link_changed_after_the_boot/1
+         relative_file_after_the_working_directory_changed/1,
+         root_link_changed_after_the_boot/1,
+         root_removed_after_the_boot/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -42,7 +44,9 @@ all() ->
      root_that_is_a_symlink,
      index_file,
      relative_root_after_the_working_directory_changed,
-     root_link_changed_after_the_boot
+     relative_file_after_the_working_directory_changed,
+     root_link_changed_after_the_boot,
+     root_removed_after_the_boot
     ].
 
 init_per_suite(Config) ->
@@ -74,10 +78,14 @@ init_per_suite(Config) ->
     ok = file:make_symlink("../secret.txt", filename:join([Base, "release-2", "file.txt"])),
     ok = file:make_symlink("../secret.txt", filename:join([Base, "release-2", "index.html"])),
     ok = file:make_symlink("release-1", filename:join(Base, "current")),
+    ok = filelib:ensure_path(filename:join(Base, "removed")),
     Host = [#{prefix => "",
               routes => [
                          {"/relative/[...]", ?RELATIVE_DIR},
                          {"/relative-index", ?RELATIVE_DIR},
+                         {"/relative-file", filename:join(?RELATIVE_DIR, "file.txt")},
+                         {"/removed-index", filename:join(Base, "removed")},
+                         {"/removed/[...]", filename:join(Base, "removed")},
                          {"/current/[...]", filename:join(Base, "current")},
                          {"/current-index", filename:join(Base, "current")},
                          {"/files/[...]", Root},
@@ -170,6 +178,22 @@ relative_root_after_the_working_directory_changed(Config) ->
     after
         ok = file:set_cwd(Cwd)
     end.
+
+relative_file_after_the_working_directory_changed(Config) ->
+    {ok, Cwd} = file:get_cwd(),
+    try
+        ok = file:set_cwd(filename:join(?config(base, Config), "elsewhere")),
+        ?assertEqual({200, ~"inside"}, nova_test_listener:get(?config(port, Config), "/relative-file"))
+    after
+        ok = file:set_cwd(Cwd)
+    end.
+
+root_removed_after_the_boot(Config) ->
+    Port = ?config(port, Config),
+    ok = file:del_dir(filename:join(?config(base, Config), "removed")),
+    ?assertMatch({404, _Body}, nova_test_listener:get(Port, "/removed-index")),
+    ?assertMatch({404, _Body}, nova_test_listener:get(Port, "/removed")),
+    ?assertMatch({404, _Body}, nova_test_listener:get(Port, "/removed/file.txt")).
 
 root_link_changed_after_the_boot(Config) ->
     Port = ?config(port, Config),

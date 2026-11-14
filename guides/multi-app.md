@@ -97,12 +97,18 @@ group's callback if that returns `{true, Data}`, and otherwise the data of
 the entry's callback. A group's callback that returns `true` leaves the data
 of the entry's callback in place.
 
+The group's callback is given the request with the data of the entry's
+callback under `auth_data`, whether the route leads to a controller or to a
+websocket.
+
 A callback that is both the `secure` of the entry and the `security` of the
 group runs once. Websocket routes follow the same rules.
 
 Replacing a callback the application declares takes `override_secure`, see
 the [routing guide](routing.md#overriding-security-for-an-included-application).
 With `override_secure`, neither `secure` nor the callback of a group runs.
+They are still checked when the routes are compiled, and a value that is not
+a callback stops the start with `{invalid_security, Value}`.
 
 ### Applications included by an included application
 

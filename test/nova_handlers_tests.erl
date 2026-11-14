@@ -1,8 +1,8 @@
 -module(nova_handlers_tests).
 -include_lib("eunit/include/eunit.hrl").
 
--define(SETUP, fun() -> setup() end).
--define(CLEANUP, fun(S) -> cleanup(S) end).
+-define(SETUP, fun setup/0).
+-define(CLEANUP, fun cleanup/1).
 
 setup() ->
     {ok, Pid} = nova_handlers:start_link(),

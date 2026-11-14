@@ -75,7 +75,7 @@ start_link() ->
 
 
 %% Read straight from the table, so reads do not queue behind the writes.
--spec get_value(SessionId :: binary(), Key :: binary()) -> {ok, Value :: binary()} | {error, not_found}.
+-spec get_value(SessionId :: binary(), Key :: binary()) -> {ok, Value :: term()} | {error, not_found}.
 get_value(SessionId, Key) ->
     try live_session(SessionId) of
         {ok, #{Key := Value}, _ExpiresAt} -> {ok, Value};
@@ -86,7 +86,7 @@ get_value(SessionId, Key) ->
 
 %% Every write waits for the local copy, so the next request on this node,
 %% which may arrive as soon as the response is out, already sees it.
--spec set_value(SessionId :: binary(), Key :: binary(), Value :: binary()) -> ok | {error, session_store_full}.
+-spec set_value(SessionId :: binary(), Key :: binary(), Value :: term()) -> ok | {error, session_store_full}.
 set_value(SessionId, Key, Value) ->
     case has_room(SessionId) of
         true ->

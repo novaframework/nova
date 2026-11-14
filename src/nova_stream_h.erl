@@ -21,9 +21,12 @@
                  }).
 
 -record(state, {
-                next :: any(),
+                next :: {module(), term()} | undefined,
                 req,
-                session :: #session{} | undefined
+                session :: #session{} | undefined,
+                %% Whether the response has begun: with its headers alone, when
+                %% it is streamed, or in full
+                sent = false :: false | headers | true
                }).
 
 -type state() :: #state{}.
@@ -32,12 +35,13 @@
           -> {cowboy_stream:commands(), state()}.
 init(StreamID, Req, Opts) ->
     {Req0, Session} = init_session(Req),
-    %% Set the correct server-header information
-    Req1 = cowboy_req:set_resp_header(<<"server">>, <<"Cowboy/Nova">>, Req0),
+    %% Set the correct server-header information. The marker tells
+    %% nova_handler that this handler can be asked whether a response began.
+    Req1 = cowboy_req:set_resp_header(<<"server">>, <<"Cowboy/Nova">>, Req0#{nova_stream_h => true}),
     {Commands, Next} = cowboy_stream:init(StreamID, Req1, Opts),
     {Commands, #state{req = Req0, next = Next, session = Session}}.
 
--spec data(cowboy_stream:streamid(), cowboy_stream:fin(), cowboy_req:resp_body(), State)
+-spec data(cowboy_stream:streamid(), cowboy_stream:fin(), binary(), State)
           -> {cowboy_stream:commands(), State} when State::state().
 data(StreamID, IsFin, Data, State = #state{next = Next}) ->
     {Commands, Next0} = cowboy_stream:data(StreamID, IsFin, Data, Next),
@@ -47,18 +51,30 @@ data(StreamID, IsFin, Data, State = #state{next = Next}) ->
           -> {cowboy_stream:commands(), State} when State::state().
 info(_StreamID, {nova_session, Event}, State = #state{session = Session}) ->
     {[], State#state{session = session_event(Event, Session)}};
-info(StreamID, {response, Code, Headers, Body}, State) when is_integer(Code) ->
+%% nova_handler asks before it sends an error page: a controller that fails
+%% after it began to stream leaves it with the request as it was before.
+info(_StreamID, {nova_response_begun, From, Ref}, State = #state{sent = Sent}) when is_pid(From) ->
+    From ! {Ref, Sent},
+    {[], State};
+info(StreamID, {response, _Code, _Headers, _Body} = Info, State) ->
+    respond(StreamID, Info, State#state{sent = true});
+info(StreamID, {headers, _Code, _Headers} = Info, State = #state{sent = false}) ->
+    respond(StreamID, Info, State#state{sent = headers});
+info(StreamID, Info, State) ->
+    respond(StreamID, Info, State).
+
+respond(StreamID, {response, Code, Headers, Body}, State) when is_integer(Code) ->
     {Headers0, State0} = session_cookie(Headers, State),
     forward(StreamID, {response, Code, Headers0, Body}, State0);
-info(StreamID, {headers, Code, Headers}, State) when is_integer(Code) ->
+respond(StreamID, {headers, Code, Headers}, State) when is_integer(Code) ->
     {Headers0, State0} = session_cookie(Headers, State),
     forward(StreamID, {headers, Code, Headers0}, State0);
 %% A websocket upgrade: a session written in nova_websocket:init/1 gets its
 %% cookie on the 101.
-info(StreamID, {switch_protocol, Headers, Module, ModState}, State) when is_map(Headers) ->
+respond(StreamID, {switch_protocol, Headers, Module, ModState}, State) when is_map(Headers) ->
     {Headers0, State0} = session_cookie(Headers, State),
     forward(StreamID, {switch_protocol, Headers0, Module, ModState}, State0);
-info(StreamID, Info, State) ->
+respond(StreamID, Info, State) ->
     forward(StreamID, Info, State).
 
 forward(StreamID, Info, State = #state{next = Next}) ->

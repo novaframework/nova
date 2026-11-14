@@ -5,7 +5,7 @@ setup() ->
     nova_test_helper:setup_nova_env().
 
 cleanup(Prev) ->
-    catch persistent_term:erase(nova_use_stacktrace),
+    _ = persistent_term:erase(nova_use_stacktrace),
     nova_test_helper:cleanup_nova_env(Prev).
 
 nova_test_() ->
@@ -24,6 +24,7 @@ nova_test_() ->
       fun use_stacktrace_false/0,
       fun format_stacktrace_basic/0,
       fun format_stacktrace_missing_info/0,
+      fun format_stacktrace_frame_of_a_fun/0,
       fun detect_language_returns_erlang/0
      ]}.
 
@@ -69,13 +70,14 @@ set_env_error_when_no_main_app() ->
     application:set_env(nova, bootstrap_application, nova).
 
 use_stacktrace_true() ->
-    nova:use_stacktrace(true),
+    ?assertEqual(ok, nova:use_stacktrace(true)),
     ?assertEqual(true, persistent_term:get(nova_use_stacktrace)).
 
 use_stacktrace_false() ->
     persistent_term:put(nova_use_stacktrace, true),
-    nova:use_stacktrace(false),
-    ?assertEqual(undefined, persistent_term:get(nova_use_stacktrace, undefined)).
+    ?assertEqual(ok, nova:use_stacktrace(false)),
+    ?assertEqual(undefined, persistent_term:get(nova_use_stacktrace, undefined)),
+    ?assertEqual(ok, nova:use_stacktrace(false)).
 
 format_stacktrace_basic() ->
     Stack = [{my_mod, my_fun, 2, [{file, "my_mod.erl"}, {line, 42}]}],
@@ -94,6 +96,15 @@ format_stacktrace_missing_info() ->
     ?assertEqual(0, maps:get(arity, Entry)),
     ?assertEqual(<<"unknown">>, maps:get(file, Entry)),
     ?assertEqual(-1, maps:get(line, Entry)).
+
+%% The frame of a fun that was called with arguments it has no clause for
+%% names the fun itself, not a module and a function.
+format_stacktrace_frame_of_a_fun() ->
+    Stack = [{fun lists:reverse/1, [not_a_list], [{file, "lists.erl"}, {line, 7}]},
+             {fun lists:reverse/1, 1, []}],
+    ?assertEqual([#{module => lists, function => reverse, arity => 1, file => "lists.erl", line => 7},
+                  #{module => lists, function => reverse, arity => 1, file => <<"unknown">>, line => -1}],
+                 nova:format_stacktrace(Stack)).
 
 detect_language_returns_erlang() ->
     ?assertEqual(erlang, nova:detect_language()).

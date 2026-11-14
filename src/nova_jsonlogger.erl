@@ -26,6 +26,8 @@ With `redact => true` in its configuration the formatter takes request data and 
     new_line_type => nl | crlf | cr | unix | windows | macos9,
     key_mapping => #{atom() => atom()},
     format_funs => #{atom() => fun((_) -> _)},
+    meta_with => [atom()],
+    meta_without => [atom()],
     redact => boolean()
 }.
 
@@ -50,10 +52,9 @@ format(#{level := Level, msg := {report, Msg}, meta := Meta}, Config) when is_ma
     Data2 = apply_format_funs(Data1, Config),
     encode(pre_encode(Data2, Config), Config);
 format(Map = #{msg := {report, KeyVal}}, Config) when is_list(KeyVal) ->
-    format(Map#{msg := {report, maps:from_list(KeyVal)}}, Config);
+    format(Map#{msg := {report, maps:from_list([Pair || {_Key, _Value} = Pair <- KeyVal])}}, Config);
 format(Map = #{msg := {string, String}}, Config) ->
-    Report = #{text => unicode:characters_to_binary(String)},
-    format(Map#{msg := {report, Report}}, Config);
+    format(Map#{msg := {report, #{text => text(String)}}}, Config);
 format(Map = #{msg := {Format, Terms}}, Config) ->
     format(Map#{msg := {string, io_lib:format(Format, Terms)}}, Config).
 
@@ -66,25 +67,26 @@ system_time_to_iso8601(Epoch) ->
 system_time_to_iso8601_nano(Epoch) ->
     system_time_to_iso8601(1000 * Epoch, nanosecond).
 
--spec system_time_to_iso8601(integer(), erlang:time_unit()) -> binary().
+-spec system_time_to_iso8601(integer(), microsecond | nanosecond) -> binary().
 system_time_to_iso8601(Epoch, Unit) ->
-    binary:list_to_bin(calendar:system_time_to_rfc3339(Epoch, [{unit, Unit}, {offset, "Z"}])).
+    iolist_to_binary(calendar:system_time_to_rfc3339(Epoch, [{unit, Unit}, {offset, "Z"}])).
 
 %%%_* Private functions ================================================
+%% The string of a {string, String} message is whatever the caller of
+%% logger passed in, which the type of a log event does not narrow down.
+-spec text(dynamic()) -> dynamic().
+text(String) ->
+    unicode:characters_to_binary(String).
+
 pre_encode(Data, Config) ->
-    maps:fold(
-        fun
-            (K, V, Acc) when is_map(V) ->
-                maps:put(jsonify(K), pre_encode(V, Config), Acc);
-            % assume list of maps
-            (K, Vs, Acc) when is_list(Vs), is_map(hd(Vs)) ->
-                maps:put(jsonify(K), [pre_encode(V, Config) || V <- Vs, is_map(V)], Acc);
-            (K, V, Acc) ->
-                maps:put(jsonify(K), jsonify(V), Acc)
-        end,
-        maps:new(),
-        Data
-    ).
+    #{jsonify(K) => pre_encode_value(V, Config) || K := V <- Data}.
+
+pre_encode_value(V, Config) when is_map(V) ->
+    pre_encode(V, Config);
+pre_encode_value([First | _] = Vs, Config) when is_map(First) ->
+    [pre_encode(V, Config) || V <- Vs, is_map(V)];
+pre_encode_value(V, _Config) ->
+    jsonify(V).
 
 redact(Data, #{redact := true}) ->
     nova_redact:term(Data);
@@ -384,19 +386,19 @@ newline_test() ->
 newline_types_test() ->
     Base = #{level => alert, msg => {string, "x"}, meta => #{}},
     %% nl
-    ?assertEqual(<<"\n">>, lists:last(format(Base, #{new_line => true, new_line_type => nl}))),
+    ?assertMatch([_Json, <<"\n">>], format(Base, #{new_line => true, new_line_type => nl})),
     %% unix
-    ?assertEqual(<<"\n">>, lists:last(format(Base, #{new_line => true, new_line_type => unix}))),
+    ?assertMatch([_Json, <<"\n">>], format(Base, #{new_line => true, new_line_type => unix})),
     %% crlf
-    ?assertEqual(<<"\r\n">>, lists:last(format(Base, #{new_line => true, new_line_type => crlf}))),
+    ?assertMatch([_Json, <<"\r\n">>], format(Base, #{new_line => true, new_line_type => crlf})),
     %% windows
-    ?assertEqual(<<"\r\n">>, lists:last(format(Base, #{new_line => true, new_line_type => windows}))),
+    ?assertMatch([_Json, <<"\r\n">>], format(Base, #{new_line => true, new_line_type => windows})),
     %% cr
-    ?assertEqual(<<"\r">>, lists:last(format(Base, #{new_line => true, new_line_type => cr}))),
+    ?assertMatch([_Json, <<"\r">>], format(Base, #{new_line => true, new_line_type => cr})),
     %% macos9
-    ?assertEqual(<<"\r">>, lists:last(format(Base, #{new_line => true, new_line_type => macos9}))),
+    ?assertMatch([_Json, <<"\r">>], format(Base, #{new_line => true, new_line_type => macos9})),
     %% default (no new_line_type specified)
-    ?assertEqual(<<"\n">>, lists:last(format(Base, #{new_line => true}))).
+    ?assertMatch([_Json, <<"\n">>], format(Base, #{new_line => true})).
 
 no_newline_test() ->
     Base = #{level => alert, msg => {string, "x"}, meta => #{}},
@@ -418,7 +420,7 @@ jsonify_types_test() ->
     %% pid
     ?assert(is_binary(jsonify(self()))),
     %% function
-    ?assert(is_binary(jsonify(fun erlang:now/0))),
+    ?assert(is_binary(jsonify(fun erlang:monotonic_time/0))),
     %% list (string)
     ?assertEqual(<<"hello">>, jsonify("hello")),
     %% list (non-string, falls through to io_lib:format)
@@ -430,30 +432,29 @@ jsonify_types_test() ->
 
 format_keyval_list_test() ->
     Event = #{level => info, msg => {report, [{key, <<"val">>}]}, meta => #{}},
-    {ok, Decoded} = thoas:decode(format(Event, #{})),
-    ?assertEqual(<<"val">>, maps:get(<<"key">>, Decoded)).
+    {ok, #{<<"key">> := Value}} = thoas:decode(format(Event, #{})),
+    ?assertEqual(<<"val">>, Value).
 
 format_format_terms_test() ->
     Event = #{level => info, msg => {"hello ~s", ["world"]}, meta => #{}},
-    {ok, Decoded} = thoas:decode(format(Event, #{})),
-    ?assertEqual(<<"hello world">>, maps:get(<<"text">>, Decoded)).
+    {ok, #{<<"text">> := Text}} = thoas:decode(format(Event, #{})),
+    ?assertEqual(<<"hello world">>, Text).
 
 format_error_logger_test() ->
     Event = #{level => error,
               msg => {report, #{format => "error: ~p", args => [bad], label => {error_logger, error}}},
               meta => #{}},
-    {ok, Decoded} = thoas:decode(format(Event, #{})),
-    ?assert(maps:is_key(<<"text">>, Decoded)).
+    ?assertMatch({ok, #{<<"text">> := _}}, thoas:decode(format(Event, #{}))).
 
 nested_map_test() ->
     Event = #{level => info, msg => {report, #{outer => #{inner => value}}}, meta => #{}},
-    {ok, Decoded} = thoas:decode(format(Event, #{})),
-    ?assertEqual(#{<<"inner">> => <<"value">>}, maps:get(<<"outer">>, Decoded)).
+    {ok, #{<<"outer">> := Outer}} = thoas:decode(format(Event, #{})),
+    ?assertEqual(#{<<"inner">> => <<"value">>}, Outer).
 
 list_of_maps_test() ->
     Event = #{level => info, msg => {report, #{items => [#{a => 1}, #{b => 2}]}}, meta => #{}},
-    {ok, Decoded} = thoas:decode(format(Event, #{})),
-    ?assertEqual([#{<<"a">> => 1}, #{<<"b">> => 2}], maps:get(<<"items">>, Decoded)).
+    {ok, #{<<"items">> := Items}} = thoas:decode(format(Event, #{})),
+    ?assertEqual([#{<<"a">> => 1}, #{<<"b">> => 2}], Items).
 
 system_time_to_iso8601_test() ->
     Epoch = erlang:system_time(microsecond),

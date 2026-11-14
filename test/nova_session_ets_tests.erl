@@ -1,6 +1,5 @@
 -module(nova_session_ets_tests).
 -include_lib("eunit/include/eunit.hrl").
--include("../include/nova_pubsub.hrl").
 
 %%====================================================================
 %% Direct tests for the nova_session_ets gen_server backend.

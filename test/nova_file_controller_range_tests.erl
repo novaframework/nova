@@ -30,7 +30,12 @@ range(Dir, RangeSpec) ->
 
 %% The fastest of a few runs, so a busy machine does not fail the test.
 milliseconds(Request) ->
-    lists:min([element(1, timer:tc(Request, millisecond)) || _Run <- lists:seq(1, 5)]).
+    lists:min([elapsed(Request) || _Run <- lists:seq(1, 5)]).
+
+elapsed(Request) ->
+    Start = erlang:monotonic_time(millisecond),
+    _ = Request(),
+    erlang:monotonic_time(millisecond) - Start.
 
 many(Digit) ->
     binary:copy(Digit, ?MANY_DIGITS).

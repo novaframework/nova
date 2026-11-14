@@ -10,13 +10,14 @@
          handle_websocket/3,
          handle_ws/2,
          location/1,
-         loggable_location/1
+         loggable_location/1,
+         render_dtl/3
         ]).
 
 -include_lib("kernel/include/logger.hrl").
 
 -ifdef(TEST).
--export([maybe_inject_csrf_token/2]).
+-export([maybe_inject_csrf_token/2, get_view_name/1]).
 -endif.
 
 -type erlydtl_vars() :: map() | [{Key :: atom() | binary() | string(), Value :: any()}].
@@ -96,7 +97,8 @@ The tuple can have three different forms:
 
 \{ok, Variables, Options, Req0\} - This will render the default view with the given variables and options but also takes a request object. This is useful if you want to set cookies or other headers that are not supported by the handler.
 """.
--spec handle_ok({ok, Variables :: erlydtl_vars()} | {ok, Variables :: erlydtl_vars(), Options :: map()},
+-spec handle_ok({ok, Variables :: erlydtl_vars()} | {ok, Variables :: erlydtl_vars(), Options :: map()} |
+                {ok, Variables :: erlydtl_vars(), Options :: map(), Req0 :: cowboy_req:req()},
                 Callback :: function(), Req :: cowboy_req:req()) -> {ok, cowboy_req:req()}.
 handle_ok({ok, Variables}, Callback, Req) ->
     %% Derive the view from module
@@ -110,10 +112,9 @@ handle_ok({ok, Variables, Options}, Callback, Req) ->
             undefined ->
                 get_view_name(Module);
             CustomView when is_atom(CustomView) ->
-                ViewName = atom_to_list(CustomView) ++ "_dtl",
-                list_to_atom(ViewName);
+                view_module(atom_to_list(CustomView) ++ "_dtl");
             CustomView ->
-                list_to_atom(CustomView ++ "_dtl")
+                view_module(CustomView ++ "_dtl")
         end,
     handle_view(View, Variables, Options, Req);
 handle_ok({ok, Variables, Options, Req0}, Callback, _Req) ->
@@ -142,7 +143,9 @@ And if you want to modulate the request object you can send it in as the fifth a
 """.
 -spec handle_status({status, StatusCode :: integer()} |
                     {status, StatusCode :: integer(), ExtraHeaders :: map()} |
-                    {status, StatusCode :: integer(), ExtraHeaders :: map(), Body :: binary() | map()},
+                    {status, StatusCode :: integer(), ExtraHeaders :: map(), Body :: binary() | map()} |
+                    {status, StatusCode :: integer(), ExtraHeaders :: map(), Body :: binary() | map(),
+                     Req0 :: cowboy_req:req()},
                     Callback :: function(), Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()}.
 handle_status({status, Status, ExtraHeaders, JSON, Req0}, Callback, _Req) ->
     handle_status({status, Status, ExtraHeaders, JSON}, Callback, Req0);
@@ -278,7 +281,11 @@ Optionally a sixth element can be added to the tuple. This is the request object
 """.
 -spec handle_sendfile({sendfile, StatusCode :: integer(), Headers :: map(), {Offset :: integer(),
                                                                              Length :: integer(),
-                                                                             Path :: list()}, Mime :: binary()},
+                                                                             Path :: list()}, Mime :: binary()} |
+                      {sendfile, StatusCode :: integer(), Headers :: map(), {Offset :: integer(),
+                                                                             Length :: integer(),
+                                                                             Path :: list()}, Mime :: binary(),
+                       Req0 :: cowboy_req:req()},
                   Callback :: function(), Req) -> {ok, Req} when Req :: cowboy_req:req().
 handle_sendfile({sendfile, StatusCode, Headers, FileInfo, Mime, Req0}, Callback, _Req) ->
     handle_sendfile({sendfile, StatusCode, Headers, FileInfo, Mime}, Callback, Req0);
@@ -292,8 +299,12 @@ handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _
 
 %%--------------------------------------------------------------------
 -doc "Handles upgrading to websocket. This is a special handler in regards to arguments. The tuple-object for websocket only takes two arguments; What the initial state of the websocket handler should be and the request object.".
--spec handle_websocket({websocket, ControllerData :: any()}, Callback :: function(), Req :: cowboy_req:req()) ->
-                              {ok, Req :: cowboy_req:req()}.
+-spec handle_websocket({websocket, ControllerData :: any()} |
+                       {websocket, ControllerData :: any(), Req0 :: cowboy_req:req()},
+                       Callback :: function(), Req :: cowboy_req:req()) ->
+                              {ok, Req :: cowboy_req:req()} |
+                              {cowboy_websocket, Req :: cowboy_req:req(), Options :: map()} |
+                              nova_handlers:handler_return().
 handle_websocket({websocket, ControllerData, Req0}, Callback, _Req) ->
     handle_websocket({websocket, ControllerData}, Callback, Req0);
 handle_websocket({websocket, ControllerData}, Callback, Req) ->
@@ -359,19 +370,17 @@ prepend_frames(Frame, Commands) ->
 handle_view(View, Variables, Options, Req) ->
     Variables1 = maybe_inject_csrf_token(Variables, Req),
     {ok, HTML} = render_dtl(View, Variables1, []),
-    Headers =
-        case maps:get(headers, Options, undefined) of
-            undefined ->
-                #{<<"content-type">> => <<"text/html">>};
-            UserHeaders ->
-                UserHeaders
-        end,
     StatusCode = maps:get(status_code, Options, 200),
-    Req0 = cowboy_req:set_resp_headers(Headers, Req),
+    %% The headers of the controller go on top of the default, so one that
+    %% names a content type replaces it and one that names none keeps it.
+    Req0 = cowboy_req:set_resp_headers(maps:get(headers, Options, #{}),
+                                       cowboy_req:set_resp_headers(#{~"content-type" => ~"text/html"}, Req)),
     Req1 = cowboy_req:set_resp_body(HTML, Req0),
     Req2 = Req1#{resp_status_code => StatusCode},
     {ok, Req2}.
 
+%% The one place that calls a compiled template. The module is made by
+%% erlydtl when the application is built, so it is only known by name.
 render_dtl(View, Variables, Options) ->
     case code:is_loaded(View) of
         false ->
@@ -397,15 +406,22 @@ maybe_inject_csrf_token(Variables, _Req) ->
 
 get_view_name({Mod, _Opts}) -> get_view_name(Mod);
 get_view_name(Mod) when is_atom(Mod) ->
-    StrName = get_view_name(erlang:atom_to_list(Mod)),
-    erlang:list_to_atom(StrName);
-get_view_name([$_, $c, $o, $n, $t, $r, $o, $l, $l, $e, $r]) ->
-    "_dtl";
-get_view_name([]) ->
-    "_dtl";
-get_view_name([H|T]) ->
-    [H|get_view_name(T)].
+    view_module(view_name(atom_to_list(Mod))).
 
--ifdef(TEST).
--compile(export_all).
--endif.
+view_name([$_, $c, $o, $n, $t, $r, $o, $l, $l, $e, $r]) ->
+    "_dtl";
+view_name([]) ->
+    "_dtl";
+view_name([H|T]) ->
+    [H|view_name(T)].
+
+%% A controller can take the name of a view from the request, so a name
+%% without a module is answered like a template that cannot be loaded.
+view_module(Name) ->
+    case nova_code:module_named(Name) of
+        {ok, View} ->
+            View;
+        error ->
+            ?LOG_ERROR(#{msg => <<"Nova could not render template">>, template => Name, reason => nofile}),
+            throw({404, {template_not_found, Name}})
+    end.

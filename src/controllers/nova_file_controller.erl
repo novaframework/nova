@@ -7,6 +7,7 @@
         ]).
 
 -include_lib("kernel/include/file.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 -define(MAX_SYMLINKS, 40).
 -define(MAX_RANGE_DIGITS, 19).
@@ -14,13 +15,19 @@
 
 %% The extra_state of a static route, for the router. The root of a
 %% directory is resolved here, when the route is compiled, so a request only
-%% has to resolve the segments that come after it.
+%% has to resolve the segments that come after it. The path of a file is
+%% made absolute, so it does not follow a change of the working directory.
+-type static() :: {file, file:name_all()} | {priv_file, atom(), file:name_all()} |
+                  {dir, file:name_all()} | {priv_dir, atom(), file:name_all()}.
+
 -doc false.
--spec static_state(Static :: tuple(), Options :: map()) -> map().
+-spec static_state(Static :: static(), Options :: map()) -> map().
 static_state({dir, _LocalPath} = Dir, Options) ->
     directory_state(Dir, Options);
 static_state({priv_dir, _App, _LocalPath} = Dir, Options) ->
     directory_state(Dir, Options);
+static_state({file, LocalFile}, Options) ->
+    #{static => {file, filename:absname(LocalFile)}, options => Options};
 static_state(File, Options) ->
     #{static => File, options => Options}.
 
@@ -78,11 +85,23 @@ serve_file(#{extra_state := #{static := File, options := Options}, headers := He
 serve_file(_Req) ->
     {status, 404}.
 
-get_dir(#{extra_state := #{pathinfo := Pathinfo, static := Dir, options := Options} = ExtraState} = Req) ->
+get_dir(#{extra_state := #{static := Dir, options := Options} = ExtraState} = Req) ->
+    Root = get_filepath(Dir),
+    case static_root(ExtraState, Root, Options) of
+        error ->
+            unusable_root(Root, unresolved),
+            {status, 404};
+        Resolved ->
+            serve_dir(Resolved, Req)
+    end;
+get_dir(_Req) ->
+    {status, 404}.
+
+serve_dir(Resolved, #{extra_state := #{pathinfo := Pathinfo, options := Options}} = Req) ->
     %% This case will be invoked if a directory was set with wildcard - pathinfo will then
     %% contain the segments of the wildcard value
-    case path_inside_root(static_root(ExtraState, get_filepath(Dir), Options), Pathinfo, Options) of
-        {ok, Filepath0, Resolved} ->
+    case path_inside_root(Resolved, Pathinfo, Options) of
+        {ok, Filepath0, FileResolved} ->
             case filelib:is_dir(Filepath0) of
                 false ->
                     %% Check if it's a file
@@ -94,16 +113,25 @@ get_dir(#{extra_state := #{pathinfo := Pathinfo, static := Dir, options := Optio
                             {status, 404}
                     end;
                 true ->
-                    get_dir(Req#{extra_state => #{static => {dir, Filepath0}, static_root => {Filepath0, Resolved},
+                    get_dir(Req#{extra_state => #{static => {dir, Filepath0}, static_root => {Filepath0, FileResolved},
                                                   options => Options}})
             end;
         error ->
             {status, 404}
     end;
-get_dir(#{path := Path, extra_state := #{static := Dir, options := Options} = ExtraState} = Req) ->
-    {_RootSegments, DirSegments} = Resolved = static_root(ExtraState, get_filepath(Dir), Options),
+serve_dir({_RootSegments, DirSegments} = Resolved, #{path := Path, extra_state := #{options := Options}} = Req) ->
     Filepath = filename:join(DirSegments),
-    {ok, Files} = file:list_dir(Filepath),
+    case file:list_dir(Filepath) of
+        {ok, Files} ->
+            serve_index(Files, Filepath, Resolved, Path, Options, Req);
+        {error, Reason} ->
+            unusable_root(Filepath, Reason),
+            {status, 404}
+    end;
+serve_dir(_Resolved, _Req) ->
+    {status, 404}.
+
+serve_index(Files, Filepath, Resolved, Path, Options, Req) ->
     case get_index_file(Files, maps:get(index_files, Options, ["index.html"])) of
         {ok, IndexFile} ->
             case inside_root(Resolved, [IndexFile], Options) of
@@ -119,7 +147,6 @@ get_dir(#{path := Path, extra_state := #{static := Dir, options := Options} = Ex
                     %% We will not show the directory listing
                     {status, 403};
                 true ->
-                    {ok, Files} = file:list_dir(Filepath),
                     FileInfos = [file_info(Filepath, F) || F <- Files],
                     ParentDir = case re:replace(Path , "/[^/]+/?$", "") of
                                     [[]] -> undefined;
@@ -127,9 +154,19 @@ get_dir(#{path := Path, extra_state := #{static := Dir, options := Options} = Ex
                                 end,
                     {ok, #{date => calendar:local_time(), parent_dir => ParentDir, path => Path, files => FileInfos}}
             end
-    end;
-get_dir(_Req) ->
-    {status, 404}.
+    end.
+
+%% A static directory that cannot be served is the same on every request,
+%% so it is logged the first time only.
+unusable_root(Directory, Reason) ->
+    Key = {?MODULE, unusable_root, Directory},
+    case persistent_term:get(Key, false) of
+        true ->
+            ok;
+        false ->
+            persistent_term:put(Key, true),
+            ?LOG_ERROR(#{msg => ~"Static directory cannot be served", directory => Directory, reason => Reason})
+    end.
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%

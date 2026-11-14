@@ -44,8 +44,6 @@ The plugin defines a field called `correlation_id` in the request object for con
          post_request/4,
          plugin_info/0]).
 
--include_lib("kernel/include/logger.hrl").
-
 -define(MAX_CORRELATION_ID_SIZE, 255).
 
 %%--------------------------------------------------------------------

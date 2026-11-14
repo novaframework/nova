@@ -2,8 +2,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("../include/nova_router.hrl").
 
--define(SETUP, fun() -> setup() end).
--define(CLEANUP, fun(S) -> cleanup(S) end).
+-define(SETUP, fun setup/0).
+-define(CLEANUP, fun cleanup/1).
 
 setup() ->
     Prev = nova_test_helper:setup_nova_env(),
@@ -192,8 +192,8 @@ execute_method_not_allowed_test_() ->
         {ok, Req1, Env1} = nova_router:execute(Req, #{}),
         %% Should get 405 with allow header
         ?assertEqual(405, maps:get(resp_status_code, Req1)),
-        AllowHeader = maps:get(<<"allow">>, maps:get(resp_headers, Req1), undefined),
-        ?assertNotEqual(undefined, AllowHeader),
+        AllowHeader = maps:get(<<"allow">>, maps:get(resp_headers, Req1)),
+        ?assertEqual([~"GET", ~"POST"], lists:sort(binary:split(iolist_to_binary(AllowHeader), ~", ", [global]))),
         ?assertMatch(F when is_function(F), maps:get(callback, Env1))
     end}.
 
@@ -311,6 +311,30 @@ render_status_page_3_test_() ->
     end}.
 
 %%====================================================================
+%% The router module of an application
+%%====================================================================
+
+router_module_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     [{"an application without a router module stops the compile, and no atom is made for the name",
+       fun() ->
+               ?assertThrow({error, {router_module_not_found, nova_router_tests_no_such_app}},
+                            nova_router:compile([nova_router_tests_no_such_app])),
+               ?assertError(badarg, binary_to_existing_atom(<<"nova_router_tests_no_such_app", "_router">>))
+       end},
+      {"the router_module of the application environment is used as it is",
+       fun() ->
+               application:set_env(nova_router_tests_named_app, router_module, nova_test_mounted_router),
+               try
+                   nova_test_mounted_router:set_routes([]),
+                   _Dispatch = nova_router:compile([nova_router_tests_named_app]),
+                   ?assert(lists:keymember(nova_router_tests_named_app, 1, nova_router:compiled_apps()))
+               after
+                   application:unset_env(nova_router_tests_named_app, router_module)
+               end
+       end}]}.
+
+%%====================================================================
 %% compiled_apps/0
 %%====================================================================
 
@@ -404,7 +428,7 @@ add_routes_empty_test_() ->
 add_routes_invalid_throws_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         ?assertThrow({error, {invalid_routes, my_app, not_a_list}},
-                     nova_router:add_routes(my_app, not_a_list))
+                     apply(nova_router, add_routes, [my_app, not_a_list]))
     end}.
 
 %% Regression: add_routes/2 used to crash with {badkey, router_file}
@@ -417,6 +441,22 @@ add_routes_without_router_file_test_() ->
         }],
         ?assertEqual(ok, nova_router:add_routes(new_app, [Routes]))
     end}.
+
+add_routes_keeps_the_prefix_in_the_env_of_the_main_application_test_() ->
+    {setup, ?SETUP,
+     fun(State) ->
+         application:unset_env(nova, apps),
+         cleanup(State)
+     end,
+     fun() ->
+         Page = fun(_) -> {json, #{}} end,
+         application:set_env(nova, apps, [{other_app, #{prefix => "/other"}}]),
+         ok = nova_router:add_routes(env_app, #{prefix => "/env", routes => [{"/page", Page, #{methods => [get]}}]}),
+         ?assertEqual([{other_app, #{prefix => "/other"}}, {env_app, #{prefix => "/env"}}],
+                      nova:get_env(apps, [])),
+         ok = nova_router:remove_application(env_app),
+         ?assertEqual([{other_app, #{prefix => "/other"}}], nova:get_env(apps, []))
+     end}.
 
 %%====================================================================
 %% routes/1 callback

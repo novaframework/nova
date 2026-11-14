@@ -8,6 +8,10 @@
          plugin_info/0
         ]).
 
+-ifdef(TEST).
+-export([modulate_state/3, should_read_body/1]).
+-endif.
+
 -include_lib("kernel/include/logger.hrl").
 
 -define(DEFAULT_MAX_BODY_LENGTH, 1000000).
@@ -56,8 +60,9 @@ plugin_info() ->
       authors => [<<"Nova team <info@novaframework.org">>],
       description => <<"This plugin modulates the body of a request.">>,
       options => [
-                  {decode_json_body, <<"Decodes the body as JSON and puts it under `json`">>},
-                  {read_urlencoded_body, <<"Used to parse body as query-string and put them in state under `qs` key">>},
+                  {decode_json_body, ~"Decodes a body sent as JSON and puts it in the request under `json`"},
+                  {read_urlencoded_body, ~"Parses an application/x-www-form-urlencoded body and puts its fields in the request under `params`"},
+                  {parse_qs, ~"Parses the query string and puts it in the request under `parsed_qs`: as a map with true, as a list of pairs with list"},
                   {max_body_length, ~"Reply 413 when the body read for decode_json_body or read_urlencoded_body is longer than this many bytes, or infinity (default 1 000 000)"},
                   {body_read_timeout, ~"Reply 408 when reading that body takes longer than this many milliseconds (at least 1), or infinity (default 60 000)"}
                  ]
@@ -225,7 +230,3 @@ should_read_body([]) -> false;
 should_read_body([{decode_json_body, true}|_Tl]) -> true;
 should_read_body([{read_urlencoded_body, true}|_Tl]) -> true;
 should_read_body([_|Tl]) -> should_read_body(Tl).
-
--ifdef(TEST).
--compile(export_all).
--endif.

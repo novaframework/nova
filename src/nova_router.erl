@@ -44,11 +44,20 @@
          delete_dispatch/1
         ]).
 
+-ifdef(TEST).
+-export([add_plugin/1, apply_callback/3, concat_strings/2, insert/6, method_to_binary/1, normalize_plugins/2,
+         normalize_secure/2, plugins_after_security/2, resolve_secure/3]).
+-endif.
+
 -include_lib("kernel/include/logger.hrl").
 -include("../include/nova_router.hrl").
 -include("../include/nova.hrl").
 
--type bindings() :: #{binary() := binary()}.
+-type bindings() :: #{binary() => binary()}.
+
+%% A request the router has matched. Its bindings are keyed by binary, which
+%% cowboy_req:req() has no room for, so it is typed as a map.
+-type routed_req() :: map().
 
 -type lookup_result() :: {ok, bindings(), Value :: term()} |
                          {ok, bindings(), Value :: term(), PathInfo :: [binary()]} |
@@ -150,7 +159,8 @@ execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
             render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
         {error, comparator_not_found, AllowedMethods} ->
             logger:debug(<<"Method not allowed: ~p for ~p. Allowed methods: ~p">>, [Method, Path, AllowedMethods]),
-            AllowHeader = iolist_to_binary(lists:join(<<", ">>, AllowedMethods)),
+            Allowed = [AllowedMethod || AllowedMethod <- AllowedMethods, is_binary(AllowedMethod)],
+            AllowHeader = iolist_to_binary(lists:join(<<", ">>, Allowed)),
             %% Set the 'allow'-header
             Req1 = cowboy_req:set_resp_header(<<"allow">>, AllowHeader, Req),
             {ok, Req2, Env1} = render_status_page('_', 405, #{error => "Method not allowed"}, Req1, Env),
@@ -261,13 +271,13 @@ add_routes(App) ->
 
 %%--------------------------------------------------------------------
 -doc "Add routes to the dispatch-table for the given app. The routes can be either a list of maps or a map. It use the same structure as the routes-callback in the router-module.".
--spec add_routes(App :: atom(), Routes :: [map()] | map()) -> ok.
+-spec add_routes(App :: atom(), Routes :: [map() | [map()]] | map()) -> ok.
 add_routes(App, Routes) ->
     add_routes(App, Routes, ?NOVA_DISPATCH).
 
 %%--------------------------------------------------------------------
 -doc "As add_routes/2, but against the routing table addressed by `DispatchKey`.".
--spec add_routes(App :: atom(), Routes :: [map()] | map(), DispatchKey :: dispatch_key()) -> ok.
+-spec add_routes(App :: atom(), Routes :: [map() | [map()]] | map(), DispatchKey :: dispatch_key()) -> ok.
 add_routes(_App, [], _DispatchKey) ->
     ok;
 add_routes(App, Routes, DispatchKey) when is_map(Routes) ->
@@ -328,7 +338,7 @@ remove_application(Application, DispatchKey) when is_atom(Application) ->
     AppsKey = apps_key(DispatchKey),
     StorageBackend:put(DispatchKey, Dispatch0),
     StorageBackend:put(AppsKey, lists:keydelete(Application, 1, StorageBackend:get(AppsKey, []))),
-    nova:set_env(apps, lists:keydelete(Application, 1, nova:get_env(apps, []))),
+    nova:set_env(apps, lists:keydelete(Application, 1, mounted_apps())),
     ok.
 
 %% Both handler kinds carry the owning application, and dropping the cowboy
@@ -436,13 +446,21 @@ router_module(App) ->
         {ok, RouterModule} ->
             RouterModule;
         undefined ->
-            case nova:detect_language() of
-                elixir ->
-                    %% We build the router as App.Router
-                    erlang:list_to_atom(lists:flatten(io_lib:format("~s.Router", [App])));
-                _ ->
-                    %% All other languages are using the app_router convention
-                    erlang:list_to_atom(lists:flatten(io_lib:format("~s_router", [App])))
+            Name = case nova:detect_language() of
+                       elixir ->
+                           %% We build the router as App.Router
+                           atom_to_list(App) ++ ".Router";
+                       _ ->
+                           %% All other languages are using the app_router convention
+                           atom_to_list(App) ++ "_router"
+                   end,
+            case nova_code:module_named(Name) of
+                {ok, RouterModule} ->
+                    RouterModule;
+                error ->
+                    ?LOG_ERROR(#{reason => <<"Could not find the router module of the application">>,
+                                 app => App, router_module => Name}),
+                    throw({error, {router_module_not_found, App}})
             end
     end.
 
@@ -464,11 +482,10 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
                             maps:get(prefix, RouteInfo, "")),
     Host = maps:get(host, RouteInfo, '_'),
     SubApps = maps:get(apps, RouteInfo, []),
+    ok = warn_misplaced_security(App, Prefix, RouteInfo, RouterFile),
 
     %% We need to add this app info to nova-env
-    NovaEnv = nova:get_env(apps, []),
-    NovaEnv0 = lists:keystore(App, 1, NovaEnv, {App, #{prefix => Prefix}}),
-    nova:set_env(apps, NovaEnv0),
+    nova:set_env(apps, lists:keystore(App, 1, mounted_apps(), {App, #{prefix => Prefix}})),
 
     {ok, Dispatch1} = parse_url(Host, maps:get(routes, RouteInfo, []),
                                 #{prefix => Prefix,
@@ -551,7 +568,7 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
 
             Methods = maps:get(methods, Options, ['_']),
 
-            ExtraState = maps:get(extra_state, Options, undefined),
+            ExtraState = route_extra_state(Options, Value#nova_handler_value.extra_state),
             Value0 = Value#nova_handler_value{extra_state = ExtraState},
 
             Value1 = Value0#nova_handler_value{callback = Callback,
@@ -585,12 +602,12 @@ parse_url(Host,
 
 
 -spec render_status_page(StatusCode :: integer(), Req :: cowboy_req:req()) ->
-                                {ok, Req0 :: cowboy_req:req(), Env :: map()}.
+                                {ok, Req0 :: routed_req(), Env :: map()}.
 render_status_page(StatusCode, Req) ->
     render_status_page(StatusCode, #{}, Req).
 
 -spec render_status_page(StatusCode :: integer(), Data :: map(), Req :: cowboy_req:req()) ->
-                                {ok, Req0 :: cowboy_req:req(), Env :: map()}.
+                                {ok, Req0 :: routed_req(), Env :: map()}.
 render_status_page(StatusCode, Data, Req) ->
     render_status_page('_', StatusCode, Data, Req, #{nova_dispatch_key => dispatch_key(Req)}).
 
@@ -598,7 +615,7 @@ render_status_page(StatusCode, Data, Req) ->
                          StatusCode :: integer(),
                          Data :: map(),
                          Req :: cowboy_req:req(),
-                         Env :: map()) -> {ok, Req0 :: cowboy_req:req(), Env :: map()}.
+                         Env :: map()) -> {ok, Req0 :: routed_req(), Env :: map()}.
 render_status_page(Host, StatusCode, Data, Req, Env) ->
     StorageBackend = storage_backend(),
     Dispatch = StorageBackend:get(dispatch_key(Env)),
@@ -631,6 +648,13 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
 
 insert_opts(T) ->
     maps:get(insert_opts, T, #{}).
+
+-spec mounted_apps() -> [{atom(), map()}].
+mounted_apps() ->
+    case nova:get_env(apps, []) of
+        Apps when is_list(Apps) ->
+            [{App, Info} || {App, Info} <- Apps, is_atom(App), is_map(Info)]
+    end.
 
 %% The route template rides at the head of the compiled plugin list so the
 %% routing records keep their arity: rebar3_nova and other tools match them
@@ -671,6 +695,12 @@ route_plugins({ok, _Bindings, Value, _Pathinfo}) -> route_plugins(Value);
 route_plugins(#nova_handler_value{plugins = Plugins})   -> Plugins;
 route_plugins(#cowboy_handler_value{plugins = Plugins}) -> Plugins;
 route_plugins(_NoRoute)                          -> undefined.
+
+%% A route without an extra_state of its own takes the one of its route
+%% group. A group that declares none carries #{}, which is none for a route.
+route_extra_state(#{extra_state := ExtraState}, _GroupExtraState) -> ExtraState;
+route_extra_state(_Options, GroupExtraState) when GroupExtraState =:= #{} -> undefined;
+route_extra_state(_Options, GroupExtraState) -> GroupExtraState.
 
 %% The routing record of a websocket route has no field for extra_state and
 %% has to keep its arity, so the state travels in the handler arguments: the
@@ -782,13 +812,15 @@ normalize_secure(Invalid, RouterFile) ->
 %% route group, and a group that declares `security` has its own behind it:
 %% both have to allow a request, so neither the application that mounts nor
 %% the one that is mounted can take away what the other one asks for. Both
-%% values are checked here, also where only one ends up on the route.
-%% Replacing a declared callback takes the explicit `override_secure`.
+%% values are checked here, also where only one ends up on the route, or
+%% neither because an `override_secure` replaces them: that is the explicit
+%% way to replace a declared callback.
 resolve_secure(Options, RouteInfo, RouterFile) ->
-    case override_callbacks(Options, RouterFile) of
+    Overrides = override_callbacks(Options, RouterFile),
+    Mount = normalize_secure(maps:get(secure, Options, false), RouterFile),
+    Group = normalize_secure(maps:get(security, RouteInfo, false), RouterFile),
+    case Overrides of
         [] ->
-            Mount = normalize_secure(maps:get(secure, Options, false), RouterFile),
-            Group = normalize_secure(maps:get(security, RouteInfo, false), RouterFile),
             case {Mount, Group} of
                 {false, _} -> Group;
                 {_, false} -> Mount;
@@ -797,7 +829,7 @@ resolve_secure(Options, RouteInfo, RouterFile) ->
             end;
         [Override] ->
             Override;
-        Overrides ->
+        _Several ->
             Overrides
     end.
 
@@ -849,6 +881,19 @@ warn_route_plugin_strategy(App, #{plugin_strategy := Strategy}, RouterFile) ->
                            app => App, plugin_strategy => Strategy, router_file => RouterFile})
     end;
 warn_route_plugin_strategy(_App, _RouteInfo, _RouterFile) ->
+    ok.
+
+%% A route group is protected by its `security`. The same wish written as
+%% `secure` on the group, or as either key in the options of one route, is
+%% never read, and the route its author believes protected is public.
+warn_misplaced_security(App, Prefix, RouteInfo, RouterFile) ->
+    Misplaced = [{secure, Prefix} || is_map_key(secure, RouteInfo)] ++
+        [{Key, concat_strings(Prefix, Path)}
+         || {Path, _Target, RouteOptions} <- maps:get(routes, RouteInfo, []), is_map(RouteOptions),
+            Key <- [security, secure], is_map_key(Key, RouteOptions)],
+    _ = [?LOG_WARNING(#{msg => ~"This key is not read here, so it protects nothing. Declare the callback as security on the route group",
+                        app => App, path => Path, key => Key, router_file => RouterFile})
+         || {Key, Path} <- Misplaced],
     ok.
 
 local_plugins(RouteInfo) ->
@@ -974,10 +1019,3 @@ routes(_) ->
                {500, fun nova_error_controller:server_error/1, #{}}
               ]
    }].
-
-%% =============================
-%% Test cases
-%% ============================
--ifdef(TEST).
--compile(export_all).
--endif.

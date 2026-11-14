@@ -69,7 +69,7 @@ above.
     {error, Reason :: atom()}
         when SessionId :: binary(),
              Key :: binary(),
-             Value :: binary().
+             Value :: term().
 
 %% Deletes a whole session
 -callback delete_value(SessionId) ->
@@ -105,8 +105,9 @@ backend without it accepts every presented id.
 %%%===================================================================
 %%% Public functions
 %%%===================================================================
+-doc "The value stored under `Key` in the session of the request, as it was given to `set/3`.".
 -spec get(Req :: cowboy_req:req(), Key :: binary()) ->
-          {ok, Value :: binary()} | {error, Reason :: atom()} | no_return().
+          {ok, Value :: term()} | {error, Reason :: atom()} | no_return().
 get(Req, Key) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
@@ -116,7 +117,13 @@ get(Req, Key) ->
             {error, not_found}
     end.
 
--spec set(Req :: cowboy_req:req(), Key :: binary(), Value :: binary()) ->
+-doc """
+Stores `Value` under `Key` in the session of the request. The value is
+handed to the session backend as it is. `nova_session_ets` keeps any term
+and returns it unchanged from `get/2`. A backend of your own decides what it
+can store, and returns `{error, Reason}` for a value it cannot.
+""".
+-spec set(Req :: cowboy_req:req(), Key :: binary(), Value :: term()) ->
           ok | {error, Reason :: atom()} | no_return().
 set(Req, Key, Value) ->
     case get_session_id(Req) of
