@@ -1,7 +1,7 @@
 # Deprecations in Nova
 
-We try to keep the Nova API as stable as possible, but sometimes we need to depreciate old functionality.
-This is a list of the things that are currently deprecated in Nova.
+We try to keep the Nova API as stable as possible, but sometimes we need to deprecate old functionality or change how something behaves.
+This page lists what is deprecated and what changed, by the release that made the change. The [Upgrading](upgrading.md) guide says what to do about the changes of the latest releases.
 
 
 ## 0.9.24
@@ -11,7 +11,14 @@ but it is a good time to do it now before we release 1.0.0. The old format will 
 of `{Module, Function}` in Nova.
 
 
-## Unreleased
+## 0.10.3
+
+- The `ca_cert` and `cert` keys of `cowboy_configuration` are deprecated in
+  favor of `ssl_options`, which takes the transport options of the TLS
+  listener as a map. The old keys still work and log a deprecation warning.
+
+
+## 0.17.0
 
 - `routing_tree` is no longer a dependency. Nova's dispatch table is now built
   by the in-tree `nova_routing_trie`. If you introspected the routing table by
@@ -46,17 +53,28 @@ of `{Module, Function}` in Nova.
   router replaces Nova's default error page. Previously Nova's was registered
   first and yours was silently ignored.
 
-- **`nova:format_stacktrace/1` always returns an integer `arity`.** A frame
-  that carries its argument list (the first frame of a `function_clause`)
-  used to be returned with the arguments in `arity`; it now gets their count,
-  so request data never reaches a log or an error page through it.
-
 - **Plugins.** A route entry that declares `plugins` uses exactly those, and one
   that does not uses the globally configured ones - unchanged. The new
   `plugin_strategy` option lets you combine both; see the
   [routing guide](routing.md). It is set per application in `nova_apps`. A
   `plugin_strategy` key on a route entry, where the routing guide for 0.17.0
   to 0.18.1 put it, is ignored and logs a warning once per application.
+
+- **`nova_router:lookup_url/1,2,3`** keep their return shapes, including
+  `{error, comparator_not_found, AllowedMethods}` for a path that exists but
+  does not accept the method.
+
+
+## Next release
+
+These changes are part of the release that follows 0.18.3.
+
+### Behaviour changes to be aware of
+
+- **`nova:format_stacktrace/1` always returns an integer `arity`.** A frame
+  that carries its argument list (the first frame of a `function_clause`)
+  used to be returned with the arguments in `arity`; it now gets their count,
+  so request data never reaches a log or an error page through it.
 
 - **`{stop, Req}` from a plugin is deprecated.** It still ends the request
   like `{stop, Req, State}` and keeps the plugin's state as it was, and logs
@@ -131,10 +149,6 @@ of `{Module, Function}` in Nova.
   ms, and at least `1`) gets a `408`. Both close the connection. Raise
   `max_body_length` on the routes that take larger bodies; set both to
   `infinity` for the old behaviour.
-
-- **`nova_router:lookup_url/1,2,3`** keep their return shapes, including
-  `{error, comparator_not_found, AllowedMethods}` for a path that exists but
-  does not accept the method.
 
 - **CSRF `excluded_paths` cover whole segments.** They are matched against the
   path the request is routed on, segment by segment, where earlier releases
