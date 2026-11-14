@@ -214,7 +214,7 @@ setup() ->
     persistent_term:put(nova_use_stacktrace, true),
     {ok, Pid} = nova_handlers:start_link(),
     meck:new(cowboy_req, [passthrough, no_link]),
-    meck:expect(cowboy_req, reply, fun(Status, Req) -> Req#{resp_status_code => Status} end),
+    meck:expect(cowboy_req, reply, fun nova_test_helper:reply/2),
     {Prev, Pid}.
 
 cleanup({Prev, Pid}) ->

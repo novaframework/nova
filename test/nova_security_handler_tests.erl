@@ -26,9 +26,7 @@ setup() ->
     persistent_term:put(nova_dispatch, Tree),
     persistent_term:put(nova_use_stacktrace, false),
     meck:new(cowboy_req, [passthrough, no_link]),
-    meck:expect(cowboy_req, reply, fun(Status, Req) ->
-        Req#{resp_status_code => Status}
-    end),
+    meck:expect(cowboy_req, reply, fun nova_test_helper:reply/2),
     meck:expect(cowboy_req, set_resp_headers, fun(Headers, Req) ->
         ExistingHeaders = maps:get(resp_headers, Req, #{}),
         Req#{resp_headers => maps:merge(ExistingHeaders, Headers)}

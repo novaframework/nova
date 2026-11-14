@@ -19,9 +19,7 @@ setup() ->
     {ok, Pid} = nova_handlers:start_link(),
     %% Need meck for cowboy_req:reply
     meck:new(cowboy_req, [passthrough, no_link]),
-    meck:expect(cowboy_req, reply, fun(Status, Req) ->
-        Req#{resp_status_code => Status}
-    end),
+    meck:expect(cowboy_req, reply, fun nova_test_helper:reply/2),
     meck:expect(cowboy_req, reply, fun(Status, Headers, Body, Req) ->
         Req#{resp_status_code => Status, resp_headers => Headers, resp_body => Body}
     end),
@@ -318,7 +316,7 @@ controller_telemetry_metadata() ->
     try
         {ok, _Req1, _Env1} = nova_handler:execute(Req, Env)
     after
-        meck:expect(cowboy_req, reply, fun(Status, R) -> R#{resp_status_code => Status} end)
+        meck:expect(cowboy_req, reply, fun nova_test_helper:reply/2)
     end,
     Expected = #{method => ~"GET", host => ~"localhost", scheme => ~"https",
                  version => 'HTTP/2', app => test_app,
