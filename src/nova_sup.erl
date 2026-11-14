@@ -221,7 +221,8 @@ listener_child(Configuration) ->
       restart => temporary,
       type => worker}.
 
-%% The table survives a nova_sup restart, so creating it has to be idempotent.
+%% Also called when a listener is registered, so creating it has to be
+%% idempotent. The supervisor owns the table, which goes when it does.
 %% It is public because add_application/2 and remove_application/1 are called
 %% by whoever wants the application started, not by the supervisor process.
 ensure_listener_table() ->
