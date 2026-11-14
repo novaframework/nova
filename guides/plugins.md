@@ -1,43 +1,84 @@
 # Plugins
 
-Plugins are a bit like the handlers except they are run on request. There's currently two different type of plugins; `pre_request` and `post_request`.
-These can be used to create access logs, insert CORS headers or similar.
+A plugin is a module that runs before or after the controller of a request.
+Plugins read or change the request, add response headers, or answer the
+request themselves. The plugins that come with Nova parse request bodies, add
+CORS headers, check CSRF tokens and more, see [Nova plugins](#nova-plugins).
 
-Plugins are used to handle things before and/or after a request. They are applied on all requests of a specified protocol.
+## Configuring plugins
 
-A rule of thumb is that if you want to store a short-lived state (For the local request) then you could store that under the Env-object. If you want to store a long-lived state (For the global request) then you could store that under the State-object which is initialized in the optional `init/0` callback and (potentially) updated in each call to `pre_request/4` and `post_request/4`. The long-lived state is only applicable to the plugin-module while the local state belongs to the request and is distributed to each invoked plugin.
+A plugin is configured as `{Phase, Module, Options}`. The phases of a request
+are `pre_request` and `post_request`. Plugins of one phase run in the order
+they are listed.
 
-This is an example:
+Global plugins are set under the `nova` application in *sys.config*:
 
 ```erlang
--module(correlation_id).
+{nova, [
+    {plugins, [
+        {pre_request, nova_request_plugin, #{decode_json_body => true}}
+    ]}
+]}
+```
+
+The plugins of a route group are set in the router:
+
+```erlang
+#{prefix => "/api",
+  security => false,
+  plugins => [
+      {pre_request, nova_request_plugin, #{decode_json_body => true}}
+  ],
+  routes => [
+      {"/items", fun my_app_items_controller:create/1, #{methods => [post]}}
+  ]}
+```
+
+A route group that declares `plugins` uses those and not the global ones. A
+group without the key uses the global ones. See
+[Routing](routing.md#using-plugins-local-to-a-set-of-endpoints) for the ways to combine them in an included
+application.
+
+A controller reads what a plugin added to the request. With the configuration
+above the decoded body is under the atom key `json`:
+
+```erlang
+create(#{json := #{~"id" := Id, ~"value" := Value}}) ->
+    {json, 200, #{}, #{id => Id, received => Value, increment => Value + 1}}.
+```
+
+## Writing a plugin
+
+A plugin implements the `nova_plugin` behaviour. `pre_request/4` and
+`post_request/4` take the request, the Cowboy middleware environment, the
+options from the configuration and the state of the plugin:
+
+```erlang
+-module(my_app_header_plugin).
 -behaviour(nova_plugin).
--export([
-    pre_request/4,
-    post_request/4,
-    plugin_info/0
-  ]).
+-export([pre_request/4, post_request/4, plugin_info/0]).
 
-pre_request(Req, _Env, _Opts, State) ->
-    UUID = uuid:uuid_to_string(uuid:get_v4()),
-    {ok, cowboy_req:set_resp_header(<<"x-correlation-id">>, UUID, Req), State}.
+pre_request(Req, _Env, _Options, State) ->
+    {ok, cowboy_req:set_resp_header(~"x-served-by", ~"my_app", Req), State}.
 
-post_request(Req, _Env, _Opts, State) ->
+post_request(Req, _Env, _Options, State) ->
     {ok, Req, State}.
 
 plugin_info() ->
-    #{
-      title => <<"nova_cors_plugin">>,
-      version => <<"0.2.0">>,
-      url => <<"https://github.com/novaframework/nova">>,
-      authors => [<<"Nova team <info@novaframework.org">>],
-      description => <<"Add CORS headers to request">>,
-      options => [
-                 ]
-     }.
+    #{title => ~"my_app_header_plugin",
+      version => ~"0.1.0",
+      url => ~"https://example.com/my_app",
+      authors => [~"My App team"],
+      description => ~"Adds an x-served-by header to every response",
+      options => []}.
 ```
 
-This plugin injects a UUID into the headers.
+A plugin exports the callbacks of the phases it is configured for.
+`plugin_info/0` is required and its map needs at least `title` and
+`version`. `rebar3 new nova_plugin <name>` creates a skeleton.
+
+Keep data that belongs to one request in `Req`. The state is one value per
+plugin module, shared by every request, see below.
 
 ## Return values
 
@@ -61,7 +102,7 @@ With `ok` the controller still runs and answers, so a redirect or a bare status 
 
 ```erlang
 pre_request(Req, _Env, _Options, State) ->
-    case nova_session:get(Req, <<"user_id">>) of
+    case nova_session:get(Req, ~"user_id") of
         {ok, _} -> {ok, Req, State};
         {error, _} -> {stop, {redirect, "/login"}, Req, State}
     end.
@@ -78,8 +119,8 @@ Every `pre_request` plugin runs before the route's security callback. A plugin t
 ```erlang
 #{prefix => "/files",
   security => fun my_auth:check/1,
-  plugins => [{pre_request, nova_cors_plugin, #{allow_origins => [<<"https://app.example.com">>]}},
-              {pre_request, nova_multipart_plugin, #{handler => {nova_multipart_file_handler, #{dir => <<"/var/uploads">>}}}}],
+  plugins => [{pre_request, nova_cors_plugin, #{allow_origins => [~"https://app.example.com"]}},
+              {pre_request, nova_multipart_plugin, #{handler => {nova_multipart_file_handler, #{dir => ~"/var/uploads"}}}}],
   plugins_after_security => [nova_multipart_plugin],
   routes => [{"/upload", fun upload_controller:upload/1, #{methods => [post]}}]}
 ```
@@ -94,7 +135,7 @@ The default is `[]`, which is the order Nova has always had. A listed plugin kee
 
 The security callback of such a route cannot read what a listed plugin produces: `json`, `params`, `parsed_qs` and `files` are not in `Req` yet. A callback that needs the body, for instance to check a signature over it, has to keep the body-reading plugin out of the list. A plugin that depends on a listed one, such as `nova_csrf_plugin` reading the token from a multipart form, has to be listed too, after it.
 
-A websocket route runs its `pre_request` plugins on the upgrade request. For the time after the upgrade it has the phases `pre_ws_request` and `post_ws_request`, which run around every callback of the controller, and `post_ws_connection`, which runs once when the connection goes away: after `terminate/3` if the controller exports it, and also when it does not or when it crashes. `post_ws_connection` does not run for an upgrade that was refused. See the `nova_websocket` documentation.
+A websocket route runs its `pre_request` plugins on the upgrade request. For the time after the upgrade it has the phases `pre_ws_request` and `post_ws_request`, which run around every callback of the controller, and `post_ws_connection`, which runs once when the connection goes away: after `terminate/3` if the controller exports it, and also when it does not or when it crashes. `post_ws_connection` does not run for an upgrade that was refused. See the [Websockets](websockets.md#plugins) guide.
 
 
 ## Request errors
@@ -120,63 +161,18 @@ so pair it with the application (`app` in `Env`) when you aggregate on it. See
 
 ## Optional callbacks
 
-There's two optional callbacks for a plugin that can be used for storing a global long-lived state. This can be useful if you want to keep track of something like a `pid` or similar.
-The first callback is `init/0` and the second is `stop/1`. `init/0` is called when the plugin is loaded and `stop/1` is called when the plugin is unloaded (Usually when the nova-application is started/stopped).
-Following example shows how we spawn a process and returns the pid in a map - this map will become our new state. When the plugin is stopped, `stop/1` will get invoked with the plugin's state and we will send a stop message to the pid. (Older releases called a `stop/0` instead; it is still called when `stop/1` is not exported.)
+`init/0` and `stop/1` are optional. `init/0` is called when the plugin is loaded and returns the initial state of the plugin. `stop/1` is called with the state when the plugin is unloaded, usually when Nova stops. Older releases called `stop/0`; it is still called when `stop/1` is not exported.
 
 ```erlang
 init() ->
-    %% Setup some pids
-    Pid = spawn(fun() -> ok end),
-    #{my_pid => Pid}.
+    #{started_at => erlang:system_time(second)}.
 
-stop(State) ->
-    %% Stop the pids
-    Pid = maps:get(my_pid, State),
-    Pid ! stop,
+stop(_State) ->
     ok.
 ```
 
 `init/0` runs while `nova_sup` is starting, when the routes that use the plugin are compiled, and `nova_sup` waits for it to return. It must not call into `nova_sup`, as in `supervisor:which_children(nova_sup)` or `nova_sup:add_application/2`: `nova_sup` cannot answer before `init/0` has returned, so Nova fails to start, after five seconds of waiting.
 
-Adding a plugin
-
-Example:
-A good example of a very useful plugin is the `nova_request_plugin`. When we are developing a HTTP web api using json as the data format, we need the framework to
-decode our message so that we can process it. To do that we need to add `decode_json_body => true` into the options field in our `sys.config`.
-
-
-**sys.config**
-
-
- ```erlang
-     {nova, [
-         {environment, dev},
-         {cowboy_configuration, #{
-                                  port => 8080
-                                 }},
-         {bootstrap_application, chatapp},
-         {plugins, [
-                    {pre_request, nova_request_plugin, #{parse_bindings => true,
-                                                         decode_json_body => true}}
-                   ]}
-        ]}
- ```
- We have added our plugin in the `plugins` section. As we can see this is a `pre_request` plugin since it processes and decodes the message to json format
- before we can actually use it in our nova application endpoints.
-
-Usage:
-
-**controller**
-
-```erlang
--module(test_controller).
--export([increment/1]).
-
-increment(#{<<"json">> := #{<<"id">> := Id, <<"value">> := Value}})->
-    {json,200,#{},#{<<"id">> => Id , <<"received">> => Value, <<"increment">> => Value+1}}.
-
-```
 ## Request pipeline
 
 A request passes these steps in this order. A step that answers the request
@@ -221,34 +217,41 @@ Over HTTP/1.1 the `post_request` plugins run when the upgrade has been
 answered, not when the connection ends. Over HTTP/2 they do not run. After
 that every frame and message runs the `pre_ws_request` plugins, the controller
 and the `post_ws_request` plugins. `post_ws_connection` plugins run when the
-connection ends, and only for a controller that exports `terminate/3`.
+connection ends, whether or not the controller exports `terminate/3`.
 
 ## Nova plugins
 
-Nova has a couple of plugins for some general purposes.
+These plugins come with Nova.
 
 |Plugin|Description|Code|
 |------|-----------|----|
-|nova_correlation_plugin|This plugin will add a correlation id to header response but also add `#{correlation_id => CorrelationID}` to the request obj that is passed to the controller.|[nova_correlation_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_correlation_plugin.erl)|
-|nova_cors_plugin|This plugin will handle cors and add the cors headers into the request.|[nova_cors_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_cors_plugin.erl)|
-|nova_multipart_plugin|This plugin reads `multipart/form-data` bodies and streams uploaded files to a handler.|[nova_multipart_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_multipart_plugin.erl)|
-|nova_request_plugin|This plugin will handle incomming data like qs, form urlencoded and json. Multipart bodies are left to `nova_multipart_plugin`.|[nova_request_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_request_plugin.erl)|
-|nova_ws_origin_plugin|This plugin refuses a websocket upgrade that a page on another origin started. Options are described in the module.|[nova_ws_origin_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_ws_origin_plugin.erl)|
+|nova_correlation_plugin|Gives every request a correlation id: in the `x-correlation-id` response header, in the logger metadata and under `correlation_id` in the request.|[nova_correlation_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_correlation_plugin.erl)|
+|nova_cors_plugin|Answers CORS preflights and adds the CORS headers to responses.|[nova_cors_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_cors_plugin.erl)|
+|nova_csrf_plugin|Refuses a state-changing request that does not carry the CSRF token of the session.|[nova_csrf_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_csrf_plugin.erl)|
+|nova_multipart_plugin|Reads `multipart/form-data` bodies and streams uploaded files to a handler.|[nova_multipart_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_multipart_plugin.erl)|
+|nova_request_plugin|Parses the query string and decodes urlencoded and JSON bodies. Multipart bodies are left to `nova_multipart_plugin`.|[nova_request_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_request_plugin.erl)|
+|nova_ws_origin_plugin|Refuses a websocket upgrade that a page on another origin started.|[nova_ws_origin_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_ws_origin_plugin.erl)|
 
 
 ### Nova correlation
 
-This plugin will generate a uuid v4 and set it as a response header as `X-Correlation-ID` if nothing is configuered.
+The plugin gives every request a correlation id. It sets the id in the
+`x-correlation-id` response header, adds it to the logger metadata of the
+request process, and puts it in the request under `correlation_id`, for a
+controller that passes it on to other services.
 
 ```erlang
-{pre_request, nova_correlation_plugin, #{request_correlation_header => CorrelationHeader,
-                                         logger_metadata_key => LoggerMetaDataKey}}
+{pre_request, nova_correlation_plugin, #{request_correlation_header => ~"x-correlation-id",
+                                         logger_metadata_key => correlation_id}}
 ```
 
 |Option|Description|
 |------|-----------|
-|request_correlation_header|This is if you want a different correlation header than the standard `X-Correlation-ID`|
-|logger_metadata_key| This is if you want to have a different metadata key then the standard `correaltion_id`|
+|request_correlation_header|The request header to take the id from. Without the option the request is not looked at and an id is always generated.|
+|logger_metadata_key|The key of the id in the logger metadata. Defaults to the binary `<<"correlation-id">>`.|
+
+A generated id is a version 4 UUID. The response header is always
+`x-correlation-id`, whatever `request_correlation_header` is.
 
 A correlation ID from the request is used when it is 1 to 255 visible ASCII characters. A value with spaces, control characters or other bytes, or a longer one, is ignored and a new ID is generated, because the ID is copied to the logger metadata and to the response.
 
@@ -261,8 +264,8 @@ The route does not have to accept `OPTIONS` for that. A preflight names the meth
 The plugin never sends `access-control-allow-credentials`, so a browser does not expose a response to a request made with cookies or HTTP authentication.
 
 ```erlang
-{pre_request, nova_cors_plugin, #{allow_origins => [<<"https://app.example.com">>,
-                                                    <<"https://admin.example.com">>]}}
+{pre_request, nova_cors_plugin, #{allow_origins => [~"https://app.example.com",
+                                                    ~"https://admin.example.com"]}}
 ```
 
 With a list (or a single origin), the request's `Origin` is echoed back in `access-control-allow-origin` only when it is on the list, and every response carries `vary: origin` (added to any `vary` value already set) so caches keep the answers apart. `<<"*">>` allows any origin.
@@ -276,9 +279,58 @@ By default a preflight is told that every header it asks for is allowed. That is
 |allow_methods|Methods a preflight allows, as a binary or a list. Defaults to `<<"*">>`.|
 |max_age|Seconds a browser may cache the preflight answer.|
 
+### Nova CSRF
+
+The plugin protects forms against cross-site request forgery with a token
+that is kept in the session. For `GET`, `HEAD` and `OPTIONS` it makes sure the
+session has a token and puts it in the request under `csrf_token`. For every
+other method it compares the token of the session with the one the request
+submitted, in the `x-csrf-token` header or in the form field `_csrf_token`.
+A request without the right token is answered with `403` and the text
+`Forbidden - CSRF token invalid`, and the controller is not called.
+
+```erlang
+#{prefix => "/account",
+  security => fun my_app_auth:session/1,
+  plugins => [
+      {pre_request, nova_request_plugin, #{read_urlencoded_body => true}},
+      {pre_request, nova_csrf_plugin, #{}}
+  ],
+  routes => [
+      {"/profile", fun my_app_profile_controller:show/1, #{methods => [get]}},
+      {"/profile", fun my_app_profile_controller:update/1, #{methods => [post]}}
+  ]}
+```
+
+The plugin needs sessions (`use_sessions`), and the plugin that parses the
+form, `nova_request_plugin` or `nova_multipart_plugin`, has to be listed
+before it so the field is in `params`.
+
+A view gets the token as the variable `csrf_token`:
+
+```html+django
+<form method="post" action="/account/profile">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+  <button>Save</button>
+</form>
+```
+
+A page that submits with JavaScript sends the token in the `x-csrf-token`
+header.
+
+|Option|Description|
+|------|-----------|
+|field_name|The form field that carries the token. Defaults to `<<"_csrf_token">>`.|
+|header_name|The request header that carries the token. Defaults to `<<"x-csrf-token">>`.|
+|session_key|The session key the token is stored under. Defaults to `<<"_csrf_token">>`.|
+|excluded_paths|Path prefixes that are not checked. A prefix covers whole path segments: `<<"/api">>` covers `/api` and `/api/hooks`, not `/apikeys`. Defaults to `[]`.|
+
+Routes for API clients that authenticate with a token in a header and not
+with the session cookie do not need the plugin.
+
 ### Nova request
 
-This plugins handle incoming data and can transform them to erlang maps depending on what the options are.
+The plugin parses the query string and decodes the request body, and adds the result to the request.
 
 ```erlang
 {pre_request, nova_request_plugin, #{decode_json_body => true,
@@ -319,9 +371,9 @@ request body, or with a plugin of your own. `read_urlencoded_body` needs
 
 |Option|Description|Req|
 |------|-----------|----|
-|decode_json_body|If header is application/json it will decode the body.| `Req#{json => Map}`|
-|read_urlencoded_body|If header is application/x-www-form-urlencoded it will decode it.| `Req#{params => Map}`|
-|parse_qs| If the path have qs in it we will get them.|`Req#{parsed_qs => Map or List}`|
+|decode_json_body|Decode a JSON body. The body of a `GET` or `DELETE` request is not decoded.| `Req#{json => Term}`|
+|read_urlencoded_body|Decode an `application/x-www-form-urlencoded` body.| `Req#{params => Map}`|
+|parse_qs|Parse the query string. `true` gives a map, `list` a list of `{Key, Value}`.|`Req#{parsed_qs => Map or List}`|
 |max_body_length|Bytes of body read for `decode_json_body` and `read_urlencoded_body`, or `infinity`. Default `1000000`. A longer body gets a `413`.| |
 |body_read_timeout|Milliseconds allowed for reading that body (at least `1`), or `infinity`. Default `60000`. A slower body gets a `408`.| |
 
@@ -334,7 +386,7 @@ that receives every file part chunk by chunk:
 ```erlang
 #{prefix => "/files",
   plugins => [
-    {pre_request, nova_multipart_plugin, #{handler => {nova_multipart_file_handler, #{dir => <<"/var/uploads">>}}}}
+    {pre_request, nova_multipart_plugin, #{handler => {nova_multipart_file_handler, #{dir => ~"/var/uploads"}}}}
   ],
   routes => [
     {"/upload", fun upload_controller:upload/1, #{methods => [post]}}
@@ -349,7 +401,7 @@ route may take an upload.
 -module(upload_controller).
 -export([upload/1]).
 
-upload(#{params := #{<<"title">> := Title}, files := Files}) ->
+upload(#{params := #{~"title" := Title}, files := Files}) ->
     Paths = [Path || #{result := #{path := Path}} <- Files],
     [ok = nova_multipart_spool:keep(Path) || Path <- Paths],
     {json, 200, #{}, #{title => Title, uploaded => Paths}}.
@@ -426,7 +478,7 @@ By default the upload is read before the route's security callback runs. See
 to read it only for requests that were let through.
 
 To read the parts yourself, leave `nova_multipart_plugin` off the route and use
-[cowboy_req:read_part/1](https://ninenines.eu/docs/en/cowboy/2.13/manual/cowboy_req.read_part/)
+[cowboy_req:read_part/1](https://ninenines.eu/docs/en/cowboy/2.21/manual/cowboy_req.read_part/)
 from the controller, handing the updated request back through a five element
 return tuple:
 

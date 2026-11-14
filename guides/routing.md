@@ -1,6 +1,6 @@
 # Routing
 
-Each nova application have their own routes file. This file contains information about all the routes existing for this application.
+Each Nova application has a router module. Its `routes/1` callback returns the routes of the application as a list of *route groups*. The module is named after the application with `_router` appended, such as `my_app_router`; `router_module` in the application environment names another one.
 
 ## Basic components
 
@@ -21,7 +21,22 @@ routes(_Environment) ->
   }].
 ```
 
-This will create a path for `/admin` which, when a user enters will call `my_controller:main/1`. The `_Environment` variable that is consumed by the `routes` function will have the value that `nova:get_environment/0` returns. The *environment* variable is an important thing cause it enables the devlopers to define different routes for different environments. To change the running environment edit the `sys.config` file to include an `{environment, Env}` tuple under the `nova` application where `Env` can be any erlang-term.
+A `GET` request to `/admin` calls `my_controller:main/1`. The argument of `routes/1` is the value of `nova:get_environment/0`, which lets a router return different routes for different environments. Set it with `{environment, Env}` under the `nova` application in *sys.config*. When it is not set it is read as `dev`.
+
+### Route groups
+
+A route group is a map. Its keys are all optional:
+
+| Key | Description |
+|---|---|
+| `prefix` | A path put in front of every route of the group |
+| `security` | The security callback of the group, `false` or a `fun/1`. A group without the key has none, see [Secure routing](#secure-routing) |
+| `plugins` | The plugins of the group, see [Using plugins local to a set of endpoints](#using-plugins-local-to-a-set-of-endpoints) |
+| `plugins_after_security` | Plugin modules that wait for the security callback, see [Plugins](plugins.md#running-a-plugin-after-the-security-callback) |
+| `routes` | The routes |
+| `host` | Serve the group only for requests to this host, a string or a binary. A host that has groups of its own is served by those alone: groups without `host` are not consulted for it |
+| `extra_state` | A term handed to the websocket controllers of the group that set none themselves. HTTP routes do not read it, they take `extra_state` from the route |
+| `apps` | Other Nova applications to mount under the prefix of the group, see [Multiple applications](multi-app.md) |
 
 You can also defer the routing information to the controllers, like this:
 ```erlang
@@ -64,31 +79,55 @@ If a controller is listed by name only, the options will be an empty map
 These methods are not exclusive - it is possible to specify routes both in
 the main router module and in the controllers.
 
-### The routing object
-
-The routing object consists of three or four fields.
-
-### HTTP(S) Routing ###
+### HTTP routes
 
 ```
-{Route :: list(), ControllerCallback :: function(), Options :: map()}
+{Path :: list(), ControllerCallback :: function(), Options :: map()}
 ```
 
-As you saw in the initial example in the [Basic components](#basic-components) section, we defined a route for the root path `/`.
+`Options` takes `methods`, the list of methods the route answers, and
+`extra_state`. A route without `methods` answers every method.
+`{Path, ControllerCallback}` is the same as an empty options map.
+
+A segment that starts with `:` is a path parameter. It matches one segment
+and reaches the controller under `bindings`, with the name as a binary key:
+
+```erlang
+{"/items/:id", fun my_app_items_controller:show/1, #{methods => [get]}}
+```
+
+```erlang
+show(#{bindings := #{~"id" := Id}}) ->
+    {json, #{id => Id}}.
+```
+
+`extra_state` hands a term of your own to the controller, under
+`extra_state` in the request:
+
+```erlang
+{"/reports", fun my_app_reports_controller:index/1, #{methods => [get], extra_state => #{role => admin}}}
+```
+
+```erlang
+index(#{extra_state := #{role := Role}}) ->
+    {json, #{role => Role}}.
+```
 
 A route ending in `[...]` matches any number of trailing segments. They reach the controller as a list of binaries under `pathinfo` in the `extra_state` of the `Req`. If the route declares an `extra_state` that is not a map it is passed on as it is, without `pathinfo`. A websocket controller finds the same under `req` in its controller data.
 
-### Websocket routing ###
+### Websocket routes
 
 ```
-{Route :: list(), Controller :: atom(), Options :: map()}
+{Path :: list(), Controller :: module(), Options :: map()}
 ```
 
 A websocket route takes `extra_state` like an HTTP route does, and falls back to the `extra_state` of its route group. The controller finds it in the upgrade request, under `req` in its controller data.
 
-The `init/1` callback of a websocket controller returns `{ok, State}` to accept the connection. Any other return refuses the upgrade with a `500`. It can return `{ok, State, Options}` to also set the options of the connection, where `Options` is a `nova_websocket:opts()` map such as `#{max_frame_size => 65536, idle_timeout => 30000}`. It takes the options of [cowboy_websocket](https://ninenines.eu/docs/en/cowboy/2.13/manual/cowboy_websocket/).
+The `init/1` callback of a websocket controller returns `{ok, State}` to accept the connection. Any other return refuses the upgrade with a `500`. It can return `{ok, State, Options}` to also set the options of the connection, where `Options` is a `nova_websocket:opts()` map such as `#{max_frame_size => 65536, idle_timeout => 30000}`. It takes the options of [cowboy_websocket](https://ninenines.eu/docs/en/cowboy/2.21/manual/cowboy_websocket/).
 
 A browser sends the cookies of your site with a websocket upgrade started by any page. When the connection relies on a session cookie, add `nova_ws_origin_plugin` as a `pre_request` plugin to refuse upgrades from other origins, in the global `plugins` or on the route group together with the other plugins the group needs. It is not on by default.
+
+The [Websockets](websockets.md) guide describes the controller.
 
 > #### Important {: .tip}
 >
@@ -97,19 +136,24 @@ A browser sends the cookies of your site with a websocket upgrade started by any
 
 ### Static files
 
-One can also define static files to be served by nova. This is done by adding a tuple to the route entries. The value of this tuple should be of size 2 or  3  where the first element is the url and the second element is the path to the file on the filesystem related from the apps `priv` directory. An additional third element can be added to the tuple to define options for this particular static file or directory.
+A route whose second element is a string serves static files. The first element is the URL path and the second the path of a file or a directory, relative to the `priv` directory of the application. A third element takes options. End the URL path with `[...]` to serve a directory:
 
-*Note*! The notation `[...]` can be used as a wildcard (Zero or many occurences) in the url-section.
-Valid options is;
+```
+{Path :: list(), LocalPath :: list()}
+{Path :: list(), LocalPath :: list(), Options :: map()}
+```
+
+The options are:
 
 - `mimetype` - which mimetype the file should be served as. If not defined nova will try to guess the mimetype based on the file extension. XML, XHTML, compressed SVG (`.svgz`) and other `+xml` types are served as `application/octet-stream` unless set here, since a browser would run scripts in them on your origin. Static files are sent with `x-content-type-options: nosniff`.
-- `index_files` - a list of filenames that can be used as an index. This is relevant if a directory is served.
-- `list_dir` - Set to true if allowing the requester to list the content of a directory (if such is served)
+- `index_files` - a list of filenames that are served for a request to a directory. The default is `["index.html"]`.
+- `list_dir` - set to `true` to answer a request to a directory that has no index file with a listing of it. Without it such a request gets a `403`.
 
 Example:
 ```erlang
-{"/my/static/directory/[...]", "assets/a-local-dir", #{list_dir => true}},
-{"/with-index/[...]", "assets/another-dir", #{index_files => ["index.html"]}}
+{"/assets/[...]", "static"},
+{"/downloads/[...]", "downloads", #{list_dir => true}},
+{"/robots.txt", "static/robots.txt"}
 ```
 
 A directory route only serves what is inside that directory. A request whose trailing segments are empty, `.` or `..`, or contain `/`, `\` or a NUL byte, is answered with `404`, whatever the router in front of it let through. Symbolic links are resolved first: a link that points inside the directory is served, one that points out of it is a `404`. Set `follow_external_symlinks => true` in the options of the route to serve links that leave the directory. The directory itself is resolved once, when the routes are compiled, and files are checked against and served from where it was then. A relative path means the directory it named in the working directory the node had at that time, also after the working directory has changed. If a symbolic link on the way to the directory is changed while Nova runs, files are still served from where it pointed before, so restart Nova after such a change. With `follow_external_symlinks` no link is resolved, and such a change takes effect at once.
@@ -132,11 +176,25 @@ Prefix is defined at top level of a route-entry which can be seen in the [Basic 
 
 ## Secure routing
 
-When building web applications, ensuring the security of your routing layer is critical. Nova Framework’s routing system is designed with flexibility and security in mind, but developers must implement best practices to protect their applications from common vulnerabilities. This section outlines key considerations and features of Nova's routing system to help you achieve secure routing.
+A route is protected by the security callback of its route group. Where the callback is declared matters:
+
+| Where | Key | Effect |
+|---|---|---|
+| Route group map | `security` | The callback runs for every route of the group |
+| Entry of an included application in `nova_apps` | `secure` | The callback runs in front of every route group of that application |
+| Entry of an included application in `nova_apps` | `override_secure` | The callback replaces the ones the application declares |
+
+Nothing else is read:
+
+* A route group without a `security` key has no callback. Its routes are public, unless the application is included with `secure` or `override_secure`.
+* A `security` or `secure` key in the options map of a single route is not read. Put routes that need another callback in a route group of their own.
+* A `secure` key in a route group is not read. The key of a route group is `security`.
+
+`rebar3 nova audit` lists the routes that change state and have no callback, see [Rebar3 Nova](rebar3_nova.md). The [Security](security.md) guide has complete examples.
 
 ### Invoking security functions for a set of endpoints
 
-You can define a security function that will be called before the actual controller is called. This is useful if you want to check if the user is allowed to access the endpoint. The security function should return a boolean value (Or a special one - more about that later in this section). If the function returns `false` the request will be stopped and a `401` status code will be returned.
+A security function is called before the controller, to decide if the request is allowed. It returns `true` to let the request through and `false` to answer it with `401`; the other return values are listed below.
 
 The following code will invoke `security_controller:do_security/1` before calling the actual controller to do the security check.
 
@@ -163,7 +221,7 @@ The security function runs after the group's `pre_request` plugins, so a plugin 
 
 ### The security-function callback
 
-The most simple way to implement a security function is to return a boolean value. If the function returns `false` the request will be stopped and a `401` status code will be returned. There's also an additional return value that can be used to store data that will be available to the controller. This is particularly useful if you want to pass data like user information, roles, etc. to the controller.
+A security function takes the request and returns one of the values below. With `{true, Data}` it hands data to the controller, such as the user and its roles.
 
 #### Return values for the secure function
 
@@ -176,6 +234,8 @@ The most simple way to implement a security function is to return a boolean valu
 | `{false, Headers :: map()}` | Same as above but also adds additional headers to the response. |
 | `{false, StatusCode :: integer(), Headers :: map()}` | Same as above but uses a custom status code. |
 | `{false, StatusCode :: integer(), Headers :: map(), Body :: iodata()}` | Same as above but also adds a custom body to the response. |
+
+Any other return value is answered with `401`, and a function that crashes with `500`.
 
 *Note* If `false` is returned in any form the request will be stopped from executing the controller. The reply has an empty body unless you return one with `{false, StatusCode, Headers, Body}`: status-code routes (below) are not rendered for a refused request, and the `post_request` plugins do not run for it.
 
@@ -193,8 +253,10 @@ do_security(Req) ->
     end.
 
 get_user(Req) ->
-    ## Do some validatation and return the user
-    {ok, #{name => "John Doe", role => "Admin"}}.
+    case nova_session:get(Req, ~"user_id") of
+        {ok, UserId} -> {ok, #{id => UserId}};
+        {error, _} -> not_found
+    end.
 ```
 
 Once the security function has been called, the data will be available in the `Req` object under the `auth_data` key.
@@ -205,9 +267,8 @@ A route group of an [included application](multi-app.md#security-of-a-mounted-ap
 -module(my_controller).
 -export([main/1]).
 
-main(Req = #{auth_data := User}) ->
-    io:format("User: ~p~n", [User]),
-    {ok, Req, <<"Hello world!">>}.
+main(#{auth_data := #{user := #{id := UserId}}}) ->
+    {json, #{user_id => UserId}}.
 ```
 
 ## Using plugins local to a set of endpoints
@@ -234,11 +295,14 @@ the application's `nova_apps` options to combine them instead (available since
 0.17.0):
 
 ```erlang
-{nova_apps, [{my_app, #{plugin_strategy => global_first}}]}
+{nova_apps, [{admin_app, #{plugin_strategy => global_first}}]}
 ```
 
-`plugin_strategy` is a per-application option and applies to every route
-entry of that application. A `plugin_strategy` key on a single route entry is
+`plugin_strategy` is an option of the entry of an included application and
+applies to every route entry of that application. The application named in
+`bootstrap_application` has no such entry, and an entry for it in its own
+`nova_apps` is not used, so its route groups always follow
+`local_or_global`. A `plugin_strategy` key on a single route entry is
 ignored, and a warning is logged once per application.
 
 | Value | Plugins used |
@@ -336,12 +400,11 @@ A status-code route that crashes, or throws `{Status, Reason}` itself, is not re
 ## The matched route
 
 When a request matches a route, Nova stores the route's template in the
-request map under `nova_route`. Controllers, plugins, Cowboy handlers and
-websocket controllers (through `req` in their controller data) can all read
-it:
+request map under `nova_route`. Controllers, plugins and websocket
+controllers (through `req` in their controller data) can all read it:
 
 ```erlang
-show(Req = #{nova_route := Route}) ->
+show(#{nova_route := Route}) ->
     %% Route is <<"/api/users/:id">> for a request to /api/users/42
     {json, #{route => Route}}.
 ```
