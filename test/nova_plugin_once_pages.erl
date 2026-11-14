@@ -28,7 +28,9 @@ pre_request(Req, _Env, #{name := Name} = Options, State) ->
     case maps:get(action, Options, pass) of
         pass -> {ok, Req, State};
         crash -> error(plugin_failed);
-        error -> {error, plugin_refused}
+        error -> {error, plugin_refused};
+        break -> {break, {reply, 403, #{}, ~"refused"}, Req, State};
+        break_replied -> {break, cowboy_req:reply(402, #{}, ~"pay first", Req), State}
     end.
 
 post_request(Req, _Env, #{name := Name}, State) ->
@@ -40,4 +42,4 @@ plugin_info() ->
       version => ~"0.0.0",
       url => ~"",
       authors => [],
-      description => ~"Tells the suite each time it runs, then passes, crashes or returns an error"}.
+      description => ~"Tells the suite each time it runs, then passes, crashes, returns an error or answers"}.
