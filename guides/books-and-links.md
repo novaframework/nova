@@ -1,17 +1,18 @@
 # Books and links
 
-## Online books
+## Nova
 
-* [Learn you some Erlang](https://learnyousomeerlang.com)
+* [The Nova Book](https://novaframework.github.io/nova-book), a tutorial that builds a complete application
 
-## Books
+## Erlang books
 
-* [Learn you some Erlang](https://learnyousomeerlang.com)
-* [Erlang OTP in action](https://www.manning.com/books/erlang-and-otp-in-action)
+* [Learn you some Erlang](https://learnyousomeerlang.com), free to read online
+* [Erlang and OTP in action](https://www.manning.com/books/erlang-and-otp-in-action)
+* [Adopting Erlang](https://adoptingerlang.org), free to read online
 
-## Blogs & Articles
+## Talks
 
-* [Nova a web framework for Erlang - Daniel Widgren, Niclas Axelsson | Code BEAM V 2020](https://www.youtube.com/watch?v=rucxrxefZMA)
-* [Nova in Hello Erlang-podcast](https://www.youtube.com/watch?v=6svokoTcRes)
-* [Getting around with NOVA | Daniel Widgren, Niclas Axelsson | Code BEAM America 2022](https://www.youtube.com/watch?v=jVkhKrx4jcY)
-* [Fireside chat on Nova and Nitrogen | Daniel Widgren, Niclas Axelsson & Jesse Gumm | Code BEAM V EU21](https://www.youtube.com/watch?v=PgBzV1-E00k)
+* [Nova, a web framework for Erlang, Code BEAM V 2020](https://www.youtube.com/watch?v=rucxrxefZMA)
+* [Nova in the Hello Erlang podcast](https://www.youtube.com/watch?v=6svokoTcRes)
+* [Fireside chat on Nova and Nitrogen, Code BEAM V EU 2021](https://www.youtube.com/watch?v=PgBzV1-E00k)
+* [Getting around with Nova, Code BEAM America 2022](https://www.youtube.com/watch?v=jVkhKrx4jcY)

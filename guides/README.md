@@ -1,33 +1,47 @@
 # Nova
 
-Here can you find the documentation for the Nova framework. Nova is under contstant improvement and we will try to keep the documentation up to date.
+This is the documentation of the Nova framework. The same guides are
+published with the API reference on [HexDocs](https://hexdocs.pm/nova/).
 
 ## Contents
 
-### Start of with Nova
+### Getting started
 
-* [Quickstart](quick-start.md)
+* [Quick start](quick-start.md)
 * [Rebar3 plugin](rebar3_nova.md)
+* [Request lifecycle](request-lifecycle.md)
 
-### Configuration and concepts
+### Building an application
 
 * [Configuration](configuration.md)
 * [Routing](routing.md)
 * [Controllers](controllers.md)
 * [Views](views.md)
-* [Sessions](sessions.md)
-* [Watchers](watchers.md)
 * [Plugins](plugins.md)
+* [Sessions](sessions.md)
+* [Websockets](websockets.md)
+* [Pubsub](pubsub.md)
+* [Handlers](handlers.md)
+* [Error handling](error-handling.md)
+* [Watchers](watchers.md)
 
-### Deeper into Nova
+### Security and testing
 
-* [Handlers in Nova](handlers.md)
-* [Pubsub system](pubsub.md)
+* [Security](security.md)
+* [Testing](testing.md)
 
-### Releases
+### Operations
 
-* [Building a release](building-releases.md)
-* [Include several nova applications in a release](multi-app.md)
+* [Building releases](building-releases.md)
+* [Graceful shutdown](graceful-shutdown.md)
+* [Logging and observability](logging.md)
+* [Telemetry](telemetry.md)
+* [Multiple applications](multi-app.md)
+
+### Upgrading
+
+* [Upgrading](upgrading.md)
+* [Deprecations](deprecations.md)
 
 ### Further reading
 
