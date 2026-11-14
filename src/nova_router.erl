@@ -15,6 +15,7 @@
          compile/1,
          compile/2,
          compile_fresh/2,
+         overrides_in_force/1,
          lookup_url/1,
          lookup_url/2,
          lookup_url/3,
@@ -367,7 +368,7 @@ compile([], Dispatch, _Options) -> Dispatch;
 compile([{App, AppOptions}|Tl], Dispatch, GlobalOptions) ->
     %% Per-application options win over the global ones, and must not leak
     %% into the applications compiled after this one.
-    Dispatch0 = compile([App], Dispatch, maps:merge(GlobalOptions, AppOptions)),
+    Dispatch0 = compile([App], Dispatch, mount_options(GlobalOptions, AppOptions)),
     compile(Tl, Dispatch0, GlobalOptions);
 compile([App|Tl], Dispatch, Options) ->
     Router = router_module(App),
@@ -392,6 +393,25 @@ compile([App|Tl], Dispatch, Options) ->
     StorageBackend:put(apps_key(maps:get(dispatch_key, Options, ?NOVA_DISPATCH)), CompiledApps0),
 
     compile(Tl, Dispatch1, Options).
+
+%% An override_secure that is in force around an application is the one
+%% option its own entry does not replace. It stays in force, in front of the
+%% override_secure of the entry.
+mount_options(GlobalOptions, AppOptions) ->
+    Options = maps:merge(GlobalOptions, AppOptions),
+    Options#{override_secure => maps:get(override_secure, AppOptions, false),
+             inherited_override_secure => overrides_in_force(GlobalOptions) ++
+                 maps:get(inherited_override_secure, AppOptions, [])}.
+
+%%--------------------------------------------------------------------
+%% The override_secure values that apply to an application mounted with
+%% Options, outermost first, as they were written. For nova_sup, which hands
+%% them to the applications that one mounts in turn.
+-doc false.
+-spec overrides_in_force(Options :: map()) -> [term()].
+overrides_in_force(Options) ->
+    maps:get(inherited_override_secure, Options, []) ++
+        [Override || Override <- [maps:get(override_secure, Options, false)], Override =/= false].
 
 %%--------------------------------------------------------------------
 -doc "The router module for an application. Either configured explicitly with the `router_module` application environment key, or derived from the application name using the convention for the language in use.".
@@ -686,8 +706,8 @@ normalize_secure(Invalid, RouterFile) ->
 %% its routes but never take away what the application declared for itself.
 %% Replacing a declared callback takes the explicit `override_secure`.
 resolve_secure(Options, RouteInfo, RouterFile) ->
-    case maps:get(override_secure, Options, false) of
-        false ->
+    case override_callbacks(Options, RouterFile) of
+        [] ->
             AppDefault = maps:get(secure, Options, false),
             case normalize_secure(maps:get(security, RouteInfo, false), RouterFile) of
                 false ->
@@ -699,9 +719,22 @@ resolve_secure(Options, RouteInfo, RouterFile) ->
                 GroupCallback ->
                     GroupCallback
             end;
-        Override ->
-            normalize_secure(Override, RouterFile)
+        [Override] ->
+            Override;
+        Overrides ->
+            Overrides
     end.
+
+%% Every override_secure in force has to allow a request: those of the
+%% applications this one was mounted through first, then its own.
+override_callbacks(Options, RouterFile) ->
+    Callbacks = [normalize_secure(Override, RouterFile) || Override <- overrides_in_force(Options)],
+    without_repeats([Callback || Callback <- Callbacks, Callback =/= false]).
+
+without_repeats([Callback | Rest]) ->
+    [Callback | without_repeats([Other || Other <- Rest, Other =/= Callback])];
+without_repeats([]) ->
+    [].
 
 %%--------------------------------------------------------------------
 -doc """

@@ -126,6 +126,16 @@ of `{Module, Function}` in Nova.
   Earlier releases logged the error and kept running without a listener, so a
   node that used to come up without serving anything now does not come up.
 
+- **`override_secure` covers the applications an included application
+  includes.** An application in the `nova_apps` of an included application
+  was served without the `override_secure` of the entry that included its
+  parent, and an `override_secure` given to an application in the `apps` of a
+  route group replaced the one around it. The outer callback now runs for
+  those routes too, in front of an `override_secure` of their own, and both
+  have to allow the request. A request that reached such a route without
+  passing the outer callback is now refused by it. Nothing else is handed
+  down: see the [multi-app guide](multi-app.md#applications-included-by-an-included-application).
+
 - **`secure` no longer replaces a callback a route group declares.** In a
   `nova_apps` entry it applies to the groups of the included application that
   declare no `security`, and is ignored, with a warning, by a group that

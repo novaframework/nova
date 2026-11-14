@@ -252,6 +252,12 @@ itself. Set `override_secure` in the options for that application:
 It takes the same values as `secure`: `false` for no override, a `fun/1`, or
 the deprecated `{Module, Function}`.
 
+It also covers the applications that the included application includes
+itself. One of those can have an `override_secure` of its own, and then both
+callbacks have to allow a request. The
+[multi-app guide](multi-app.md#applications-included-by-an-included-application)
+has the details.
+
 `override_secure` is the only option that replaces a callback a route group
 declares. `secure` in the same place is a default: it applies to the groups
 that declare no callback, and is ignored, with a warning in the log, by a

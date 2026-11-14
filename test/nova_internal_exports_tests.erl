@@ -15,6 +15,7 @@ internal_exports_are_hidden_test_() ->
     [{lists:flatten(io_lib:format("~s:~s/~b", [Module, Function, Arity])),
       ?_assertEqual(hidden, doc(Module, Function, Arity))}
      || {Module, Function, Arity} <- [{nova_router, compile_fresh, 2},
+                                      {nova_router, overrides_in_force, 1},
                                       {nova_routing_trie, canonical_segments, 1},
                                       {nova_plugin_manager, ensure_plugin, 1},
                                       {nova_security_handler, deny, 1}]].

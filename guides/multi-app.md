@@ -12,7 +12,9 @@ application names, or `{Name, Options}` two-tuples when you want to configure
 how it is mounted.
 
 Included applications are resolved depth-first, so an application that
-declares `nova_apps` of its own has those registered too.
+declares `nova_apps` of its own has those registered too. What they take over
+from the entry of their parent is listed
+[below](#applications-included-by-an-included-application).
 
 Your own application's routes are registered before those of the applications
 it includes. Where both declare the same path and method, or a page for the
@@ -30,7 +32,7 @@ first, which let them replace a route of yours together with its security.
 |---|---|---|
 | `prefix` | `string()` | Mount the application's routes under this path, in front of the prefix each route group declares |
 | `secure` | `false` \| `fun/1` | Security callback for the application's route groups that declare none |
-| `override_secure` | `false` \| `fun/1` | Replace the security callback of every route group, including one the application declares for itself |
+| `override_secure` | `false` \| `fun/1` | Replace the security callback of every route group, including one the application declares for itself, and of every route group of the applications it includes |
 | `plugin_strategy` | see the [routing guide](routing.md) | How the application's route-local plugins combine with the global ones |
 
 ### Example
@@ -81,6 +83,55 @@ application declared it.
 
 Replacing a callback the application declares takes `override_secure`, see
 the [routing guide](routing.md#overriding-security-for-an-included-application).
+
+### Applications included by an included application
+
+An included application can declare `nova_apps` of its own. Those
+applications share the listener too. Each is mounted with the options of its
+own entry, not with the options of the entry that included its parent:
+
+| Option in the entry of the parent | Applies to the nested application |
+|---|---|
+| `prefix` | No. It answers under the `prefix` of its own entry, counted from the root of the listener, and at the root when it has none |
+| `secure` | No |
+| `plugin_strategy` | No. Its route groups use the plugins they declare or the global ones, as any route group does |
+| `override_secure` | Yes |
+
+With `{admin_app, #{prefix => "/admin", secure => fun my_auth:check/1}}`,
+where `admin_app` declares `{nova_apps, [dashboard_app]}`, the routes of
+`dashboard_app` answer at the root of the listener and without
+`my_auth:check/1`. Give `dashboard_app` an entry with its own `prefix` and
+`secure` in the `nova_apps` of `admin_app`, or use `override_secure`.
+
+`override_secure` is the option that covers everything an application brings
+in. When the entry of the nested application sets an `override_secure` too,
+both callbacks run, the outer one first. The request goes on when both allow
+it. The first that does not answers it, and the other one is not run. The
+controller gets the `auth_data` of the nested callback when that returns
+some, and otherwise that of the outer one.
+
+An application is mounted once. When it is listed more than once, the entry
+that comes first is used, going through `nova_apps` depth-first.
+
+A route group can include applications as well, with the `apps` key:
+
+```erlang
+#{prefix => "/tools",
+  security => fun my_auth:check/1,
+  apps => [tools_app, {reports_app, #{prefix => "/reports"}}]}
+```
+
+Those are compiled with the options the application of the group was mounted
+with, and the prefix of the group as their `prefix`. `tools_app` answers
+under `/tools`, with the `secure`, `override_secure` and `plugin_strategy` of
+that entry. Options given with an application replace the inherited ones, so
+`reports_app` answers under `/reports`, not `/tools/reports`. An
+`override_secure` is the exception: an inherited one stays in force and one
+given with the application is added to it, as above.
+
+The `security` and `plugins` of the group are not inherited. They apply to
+the `routes` of the group, and `my_auth:check/1` above does not run for
+`tools_app` or `reports_app`.
 
 ## Starting an application at runtime
 

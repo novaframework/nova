@@ -22,6 +22,10 @@ try_start(Options) ->
     end.
 
 %% Sets the environment a boot reads, without starting anything.
+%% nova_test_nested_app and nova_test_deep_app are not applications on
+%% disk. Each is a router and the entry that mounts it: `mounted_nova_apps`
+%% is the nova_apps of nova_test_sub_app, `nested_nova_apps` the one of
+%% nova_test_nested_app.
 -spec configure(map()) -> ok.
 configure(Options) ->
     Port = maps:get(port, Options, free_port()),
@@ -30,6 +34,8 @@ configure(Options) ->
     application:load(nova_test_sub_app),
     nova_test_host_router:set_routes(maps:get(host, Options, [])),
     nova_test_mounted_router:set_routes(maps:get(mounted, Options, [])),
+    nova_test_nested_router:set_routes(maps:get(nested, Options, [])),
+    nova_test_deep_router:set_routes(maps:get(deep, Options, [])),
     application:set_env(nova, bootstrap_application, nova_test_app),
     application:set_env(nova, cowboy_configuration,
                         #{port => Port, options => maps:get(cowboy_options, Options, #{})}),
@@ -39,7 +45,11 @@ configure(Options) ->
     application:set_env(nova_test_app, nova_apps,
                         maps:get(nova_apps, Options,
                                  [{nova_test_sub_app, maps:get(mounted_options, Options, #{prefix => "/mounted"})}])),
-    application:set_env(nova_test_sub_app, router_module, nova_test_mounted_router).
+    application:set_env(nova_test_sub_app, router_module, nova_test_mounted_router),
+    application:set_env(nova_test_sub_app, nova_apps, maps:get(mounted_nova_apps, Options, [])),
+    application:set_env(nova_test_nested_app, router_module, nova_test_nested_router),
+    application:set_env(nova_test_nested_app, nova_apps, maps:get(nested_nova_apps, Options, [])),
+    application:set_env(nova_test_deep_app, router_module, nova_test_deep_router).
 
 %% Unloading puts the environment of both test applications back to what
 %% their .app files declare, for the suites that run after this one.
@@ -50,8 +60,13 @@ stop() ->
     application:unload(nova_test_app),
     application:unload(nova_test_sub_app),
     application:unset_env(nova, cowboy_configuration),
+    application:unset_env(nova_test_nested_app, router_module),
+    application:unset_env(nova_test_nested_app, nova_apps),
+    application:unset_env(nova_test_deep_app, router_module),
     nova_test_host_router:set_routes([]),
     nova_test_mounted_router:set_routes([]),
+    nova_test_nested_router:set_routes([]),
+    nova_test_deep_router:set_routes([]),
     ok.
 
 -spec get(inet:port_number(), iodata()) -> {100..599, binary()}.

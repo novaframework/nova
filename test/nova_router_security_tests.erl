@@ -61,6 +61,47 @@ precedence_test_() ->
       {"the deprecated {Mod, Fun} form is still accepted on a group",
        ?_assertEqual(Group, secure_of({?MODULE, group_callback}, #{secure => false}))}]}.
 
+inherited_override_test_() ->
+    Group = fun ?MODULE:group_callback/1,
+    Host = fun ?MODULE:host_callback/1,
+    Other = fun ?MODULE:page/1,
+    {setup, fun setup/0, fun cleanup/1,
+     [{"an inherited override_secure replaces a group callback",
+       ?_assertEqual(Host, secure_of(Group, #{inherited_override_secure => [Host]}))},
+      {"an inherited override_secure stays in force next to the application's own",
+       ?_assertEqual([Host, Other], secure_of(Group, #{inherited_override_secure => [Host], override_secure => Other}))},
+      {"inherited values are kept in their order, in front of the application's own",
+       ?_assertEqual([Other, Host, Group],
+                     secure_of(unset, #{inherited_override_secure => [Other, Host], override_secure => Group}))},
+      {"override_secure => false leaves an inherited one in force",
+       ?_assertEqual(Host, secure_of(Group, #{inherited_override_secure => [Host], override_secure => false}))},
+      {"a callback that is in force twice runs once",
+       [?_assertEqual(Host, secure_of(Group, #{inherited_override_secure => [Host], override_secure => Host})),
+        ?_assertEqual([Host, Other],
+                      secure_of(Group, #{inherited_override_secure => [Host, Other, Host], override_secure => Other}))]},
+      {"the deprecated {Mod, Fun} form is accepted for an inherited value",
+       ?_assertEqual([Host, Other],
+                     secure_of(unset, #{inherited_override_secure => [{?MODULE, host_callback}],
+                                        override_secure => Other}))},
+      {"an invalid inherited value stops the compile",
+       ?_assertThrow({error, {invalid_security, "my_auth:check"}},
+                     secure_of(unset, #{inherited_override_secure => ["my_auth:check"], override_secure => Host}))},
+      {"an invalid override_secure stops the compile next to an inherited one",
+       ?_assertThrow({error, {invalid_security, true}},
+                     secure_of(unset, #{inherited_override_secure => [Host], override_secure => true}))}]}.
+
+overrides_in_force_test_() ->
+    Host = fun ?MODULE:host_callback/1,
+    Other = fun ?MODULE:page/1,
+    [?_assertEqual([], nova_router:overrides_in_force(#{})),
+     ?_assertEqual([], nova_router:overrides_in_force(#{prefix => "/admin", secure => Host, override_secure => false})),
+     ?_assertEqual([Host], nova_router:overrides_in_force(#{override_secure => Host})),
+     ?_assertEqual([Other, Host],
+                   nova_router:overrides_in_force(#{inherited_override_secure => [Other], override_secure => Host})),
+     ?_assertEqual([Other],
+                   nova_router:overrides_in_force(#{inherited_override_secure => [Other], override_secure => false})),
+     ?_assertEqual([true], nova_router:overrides_in_force(#{override_secure => true}))].
+
 invalid_value_stops_the_compile_test_() ->
     Host = fun ?MODULE:host_callback/1,
     {setup, fun setup/0, fun cleanup/1,
