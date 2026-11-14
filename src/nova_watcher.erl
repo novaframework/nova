@@ -237,9 +237,7 @@ argument_string(Args) -> string:join(Args, " ").
 
 simple_ls_test_() ->
     {setup,
-     fun() ->
-             ?MODULE:start_link()
-     end,
+     fun start_link/0,
      fun(_) ->
              ?MODULE:stop()
      end,

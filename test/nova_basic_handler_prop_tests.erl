@@ -83,8 +83,8 @@ prop_ws_reply_appends_command() ->
 proper_test_() ->
     Opts = [{numtests, 100}, {to_file, user}],
     {setup,
-     fun() -> nova_test_helper:setup_nova_env() end,
-     fun(Prev) -> nova_test_helper:cleanup_nova_env(Prev) end,
+     fun nova_test_helper:setup_nova_env/0,
+     fun nova_test_helper:cleanup_nova_env/1,
      [
       {"json POST always 201",
        ?_assert(proper:quickcheck(prop_json_post_201(), Opts))},

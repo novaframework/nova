@@ -22,7 +22,7 @@ cleanup(Prev) ->
 %% Regression: add_routes/2 crashed with {badkey, router_file}
 %% because Options did not include router_file
 add_routes_no_crash_test_() ->
-    {setup, fun() -> setup() end, fun(S) -> cleanup(S) end, fun() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
         Callback = fun(_) -> {json, #{ok => true}} end,
         Routes = [#{routes => [{"/test", Callback, #{methods => [get]}}]}],
         nova_router:add_routes(test_app, [Routes]),
@@ -59,7 +59,7 @@ static_directory_is_resolved_when_the_route_is_compiled_test_() ->
     end}.
 
 add_routes_registers_app_test_() ->
-    {setup, fun() -> setup() end, fun(S) -> cleanup(S) end, fun() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
         Callback = fun(_) -> {json, #{}} end,
         Routes = [#{routes => [{"/x", Callback, #{methods => [get]}}]}],
         nova_router:add_routes(my_app, [Routes]),

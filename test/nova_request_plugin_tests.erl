@@ -4,8 +4,8 @@
 %% Logger handler callback: forwards reports to the process that added it.
 -export([log/2]).
 
--define(SETUP, fun() -> nova_test_helper:setup_nova_env() end).
--define(CLEANUP, fun(Prev) -> nova_test_helper:cleanup_nova_env(Prev) end).
+-define(SETUP, fun nova_test_helper:setup_nova_env/0).
+-define(CLEANUP, fun nova_test_helper:cleanup_nova_env/1).
 
 %%====================================================================
 %% should_read_body/1
