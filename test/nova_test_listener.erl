@@ -4,7 +4,7 @@
 -module(nova_test_listener).
 
 -export([start/1, try_start/1, configure/1, stop/0, get/2, get/3, request/4, response/4,
-         websocket_handshake/2, free_port/0]).
+         websocket_handshake/2, websocket_texts/4, free_port/0]).
 
 -spec start(map()) -> inet:port_number().
 start(Options) ->
@@ -96,6 +96,49 @@ websocket_handshake(Port, Path) ->
                     "sec-websocket-key: ", base64:encode(crypto:strong_rand_bytes(16)), "\r\n",
                     "sec-websocket-version: 13\r\n\r\n"],
              first_packet).
+
+%% Upgrades, sends one text frame and returns the text frames the server
+%% answers with, up to Count of them. A close frame ends the list with `closed`.
+-spec websocket_texts(inet:port_number(), iodata(), binary(), pos_integer()) -> [binary() | closed].
+websocket_texts(Port, Path, Text, Count) when byte_size(Text) < 126 ->
+    {ok, Socket} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}, {packet, raw}]),
+    try
+        ok = gen_tcp:send(Socket, ["GET ", Path, " HTTP/1.1\r\n",
+                                   "host: localhost\r\n",
+                                   "upgrade: websocket\r\n",
+                                   "connection: Upgrade\r\n",
+                                   "sec-websocket-key: ", base64:encode(crypto:strong_rand_bytes(16)), "\r\n",
+                                   "sec-websocket-version: 13\r\n\r\n"]),
+        Buffered = after_handshake(Socket, <<>>),
+        Mask = crypto:strong_rand_bytes(4),
+        ok = gen_tcp:send(Socket, [<<1:1, 0:3, 1:4, 1:1, (byte_size(Text)):7>>, Mask,
+                                   crypto:exor(Text, binary:part(binary:copy(Mask, 32), 0, byte_size(Text)))]),
+        receive_texts(Socket, Buffered, Count)
+    after
+        gen_tcp:close(Socket)
+    end.
+
+after_handshake(Socket, Acc) ->
+    case binary:split(Acc, ~"\r\n\r\n") of
+        [<<"HTTP/1.1 101", _/binary>>, Rest] ->
+            Rest;
+        [_Incomplete] ->
+            {ok, Data} = gen_tcp:recv(Socket, 0, 5000),
+            after_handshake(Socket, <<Acc/binary, Data/binary>>)
+    end.
+
+receive_texts(_Socket, _Buffer, 0) ->
+    [];
+receive_texts(Socket, <<1:1, 0:3, 1:4, 0:1, Length:7, Payload:Length/binary, Rest/binary>>, Count)
+  when Length < 126 ->
+    [Payload | receive_texts(Socket, Rest, Count - 1)];
+receive_texts(_Socket, <<1:1, 0:3, 8:4, _/binary>>, _Count) ->
+    [closed];
+receive_texts(Socket, Buffer, Count) ->
+    case gen_tcp:recv(Socket, 0, 5000) of
+        {ok, Data} -> receive_texts(Socket, <<Buffer/binary, Data/binary>>, Count);
+        {error, closed} -> [closed]
+    end.
 
 exchange(Port, Request, Read) ->
     {ok, Socket} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}, {packet, raw}]),

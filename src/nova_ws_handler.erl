@@ -140,6 +140,9 @@ run_plugins([], _Callback, #{controller_result := {stop, _} = Signal}, _State) -
     Signal;
 run_plugins([], _Callback, _ControllerState, State) ->
     {ok, State};
+run_plugins([{Plugin, Options}|Tl], Callback, ControllerState, State) when is_function(Plugin) ->
+    {module, Module} = erlang:fun_info(Plugin, module),
+    run_plugins([{Module, Options}|Tl], Callback, ControllerState, State);
 run_plugins([{Module, Options}|Tl], Callback, ControllerState, State) ->
     try erlang:apply(Module, Callback, [ControllerState, State, Options]) of
         {ok, ControllerState0, State0} ->
