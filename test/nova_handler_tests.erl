@@ -254,6 +254,7 @@ controller_telemetry_test_() ->
      end,
      fun cleanup/1,
      [fun() -> with_handler(fun controller_telemetry_metadata/0) end,
+      fun() -> with_handler(fun controller_telemetry_opt_in_request_fields/0) end,
       fun() -> with_handler(fun controller_telemetry_exception/0) end,
       fun() -> with_handler(fun controller_telemetry_exception_reason_is_a_tag/0) end,
       {timeout, 1, fun() -> with_handler(fun controller_telemetry_status_page/0) end},
@@ -276,8 +277,8 @@ controller_telemetry_metadata() ->
     after
         meck:expect(cowboy_req, reply, fun(Status, R) -> R#{resp_status_code => Status} end)
     end,
-    Expected = #{method => ~"GET", path => ~"/users/1", host => ~"localhost", scheme => ~"https",
-                 version => 'HTTP/2', peer => {{127, 0, 0, 1}, 4000}, app => test_app,
+    Expected = #{method => ~"GET", host => ~"localhost", scheme => ~"https",
+                 version => 'HTTP/2', app => test_app,
                  controller => ?MODULE, action => no_status_action, route => ~"/users/:id",
                  status_page => false},
     {[nova, controller, start], _, Start} = next_event(),
@@ -290,6 +291,27 @@ controller_telemetry_metadata() ->
     {[nova, controller, start], _, _} = next_event(),
     {[nova, controller, stop], _, TeapotStop} = next_event(),
     ?assertEqual(418, maps:get(status, TeapotStop)).
+
+controller_telemetry_opt_in_request_fields() ->
+    Req = (nova_test_helper:mock_req(~"GET", ~"/reset/secret-token"))#{peer => {{127, 0, 0, 1}, 4000}},
+    Env = #{callback => fun(_) -> {status, 204} end, app => test_app, secure => false, controller_data => #{}},
+    Keys = fun(Configured) ->
+                   application:set_env(nova, telemetry_request_fields, Configured),
+                   {ok, _Req1, _Env1} = nova_handler:execute(Req, Env),
+                   {[nova, controller, start], _, Start} = next_event(),
+                   {[nova, controller, stop], _, Stop} = next_event(),
+                   ?assertEqual(Start#{status => 204}, Stop),
+                   maps:with([path, peer, headers, pid], Start)
+           end,
+    try
+        ?assertEqual(#{path => ~"/reset/secret-token", peer => {{127, 0, 0, 1}, 4000}}, Keys([path, peer])),
+        ?assertEqual(#{peer => {{127, 0, 0, 1}, 4000}}, Keys([peer])),
+        ?assertEqual(#{path => ~"/reset/secret-token"}, Keys([headers, path, pid, ~"peer"])),
+        ?assertEqual(#{}, Keys([])),
+        ?assertEqual(#{}, Keys(path))
+    after
+        application:unset_env(nova, telemetry_request_fields)
+    end.
 
 controller_telemetry_exception_reason_is_a_tag() ->
     Env = #{callback => fun(Req) -> ok = Req end, app => test_app, secure => false, controller_data => #{}},

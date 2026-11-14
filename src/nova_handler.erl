@@ -127,13 +127,17 @@ run_controller(Callback, Req, Env, StatusPage) ->
             erlang:raise(Class, Reason, Stacktrace)
     end.
 
+%% The raw path can hold a token and the peer is the client's address, so
+%% those two are only exported when the application asks for them.
 request_metadata(Req) ->
-    #{method => maps:get(method, Req, undefined),
-      path => maps:get(path, Req, undefined),
-      host => maps:get(host, Req, undefined),
-      scheme => maps:get(scheme, Req, undefined),
-      version => maps:get(version, Req, undefined),
-      peer => maps:get(peer, Req, undefined)}.
+    #{Field => maps:get(Field, Req, undefined)
+      || Field <- [method, host, scheme, version | opt_in_request_fields()]}.
+
+opt_in_request_fields() ->
+    case application:get_env(nova, telemetry_request_fields, []) of
+        Fields when is_list(Fields) -> [Field || Field <- Fields, Field =:= path orelse Field =:= peer];
+        _ -> []
+    end.
 
 -spec execute_fallback(Callback :: function(), Req :: cowboy_req:req(), Response :: any(), Env :: map()) ->
           {ok, Req0 :: cowboy_req:req(), Env :: map()}.

@@ -54,7 +54,9 @@ handler for it.
 Metadata never contains the request map, request or response bodies, plugin
 options or plugin state, websocket frame payloads or pubsub payloads. Those
 can hold credentials (`authorization` and `cookie` headers, decoded form and
-JSON bodies, uploaded files) and other secrets.
+JSON bodies, uploaded files) and other secrets. The raw request path and the
+client's address are left out as well unless you ask for them, see
+[Controller](#controller).
 
 The catalogue below is a public contract. New metadata keys may be added in a
 minor release; renaming or removing an event or a key is a breaking change.
@@ -68,14 +70,26 @@ Plugins and the security callback are outside it.
 
 | Event | Measurements | Metadata |
 |-------|--------------|----------|
-| `start` | `monotonic_time`, `system_time` | `app`, `controller`, `action`, `route`, `status_page`, `method`, `path`, `host`, `scheme`, `version`, `peer` |
+| `start` | `monotonic_time`, `system_time` | `app`, `controller`, `action`, `route`, `status_page`, `method`, `host`, `scheme`, `version` |
 | `stop` | `duration`, `monotonic_time` | start metadata, `status` |
 | `exception` | `duration`, `monotonic_time` | start metadata, `kind`, `reason`, `stacktrace` |
 
 - `controller` is the module and `action` the function name of the route's
   callback.
-- `method`, `path`, `host`, `scheme`, `version` and `peer` are copied from
-  the Cowboy request. `path` is the raw path; use `route` as a label.
+- `method`, `host`, `scheme` and `version` are copied from the Cowboy
+  request.
+- `path` (the raw request path) and `peer` (the client's address and port)
+  are not exported by default. A path can carry a secret, such as the token
+  of a password-reset link or a signed file URL, and the client's address is
+  personal data. To add one or both to the controller metadata, list them
+  in `telemetry_request_fields`:
+
+  ```erlang
+  {nova, [{telemetry_request_fields, [path, peer]}]}
+  ```
+
+  Any other name in the list is ignored. As a label, use `route`: `path` is
+  different for every id in it.
 - `status` is the response status code.
 - A controller that raises `{Status, Reason}` with an integer `Status`, as a
   throw, error or exit, is asking Nova for a status page. That ends the span

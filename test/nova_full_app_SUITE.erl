@@ -60,8 +60,8 @@
 -define(TELEMETRY_EVENTS, [[nova, Kind, Phase] || Kind <- [controller, plugin], Phase <- [start, stop, exception]]
         ++ [[nova, websocket, handle, Phase] || Phase <- [start, stop, exception]]
         ++ [[nova, websocket, connection, Phase] || Phase <- [start, stop]]).
--define(CONTROLLER_META, [app, controller, action, route, status_page, method, path, host, scheme,
-                          version, peer, telemetry_span_context]).
+-define(CONTROLLER_META, [app, controller, action, route, status_page, method, host, scheme,
+                          version, telemetry_span_context]).
 -define(PLUGIN_META, [plugin, callback, app, route, telemetry_span_context]).
 -define(WS_HANDLE_META, [callback, module, app, route, telemetry_span_context]).
 -define(WS_CONNECTION_META, [module, app, route, telemetry_span_context]).
@@ -401,9 +401,8 @@ telemetry_controller_and_plugins(Config) ->
     assert_keys([monotonic_time, system_time], StartM),
     assert_keys(?CONTROLLER_META, Start),
     ?assertMatch(#{app := nova_test_app, controller := nova_test_app_controller, action := echo,
-                   status_page := false, method := ~"GET", path := ~"/echo/42",
-                   host := ~"localhost", scheme := ~"http", version := 'HTTP/1.1',
-                   peer := {_, _}}, Start),
+                   status_page := false, method := ~"GET",
+                   host := ~"localhost", scheme := ~"http", version := 'HTTP/1.1'}, Start),
 
     {StopM, Stop} = next_event([nova, controller, stop], Route),
     assert_keys([duration, monotonic_time], StopM),
