@@ -370,15 +370,11 @@ prepend_frames(Frame, Commands) ->
 handle_view(View, Variables, Options, Req) ->
     Variables1 = maybe_inject_csrf_token(Variables, Req),
     {ok, HTML} = render_dtl(View, Variables1, []),
-    Headers =
-        case maps:get(headers, Options, undefined) of
-            undefined ->
-                #{<<"content-type">> => <<"text/html">>};
-            UserHeaders ->
-                UserHeaders
-        end,
     StatusCode = maps:get(status_code, Options, 200),
-    Req0 = cowboy_req:set_resp_headers(Headers, Req),
+    %% The headers of the controller go on top of the default, so one that
+    %% names a content type replaces it and one that names none keeps it.
+    Req0 = cowboy_req:set_resp_headers(maps:get(headers, Options, #{}),
+                                       cowboy_req:set_resp_headers(#{~"content-type" => ~"text/html"}, Req)),
     Req1 = cowboy_req:set_resp_body(HTML, Req0),
     Req2 = Req1#{resp_status_code => StatusCode},
     {ok, Req2}.
