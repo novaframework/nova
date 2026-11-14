@@ -23,9 +23,6 @@ Each listener owns its own routing table, so an application started on a second 
 %% Supervisor callbacks
 -export([init/1]).
 
-%% Started by the supervisor as its last child
--export([start_bootstrap_listener/1]).
-
 -include_lib("kernel/include/logger.hrl").
 -include("../include/nova.hrl").
 
@@ -36,6 +33,9 @@ Each listener owns its own routing table, so an application started on a second 
 -define(NOVA_LISTENERS_TABLE, nova_listeners).
 
 -type nova_app() :: atom() | {atom(), map()}.
+
+%% Started by the supervisor as its last child
+-export([start_listener_child/1]).
 
 %% Keyed on bind: one listener per {Host, Port} is the invariant
 %% add_application/2 relies on, so that pair is the table key.
@@ -153,8 +153,8 @@ init([]) ->
 
 %%--------------------------------------------------------------------
 -doc false.
--spec start_bootstrap_listener(Configuration :: map()) -> ignore | {error, Reason :: any()}.
-start_bootstrap_listener(Configuration) ->
+-spec start_listener_child(Configuration :: map()) -> ignore | {error, Reason :: any()}.
+start_listener_child(Configuration) ->
     setup_cowboy(Configuration).
 
 %%%===================================================================
@@ -180,7 +180,7 @@ child(Id, Mod) ->
 %% supervisor from starting.
 listener_child(Configuration) ->
     #{id => ?NOVA_LISTENER,
-      start => {?MODULE, start_bootstrap_listener, [Configuration]},
+      start => {?MODULE, start_listener_child, [Configuration]},
       restart => temporary,
       type => worker}.
 
