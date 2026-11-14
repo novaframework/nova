@@ -225,9 +225,9 @@ start_cowboy(Configuration) ->
                 throw({error, no_nova_app_defined});
             App ->
                 ExtraApps = application:get_env(App, nova_apps, []),
-                %% nova is compiled last so that its own 404/500 routes act as
-                %% defaults. Routes are first-wins, so compiling nova first
-                %% made an application's own status-code routes unreachable.
+                %% Routes are first-wins. The bootstrap application comes
+                %% first so nothing it mounts can take over one of its routes,
+                %% and nova last so its 404/500 routes are only defaults.
                 nova_router:compile_fresh(resolve_nova_apps([App | ExtraApps] ++ [nova]), nova_dispatch)
         end,
 
@@ -404,7 +404,7 @@ get_version(Application) ->
             not_found
     end.
 
--doc "Recursively resolve nested nova_apps. Each nova_app can declare its own nova_apps dependencies. Dependencies are resolved depth-first so child app routes are registered before the parent. An application already resolved is skipped, so a cycle terminates.".
+-doc "Recursively resolve nested nova_apps. Each nova_app can declare its own nova_apps dependencies. An application comes before the applications it mounts, and routes are first-wins, so where both declare the same route or status page the mounting application's is kept. An application already resolved is skipped, so a cycle terminates.".
 -spec resolve_nova_apps([nova_app()]) -> [nova_app()].
 resolve_nova_apps(Apps) ->
     {Resolved, _Seen} = resolve_nova_apps(Apps, [], []),
@@ -421,7 +421,7 @@ resolve_nova_apps([App | Rest], Acc, Seen) ->
         false ->
             Nested = application:get_env(Name, nova_apps, []),
             {NestedApps, Seen0} = resolve_nova_apps(Nested, [], [Name | Seen]),
-            resolve_nova_apps(Rest, [App | lists:reverse(NestedApps)] ++ Acc, Seen0)
+            resolve_nova_apps(Rest, lists:reverse(NestedApps) ++ [App | Acc], Seen0)
     end.
 
 %% A nova_app is either the application name or {Name, Options}.
