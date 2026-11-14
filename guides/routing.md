@@ -291,6 +291,11 @@ This will add the routes defined in the second argument to the `my_app` applicat
 **Note**: If a route already exists it will be overwritten. This is the one
 place where a later route wins; routes compiled at startup keep the first.
 
+Routes added this way live in the routing table of the running listener. When
+Nova starts, each listener compiles its table from the routers again, so
+routes added at runtime, and routes a router no longer returns, are gone
+after a restart.
+
 If the application has a router module you can leave the routes out and let
 Nova call it for you:
 

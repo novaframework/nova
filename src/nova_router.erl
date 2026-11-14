@@ -14,6 +14,7 @@
 -export([
          compile/1,
          compile/2,
+         compile_fresh/2,
          lookup_url/1,
          lookup_url/2,
          lookup_url/3,
@@ -101,6 +102,19 @@ compile(Apps, DispatchKey) ->
                                         nova_routing_trie:new(#{strict => UseStrict})),
     Dispatch = compile(Apps, StoredDispatch, #{dispatch_key => DispatchKey}),
     %% Write the updated dispatch to storage
+    StorageBackend:put(DispatchKey, Dispatch),
+    Dispatch.
+
+%%--------------------------------------------------------------------
+-doc "As compile/2, but starting from an empty routing table that replaces whatever is stored under `DispatchKey`. A listener that is starting uses this, so routes and security callbacks from an earlier run in the same VM are not carried over.".
+-spec compile_fresh(Apps :: [atom() | {atom(), map()}], DispatchKey :: dispatch_key()) ->
+          nova_routing_trie:trie().
+compile_fresh(Apps, DispatchKey) ->
+    UseStrict = application:get_env(nova, use_strict_routing, false),
+    StorageBackend = storage_backend(),
+    StorageBackend:put(apps_key(DispatchKey), []),
+    Dispatch = compile(Apps, nova_routing_trie:new(#{strict => UseStrict}),
+                       #{dispatch_key => DispatchKey}),
     StorageBackend:put(DispatchKey, Dispatch),
     Dispatch.
 
