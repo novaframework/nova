@@ -49,6 +49,7 @@ Either takes `infinity`. A part that would pass a limit is refused with `{error,
 -define(DEFAULT_MAX_FILES, 1024).
 -define(DEFAULT_MAX_BYTES, 8000000000).
 
+-doc "The name of a spooled file. A string and a binary of the same name are the same file.".
 -type path() :: file:filename_all().
 
 -record(state, {files = #{} :: #{binary() => {Owner :: pid(), Bytes :: non_neg_integer()}},

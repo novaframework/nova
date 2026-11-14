@@ -13,11 +13,21 @@ Result: `#{path => Path}`.
 
 -export([init/2, handle_data/2, handle_end/1, handle_abort/2]).
 
+-doc """
+The `InitArgs` of the handler: `dir`, the directory the files are written
+to, and `extensions`, the extensions that are kept on the stored name, as
+lowercase binaries without the dot. `extensions` defaults to none.
+""".
 -type init_args() :: #{dir := file:filename_all(),
                        extensions => [binary()]}.
 
 -export_type([init_args/0]).
 
+-doc """
+Opens a new file with a random name in `dir` for the part. Returns
+`{error, spool_full}` when the spool is at its limit, and `{error, Reason}`
+when the file cannot be opened.
+""".
 -spec init(nova_multipart_handler:part_info(), InitArgs :: init_args()) ->
           {ok, HandlerState :: map()} | {error, Reason :: term()}.
 init(#{filename := Filename}, #{dir := Dir} = InitArgs) ->
@@ -38,6 +48,10 @@ init(#{filename := Filename}, #{dir := Dir} = InitArgs) ->
             Error
     end.
 
+-doc """
+Appends the chunk to the file. Returns `{error, spool_full}` when the chunk
+takes the spool past its limit, and `{error, Reason}` when the write fails.
+""".
 -spec handle_data(Data :: binary(), HandlerState :: map()) ->
           {ok, NewHandlerState :: map()} | {error, Reason :: term()}.
 handle_data(Data, #{fd := Fd, tmp_path := TmpPath} = State) ->
@@ -51,6 +65,11 @@ handle_data(Data, #{fd := Fd, tmp_path := TmpPath} = State) ->
             Error
     end.
 
+-doc """
+Closes the file and gives it its final name. Returns `{ok, #{path => Path}}`
+with that name, or `{error, Reason}` after deleting the file when it cannot
+be closed or renamed.
+""".
 -spec handle_end(HandlerState :: map()) ->
           {ok, #{path := file:filename_all()}} | {error, Reason :: term()}.
 handle_end(#{fd := Fd, tmp_path := TmpPath, final_path := FinalPath}) ->
@@ -69,6 +88,7 @@ handle_end(#{fd := Fd, tmp_path := TmpPath, final_path := FinalPath}) ->
             Error
     end.
 
+-doc "Closes and deletes the file of a part that was not finished.".
 -spec handle_abort(Reason :: term(), HandlerState :: map()) -> ok.
 handle_abort(_Reason, #{fd := Fd, tmp_path := TmpPath}) ->
     _ = file:close(Fd),
