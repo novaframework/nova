@@ -44,6 +44,20 @@ remember(Req) ->
 Set cookies with `cowboy_req:set_resp_cookie/4`. A `set-cookie` key in a
 headers map is refused by Cowboy and the response becomes a `500`.
 
+A controller that answers the request itself, with `cowboy_req:reply/4` for
+instance, also uses that variant, with the request the call gave back:
+
+```erlang
+download(Req) ->
+    Req1 = cowboy_req:reply(200, #{~"content-type" => ~"text/plain"}, ~"done", Req),
+    {status, 200, #{}, <<>>, Req1}.
+```
+
+A request is answered once. When a controller or a fallback controller has
+answered and returns without that request, what it returned is not sent, and
+Nova logs a warning that names the controller, the function and the form of
+the return.
+
 ### JSON
 
 | Return | Response |
