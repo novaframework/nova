@@ -474,6 +474,14 @@ ws_telemetry_metadata_test_() ->
                  ?assertMatch(#{kind := error, reason := info_crash, callback := websocket_info,
                                 module := test_ws_mod, app := test_app, route := ~"/ws"}, Exception),
 
+                 meck:expect(test_ws_mod, websocket_handle, fun(Frame, _CD) -> ok = Frame end),
+                 {stop, _} = nova_ws_handler:websocket_handle({text, ~"do-not-export-me"}, State1),
+                 {[nova, websocket, handle, start], _} = next_event(),
+                 {[nova, websocket, handle, exception], FrameException} = next_event(),
+                 ?assertMatch(#{kind := error, reason := badmatch, callback := websocket_handle}, FrameException),
+                 ?assertEqual(nomatch, binary:match(iolist_to_binary(io_lib:format("~p", [FrameException])),
+                                                    ~"do-not-export-me")),
+
                  nova_ws_handler:terminate(normal, #{}, State1),
                  {[nova, websocket, connection, stop], ConnStop} = next_event(),
                  ?assertEqual(maps:get(telemetry_span_context, ConnStart),

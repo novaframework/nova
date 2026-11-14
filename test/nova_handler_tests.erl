@@ -255,6 +255,7 @@ controller_telemetry_test_() ->
      fun cleanup/1,
      [fun() -> with_handler(fun controller_telemetry_metadata/0) end,
       fun() -> with_handler(fun controller_telemetry_exception/0) end,
+      fun() -> with_handler(fun controller_telemetry_exception_reason_is_a_tag/0) end,
       {timeout, 1, fun() -> with_handler(fun controller_telemetry_status_page/0) end},
       fun controller_unsupported_return/0]}.
 
@@ -289,6 +290,15 @@ controller_telemetry_metadata() ->
     {[nova, controller, start], _, _} = next_event(),
     {[nova, controller, stop], _, TeapotStop} = next_event(),
     ?assertEqual(418, maps:get(status, TeapotStop)).
+
+controller_telemetry_exception_reason_is_a_tag() ->
+    Env = #{callback => fun(Req) -> ok = Req end, app => test_app, secure => false, controller_data => #{}},
+    Req = (nova_test_helper:mock_req(~"GET", ~"/"))#{headers => #{~"cookie" => ~"session_id=do-not-export-me"}},
+    {ok, _Req1, _Env1} = nova_handler:execute(Req, Env),
+    {[nova, controller, start], _, _} = next_event(),
+    {[nova, controller, exception], _, Exception} = next_event(),
+    ?assertMatch(#{kind := error, reason := badmatch, status_page := false}, Exception),
+    ?assertEqual(nomatch, binary:match(iolist_to_binary(io_lib:format("~p", [Exception])), ~"do-not-export-me")).
 
 controller_telemetry_exception() ->
     Env = #{callback => fun ?MODULE:crashing_action/1, app => test_app, secure => false,

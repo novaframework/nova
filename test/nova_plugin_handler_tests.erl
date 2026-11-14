@@ -352,7 +352,8 @@ plugin_telemetry_test_() ->
      fun cleanup/1,
      [fun plugin_telemetry_results/0,
       fun plugin_telemetry_invalid_result/0,
-      fun plugin_telemetry_exception/0]}.
+      fun plugin_telemetry_exception/0,
+      fun plugin_telemetry_exception_reason_is_a_tag/0]}.
 
 plugin_telemetry_results() ->
     Id = attach(),
@@ -403,6 +404,22 @@ plugin_telemetry_exception() ->
         ?assertEqual([], [Entry || {_, _, Arguments, _} = Entry <- maps:get(stacktrace, Exception),
                                    not is_integer(Arguments)]),
         ?assertNot(maps:is_key(options, Exception))
+    after
+        telemetry:detach(Id)
+    end.
+
+plugin_telemetry_exception_reason_is_a_tag() ->
+    Id = attach(),
+    try
+        P = fun(R, _Env, _Opts, _State) -> ok = R end,
+        Req = (req([{pre_request, [plugin(P)]}]))#{headers => #{~"cookie" => ~"session_id=do-not-export-me"}},
+        {ok, Req1, _Env1} = nova_plugin_handler:execute(Req, env()),
+        ?assertEqual(500, maps:get(resp_status_code, Req1)),
+        {_, _Start} = next_event([nova, plugin, start]),
+        {_, Exception} = next_event([nova, plugin, exception]),
+        ?assertMatch(#{kind := error, reason := badmatch}, Exception),
+        ?assertEqual(nomatch, binary:match(iolist_to_binary(io_lib:format("~p", [Exception])),
+                                           ~"do-not-export-me"))
     after
         telemetry:detach(Id)
     end.

@@ -4,7 +4,8 @@
 -export([
          start/2,
          stop/2,
-         exception/4
+         exception/4,
+         reason_tag/1
         ]).
 
 -export_type([span/0]).
@@ -27,19 +28,38 @@ stop({Prefix, StartTime, Metadata}, StopMetadata) ->
                       #{monotonic_time => StopTime, duration => StopTime - StartTime},
                       maps:merge(Metadata, StopMetadata)).
 
-%% Handlers export exceptions, so call arguments (a Req, plugin options or
-%% state, a frame) are reduced to their arity before they leave Nova.
+%% Handlers export exceptions, and a reason such as {badmatch, Req} or a
+%% frame's argument list holds the request, plugin options or state, or what
+%% a websocket client sent. Only the reason's tag and each frame's module,
+%% function, arity, file and line leave Nova.
 -spec exception(span(), error | exit | throw, term(), erlang:stacktrace()) -> ok.
 exception({Prefix, StartTime, Metadata}, Class, Reason, Stacktrace) ->
     StopTime = erlang:monotonic_time(),
     telemetry:execute(Prefix ++ [exception],
                       #{monotonic_time => StopTime, duration => StopTime - StartTime},
                       Metadata#{kind => Class,
-                                reason => Reason,
+                                reason => reason_tag(Reason),
                                 stacktrace => without_arguments(Stacktrace)}).
 
+-spec reason_tag(term()) -> atom().
+reason_tag(Reason) when is_atom(Reason) ->
+    Reason;
+reason_tag(Reason) when is_tuple(Reason), tuple_size(Reason) > 0 ->
+    case element(1, Reason) of
+        Tag when is_atom(Tag) -> Tag;
+        _ -> unknown
+    end;
+reason_tag(_Reason) ->
+    unknown.
+
 without_arguments(Stacktrace) ->
-    [{Module, Function, arity(Arguments), Location} || {Module, Function, Arguments, Location} <- Stacktrace].
+    [{Module, Function, arity(Arguments), file_and_line(Location)}
+     || {Module, Function, Arguments, Location} <- Stacktrace].
 
 arity(Arguments) when is_list(Arguments) -> length(Arguments);
 arity(Arity)                             -> Arity.
+
+file_and_line(Location) when is_list(Location) ->
+    [Entry || {Key, _Value} = Entry <- Location, Key =:= file orelse Key =:= line];
+file_and_line(_Location) ->
+    [].
