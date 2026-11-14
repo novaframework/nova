@@ -153,6 +153,8 @@ routes(_Environment) ->
     }].
 ```
 
+The callback runs after the `pre_request` plugins of the route and before the controller. The [request pipeline](plugins.md#request-pipeline) section of the plugins guide has the whole order.
+
 `security` takes `false`, a `fun/1` or the deprecated `{Module, Function}`. Any other value, `true` included, is logged as an error and stops the application from starting with `{invalid_security, Value}`. The same goes for `secure` and `override_secure` in `nova_apps`.
 
 ### The security-function callback
