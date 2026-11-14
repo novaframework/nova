@@ -71,7 +71,7 @@ the cookies and the body from it. Nova adds these keys:
 | Key | Set by | Value |
 |---|---|---|
 | `bindings` | Router | The path parameters, a map with binary keys: `#{~"id" => ~"42"}` |
-| `extra_state` | Router | The `extra_state` of the route. For a route ending in `[...]` it has the trailing segments under `pathinfo` |
+| `extra_state` | Router | The `extra_state` of the route, or of its route group when the route has none, otherwise `undefined`. For a route ending in `[...]` it has the trailing segments under `pathinfo` |
 | `nova_route` | Router | The template of the matched route, such as `<<"/users/:id">>`. Not set when no route matched |
 | `plugins` | Router | The plugins of the route |
 | `auth_data` | Security callback | The data of `{true, AuthData}` |

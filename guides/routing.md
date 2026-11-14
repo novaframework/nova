@@ -35,7 +35,7 @@ A route group is a map. Its keys are all optional:
 | `plugins_after_security` | Plugin modules that wait for the security callback, see [Plugins](plugins.md#running-a-plugin-after-the-security-callback) |
 | `routes` | The routes |
 | `host` | Serve the group only for requests to this host, a string or a binary. A host that has groups of its own is served by those alone: groups without `host` are not consulted for it |
-| `extra_state` | A term handed to the websocket controllers of the group that set none themselves. HTTP routes do not read it, they take `extra_state` from the route |
+| `extra_state` | A term handed to the controllers of the routes of the group that set no `extra_state` themselves |
 | `apps` | Other Nova applications to mount under the prefix of the group, see [Multiple applications](multi-app.md) |
 
 You can also defer the routing information to the controllers, like this:
@@ -102,7 +102,8 @@ show(#{bindings := #{~"id" := Id}}) ->
 ```
 
 `extra_state` hands a term of your own to the controller, under
-`extra_state` in the request:
+`extra_state` in the request. A route without the option gets the
+`extra_state` of its route group, and `undefined` when the group has none:
 
 ```erlang
 {"/reports", fun my_app_reports_controller:index/1, #{methods => [get], extra_state => #{role => admin}}}
