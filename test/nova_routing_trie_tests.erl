@@ -247,7 +247,16 @@ concrete_method_after_any_is_a_duplicate_test() ->
 lowercase_method_is_normalised_test() ->
     T = ins('_', "/users", get, "LIST", new()),
     ?assertEqual({ok, #{}, "LIST"}, find('_', <<"/users">>, <<"GET">>, T)),
-    ?assertEqual({ok, #{}, "LIST"}, find('_', <<"/users">>, "get", T)).
+    ?assertEqual({ok, #{}, "LIST"}, find('_', <<"/users">>, 'Get', T)).
+
+binary_and_string_methods_keep_their_case_test() ->
+    T0 = ins('_', "/cache", <<"purge">>, "LOWER", new()),
+    T1 = ins('_', "/cache", "PURGE", "UPPER", T0),
+    ?assertEqual({ok, #{}, "LOWER"}, find('_', <<"/cache">>, <<"purge">>, T1)),
+    ?assertEqual({ok, #{}, "UPPER"}, find('_', <<"/cache">>, <<"PURGE">>, T1)),
+    ?assertEqual({ok, #{}, "UPPER"}, find('_', <<"/cache">>, purge, T1)),
+    ?assertEqual({error, comparator_not_found, [<<"PURGE">>, <<"purge">>]},
+                 find('_', <<"/cache">>, "Purge", T1)).
 
 %%====================================================================
 %% Matching improvements over routing_tree

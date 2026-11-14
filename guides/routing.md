@@ -119,7 +119,7 @@ A `Range` request for one byte range is answered with `206` and that part of the
 A route consists of three different components:
 
 * `Path` - This is the actual path to the endpoint. Eg `"/admin"`
-* `Method` - What method you want to support for this endpoint: `get`, `post`, `put`, `delete`, `options`, `head`, `connect`, `trace` or `patch`, as an atom, a binary or a string in either case. If you want to support all methods you can use the `'_'`-atom. Anything else, a misspelling included, stops the application from starting with `{invalid_method, Method}`. Earlier releases silently treated it as `'_'`, so the route answered every method.
+* `Method` - What method you want to support for this endpoint: `get`, `post`, `put`, `delete`, `options`, `head`, `connect`, `trace` or `patch`, as an atom in either case. Any other method, such as `PURGE` or `PROPFIND`, is written as a binary or a string. Those are matched as they are written, since a method is case-sensitive: write `<<"PURGE">>`, not `<<"purge">>`. If you want to support all methods you can use the `'_'`-atom. Any other atom, a misspelling included, or a binary or string that is not a method token ([RFC 9110](https://www.rfc-editor.org/rfc/rfc9110#section-9.1)), stops the application from starting with `{invalid_method, Method}`. Earlier releases silently treated it as `'_'`, so the route answered every method.
 * `ControllerCallback` - What erlang callback should be called on when the path gets called. This is defined as a function reference, eg `fun my_controller:main/1`.
 
 ## Using prefix

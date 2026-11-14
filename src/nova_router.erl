@@ -627,7 +627,7 @@ insert_methods([Method|Tl], Host, Path, Value, Tree, Options, ToComparator) ->
         try ToComparator(Method)
         catch
             throw:{error, {invalid_method, _}} = Error ->
-                ?LOG_ERROR(#{reason => <<"Unknown HTTP method in the methods of a route. Use get, post, put, delete, options, head, connect, trace, patch or '_'.">>,
+                ?LOG_ERROR(#{reason => <<"Unknown HTTP method in the methods of a route. Use get, post, put, delete, options, head, connect, trace, patch or '_', or a binary or string for any other method.">>,
                              route => Path, method => Method}),
                 throw(Error)
         end,
@@ -754,15 +754,17 @@ normalize_plugins([{Type, PluginName, Options}|Tl], Ack) ->
 
 %% A method that is not recognised stops the route table from compiling.
 %% It used to become the wildcard, which opened the route to every method.
+%% An atom is one of the methods Nova knows. A binary or a string is any
+%% method, such as PURGE or PROPFIND, in the case it is sent in.
 method_to_binary('_') ->
     '_';
 method_to_binary(Method) when is_atom(Method) ->
     known_method(atom_to_binary(Method), Method);
 method_to_binary(Method) when is_binary(Method) ->
-    known_method(Method, Method);
+    method_token(Method, Method);
 method_to_binary(Method) when is_list(Method) ->
     try unicode:characters_to_binary(Method) of
-        Name when is_binary(Name) -> known_method(Name, Method);
+        Name when is_binary(Name) -> method_token(Name, Method);
         _ -> throw({error, {invalid_method, Method}})
     catch
         error:badarg -> throw({error, {invalid_method, Method}})
@@ -779,6 +781,23 @@ known_method(Name, Method) ->
         _ ->
             throw({error, {invalid_method, Method}})
     end.
+
+%% RFC 9110 section 9.1: a method is a token, and it is case-sensitive.
+method_token(Name, Method) ->
+    case Name =/= <<>> andalso is_token(Name) of
+        true -> Name;
+        false -> throw({error, {invalid_method, Method}})
+    end.
+
+is_token(<<Char, Rest/binary>>) ->
+    is_token_char(Char) andalso is_token(Rest);
+is_token(<<>>) ->
+    true.
+
+is_token_char(Char) when Char >= $a, Char =< $z; Char >= $A, Char =< $Z; Char >= $0, Char =< $9 ->
+    true;
+is_token_char(Char) ->
+    lists:member(Char, "!#$%&'*+-.^_`|~").
 
 concat_strings(Path1, Path2) when is_binary(Path1) ->
     concat_strings(unicode:characters_to_list(uri_string:unquote(Path1)), Path2);

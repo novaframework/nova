@@ -99,11 +99,20 @@ method_to_binary_unknown_atom_test() ->
 
 method_to_binary_accepts_every_spelling_test_() ->
     [?_assertEqual(<<"POST">>, nova_router:method_to_binary(Method))
-     || Method <- ['POST', 'Post', <<"POST">>, <<"post">>, "POST", "post"]].
+     || Method <- ['POST', 'Post', <<"POST">>, "POST"]].
+
+method_to_binary_keeps_the_case_of_a_binary_or_string_test_() ->
+    [?_assertEqual(Expected, nova_router:method_to_binary(Method))
+     || {Method, Expected} <- [{~"post", ~"post"}, {"post", ~"post"}, {~"Purge", ~"Purge"}, {"pots", ~"pots"}]].
+
+method_to_binary_accepts_any_token_test_() ->
+    [?_assertEqual(iolist_to_binary(Method), nova_router:method_to_binary(Method))
+     || Method <- [~"PURGE", "PROPFIND", ~"QUERY", "M-SEARCH", ~"!#$%&'*+-.^_`|~09azAZ"]].
 
 method_to_binary_rejects_what_is_not_a_method_test_() ->
     [?_assertThrow({error, {invalid_method, Method}}, nova_router:method_to_binary(Method))
-     || Method <- [gett, update, <<"P O">>, <<>>, "", "pots", 1, {get}, [get]]].
+     || Method <- [gett, update, purge, 'PROPFIND', <<"P O">>, <<>>, "", "GET,POST", ~"GET\r\n", ~"G/T",
+                   <<"G", 233, "T">>, [$G, 233, $T], [$G, 16#D800], 1, {get}, [get]]].
 
 %%====================================================================
 %% concat_strings/2

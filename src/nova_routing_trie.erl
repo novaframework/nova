@@ -65,7 +65,9 @@ Matching is deterministic: at each depth a literal segment is tried first, then 
 %% A path is either a URL or an HTTP status code.
 -type path() :: binary() | list() | integer().
 
-%% Stored comparator: '_' matches any, otherwise an uppercase method binary.
+%% Stored comparator: '_' matches any, otherwise the method as a binary. An
+%% atom is stored in upper case. A binary or a string is stored as it is,
+%% since a method is case-sensitive.
 -type comparator()    :: '_' | binary().
 -type comparator_in() :: comparator() | atom() | list().
 
@@ -247,9 +249,9 @@ norm_host(Host) when is_atom(Host)   -> atom_to_binary(Host, utf8).
 
 -spec norm_comparator(comparator_in()) -> comparator().
 norm_comparator('_')                 -> '_';
-norm_comparator(C) when is_binary(C) -> upper(C);
+norm_comparator(C) when is_binary(C) -> C;
 norm_comparator(C) when is_atom(C)   -> upper(atom_to_binary(C, utf8));
-norm_comparator(C) when is_list(C)   -> upper(to_binary(C)).
+norm_comparator(C) when is_list(C)   -> to_binary(C).
 
 %% unicode:characters_to_binary/1 answers with an error tuple rather than
 %% raising, and silently treating that as a segment would put an unroutable
