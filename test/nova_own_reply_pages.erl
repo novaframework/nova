@@ -8,6 +8,7 @@
 
 -export([ok/1, view/1, json/1, status/1, redirect/1, unsupported/1, to_fallback/1, crash/1, thrown/1,
          before_plugin/1, plain/1, not_found/1, resolve/2]).
+-export([denies/1, denies_with_a_body/1, redirects/1]).
 -export([pre_request/4, post_request/4, plugin_info/0]).
 
 ok(Req) ->
@@ -61,6 +62,24 @@ resolve(Req, answer_in_the_fallback) ->
     answer(Req),
     {status, 409, #{}, ~"from the fallback"}.
 
+denies(Req) ->
+    answer(Req),
+    false.
+
+denies_with_a_body(Req) ->
+    answer(Req),
+    {false, 403, #{}, ~"from the callback"}.
+
+redirects(Req) ->
+    answer(Req),
+    {redirect, "/plain"}.
+
+pre_request(Req, _Env, #{then := stop}, State) ->
+    answer(Req),
+    {stop, {reply, 503, #{}, ~"from the plugin"}, Req, State};
+pre_request(Req, _Env, #{then := crash}, _State) ->
+    answer(Req),
+    error(crashed_after_the_answer);
 pre_request(Req, _Env, _Options, State) ->
     {ok, Req, State}.
 

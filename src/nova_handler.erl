@@ -144,17 +144,17 @@ render_crash(Req, Env, StatusPage) ->
 render_crash_page(Req, Env = #{callback := Callback}, 500) ->
     case Callback =:= fun nova_error_controller:server_error/1 of
         true ->
-            reply(500, maps:without([resp_body], Req), Env, origin(Callback, status));
+            reply(500, maps:without([resp_body], Req), Env);
         false ->
             execute_controller(Req, Env#{app => nova, callback => fun nova_error_controller:server_error/1}, 500)
     end;
 render_crash_page(Req, Env, _StatusPage) ->
     render_response(Req, Env, 500).
 
-%% Whether the request has its answer, which is asked before every response
-%% Nova sends: Cowboy stops the connection process, and every other request
-%% on it, when a request is answered twice. The request that comes back is
-%% marked as answered.
+%% Whether the request has its answer, which is asked before an error page
+%% is rendered for a controller that failed: the page would run for nothing,
+%% and nova_stream_h would drop it. The request that comes back is marked as
+%% answered.
 -doc false.
 -spec answered(Req) -> false | {true, Req} when Req :: cowboy_req:req().
 answered(Req) ->
@@ -264,9 +264,9 @@ execute_fallback(Callback, Req, Response, Env) ->
           {ok, Req0 :: cowboy_req:req(), Env :: map()}.
 call_handler(Callback, Req, RetObj, Env, IsFallbackController) ->
     case get_handler(RetObj) of
-        {ok, Form, HandlerCallback} ->
+        {ok, HandlerCallback} ->
             {ok, Req0} = HandlerCallback(RetObj, Callback, Req),
-            send_response(Req0, Env, origin(Callback, Form));
+            send_response(Req0, Env);
         {error, not_found} ->
             case IsFallbackController of
                 true ->
@@ -289,51 +289,25 @@ call_handler(Callback, Req, RetObj, Env, IsFallbackController) ->
 %% A controller that returns something other than a tagged tuple (an atom, a
 %% map) goes to the fallback controller like any other unknown return.
 get_handler(RetObj) when is_tuple(RetObj), tuple_size(RetObj) > 0, is_atom(element(1, RetObj)) ->
-    Form = element(1, RetObj),
-    case nova_handlers:get_handler(Form) of
-        {ok, HandlerCallback} -> {ok, Form, HandlerCallback};
-        {error, not_found} -> {error, not_found}
-    end;
+    nova_handlers:get_handler(element(1, RetObj));
 get_handler(_RetObj) ->
     {error, not_found}.
 
--spec send_response(Req :: cowboy_req:req(), Env :: map(), Origin :: map()) ->
+-spec send_response(Req :: cowboy_req:req(), Env :: map()) ->
           {ok, Req :: cowboy_req:req(), State :: map()}.
-send_response(Req = #{resp_status_code := StatusCode}, Env, Origin) when is_integer(StatusCode); is_binary(StatusCode) ->
-    reply(StatusCode, without_refused_body(StatusCode, Req), Env, Origin);
-send_response(Req, Env, Origin) when not is_map_key(resp_status_code, Req) ->
-    reply(200, Req, Env, Origin).
+send_response(Req = #{resp_status_code := StatusCode}, Env) when is_integer(StatusCode); is_binary(StatusCode) ->
+    reply(StatusCode, without_refused_body(StatusCode, Req), Env);
+send_response(Req, Env) when not is_map_key(resp_status_code, Req) ->
+    reply(200, Req, Env).
 
 %% Every response of a controller, a fallback controller or a status page
-%% leaves from here.
-reply(StatusCode, Req, Env, Origin) ->
-    case answered(Req) of
-        false ->
-            {ok, cowboy_req:reply(StatusCode, Req), Env};
-        {true, Req0} ->
-            not_sent(Req, Origin),
-            {ok, Req0, Env}
-    end.
-
-%% A handler or a controller that streamed its response, or replied itself,
-%% may hand back the request Cowboy marked as answered. One that returns
-%% without it is told that what it returned went nowhere.
-not_sent(#{has_sent_resp := _}, _Origin) ->
-    ok;
-not_sent(Req, Origin) ->
-    ?LOG_WARNING(Origin#{msg => ~"The request was answered before the controller returned, so what it returned is not sent",
-                         route => maps:get(nova_route, Req, undefined)}).
-
-origin(Callback, Return) ->
-    {module, Module} = erlang:fun_info(Callback, module),
-    {name, Function} = erlang:fun_info(Callback, name),
-    #{controller => Module, function => Function, return => Return}.
-
-status_origin(#{callback := Callback}) when is_function(Callback) ->
-    origin(Callback, status);
-status_origin(_Env) ->
-    #{return => status}.
-
+%% leaves from here. A handler or a controller that streamed its response,
+%% or replied itself, hands back the request Cowboy marked as answered. When
+%% it does not, nova_stream_h drops the second answer.
+reply(_StatusCode, Req = #{has_sent_resp := _}, Env) ->
+    {ok, Req, Env};
+reply(StatusCode, Req, Env) ->
+    {ok, cowboy_req:reply(StatusCode, Req), Env}.
 
 %% A 204 and a 304 have no body, and Cowboy exits when given one.
 without_refused_body(StatusCode, Req) when StatusCode =:= 204; StatusCode =:= 304 ->
@@ -348,13 +322,13 @@ render_response(Req, Env, StatusCode) ->
                 {error, _} ->
                     %% Render the internal view of nova
                     {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, fun erlang:date/0, Req),
-                    send_response(Req0, Env, status_origin(Env));
+                    send_response(Req0, Env);
                 {ok, _Bindings, #nova_handler_value{callback = Callback}} ->
                     execute_controller(Req, Env#{app => nova, callback => Callback}, StatusCode)
             end;
         false ->
             {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, fun(_) -> ok end, Req),
-            send_response(Req0, Env, status_origin(Env))
+            send_response(Req0, Env)
     end.
 
 

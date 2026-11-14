@@ -104,23 +104,24 @@ handle_result({stop, Req0}, Callback, _State, _Tl, _CallbackType, _Req, _Env) wh
     deprecated_stop(Callback),
     {stop, Req0};
 %% The controller has answered by the time the post_request plugins run, and
-%% a plugin may have answered itself before it asks Nova to.
+%% a plugin may have answered itself before it asks Nova to. Cowboy exits on
+%% a reply to a request it marked as answered. A second answer to a request
+%% without the mark is dropped by nova_stream_h.
+handle_result({stop, _Reply, Req0, State0}, Callback, State, _Tl, _CallbackType, _Req, _Env)
+  when is_map_key(has_sent_resp, Req0) ->
+    set_state(Callback, State, State0),
+    warn_once(Callback, late_reply_warned,
+              ~"Plugin replied after the response was sent. The reply is dropped"),
+    {stop, Req0};
 handle_result({stop, Reply, Req0, State0}, Callback, State, _Tl, _CallbackType, _Req, Env) ->
     set_state(Callback, State, State0),
-    case nova_handler:answered(Req0) of
-        {true, Req1} ->
-            warn_once(Callback, late_reply_warned,
-                      ~"Plugin replied after the response was sent. The reply is dropped"),
-            {stop, Req1};
-        false ->
-            case handle_reply(Reply, Req0) of
-                {ok, Req1} ->
-                    %% Stopping means nobody else will answer, so the reply goes out here.
-                    StatusCode = maps:get(resp_status_code, Req1, 200),
-                    {stop, cowboy_req:reply(StatusCode, Req1)};
-                error ->
-                    unsupported_reply(Callback, Reply, Req0, Env)
-            end
+    case handle_reply(Reply, Req0) of
+        {ok, Req1} ->
+            %% Stopping means nobody else will answer, so the reply goes out here.
+            StatusCode = maps:get(resp_status_code, Req1, 200),
+            {stop, cowboy_req:reply(StatusCode, Req1)};
+        error ->
+            unsupported_reply(Callback, Reply, Req0, Env)
     end;
 handle_result({error, Reason}, Callback, _State, _Tl, _CallbackType, Req, Env) ->
     ?LOG_ERROR(#{msg => ~"Plugin returned an error", plugin => plugin_module(Callback),
