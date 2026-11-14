@@ -60,6 +60,18 @@ execute_status_return_test_() ->
         ?assertEqual(404, maps:get(resp_status_code, Req1))
     end}.
 
+%% Cowboy refuses a body with these two, which made the response a 500.
+execute_status_without_content_drops_the_body_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        [begin
+             Callback = fun(_Req) -> {status, Status, #{}, ~"body"} end,
+             Req = nova_test_helper:mock_req(~"GET", ~"/"),
+             Env = #{callback => Callback, app => test_app, secure => false, controller_data => #{}},
+             {ok, Req1, _Env1} = nova_handler:execute(Req, Env),
+             ?assertEqual({Status, false}, {maps:get(resp_status_code, Req1), is_map_key(resp_body, Req1)})
+         end || Status <- [204, 304]]
+    end}.
+
 execute_redirect_return_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         Callback = fun(_Req) -> {redirect, <<"/login">>} end,

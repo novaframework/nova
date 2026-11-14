@@ -250,12 +250,18 @@ get_handler(_RetObj) ->
 
 -spec render_response(Req :: cowboy_req:req(), Env :: map()) -> {ok, Req :: cowboy_req:req(), State :: map()}.
 render_response(Req = #{resp_status_code := StatusCode}, Env) ->
-    Req0 = cowboy_req:reply(StatusCode, Req),
+    Req0 = cowboy_req:reply(StatusCode, without_refused_body(StatusCode, Req)),
     {ok, Req0, Env};
 render_response(Req, Env) ->
     Req0 = cowboy_req:reply(200, Req),
     {ok, Req0, Env}.
 
+
+%% A 204 and a 304 have no body, and Cowboy exits when given one.
+without_refused_body(StatusCode, Req) when StatusCode =:= 204; StatusCode =:= 304 ->
+    maps:remove(resp_body, Req);
+without_refused_body(_StatusCode, Req) ->
+    Req.
 
 render_response(Req, Env, StatusCode) ->
     case application:get_env(nova, render_error_pages, true) of

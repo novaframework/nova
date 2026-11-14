@@ -89,7 +89,7 @@ Same as the simple interface but with an additional field for specifying additio
 
 *Example*: `{status, 200, #{"content-type" => "text/plain"}, "A plain text"}`
 
-Same as the medium interface but with an additional field for specifying a body.
+Same as the medium interface but with an additional field for specifying a body. A `204` and a `304` have no body: one given with either status, by this or any other keyword, is left out.
 
 ### File transfers (Using cowboys sendfile functionality)
 
