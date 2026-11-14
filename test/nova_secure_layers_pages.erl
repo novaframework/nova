@@ -32,6 +32,7 @@ decide(Layer, Req) ->
         ~"deny-status" -> {false, 403, #{~"x-refused-by" => Name}};
         ~"deny-body" -> {false, 403, #{~"x-refused-by" => Name}, Name};
         ~"redirect" -> {redirect, "/login-of-" ++ atom_to_list(Layer)};
+        ~"redirect-binary" -> {redirect, <<"/login-of-", Name/binary>>};
         ~"raise" -> error({raised_by, Layer});
         ~"unexpected" -> {ok, Layer}
     end.

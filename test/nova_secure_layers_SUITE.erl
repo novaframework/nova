@@ -29,7 +29,7 @@
 -define(GROUP, fun nova_secure_layers_pages:group/1).
 -define(OVERRIDE, fun nova_secure_layers_pages:override/1).
 -define(DECISIONS, [~"allow", ~"data", ~"deny", ~"deny-headers", ~"deny-status", ~"deny-body",
-                    ~"redirect", ~"raise", ~"unexpected"]).
+                    ~"redirect", ~"redirect-binary", ~"raise", ~"unexpected"]).
 
 all() ->
     [{group, mount_and_group}, {group, with_override}].
@@ -186,6 +186,7 @@ refusal(Layer, ~"deny-headers") -> {401, #{~"x-refused-by" => atom_to_binary(Lay
 refusal(Layer, ~"deny-status") -> {403, #{~"x-refused-by" => atom_to_binary(Layer)}, any};
 refusal(Layer, ~"deny-body") -> {403, #{~"x-refused-by" => atom_to_binary(Layer)}, atom_to_binary(Layer)};
 refusal(Layer, ~"redirect") -> {302, #{~"location" => <<"/login-of-", (atom_to_binary(Layer))/binary>>}, any};
+refusal(Layer, ~"redirect-binary") -> refusal(Layer, ~"redirect");
 refusal(_Layer, ~"raise") -> {500, #{}, any};
 refusal(_Layer, ~"unexpected") -> {401, #{}, any}.
 
