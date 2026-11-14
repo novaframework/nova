@@ -138,6 +138,28 @@ server_error_without_a_crash_map_test_() ->
           end || Req0 <- [Req, Req#{crash_info => not_a_map}]]
      end}.
 
+%% Without an accept header the 500 page is JSON, as the 404 page is.
+server_error_no_accept_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Req = nova_test_helper:mock_req(~"GET", ~"/"),
+         [begin
+              {status, 500, Headers, Body} = nova_error_controller:server_error(Req0),
+              ?assertEqual(~"application/json", maps:get(~"content-type", Headers)),
+              ?assertMatch(#{~"title" := ~"500 Internal Server Error"}, json:decode(iolist_to_binary(Body)))
+          end || Req0 <- [Req, Req#{crash_info => #{status_code => 500, class => error, reason => boom}}]]
+     end}.
+
+%% An accept header that asks for neither JSON nor HTML gets no body, on
+%% both pages.
+unknown_accept_has_no_body_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Req = nova_test_helper:with_header(~"accept", ~"image/png", nova_test_helper:mock_req(~"GET", ~"/")),
+         ?assertMatch({status, 404, _, <<>>}, nova_error_controller:not_found(Req)),
+         ?assertMatch({status, 500, _, <<>>}, nova_error_controller:server_error(Req))
+     end}.
+
 server_error_html_for_browsers_test_() ->
     {setup, ?SETUP, ?CLEANUP,
      fun() ->

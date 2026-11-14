@@ -18,11 +18,7 @@ status_code(Req) ->
     {status, maps:get(resp_status_code, Req, 200)}.
 
 not_found(Req) ->
-    Type = case cowboy_req:header(~"accept", Req) of
-               undefined -> json;
-               Accept -> preferred_type(Accept)
-           end,
-    case Type of
+    case response_type(Req) of
         json ->
             Json = nova_json:encode(#{message => ~"Resource not found"}),
             {status, 404, #{<<"content-type">> => <<"application/json">>}, Json};
@@ -65,7 +61,7 @@ server_error(Req) ->
     server_error(Req#{crash_info => #{status_code => 500}}).
 
 render(StatusCode, Variables, Req) ->
-    case preferred_type(cowboy_req:header(~"accept", Req)) of
+    case response_type(Req) of
         json ->
             Json = nova_json:encode(Variables),
             {status, StatusCode, #{~"content-type" => ~"application/json"}, Json};
@@ -74,6 +70,14 @@ render(StatusCode, Variables, Req) ->
             {status, StatusCode, #{~"content-type" => ~"text/html"}, Body};
         none ->
             {status, StatusCode, #{~"content-type" => ~"text/html"}, <<>>}
+    end.
+
+%% A client that sends no accept header gets JSON. One that sends a header
+%% naming neither JSON nor HTML gets no body.
+response_type(Req) ->
+    case cowboy_req:header(~"accept", Req) of
+        undefined -> json;
+        Accept -> preferred_type(Accept)
     end.
 
 %% Crash details can carry anything a controller or plugin returned, so they
