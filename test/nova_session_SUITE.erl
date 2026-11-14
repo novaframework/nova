@@ -10,6 +10,7 @@
          no_cookie_until_session_is_written/1,
          cookie_has_safe_attributes/1,
          session_survives_requests/1,
+         status_with_a_reason_phrase_carries_the_cookie/1,
          unknown_session_id_is_replaced/1,
          renew_rotates_session_id/1,
          delete_clears_cookie/1,
@@ -27,6 +28,7 @@ all() ->
      no_cookie_until_session_is_written,
      cookie_has_safe_attributes,
      session_survives_requests,
+     status_with_a_reason_phrase_carries_the_cookie,
      unknown_session_id_is_replaced,
      renew_rotates_session_id,
      delete_clears_cookie,
@@ -96,6 +98,14 @@ session_survives_requests(Config) ->
     {200, H2, Body} = get(Config, "/session/get", Id),
     ?assertEqual(#{~"value" => ~"kept"}, json:decode(Body)),
     ?assertEqual([], session_cookies(H2)).
+
+%% Cowboy takes a status as an integer or as a binary with the reason phrase.
+status_with_a_reason_phrase_carries_the_cookie(Config) ->
+    [begin
+         {200, Headers, ~"stored"} = get(Config, Path, undefined),
+         {200, _, Body} = get(Config, "/session/get", session_id(Headers)),
+         ?assertEqual(#{~"value" => ~"kept"}, json:decode(Body))
+     end || Path <- ["/session/set-with-status-text/kept", "/session/set-and-stream/kept"]].
 
 %% Session fixation: an id the server never issued is not adopted.
 unknown_session_id_is_replaced(Config) ->

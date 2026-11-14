@@ -90,6 +90,10 @@ routes(_Environment) ->
      #{prefix => "/session",
        routes => [
                   {"/set/:value", fun nova_test_app_session_controller:set/1, #{methods => [get]}},
+                  {"/set-with-status-text/:value", fun nova_test_app_session_controller:set_with_status_text/1,
+                   #{methods => [get]}},
+                  {"/set-and-stream/:value", fun nova_test_app_session_controller:set_and_stream/1,
+                   #{methods => [get]}},
                   {"/get", fun nova_test_app_session_controller:get/1, #{methods => [get]}},
                   {"/renew", fun nova_test_app_session_controller:renew/1, #{methods => [get]}},
                   {"/delete", fun nova_test_app_session_controller:delete/1, #{methods => [get]}},

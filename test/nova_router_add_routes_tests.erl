@@ -107,6 +107,28 @@ route_takes_the_extra_state_of_its_group_test_() ->
         ?assertEqual(undefined, extra_state(~"/plain/none"))
     end}.
 
+%% An empty map is a value like any other: a controller that reads a key out
+%% of its extra_state with a default needs a map to read from.
+declared_empty_extra_state_is_taken_from_the_group_test_() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
+        Callback = fun(_) -> {json, #{}} end,
+        Routes = [#{prefix => "/empty", extra_state => #{},
+                    routes => [{"/route", Callback, #{methods => [get]}},
+                               {"/ws", extra_state_ws, #{protocol => ws}}]},
+                  #{prefix => "/none",
+                    routes => [{"/route", Callback, #{methods => [get]}},
+                               {"/ws", extra_state_ws, #{protocol => ws}}]}],
+        ok = nova_router:add_routes(empty_extra_state_app, Routes),
+        Declared = fun(Path) ->
+                           {ok, Req, _Env} = nova_router:execute(nova_test_helper:mock_req(~"GET", Path), #{}),
+                           maps:get(extra_state, Req, not_set)
+                   end,
+        ?assertEqual(#{}, Declared(~"/empty/route")),
+        ?assertEqual(#{}, Declared(~"/empty/ws")),
+        ?assertEqual(undefined, Declared(~"/none/route")),
+        ?assertEqual(not_set, Declared(~"/none/ws"))
+    end}.
+
 extra_state(Path) ->
     {ok, Req, _Env} = nova_router:execute(nova_test_helper:mock_req(~"GET", Path), #{}),
     maps:get(extra_state, Req).

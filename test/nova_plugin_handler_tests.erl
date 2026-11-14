@@ -91,6 +91,17 @@ post_request_reply_after_the_response_test_() ->
     end}.
 
 %%====================================================================
+%% Nor can a pre_request plugin that answered the request itself
+%%====================================================================
+
+pre_request_reply_with_an_answered_request_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        P = fun(R, _Env, _Opts, _State) -> {stop, {reply, 403, ~"again"}, R#{has_sent_resp => true}, #{}} end,
+        {stop, Req1} = nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env()),
+        ?assertNot(is_map_key(resp_status_code, Req1))
+    end}.
+
+%%====================================================================
 %% Empty pre_request plugins -> sets plugin_state
 %%====================================================================
 

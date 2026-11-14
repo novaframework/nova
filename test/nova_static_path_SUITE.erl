@@ -20,7 +20,8 @@
          relative_root_after_the_working_directory_changed/1,
          relative_file_after_the_working_directory_changed/1,
          root_link_changed_after_the_boot/1,
-         root_removed_after_the_boot/1
+         root_removed_after_the_boot/1,
+         file_under_a_removed_root_logs_the_root_once/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -46,7 +47,8 @@ all() ->
      relative_root_after_the_working_directory_changed,
      relative_file_after_the_working_directory_changed,
      root_link_changed_after_the_boot,
-     root_removed_after_the_boot
+     root_removed_after_the_boot,
+     file_under_a_removed_root_logs_the_root_once
     ].
 
 init_per_suite(Config) ->
@@ -79,6 +81,7 @@ init_per_suite(Config) ->
     ok = file:make_symlink("../secret.txt", filename:join([Base, "release-2", "index.html"])),
     ok = file:make_symlink("release-1", filename:join(Base, "current")),
     ok = filelib:ensure_path(filename:join(Base, "removed")),
+    ok = filelib:ensure_path(filename:join(Base, "removed-files")),
     Host = [#{prefix => "",
               routes => [
                          {"/relative/[...]", ?RELATIVE_DIR},
@@ -86,6 +89,7 @@ init_per_suite(Config) ->
                          {"/relative-file", filename:join(?RELATIVE_DIR, "file.txt")},
                          {"/removed-index", filename:join(Base, "removed")},
                          {"/removed/[...]", filename:join(Base, "removed")},
+                         {"/removed-files/[...]", filename:join(Base, "removed-files")},
                          {"/current/[...]", filename:join(Base, "current")},
                          {"/current-index", filename:join(Base, "current")},
                          {"/files/[...]", Root},
@@ -97,9 +101,12 @@ init_per_suite(Config) ->
     [{port, nova_test_listener:start(#{host => Host})}, {secret, filename:join(Base, "secret.txt")},
      {base, Base} | Config].
 
-end_per_suite(_Config) ->
+%% The fixture holds links that lead back into it, which `rebar3 ct --retry`
+%% cannot copy, so it does not stay behind in the logs.
+end_per_suite(Config) ->
     nova_test_listener:stop(),
-    file:del_dir_r(?RELATIVE_DIR).
+    file:del_dir_r(?RELATIVE_DIR),
+    file:del_dir_r(?config(base, Config)).
 
 file_inside_root(Config) ->
     Port = ?config(port, Config),
@@ -208,3 +215,17 @@ refused(Config, Path) ->
     {Status, Body} = nova_test_listener:get(?config(port, Config), Path),
     ?assert(lists:member(Status, [400, 404]), {Path, Status}),
     ?assertEqual(nomatch, binary:match(Body, ?SECRET), Path).
+
+%% Nobody may ever ask for the directory itself, so a file asked for under
+%% it is what tells the operator that it is gone.
+file_under_a_removed_root_logs_the_root_once(Config) ->
+    Port = ?config(port, Config),
+    Removed = filename:join(?config(base, Config), "removed-files"),
+    ok = file:del_dir(Removed),
+    {Results, Events} = nova_test_log:collect(fun() ->
+                                                      [nova_test_listener:get(Port, "/removed-files/one.txt"),
+                                                       nova_test_listener:get(Port, "/removed-files/two.txt")]
+                                              end),
+    ?assertMatch([{404, _}, {404, _}], Results),
+    ?assertMatch([#{msg := ~"Static directory cannot be served", directory := Removed, reason := enoent}],
+                 nova_test_log:errors(Events)).

@@ -55,9 +55,17 @@ serve_file(#{extra_state := #{static := File, options := Options}, headers := He
                 MType
         end,
 
-    %% Fetch file size
-    #{size := Size} = file_info(filename:dirname(Filepath), filename:basename(Filepath)),
+    case file:read_file_info(Filepath) of
+        {ok, #file_info{size = Size}} ->
+            serve_file(Filepath, Size, MimeType, Headers);
+        {error, Reason} ->
+            unusable_file(Filepath, Reason),
+            {status, 404}
+    end;
+serve_file(_Req) ->
+    {status, 404}.
 
+serve_file(Filepath, Size, MimeType, Headers) ->
     %% Check if Range header is present
     case maps:get(<<"range">>, Headers, undefined) of
         undefined ->
@@ -80,10 +88,7 @@ serve_file(#{extra_state := #{static := File, options := Options}, headers := He
                 _ ->
                     {status, 416, #{<<"content-range">> => <<"bytes */", (integer_to_binary(Size))/binary>>}}
             end
-    end;
-
-serve_file(_Req) ->
-    {status, 404}.
+    end.
 
 get_dir(#{extra_state := #{static := Dir, options := Options} = ExtraState} = Req) ->
     Root = get_filepath(Dir),
@@ -110,14 +115,14 @@ serve_dir(Resolved, #{extra_state := #{pathinfo := Pathinfo, options := Options}
                             %% It's a file
                             get_file(Req#{extra_state => #{static => {file, Filepath0}, options => Options}});
                         false ->
-                            {status, 404}
+                            not_found(Resolved)
                     end;
                 true ->
                     get_dir(Req#{extra_state => #{static => {dir, Filepath0}, static_root => {Filepath0, FileResolved},
                                                   options => Options}})
             end;
         error ->
-            {status, 404}
+            not_found(Resolved)
     end;
 serve_dir({_RootSegments, DirSegments} = Resolved, #{path := Path, extra_state := #{options := Options}} = Req) ->
     Filepath = filename:join(DirSegments),
@@ -156,6 +161,17 @@ serve_index(Files, Filepath, Resolved, Path, Options, Req) ->
             end
     end.
 
+%% A file that is not there is the business of the client. A root that is
+%% not there is the business of the operator, and nobody may ever ask for
+%% the directory itself, so the root is looked at before the 404.
+not_found({RootSegments, _DirSegments}) ->
+    Root = filename:join(RootSegments),
+    case file:read_file_info(Root) of
+        {ok, _Info} -> ok;
+        {error, Reason} -> unusable_root(Root, Reason)
+    end,
+    {status, 404}.
+
 %% A static directory that cannot be served is the same on every request,
 %% so it is logged the first time only.
 unusable_root(Directory, Reason) ->
@@ -166,6 +182,17 @@ unusable_root(Directory, Reason) ->
         false ->
             persistent_term:put(Key, true),
             ?LOG_ERROR(#{msg => ~"Static directory cannot be served", directory => Directory, reason => Reason})
+    end.
+
+%% As is a static file that is gone or cannot be read.
+unusable_file(File, Reason) ->
+    Key = {?MODULE, unusable_file, File},
+    case persistent_term:get(Key, false) of
+        true ->
+            ok;
+        false ->
+            persistent_term:put(Key, true),
+            ?LOG_ERROR(#{msg => ~"Static file cannot be served", file => File, reason => Reason})
     end.
 
 

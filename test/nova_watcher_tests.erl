@@ -27,7 +27,8 @@ watcher_test_() ->
       fun missing_workdir_does_not_stop_the_watcher/1,
       fun malformed_watcher_does_not_stop_the_watcher/1,
       fun command_of_nested_characters_runs/1,
-      fun command_holding_more_than_characters_does_not_stop_the_watcher/1]}.
+      fun command_holding_more_than_characters_does_not_stop_the_watcher/1,
+      fun arguments_that_are_not_strings_do_not_stop_the_watcher/1]}.
 
 configured_watchers_start_with_the_watcher_test() ->
     {ok, Cwd} = file:get_cwd(),
@@ -135,6 +136,23 @@ command_holding_more_than_characters_does_not_stop_the_watcher({_Cwd, Dir}) ->
                ?assert(appears(filename:join(Dir, "ran"))),
                ?assertEqual(Watcher, whereis(nova_watcher)),
                ?assertEqual({ok, ["ran"]}, file:list_dir(Dir))
+           end).
+
+arguments_that_are_not_strings_do_not_stop_the_watcher({_Cwd, Dir}) ->
+    ?_test(begin
+               Watcher = whereis(nova_watcher),
+               ok = nova_test_log:start(),
+               ok = nova_watcher:async_cast(nova, "touch", [ran, twice], #{workdir => Dir}),
+               ok = nova_watcher:async_cast(nova, "touch", [~"ran", ~"twice"], #{workdir => Dir}),
+               ok = nova_watcher:async_cast(nova, "touch", ["ran", 2], #{workdir => Dir}),
+               _ = sys:get_state(nova_watcher),
+               Logged = [Report || #{level := error, msg := {report, Report}} <- nova_test_log:stop()],
+               ?assertEqual(Watcher, whereis(nova_watcher)),
+               ?assertMatch([#{msg := ~"Could not start watcher", arguments := [ran, twice]},
+                             #{msg := ~"Could not start watcher", arguments := [~"ran", ~"twice"]},
+                             #{msg := ~"Could not start watcher", arguments := ["ran", 2]}],
+                            Logged),
+               ?assertEqual({ok, []}, file:list_dir(Dir))
            end).
 
 appears(File) ->

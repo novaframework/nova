@@ -63,10 +63,11 @@ info(StreamID, {headers, _Code, _Headers} = Info, State = #state{sent = false}) 
 info(StreamID, Info, State) ->
     respond(StreamID, Info, State).
 
-respond(StreamID, {response, Code, Headers, Body}, State) when is_integer(Code) ->
+%% Cowboy takes a status as an integer or as a binary with the reason phrase.
+respond(StreamID, {response, Code, Headers, Body}, State) when is_integer(Code); is_binary(Code) ->
     {Headers0, State0} = session_cookie(Headers, State),
     forward(StreamID, {response, Code, Headers0, Body}, State0);
-respond(StreamID, {headers, Code, Headers}, State) when is_integer(Code) ->
+respond(StreamID, {headers, Code, Headers}, State) when is_integer(Code); is_binary(Code) ->
     {Headers0, State0} = session_cookie(Headers, State),
     forward(StreamID, {headers, Code, Headers0}, State0);
 %% A websocket upgrade: a session written in nova_websocket:init/1 gets its

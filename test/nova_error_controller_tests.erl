@@ -45,6 +45,7 @@ format_stacktrace_multiple_entries_test() ->
     ?assertEqual(2, length(Result)).
 
 format_stacktrace_not_enabled_test() ->
+    persistent_term:erase({nova_error_controller, stacktrace_hint}),
     {Frames, Events} = nova_test_log:collect(fun() -> nova_error_controller:format_stacktrace(not_enabled) end),
     ?assertEqual([], Frames),
     [{warning, {report, #{msg := <<Message/binary>>}}}] = Events,
@@ -250,23 +251,144 @@ extra_msg_is_hidden_when_environment_is_unset_test_() ->
              #{} = Decoded = json:decode(iolist_to_binary(Json)),
              ?assertNot(is_map_key(~"extra_msg", Decoded)),
              ?assertNot(is_map_key(~"stacktrace", Decoded)),
-             ?assertEqual({status, 500},
-                          nova_error_controller:server_error(
-                            (json_req())#{crash_info => #{class => error, reason => secret}}))
+             {status, 500, _, Crash} =
+                 nova_error_controller:server_error((json_req())#{crash_info => #{class => error, reason => secret}}),
+             ?assertEqual(nomatch, binary:match(iolist_to_binary(Crash), ~"secret"))
          after
              application:set_env(nova, environment, dev)
          end
      end}.
 
-accept_media_types_are_case_insensitive_test() ->
-    ?assertEqual(html, nova_error_controller:preferred_type(~" Text/HTML ;q=0.9")).
+%% A crash in a plugin leaves a class and a reason and no status code.
+%% Outside dev its page is the generic one, in the form the client accepts.
+crash_page_outside_dev_follows_the_accept_header_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         application:set_env(nova, environment, prod),
+         try
+             CrashInfo = #{class => error, reason => secret, stacktrace => [{secret_mod, secret_fun, 1, []}]},
+             {status, 500, JsonHeaders, Json} =
+                 nova_error_controller:server_error((json_req())#{crash_info => CrashInfo}),
+             ?assertEqual(~"application/json", maps:get(~"content-type", JsonHeaders)),
+             ?assertEqual(#{~"status" => ~"Internal Server Error",
+                            ~"title" => ~"500 Internal Server Error",
+                            ~"message" => ~"Something internal crashed. Please take a look!"},
+                          json:decode(iolist_to_binary(Json))),
+             {status, 500, NoAcceptHeaders, _} =
+                 nova_error_controller:server_error((nova_test_helper:mock_req(~"GET", ~"/"))#{crash_info => CrashInfo}),
+             ?assertEqual(~"application/json", maps:get(~"content-type", NoAcceptHeaders)),
+             {status, 500, HtmlHeaders, Html} =
+                 nova_error_controller:server_error((browser_req())#{crash_info => CrashInfo}),
+             ?assertEqual(~"text/html", maps:get(~"content-type", HtmlHeaders)),
+             ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Html), ~"500 Internal Server Error")),
+             ?assertEqual(nomatch, binary:match(iolist_to_binary(Html), ~"secret")),
+             Png = nova_test_helper:with_header(~"accept", ~"image/png", nova_test_helper:mock_req(~"GET", ~"/")),
+             ?assertMatch({status, 500, _, <<>>}, nova_error_controller:server_error(Png#{crash_info => CrashInfo}))
+         after
+             application:set_env(nova, environment, dev)
+         end
+     end}.
 
-%% Cowboy joins repeated accept headers; parsing must stay linear.
-huge_accept_header_is_cheap_test() ->
-    Accept = binary:copy(~",", 400000),
-    {Micros, none} = timer:tc(fun() -> nova_error_controller:preferred_type(Accept) end),
-    ?assert(Micros < 100000).
+%% render_error_pages turns the HTML page off. A client that asks for JSON,
+%% or for nothing in particular, still gets the JSON body.
+server_error_without_error_pages_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         application:set_env(nova, render_error_pages, false),
+         try
+             CrashInfo = #{status_code => 500, class => error, reason => boom},
+             [begin
+                  {status, 500, Headers, Body} = nova_error_controller:server_error(Req#{crash_info => CrashInfo}),
+                  ?assertEqual(~"application/json", maps:get(~"content-type", Headers)),
+                  ?assertMatch(#{~"title" := ~"500 Internal Server Error"}, json:decode(iolist_to_binary(Body)))
+              end || Req <- [json_req(), nova_test_helper:mock_req(~"GET", ~"/")]],
+             ?assertEqual({status, 500}, nova_error_controller:server_error((browser_req())#{crash_info => CrashInfo}))
+         after
+             application:unset_env(nova, render_error_pages)
+         end
+     end}.
 
-media_range_of_only_whitespace_is_empty_test() ->
-    ?assertEqual(<<>>, nova_error_controller:trim_ows(~" \t ")),
-    ?assertEqual(none, nova_error_controller:preferred_type(~" , \t")).
+%% nova_handler takes the stacktrace of a crash only when stacktraces are
+%% on. In dev the page of a crash without one says how to turn them on, the
+%% first time.
+crash_without_a_stacktrace_names_the_setting_in_dev_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Warnings = fun(CrashInfo) ->
+                            {_Page, Events} =
+                                nova_test_log:collect(
+                                  fun() -> nova_error_controller:server_error((json_req())#{crash_info => CrashInfo}) end),
+                            [Message || {warning, {report, #{msg := Message}}} <- Events]
+                    end,
+         Crash = #{status_code => 500, class => error, reason => boom},
+         persistent_term:erase({nova_error_controller, stacktrace_hint}),
+         ?assertEqual([], Warnings(Crash#{stacktrace => []})),
+         ?assertEqual([], Warnings(#{status_code => 500})),
+         application:set_env(nova, environment, prod),
+         try
+             ?assertEqual([], Warnings(Crash))
+         after
+             application:set_env(nova, environment, dev)
+         end,
+         [<<Message/binary>>] = Warnings(Crash),
+         ?assertNotEqual(nomatch, binary:match(Message, ~"nova:use_stacktrace(true)")),
+         ?assertEqual([], Warnings(Crash))
+     end}.
+
+%% The pages are negotiated as RFC 9110 12.5.1 has it: the most specific
+%% range that covers a type gives its quality, the type with the higher
+%% quality wins, and of two the client likes the same the one it names first.
+%% JSON wins when one range covers both.
+accept_header_chooses_the_body_test_() ->
+    Chosen = [{undefined, json},
+              {~"*/*", json},
+              {~"text/html", html},
+              {~"application/json", json},
+              {~"application/json; charset=utf-8", json},
+              {~"text/*", html},
+              {~"application/*", json},
+              {~"application/*;q=0.5, text/html", html},
+              {~"text/html;q=0, */*", json},
+              {~"application/json;q=0, */*", html},
+              {~"text/html, application/json", html},
+              {~"application/json, text/html", json},
+              {~"text/html;q=0.5, application/json;q=0.6", json},
+              {~"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", html},
+              {~" Text/HTML ;q=0.9", html},
+              {~"image/png", none},
+              {~"*/*;q=0", none},
+              {~"text/html;q=0", none},
+              {~" , \t", none},
+              {~"text/html;q=abc", json},
+              {~"/", json}],
+    [{iolist_to_binary(io_lib:format("~p", [Accept])),
+      ?_assertEqual(Type, nova_error_controller:response_type(accepting(Accept)))}
+     || {Accept, Type} <- Chosen].
+
+accept_header_chooses_the_body_of_both_pages_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Req = accepting(~"*/*"),
+         {status, 404, NotFound, _} = nova_error_controller:not_found(Req),
+         {status, 500, ServerError, _} = nova_error_controller:server_error(Req),
+         ?assertEqual(~"application/json", maps:get(~"content-type", NotFound)),
+         ?assertEqual(~"application/json", maps:get(~"content-type", ServerError))
+     end}.
+
+%% Cowboy joins repeated accept headers, up to some hundred kilobytes, so
+%% reading them must stay linear.
+huge_accept_header_is_cheap_test_() ->
+    [?_test(begin
+                {Micros, Type} = timer:tc(fun() -> nova_error_controller:response_type(accepting(Accept)) end),
+                ?assertEqual(Expected, Type),
+                ?assert(Micros < Limit)
+            end)
+     || {Accept, Expected, Limit} <- [{binary:copy(~",", 400000), none, 100000},
+                                      {binary:copy(~"image/png;q=0.5, ", 25000), none, 1000000},
+                                      {<<(binary:copy(~"image/png;q=0.5, ", 25000))/binary, "text/html">>, html,
+                                       1000000}]].
+
+accepting(undefined) ->
+    nova_test_helper:mock_req(~"GET", ~"/");
+accepting(Accept) ->
+    nova_test_helper:with_header(~"accept", Accept, nova_test_helper:mock_req(~"GET", ~"/")).
