@@ -162,9 +162,7 @@ handle_status({status, Status, ExtraHeaders, Body}, _Callback, Req) ->
     {ok, Req2};
 handle_status({status, Status, ExtraHeaders}, _Callback, Req) ->
     Req0 = cowboy_req:set_resp_headers(ExtraHeaders, Req),
-    Req1 = Req0#{resp_status_code => Status},
-    {ok, Req2, _Env} =  nova_router:render_status_page(Status, #{}, Req1),
-    {ok, Req2};
+    {ok, Req0#{resp_status_code => Status}};
 handle_status({status, Status}, Callback, State) when is_integer(Status) ->
     handle_status({status, Status, #{}}, Callback, State).
 
