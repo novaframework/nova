@@ -125,9 +125,12 @@ is_safe_method(_) -> false.
 %% path let `/api` cover `/apikeys`, and `/api/../admin` reach `/admin`.
 -spec is_excluded_path(Path :: binary(), Prefixes :: [iodata()]) -> boolean().
 is_excluded_path(Path, Prefixes) ->
-    Segments = nova_routing_trie:canonical_segments(Path),
+    Segments = routed_segments(Path),
     [] =/= [Prefix || Prefix <- Prefixes,
-                      lists:prefix(nova_routing_trie:canonical_segments(iolist_to_binary(Prefix)), Segments)].
+                      lists:prefix(routed_segments(iolist_to_binary(Prefix)), Segments)].
+
+routed_segments(Path) ->
+    binary:split(nova_router:canonical_path(Path), ~"/", [global, trim_all]).
 
 get_submitted_token(Req, FieldName, HeaderName) ->
     case cowboy_req:header(HeaderName, Req) of

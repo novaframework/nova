@@ -174,7 +174,11 @@ find(HostIn, Path, ComparatorIn, Trie) ->
     end.
 
 %%--------------------------------------------------------------------
--doc "The segments `find/4` matches a request path on: the query string and fragment removed, empty segments dropped, and `.` and `..` resolved without leaving the root. Anything that decides by path has to use these, not the raw path, to agree with the route that is matched.".
+%% The segments find/4 matches a request path on: the query string and
+%% fragment removed, empty segments dropped, and `.' and `..' resolved
+%% without leaving the root. For nova_router:canonical_path/1, which is what
+%% anything that decides by path calls.
+-doc false.
 -spec canonical_segments(binary()) -> [binary()].
 canonical_segments(Path) when is_binary(Path) ->
     canonicalise(split(Path), []).

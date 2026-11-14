@@ -109,7 +109,11 @@ compile(Apps, DispatchKey) ->
     Dispatch.
 
 %%--------------------------------------------------------------------
--doc "As compile/2, but starting from an empty routing table that replaces whatever is stored under `DispatchKey`. A listener that is starting uses this, so routes and security callbacks from an earlier run in the same VM are not carried over.".
+%% As compile/2, but starting from an empty routing table that replaces
+%% whatever is stored under DispatchKey. For nova_sup: a listener that is
+%% starting uses this, so routes and security callbacks from an earlier run
+%% in the same VM are not carried over.
+-doc false.
 -spec compile_fresh(Apps :: [atom() | {atom(), map()}], DispatchKey :: dispatch_key()) ->
           nova_routing_trie:trie().
 compile_fresh(Apps, DispatchKey) ->
