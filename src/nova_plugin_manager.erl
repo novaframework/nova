@@ -36,8 +36,9 @@
 
 -record(plugin, {
                  module :: atom(),
-                 name :: binary(),
-                 version :: binary(),
+                 %% As plugin_info/0 of the plugin gave them.
+                 name :: term(),
+                 version :: term(),
                  state :: nova:state()
                 }).
 
@@ -172,7 +173,7 @@ init([]) ->
           {noreply, NewState :: term(), hibernate} |
           {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
           {stop, Reason :: term(), NewState :: term()}.
-handle_call({set_state, Module, P, NewState}, _From, State) ->
+handle_call({set_state, Module, #plugin{} = P, NewState}, _From, State) ->
     ?LOG_DEBUG(<<"Set state for plugin ~p; NewState: ~p">>, [Module, NewState]),
     ets:insert(?TABLE, P#plugin{state = NewState}),
     {reply, ok, State};
@@ -196,7 +197,7 @@ handle_call(_Request, _From, State) ->
           {noreply, NewState :: term(), Timeout :: timeout()} |
           {noreply, NewState :: term(), hibernate} |
           {stop, Reason :: term(), NewState :: term()}.
-handle_cast({add_plugin, Module, Name, Version}, State) ->
+handle_cast({add_plugin, Module, Name, Version}, State) when is_atom(Module) ->
     PluginState =
         case erlang:function_exported(Module, init, 0) of
             true ->
