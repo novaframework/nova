@@ -87,6 +87,30 @@ modulate_state_parse_qs_list_test() ->
     ?assert(is_list(Parsed)),
     ?assertEqual(2, length(Parsed)).
 
+modulate_state_parse_qs_false_test() ->
+    Req = (nova_test_helper:mock_req(~"GET", ~"/"))#{qs => ~"a=%zz"},
+    ?assertEqual({ok, Req, state}, nova_request_plugin:modulate_state(Req, [{parse_qs, false}], state)).
+
+modulate_state_malformed_qs_test() ->
+    Req = (nova_test_helper:mock_req(~"GET", ~"/"))#{qs => ~"a=%zz"},
+    ?assertEqual({stop, {status, 400}, Req, state},
+                 nova_request_plugin:modulate_state(Req, [{parse_qs, true}], state)).
+
+modulate_state_urlencoded_body_errors_test() ->
+    Post = fun(Body) ->
+                   (nova_test_helper:with_content_type(~"application/x-www-form-urlencoded",
+                                                       nova_test_helper:mock_req(~"POST", ~"/")))#{body => Body}
+           end,
+    Fields = fun(Count) ->
+                     iolist_to_binary(lists:join(~"&", [[~"f", integer_to_binary(N), ~"=v"] || N <- lists:seq(1, Count)]))
+             end,
+    ?assertMatch({ok, #{params := #{~"f100" := ~"v"}}, state},
+                 nova_request_plugin:modulate_state(Post(Fields(100)), [{read_urlencoded_body, true}], state)),
+    ?assertMatch({stop, {status, 413}, _Req, state},
+                 nova_request_plugin:modulate_state(Post(Fields(101)), [{read_urlencoded_body, true}], state)),
+    ?assertMatch({stop, {status, 400}, _Req, state},
+                 nova_request_plugin:modulate_state(Post(~"a=%zz"), [{read_urlencoded_body, true}], state)).
+
 %%====================================================================
 %% modulate_state/3 — decode_json_body on POST with body
 %%====================================================================

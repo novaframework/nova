@@ -232,7 +232,7 @@ This plugins handle incoming data and can transform them to erlang maps dependin
                                      parse_qs => true|list}}
 ```
 
-An empty or malformed JSON body is answered with a bare `400` (no body, no status page).
+An empty or malformed JSON body is answered with a bare `400` (no body, no status page). So is a query string or a urlencoded body that cannot be parsed, and a query string with more than 100 keys. A urlencoded body with more than 100 fields gets a bare `413`. Each is logged as a warning. `parse_qs => false` leaves the query string alone.
 
 The body is read only when `decode_json_body` or `read_urlencoded_body` is set,
 and at most `max_body_length` bytes of it (default `1000000`, 1 MB). A body

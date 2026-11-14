@@ -20,8 +20,8 @@
 -spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
                          {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
                          {stop, Req0 :: cowboy_req:req(), NewState :: any()} |
-                         {stop, {status, 408 | 413, #{binary() => binary()}}, Req0 :: cowboy_req:req(),
-                          NewState :: any()}.
+                         {stop, {status, 400 | 413} | {status, 408 | 413, #{binary() => binary()}},
+                          Req0 :: cowboy_req:req(), NewState :: any()}.
 pre_request(Req, _Env, Options, State) ->
     ListOptions = maps:to_list(Options),
     MaxLength = limit(max_body_length, Options, ?DEFAULT_MAX_BODY_LENGTH, 0),
@@ -81,20 +81,29 @@ modulate_state(Req = #{body := Body}, [{decode_json_body, true}|Tl], State) ->
 modulate_state(Req = #{body := Body}, [{read_urlencoded_body, true}|Tl], State) ->
     case content_type(Req) of
         {~"application", ~"x-www-form-urlencoded"} ->
-            Params = maps:from_list(cow_qs:parse_qs(Body)),
-            modulate_state(Req#{params => Params}, Tl, State);
+            try maps:from_list(cow_qs:parse_qs(Body)) of
+                Params -> modulate_state(Req#{params => Params}, Tl, State)
+            catch
+                error:limit_reached -> refuse(413, ~"Too many fields in the urlencoded body", Req, State);
+                error:_ -> refuse(400, ~"Malformed urlencoded body", Req, State)
+            end;
         _ ->
             modulate_state(Req, Tl, State)
     end;
-modulate_state(Req, [{parse_qs, Type}|T1], State) ->
-    Qs = cowboy_req:parse_qs(Req),
-    case Type of
-        true -> MapQs = maps:from_list(Qs),
-                modulate_state(Req#{parsed_qs => MapQs}, T1, State);
-        list -> modulate_state(Req#{parsed_qs => Qs}, T1, State)
+modulate_state(Req, [{parse_qs, Type}|Tl], State) when Type =:= true; Type =:= list ->
+    try cowboy_req:parse_qs(Req) of
+        Qs when Type =:= true -> modulate_state(Req#{parsed_qs => maps:from_list(Qs)}, Tl, State);
+        Qs -> modulate_state(Req#{parsed_qs => Qs}, Tl, State)
+    catch
+        exit:{request_error, _, _} -> refuse(400, ~"Malformed query string", Req, State)
     end;
 modulate_state(Req, [_|Tl], State) ->
     modulate_state(Req, Tl, State).
+
+%% What the client sent is left out of the log line.
+refuse(Status, Reason, Req, State) ->
+    ?LOG_WARNING(#{msg => ~"Request refused", reason => Reason, status_code => Status}),
+    {stop, {status, Status}, Req, State}.
 
 decode_json(Req, <<>>, _Tl, State) ->
     Req400 = cowboy_req:reply(400, Req),
