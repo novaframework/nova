@@ -49,7 +49,7 @@ handle_stream({test_stream, IdleTimeout}, _Callback, Req0) ->
          cowboy_req:stream_body([~"data: chunk-", integer_to_binary(N), ~"\n\n"], nofin, Req)
      end || N <- lists:seq(1, 5)],
     cowboy_req:stream_body(<<>>, fin, Req),
-    exit(normal).
+    {ok, Req}.
 
 stream_is_cut_at_the_idle_timeout(Config) ->
     {200, Body} = nova_test_listener:get(?config(port, Config), "/stream"),
