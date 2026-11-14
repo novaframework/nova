@@ -26,18 +26,15 @@ execute(Req = #{host := Host}, Env = #{secure := Callback}) ->
                          reason => Reason,
                          stacktrace => Stacktrace}),
             Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 500, stacktrace => Stacktrace}),
-            {ok, Req0, _Env} = nova_router:render_status_page(Host, 500, #{}, Req#{crash_info => Payload}, Env),
-            Req1 = cowboy_req:reply(500, Req0),
-            {stop, Req1};
+            %% On to nova_handler with the 500 page in place of the route.
+            nova_router:render_status_page(Host, 500, #{}, Req#{crash_info => Payload}, Env);
         Class:Reason0 ->
             Reason = nova_redact:term(Reason0),
             ?LOG_ERROR(#{msg => <<"Security handler crashed">>,
                          class => Class,
                          reason => Reason}),
             Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 500}),
-            {ok, Req0, _Env} = nova_router:render_status_page(Host, 500, #{}, Req#{crash_info => Payload}, Env),
-            Req1 = cowboy_req:reply(500, Req0),
-            {stop, Req1}
+            nova_router:render_status_page(Host, 500, #{}, Req#{crash_info => Payload}, Env)
     end.
 
 

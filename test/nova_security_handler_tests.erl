@@ -215,20 +215,24 @@ callback_unexpected_value_test_() ->
     end}.
 
 %%====================================================================
-%% Callback crashes -> 500 stop (stacktrace disabled)
+%% Callback crashes -> the 500 page in place of the route (stacktrace disabled)
 %%====================================================================
 
 callback_crash_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         Req = req(),
         Callback = fun(_) -> error(boom) end,
-        Env = (env())#{secure => Callback},
-        {stop, Req1} = nova_security_handler:execute(Req, Env),
-        ?assertEqual(500, maps:get(resp_status_code, Req1))
+        Route = fun ?MODULE:module_info/1,
+        Env = (env())#{secure => Callback, callback => Route},
+        {ok, Req1, Env1} = nova_security_handler:execute(Req, Env),
+        ?assertEqual(500, maps:get(resp_status_code, Req1)),
+        ?assertNot(is_map_key(has_sent_resp, Req1)),
+        ?assertEqual(false, maps:get(secure, Env1)),
+        ?assertNotEqual(Route, maps:get(callback, Env1))
     end}.
 
 %%====================================================================
-%% Callback crashes with stacktrace enabled -> 500 stop
+%% Callback crashes with stacktrace enabled -> the 500 page as well
 %%====================================================================
 
 callback_crash_stacktrace_test_() ->
@@ -237,7 +241,7 @@ callback_crash_stacktrace_test_() ->
         Req = req(),
         Callback = fun(_) -> error(boom) end,
         Env = (env())#{secure => Callback},
-        {stop, Req1} = nova_security_handler:execute(Req, Env),
+        {ok, Req1, _Env1} = nova_security_handler:execute(Req, Env),
         ?assertEqual(500, maps:get(resp_status_code, Req1)),
         ?assert(is_map(maps:get(crash_info, Req1))),
         CrashInfo = maps:get(crash_info, Req1),

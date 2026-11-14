@@ -13,7 +13,9 @@
          thrown_404_with_a_throwing_page_renders_the_500_page/1,
          both_pages_crashing_run_once_each/1,
          thrown_500_without_a_map_is_a_500/1,
-         returned_status_keeps_the_request_of_the_route/1]).
+         returned_status_keeps_the_request_of_the_route/1,
+         crashing_security_callback_renders_the_500_page/1,
+         crashing_security_callback_does_not_upgrade/1]).
 
 -export([observed/1]).
 
@@ -33,7 +35,9 @@ all() ->
      thrown_404_with_a_throwing_page_renders_the_500_page,
      both_pages_crashing_run_once_each,
      thrown_500_without_a_map_is_a_500,
-     returned_status_keeps_the_request_of_the_route].
+     returned_status_keeps_the_request_of_the_route,
+     crashing_security_callback_renders_the_500_page,
+     crashing_security_callback_does_not_upgrade].
 
 init_per_suite(Config) ->
     Routes = [#{prefix => "",
@@ -43,6 +47,11 @@ init_per_suite(Config) ->
                            {"/gone", fun ?PAGES:throw_404/1, #{methods => [get]}},
                            {404, fun ?PAGES:not_found/1, #{}},
                            {500, fun ?PAGES:server_error/1, #{}}]},
+              #{prefix => "/guarded",
+                security => fun ?PAGES:crashing_security/1,
+                plugins => [],
+                routes => [{"/page", fun ?PAGES:bare_404/1, #{methods => [get]}},
+                           {"/ws", nova_ws_lifecycle_pages, #{protocol => ws}}]},
               #{prefix => "/bare",
                 plugins => [{post_request, ?PAGES, #{}}],
                 routes => [{"/:id", fun ?PAGES:bare_404/1, #{methods => [get], extra_state => #{kept => true}}}]}],
@@ -114,6 +123,16 @@ thrown_500_without_a_map_is_a_500(Config) ->
 returned_status_keeps_the_request_of_the_route(Config) ->
     ?assertEqual({404, <<>>}, nova_test_listener:get(?config(port, Config), "/bare/7")),
     ?assertEqual([{post_request, #{~"id" => ~"7"}, #{kept => true}}], observations()).
+
+%% As for a crashing plugin or controller, and without reaching the route.
+crashing_security_callback_renders_the_500_page(Config) ->
+    ?assertEqual({500, ~"page 500"}, nova_test_listener:get(?config(port, Config), "/guarded/page")),
+    ?assertEqual([{page, 500}], observations()).
+
+crashing_security_callback_does_not_upgrade(Config) ->
+    ?assertMatch(<<"HTTP/1.1 500", _/binary>>,
+                 nova_test_listener:websocket_handshake(?config(port, Config), "/guarded/ws")),
+    ?assertEqual([{page, 500}], observations()).
 
 observations() ->
     receive

@@ -4,7 +4,7 @@
 -module(nova_status_page_pages).
 -behaviour(nova_plugin).
 
--export([crash/1, throw_500/1, throw_404/1, bare_404/1, not_found/1, server_error/1]).
+-export([crash/1, throw_500/1, throw_404/1, bare_404/1, crashing_security/1, not_found/1, server_error/1]).
 -export([post_request/4, plugin_info/0]).
 
 crash(_Req) ->
@@ -18,6 +18,9 @@ throw_404(_Req) ->
 
 bare_404(_Req) ->
     {status, 404}.
+
+crashing_security(_Req) ->
+    error(security_failed).
 
 not_found(Req) ->
     page(404, cowboy_req:header(~"x-404", Req, ~"ok")).
