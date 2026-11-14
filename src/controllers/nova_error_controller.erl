@@ -16,19 +16,12 @@ status_code(Req) ->
     {status, maps:get(resp_status_code, Req, 200)}.
 
 not_found(Req) ->
-    case response_type(Req) of
-        json ->
-            Json = nova_json:encode(#{message => ~"Resource not found"}),
-            {status, 404, #{<<"content-type">> => <<"application/json">>}, Json};
-        html ->
-            Variables = #{status => "Could not find the page you were looking for",
-                          title => "404 Not found",
-                          message => "We could not find the page you were looking for"},
-            {ok, Body} = nova_basic_handler:render_dtl(nova_error_dtl, Variables, []),
-            {status, 404, #{<<"content-type">> => <<"text/html">>}, Body};
-        none ->
-            {status, 404, #{<<"content-type">> => <<"text/html">>}, <<>>}
-    end.
+    page(404,
+         #{message => ~"Resource not found"},
+         #{status => "Could not find the page you were looking for",
+           title => "404 Not found",
+           message => "We could not find the page you were looking for"},
+         Req).
 
 server_error(#{crash_info := #{status_code := StatusCode} = CrashInfo} = Req) ->
     Variables = debug_details(#{status => maps:get(status, CrashInfo, ~"Internal Server Error"),
@@ -53,24 +46,23 @@ server_error(Req) ->
     server_error(Req#{crash_info => #{status_code => 500}}).
 
 render(StatusCode, Variables, Req) ->
-    case response_type(Req) of
-        json ->
-            Json = nova_json:encode(Variables),
-            {status, StatusCode, #{~"content-type" => ~"application/json"}, Json};
-        html ->
-            html_page(StatusCode, Variables);
-        none ->
-            {status, StatusCode, #{~"content-type" => ~"text/html"}, <<>>}
-    end.
+    page(StatusCode, Variables, Variables, Req).
 
-%% render_error_pages is about the HTML page only.
-html_page(StatusCode, Variables) ->
-    case application:get_env(nova, render_error_pages, true) of
-        true ->
+%% Every page of Nova leaves from here, and this is the one place that reads
+%% render_error_pages: with it off the status is sent bare to every client,
+%% whatever form it accepts. The status routes of an application are not
+%% pages of Nova and run either way.
+page(StatusCode, Json, Variables, Req) ->
+    case application:get_env(nova, render_error_pages, true) =:= true andalso response_type(Req) of
+        false ->
+            {status, StatusCode};
+        json ->
+            {status, StatusCode, #{~"content-type" => ~"application/json"}, nova_json:encode(Json)};
+        html ->
             {ok, Body} = nova_basic_handler:render_dtl(nova_error_dtl, Variables, []),
             {status, StatusCode, #{~"content-type" => ~"text/html"}, Body};
-        _ ->
-            {status, StatusCode}
+        none ->
+            {status, StatusCode, #{~"content-type" => ~"text/html"}, <<>>}
     end.
 
 %% A client that sends no accept header gets JSON, as does one whose header

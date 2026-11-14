@@ -5,7 +5,7 @@
 -behaviour(nova_plugin).
 
 -export([crash/1, throw_500/1, throw_404/1, bare_404/1, crashing_security/1, not_found/1, server_error/1]).
--export([post_request/4, plugin_info/0]).
+-export([pre_request/4, post_request/4, plugin_info/0]).
 
 crash(_Req) ->
     error(controller_failed).
@@ -35,6 +35,9 @@ page(Status, Behaviour) ->
         ~"crash" -> error(page_failed);
         ~"throw" -> throw({Status, page_failed})
     end.
+
+pre_request(_Req, _Env, _Options, _State) ->
+    error(plugin_failed).
 
 post_request(Req, _Env, _Options, State) ->
     nova_test_observer:observed(nova_status_page_observer, {post_request, maps:get(bindings, Req, undefined),

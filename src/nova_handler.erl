@@ -315,20 +315,15 @@ without_refused_body(StatusCode, Req) when StatusCode =:= 204; StatusCode =:= 30
 without_refused_body(_StatusCode, Req) ->
     Req.
 
+%% The status route of the application or, for a 404 and a 500 it has none
+%% for, the page of Nova. A status nobody has a page for is sent bare.
 render_response(Req, Env, StatusCode) ->
-    case application:get_env(nova, render_error_pages, true) of
-        true ->
-            case nova_router:lookup_url('_', StatusCode, '_', nova_router:dispatch_key(Env)) of
-                {error, _} ->
-                    %% Render the internal view of nova
-                    {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, fun erlang:date/0, Req),
-                    send_response(Req0, Env);
-                {ok, _Bindings, #nova_handler_value{callback = Callback}} ->
-                    execute_controller(Req, Env#{app => nova, callback => Callback}, StatusCode)
-            end;
-        false ->
-            {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, fun(_) -> ok end, Req),
-            send_response(Req0, Env)
+    case nova_router:lookup_url('_', StatusCode, '_', nova_router:dispatch_key(Env)) of
+        {error, _} ->
+            {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, fun erlang:date/0, Req),
+            send_response(Req0, Env);
+        {ok, _Bindings, #nova_handler_value{callback = Callback}} ->
+            execute_controller(Req, Env#{app => nova, callback => Callback}, StatusCode)
     end.
 
 

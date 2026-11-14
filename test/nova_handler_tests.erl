@@ -10,7 +10,6 @@
 setup() ->
     Prev = nova_test_helper:setup_nova_env(),
     application:set_env(nova, dispatch_backend, persistent_term),
-    application:set_env(nova, render_error_pages, false),
     %% Set up dispatch table for render_response/3
     Tree = nova_routing_trie:new(#{use_strict => false, convert_to_binary => true}),
     persistent_term:put(nova_dispatch, Tree),
@@ -383,25 +382,20 @@ controller_telemetry_exception() ->
                  Exception).
 
 controller_telemetry_status_page() ->
-    application:set_env(nova, render_error_pages, true),
     ErrorPage = #nova_handler_value{app = test_app, callback = fun ?MODULE:error_page/1, plugins = [],
                                     secure = false, extra_state = #{}},
     {ok, Tree} = nova_routing_trie:insert('_', 500, '_', ErrorPage, persistent_term:get(nova_dispatch)),
     persistent_term:put(nova_dispatch, Tree),
-    try
-        Env = #{callback => fun ?MODULE:crashing_action/1, app => test_app, secure => false,
-                controller_data => #{}},
-        {ok, Req1, _Env1} = nova_handler:execute(nova_test_helper:mock_req(~"GET", ~"/"), Env),
-        ?assertEqual(500, maps:get(resp_status_code, Req1)),
-        {[nova, controller, start], _, #{status_page := false}} = next_event(),
-        {[nova, controller, exception], _, _} = next_event(),
-        {[nova, controller, start], _, PageStart} = next_event(),
-        ?assertMatch(#{app := nova, action := error_page, status_page := true}, PageStart),
-        {[nova, controller, stop], _, PageStop} = next_event(),
-        ?assertMatch(#{status := 500, status_page := true}, PageStop)
-    after
-        application:set_env(nova, render_error_pages, false)
-    end.
+    Env = #{callback => fun ?MODULE:crashing_action/1, app => test_app, secure => false,
+            controller_data => #{}},
+    {ok, Req1, _Env1} = nova_handler:execute(nova_test_helper:mock_req(~"GET", ~"/"), Env),
+    ?assertEqual(500, maps:get(resp_status_code, Req1)),
+    {[nova, controller, start], _, #{status_page := false}} = next_event(),
+    {[nova, controller, exception], _, _} = next_event(),
+    {[nova, controller, start], _, PageStart} = next_event(),
+    ?assertMatch(#{app := nova, action := error_page, status_page := true}, PageStart),
+    {[nova, controller, stop], _, PageStop} = next_event(),
+    ?assertMatch(#{status := 500, status_page := true}, PageStop).
 
 controller_unsupported_return() ->
     Env = #{callback => fun(_) -> {unsupported, value} end, app => test_app, secure => false,
