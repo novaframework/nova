@@ -68,6 +68,18 @@ no_plugins_key_test_() ->
     end}.
 
 %%====================================================================
+%% A plugin given as {Module, Options} is called like one given as a fun
+%%====================================================================
+
+plugin_given_as_a_module_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Req = req([{pre_request, [{nova_plugin_once_pages, #{name => unit}}]}]),
+        {ok, Req1, Env1} = nova_plugin_handler:execute(Req, env()),
+        ?assertNot(is_map_key(crash_info, Req1)),
+        ?assertEqual(pre_request, maps:get(plugin_state, Env1))
+    end}.
+
+%%====================================================================
 %% Empty pre_request plugins -> sets plugin_state
 %%====================================================================
 

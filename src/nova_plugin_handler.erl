@@ -37,7 +37,7 @@ after_security(Req, Env) ->
 run_plugins([], Callback, Req, Env) ->
     {ok, Req, Env#{plugin_state => Callback}};
 run_plugins([{Module, Options}|Tl], Callback, Req, Env) when is_atom(Module) ->
-    run_plugins([{fun Module:Callback/1, Options}|Tl], Callback, Req, Env);
+    run_plugins([{fun Module:Callback/4, Options}|Tl], Callback, Req, Env);
 run_plugins([{Callback, Options}|Tl], CallbackType, Req, Env) when is_function(Callback) ->
     %% Fetch state
     State =
