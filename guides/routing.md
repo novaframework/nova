@@ -305,9 +305,8 @@ the application's `nova_apps` options to combine them instead (available since
 route entry of the application the entry names. The application that starts
 the listener sets it for its own routes with an entry for itself in its own
 `nova_apps`, as above, and for an application it includes in the entry of
-that application. A
-`plugin_strategy` key on a single route entry is ignored, and a warning is
-logged once per application.
+that application. A `plugin_strategy` key on a single route entry is
+ignored, and a warning is logged once per application.
 
 | Value | Plugins used |
 |---|---|
