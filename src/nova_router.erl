@@ -30,6 +30,7 @@
 
          %% Fetch information about the routing table
          plugins/0,
+         forget_plugins/0,
          compiled_apps/0,
          compiled_apps/1,
 
@@ -88,6 +89,13 @@ compiled_apps(DispatchKey) ->
 plugins() ->
     StorageBackend = storage_backend(),
     StorageBackend:get(?NOVA_PLUGINS, []).
+
+-doc false.
+-spec forget_plugins() -> ok.
+forget_plugins() ->
+    StorageBackend = storage_backend(),
+    StorageBackend:put(?NOVA_PLUGINS, []),
+    ok.
 
 -spec compile(Apps :: [atom() | {atom(), map()}]) -> nova_routing_trie:trie().
 compile(Apps) ->

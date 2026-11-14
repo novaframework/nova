@@ -9,7 +9,8 @@
          pubsub_scope_is_restarted/1,
          pubsub_scope_started_elsewhere_is_left_alone/1,
          unset_environment_is_warned_about_once/1,
-         set_environment_is_not_warned_about/1
+         set_environment_is_not_warned_about/1,
+         plugins_of_an_earlier_run_are_forgotten/1
         ]).
 
 -include_lib("stdlib/include/assert.hrl").
@@ -21,7 +22,8 @@ all() ->
      pubsub_scope_is_restarted,
      pubsub_scope_started_elsewhere_is_left_alone,
      unset_environment_is_warned_about_once,
-     set_environment_is_not_warned_about
+     set_environment_is_not_warned_about,
+     plugins_of_an_earlier_run_are_forgotten
     ].
 
 end_per_testcase(_Case, _Config) ->
@@ -83,6 +85,18 @@ set_environment_is_not_warned_about(_Config) ->
          ?assertEqual([], environment_warnings(Events)),
          ok = nova_test_listener:stop()
      end || Environment <- [dev, prod]].
+
+%% nova_plugin_manager starts every plugin the router has listed, also after
+%% a restart, so the list must not carry over from a run with other routes.
+plugins_of_an_earlier_run_are_forgotten(_Config) ->
+    Routes = [#{prefix => "/earlier",
+                plugins => [{pre_request, nova_plugin_once_pages, #{name => earlier}}],
+                routes => []}],
+    _ = nova_test_listener:start(#{host => Routes}),
+    ?assert(lists:member(nova_plugin_once_pages, nova_router:plugins())),
+    ok = nova_test_listener:stop(),
+    _ = nova_test_listener:start(#{}),
+    ?assertNot(lists:member(nova_plugin_once_pages, nova_router:plugins())).
 
 environment_warnings(Events) ->
     [Report || {warning, {report, #{environment := _} = Report}} <- Events].

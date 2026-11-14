@@ -15,6 +15,10 @@
 
 start(_StartType, _StartArgs) ->
     warn_about_unset_environment(),
+    %% The plugins the router lists are those of the routes compiled from
+    %% here on. The list is stored outside the supervision tree and would
+    %% otherwise still hold those of an earlier run in this VM.
+    nova_router:forget_plugins(),
     nova_sup:start_link().
 
 prep_stop(State) ->
