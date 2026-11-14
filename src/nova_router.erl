@@ -568,7 +568,7 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
 
             Methods = maps:get(methods, Options, ['_']),
 
-            ExtraState = maps:get(extra_state, Options, undefined),
+            ExtraState = route_extra_state(Options, Value#nova_handler_value.extra_state),
             Value0 = Value#nova_handler_value{extra_state = ExtraState},
 
             Value1 = Value0#nova_handler_value{callback = Callback,
@@ -695,6 +695,12 @@ route_plugins({ok, _Bindings, Value, _Pathinfo}) -> route_plugins(Value);
 route_plugins(#nova_handler_value{plugins = Plugins})   -> Plugins;
 route_plugins(#cowboy_handler_value{plugins = Plugins}) -> Plugins;
 route_plugins(_NoRoute)                          -> undefined.
+
+%% A route without an extra_state of its own takes the one of its route
+%% group. A group that declares none carries #{}, which is none for a route.
+route_extra_state(#{extra_state := ExtraState}, _GroupExtraState) -> ExtraState;
+route_extra_state(_Options, GroupExtraState) when GroupExtraState =:= #{} -> undefined;
+route_extra_state(_Options, GroupExtraState) -> GroupExtraState.
 
 %% The routing record of a websocket route has no field for extra_state and
 %% has to keep its arity, so the state travels in the handler arguments: the

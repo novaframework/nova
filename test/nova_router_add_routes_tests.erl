@@ -88,6 +88,29 @@ route_entry_plugin_strategy_is_warned_about_once_test_() ->
         end
     end}.
 
+%% A route that sets no extra_state gets the one of its route group, as a
+%% websocket route does. One in a group that declares none has undefined.
+route_takes_the_extra_state_of_its_group_test_() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
+        Callback = fun(_) -> {json, #{}} end,
+        Routes = [#{prefix => "/group", extra_state => #{role => admin},
+                    routes => [{"/inherits", Callback, #{methods => [get]}},
+                               {"/bare", Callback},
+                               {"/own", Callback, #{methods => [get], extra_state => #{role => guest}}},
+                               {"/files/[...]", Callback, #{methods => [get]}}]},
+                  #{prefix => "/plain", routes => [{"/none", Callback, #{methods => [get]}}]}],
+        ok = nova_router:add_routes(extra_state_app, Routes),
+        ?assertEqual(#{role => admin}, extra_state(~"/group/inherits")),
+        ?assertEqual(#{role => admin}, extra_state(~"/group/bare")),
+        ?assertEqual(#{role => guest}, extra_state(~"/group/own")),
+        ?assertEqual(#{role => admin, pathinfo => [~"a", ~"b"]}, extra_state(~"/group/files/a/b")),
+        ?assertEqual(undefined, extra_state(~"/plain/none"))
+    end}.
+
+extra_state(Path) ->
+    {ok, Req, _Env} = nova_router:execute(nova_test_helper:mock_req(~"GET", Path), #{}),
+    maps:get(extra_state, Req).
+
 %% A security callback is declared with `security` on a route group.
 %% Written on a single route, or as `secure` on the group, it is not read:
 %% the routes are added as before, and each misplaced key is named.
