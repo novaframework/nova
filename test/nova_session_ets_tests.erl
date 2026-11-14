@@ -23,7 +23,7 @@ cleanup(Pid) ->
     ok.
 
 sync() ->
-    nova_session_ets:get_value(<<"__sync__">>, <<"__sync__">>).
+    gen_server:call(nova_session_ets, sync).
 
 %%====================================================================
 %% Test generators
@@ -64,6 +64,80 @@ expiry_test_() ->
       fun session_expires_after_max_age/0,
       fun update_does_not_extend_max_age/0
      ]}.
+
+cap_test_() ->
+    {foreach,
+     fun() -> application:set_env(nova, max_sessions, 10), setup() end,
+     fun(Pid) ->
+             cleanup(Pid),
+             application:unset_env(nova, max_sessions),
+             application:unset_env(nova, session_max_age)
+     end,
+     [
+      fun new_sessions_are_refused_at_the_cap/0,
+      fun existing_session_is_written_at_the_cap/0,
+      fun deleted_session_makes_room/0,
+      fun expired_sessions_make_room/0,
+      fun cap_can_be_turned_off/0
+     ]}.
+
+reads_test_() ->
+    {foreach,
+     fun setup/0,
+     fun cleanup/1,
+     [
+      fun get_value_does_not_wait_for_the_server/0
+     ]}.
+
+get_value_without_the_server_test() ->
+    ?assertEqual(undefined, whereis(nova_session_ets)),
+    ?assertEqual({error, not_found}, nova_session_ets:get_value(~"s", ~"k")).
+
+fill(Count) ->
+    [ok = nova_session_ets:set_value(integer_to_binary(N), ~"k", ~"v") || N <- lists:seq(1, Count)],
+    ok.
+
+new_sessions_are_refused_at_the_cap() ->
+    fill(10),
+    ?assertEqual({error, session_store_full}, nova_session_ets:set_value(~"eleventh", ~"k", ~"v")),
+    ?assertNot(nova_session_ets:session_exists(~"eleventh")),
+    ?assertEqual(10, ets:info(nova_session_ets_entries, size)).
+
+existing_session_is_written_at_the_cap() ->
+    fill(10),
+    ?assertEqual(ok, nova_session_ets:set_value(~"3", ~"other", ~"value")),
+    ?assertEqual({ok, ~"value"}, nova_session_ets:get_value(~"3", ~"other")).
+
+deleted_session_makes_room() ->
+    fill(10),
+    ok = nova_session_ets:delete_value(~"3"),
+    ?assertEqual(ok, nova_session_ets:set_value(~"eleventh", ~"k", ~"v")),
+    ?assertEqual({error, session_store_full}, nova_session_ets:set_value(~"twelfth", ~"k", ~"v")).
+
+%% Expired rows are only swept once a minute, so a full table is swept
+%% before a new session is refused.
+expired_sessions_make_room() ->
+    application:set_env(nova, session_max_age, 1),
+    fill(10),
+    timer:sleep(1100),
+    ?assertEqual(ok, nova_session_ets:set_value(~"eleventh", ~"k", ~"v")),
+    ?assertEqual(1, ets:info(nova_session_ets_entries, size)).
+
+cap_can_be_turned_off() ->
+    application:set_env(nova, max_sessions, infinity),
+    ?assertEqual(ok, fill(25)).
+
+%% Reads go to the table, so they do not queue behind the writes.
+get_value_does_not_wait_for_the_server() ->
+    ok = nova_session_ets:set_value(~"s", ~"k", ~"v"),
+    ok = sys:suspend(nova_session_ets),
+    try
+        ?assertEqual({ok, ~"v"}, nova_session_ets:get_value(~"s", ~"k")),
+        ?assertEqual({error, not_found}, nova_session_ets:get_value(~"s", ~"missing")),
+        ?assertEqual({error, not_found}, nova_session_ets:get_value(~"nobody", ~"k"))
+    after
+        sys:resume(nova_session_ets)
+    end.
 
 %% A request that follows the response must find what it stored.
 write_is_visible_without_sync() ->

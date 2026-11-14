@@ -112,6 +112,8 @@ With a `__Host-` name Nova always sends `Secure` and `Path=/` and drops `domain`
 
 `session_max_age` (seconds, 14 days by default) limits how long a session lives from the moment it was created, whatever happens in between. It sets `Max-Age` on the cookie, and the default `nova_session_ets` backend drops the session once it has passed. With `infinity` the cookie has no `Max-Age` and sessions live until they are deleted or the node restarts.
 
+`max_sessions` (1 000 000 by default) limits how many sessions the default `nova_session_ets` backend holds. A request without a session cookie that writes to the session starts a new one, and `nova_csrf_plugin` does that on every such request, so without a limit any client could fill the memory of every node. When the table is full, expired sessions are dropped first. If that leaves no room, `nova_session:set/3` returns `{error, session_store_full}` for a session that does not exist yet and a warning is logged, at most once a minute. Sessions that exist are read and written as before. `infinity` turns the limit off.
+
 The default `nova_session_ets` backend keeps sessions in memory, replicated to the nodes connected at the time of the write. They do not survive a restart, and a node that joins later does not have the sessions written before it joined. Because unknown ids are replaced, a client that reaches such a node gets a fresh, empty session and is signed out. That happens:
 
 - behind a load balancer without sticky sessions;

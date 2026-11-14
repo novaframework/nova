@@ -13,6 +13,12 @@ was created, whatever happens to it in between. With
 or the node restarts. Expired sessions are swept once a minute; a session
 created while the setting was `infinity` never expires.
 
+The table holds at most `max_sessions` sessions, 1 000 000 by default. Once
+it is full, expired sessions are dropped, and when that leaves no room a write
+that would start a new session returns `{error, session_store_full}`. Sessions
+that exist are still written. Set `{nova, [{max_sessions, infinity}]}` to turn
+the limit off.
+
 Sessions do not survive a restart, and a node that starts or joins later only
 has the sessions written after it joined. During a rolling deploy or behind a
 load balancer without sticky sessions, a client whose id the serving node does
@@ -45,10 +51,14 @@ Rows are `{SessionId, Data, ExpiresAt}`. Older releases stored
 -define(TABLE, nova_session_ets_entries).
 -define(CHANNEL, '__sessions').
 -define(SWEEP_INTERVAL, 60000).
+-define(RECLAIM_INTERVAL, 1000).
+-define(DEFAULT_MAX_SESSIONS, 1000000).
 
+-include_lib("kernel/include/logger.hrl").
 -include("../include/nova_pubsub.hrl").
 
--record(state, {}).
+-record(state, {reclaimed_at :: integer() | undefined,
+                warned_at :: integer() | undefined}).
 
 %%%===================================================================
 %%% API
@@ -64,16 +74,27 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 
+%% Read straight from the table, so reads do not queue behind the writes.
 -spec get_value(SessionId :: binary(), Key :: binary()) -> {ok, Value :: binary()} | {error, not_found}.
 get_value(SessionId, Key) ->
-    gen_server:call(?SERVER, {get_value, SessionId, Key}).
+    try live_session(SessionId) of
+        {ok, #{Key := Value}, _ExpiresAt} -> {ok, Value};
+        _ -> {error, not_found}
+    catch
+        error:badarg -> {error, not_found}
+    end.
 
 %% Every write waits for the local copy, so the next request on this node,
 %% which may arrive as soon as the response is out, already sees it.
--spec set_value(SessionId :: binary(), Key :: binary(), Value :: binary()) -> ok.
+-spec set_value(SessionId :: binary(), Key :: binary(), Value :: binary()) -> ok | {error, session_store_full}.
 set_value(SessionId, Key, Value) ->
-    nova_pubsub:broadcast(?CHANNEL, "set_value", {SessionId, Key, Value}),
-    sync().
+    case has_room(SessionId) of
+        true ->
+            nova_pubsub:broadcast(?CHANNEL, "set_value", {SessionId, Key, Value}),
+            sync();
+        false ->
+            {error, session_store_full}
+    end.
 
 -spec delete_value(SessionId :: binary()) -> ok.
 delete_value(SessionId) ->
@@ -99,6 +120,24 @@ session_exists(SessionId) ->
 sync() ->
     ok = gen_server:call(?SERVER, sync).
 
+%% Only the node taking the write counts: what other nodes replicate is
+%% stored, or the nodes would end up with different sessions.
+has_room(SessionId) ->
+    case max_sessions() of
+        infinity ->
+            true;
+        Max ->
+            session_exists(SessionId) orelse ets:info(?TABLE, size) < Max
+                orelse gen_server:call(?SERVER, {reclaim, Max}) < Max
+    end.
+
+max_sessions() ->
+    case nova_config:get_env(max_sessions, ?DEFAULT_MAX_SESSIONS) of
+        infinity -> infinity;
+        Max when is_integer(Max), Max >= 0 -> Max;
+        _ -> ?DEFAULT_MAX_SESSIONS
+    end.
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -113,7 +152,7 @@ sync() ->
                               ignore.
 init([]) ->
     process_flag(trap_exit, true),
-    ets:new(?TABLE, [set, named_table]),
+    ets:new(?TABLE, [set, named_table, {read_concurrency, true}]),
     nova_pubsub:join(?CHANNEL),
     schedule_sweep(),
     {ok, #state{}}.
@@ -130,18 +169,10 @@ init([]) ->
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
                          {stop, Reason :: term(), NewState :: term()}.
-handle_call({get_value, SessionId, Key}, _From, State) ->
-    case live_session(SessionId) of
-        {ok, Session, _ExpiresAt} ->
-            case maps:get(Key, Session, undefined) of
-                undefined ->
-                    {reply, {error, not_found}, State};
-                Value ->
-                    {reply, {ok, Value}, State}
-            end;
-        error ->
-            {reply, {error, not_found}, State}
-    end;
+handle_call({reclaim, Max}, _From, State) ->
+    State1 = reclaim(State),
+    Size = ets:info(?TABLE, size),
+    {reply, Size, warn_when_full(Size, Max, State1)};
 handle_call(sync, _From, State) ->
     {reply, ok, State};
 handle_call(_Request, _From, State) ->
@@ -188,11 +219,8 @@ handle_info(#nova_pubsub{topic = "delete_value", payload = SessionId}, State) ->
     {noreply, State};
 handle_info(sweep, State) ->
     case max_age() of
-        undefined ->
-            ok;
-        _ ->
-            Now = erlang:system_time(millisecond),
-            ets:select_delete(?TABLE, [{{'_', '_', '$1'}, [{is_integer, '$1'}, {'=<', '$1', Now}], [true]}])
+        undefined -> ok;
+        _ -> sweep()
     end,
     schedule_sweep(),
     {noreply, State};
@@ -217,10 +245,10 @@ terminate(_Reason, _State) ->
                   State :: term(),
                   Extra :: term()) -> {ok, NewState :: term()} |
                                       {error, Reason :: term()}.
-code_change(_OldVsn, State, _Extra) ->
+code_change(_OldVsn, _State, _Extra) ->
     Old = ets:select(?TABLE, [{{'$1', '$2'}, [], [{{'$1', '$2'}}]}]),
     ets:insert(?TABLE, [{SessionId, Session, infinity} || {SessionId, Session} <- Old]),
-    {ok, State}.
+    {ok, #state{}}.
 
 %%--------------------------------------------------------------------
 %% This function is called for changing the form and appearance
@@ -245,6 +273,35 @@ live_session(SessionId) ->
         [] ->
             error
     end.
+
+sweep() ->
+    Now = erlang:system_time(millisecond),
+    ets:select_delete(?TABLE, [{{'_', '_', '$1'}, [{is_integer, '$1'}, {'=<', '$1', Now}], [true]}]).
+
+%% Sweeping walks the whole table, so a full table is swept at most once a
+%% second however many writes it refuses.
+reclaim(State = #state{reclaimed_at = ReclaimedAt}) ->
+    Now = erlang:monotonic_time(millisecond),
+    case ReclaimedAt =:= undefined orelse Now - ReclaimedAt >= ?RECLAIM_INTERVAL of
+        true ->
+            sweep(),
+            State#state{reclaimed_at = Now};
+        false ->
+            State
+    end.
+
+warn_when_full(Size, Max, State = #state{warned_at = WarnedAt}) when Size >= Max ->
+    Now = erlang:monotonic_time(millisecond),
+    case WarnedAt =:= undefined orelse Now - WarnedAt >= ?SWEEP_INTERVAL of
+        true ->
+            ?LOG_WARNING(#{msg => ~"Session store is full, new sessions are refused",
+                           sessions => Size, max_sessions => Max}),
+            State#state{warned_at = Now};
+        false ->
+            State
+    end;
+warn_when_full(_Size, _Max, State) ->
+    State.
 
 expires_at() ->
     case max_age() of

@@ -37,6 +37,7 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 | `session_cookie_name` | Name of the session cookie. It must be an RFC 6265 token: ASCII letters, digits and the symbols a token allows such as `-`, `_` and `.`, but no spaces, `:`, `/`, `@`, `=` or quotes. Nova refuses to start with any other name, including an empty binary or a value that is not a binary. `<<"__Host-session_id">>` is recommended for new applications; see the [Sessions](sessions.md) guide. | `binary()` | `<<"session_id">>` |
 | `session_cookie_opts` | Options for the session cookie, merged over the defaults. The cookie is `Secure` unless `{nova, [{environment, dev}]}` is set explicitly; an unset `environment` counts as not `dev` here, although `nova:get_environment/0` returns `dev` for it. Developing over plain HTTP without that setting loses the session cookie. `path` and `domain` must be ASCII without control characters or `;`, or Nova refuses to start. See the [Sessions](sessions.md) guide. | `cow_cookie:cookie_opts()` | `#{path => <<"/">>, http_only => true, same_site => lax, secure => <not dev>, max_age => <session_max_age>}` |
 | `session_max_age` | Seconds a session lives after it was created. Sets the cookie's `Max-Age` and expires `nova_session_ets` entries. `infinity` turns the limit off. | `pos_integer() \| infinity` | `1209600` (14 days) |
+| `max_sessions` | Sessions the `nova_session_ets` backend holds at most. A write that would start one more returns `{error, session_store_full}`. `infinity` turns the limit off. See the [Sessions](sessions.md) guide. | `non_neg_integer() \| infinity` | `1000000` |
 | `use_strict_routing`    | If the routing module should work under the strict mode. Using strict mode will cause errors if non-deterministic paths are detected. This is a beta-function so use with caution. | `boolean()` | `false` |
 | `bootstrap_application` | Define which application to bootstrap with Nova. This should be the name of your application. | `atom()` | *Will crash if not defined* |
 | `cowboy_configuration` | If you need some additional configuration done to Cowboy this is the place. Check `nova_sup` module to learn which keys that can be defined. | `map()` | `#{}` |
@@ -48,7 +49,7 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 
 ### Where Nova reads a setting
 
-`json_lib`, `use_sessions`, `session_cookie_name`, `session_cookie_opts`, `session_max_age` and `redact_keys` are read from the bootstrap application's environment first, then from the `nova` environment, then the default. A value set in your own application always wins:
+`json_lib`, `use_sessions`, `session_cookie_name`, `session_cookie_opts`, `session_max_age`, `max_sessions` and `redact_keys` are read from the bootstrap application's environment first, then from the `nova` environment, then the default. A value set in your own application always wins:
 
 ```erlang
 [{nova, [{bootstrap_application, my_app}]},
