@@ -11,6 +11,7 @@
          status_code_and_headers_options_are_used/1,
          request_from_the_controller_is_used/1,
          missing_template_is_a_404/1,
+         unknown_view_name_does_not_become_an_atom/1,
          template_output_is_escaped/1,
          url_tag_adds_the_prefix_of_a_mounted_application/1,
          url_tag_of_an_unknown_application_is_a_hash/1]).
@@ -27,6 +28,7 @@ all() ->
      status_code_and_headers_options_are_used,
      request_from_the_controller_is_used,
      missing_template_is_a_404,
+     unknown_view_name_does_not_become_an_atom,
      template_output_is_escaped,
      url_tag_adds_the_prefix_of_a_mounted_application,
      url_tag_of_an_unknown_application_is_a_hash].
@@ -51,6 +53,7 @@ init_per_suite(Config) ->
                            Page("/options", fun nova_views_pages:with_options/1),
                            Page("/request", fun nova_views_pages:with_request/1),
                            Page("/no-template", fun nova_views_pages:no_template/1),
+                           Page("/named", fun nova_views_pages:named_view/1),
                            Page("/links", fun nova_views_pages:links/1)]}],
     [{port, nova_test_listener:start(#{host => Routes})} | Config].
 
@@ -99,6 +102,13 @@ request_from_the_controller_is_used(Config) ->
 
 missing_template_is_a_404(Config) ->
     ?assertMatch({404, _, _}, response(Config, "/views/no-template")).
+
+%% A controller that takes the view from the request must not let a client
+%% add an atom for every name it thinks of.
+unknown_view_name_does_not_become_an_atom(Config) ->
+    ?assertMatch({200, _, ~"<p>other: named in the request</p>"}, response(Config, "/views/named?view=nova_views_other")),
+    ?assertMatch({404, _, _}, response(Config, "/views/named?view=nova_views_unheard_of_91c2")),
+    ?assertError(badarg, binary_to_existing_atom(<<"nova_views_unheard_of_91c2", "_dtl">>)).
 
 template_output_is_escaped(Config) ->
     ?assertMatch({201, _, ~"<h1>&lt;b&gt;created&lt;/b&gt;</h1>"}, response(Config, "/views/options")).

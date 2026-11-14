@@ -311,6 +311,30 @@ render_status_page_3_test_() ->
     end}.
 
 %%====================================================================
+%% The router module of an application
+%%====================================================================
+
+router_module_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     [{"an application without a router module stops the compile, and no atom is made for the name",
+       fun() ->
+               ?assertThrow({error, {router_module_not_found, nova_router_tests_no_such_app}},
+                            nova_router:compile([nova_router_tests_no_such_app])),
+               ?assertError(badarg, binary_to_existing_atom(<<"nova_router_tests_no_such_app", "_router">>))
+       end},
+      {"the router_module of the application environment is used as it is",
+       fun() ->
+               application:set_env(nova_router_tests_named_app, router_module, nova_test_mounted_router),
+               try
+                   nova_test_mounted_router:set_routes([]),
+                   _Dispatch = nova_router:compile([nova_router_tests_named_app]),
+                   ?assert(lists:keymember(nova_router_tests_named_app, 1, nova_router:compiled_apps()))
+               after
+                   application:unset_env(nova_router_tests_named_app, router_module)
+               end
+       end}]}.
+
+%%====================================================================
 %% compiled_apps/0
 %%====================================================================
 

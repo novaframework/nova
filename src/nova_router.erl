@@ -441,13 +441,21 @@ router_module(App) ->
         {ok, RouterModule} ->
             RouterModule;
         undefined ->
-            case nova:detect_language() of
-                elixir ->
-                    %% We build the router as App.Router
-                    erlang:list_to_atom(lists:flatten(io_lib:format("~s.Router", [App])));
-                _ ->
-                    %% All other languages are using the app_router convention
-                    erlang:list_to_atom(lists:flatten(io_lib:format("~s_router", [App])))
+            Name = case nova:detect_language() of
+                       elixir ->
+                           %% We build the router as App.Router
+                           atom_to_list(App) ++ ".Router";
+                       _ ->
+                           %% All other languages are using the app_router convention
+                           atom_to_list(App) ++ "_router"
+                   end,
+            case nova_code:module_named(Name) of
+                {ok, RouterModule} ->
+                    RouterModule;
+                error ->
+                    ?LOG_ERROR(#{reason => <<"Could not find the router module of the application">>,
+                                 app => App, router_module => Name}),
+                    throw({error, {router_module_not_found, App}})
             end
     end.
 
