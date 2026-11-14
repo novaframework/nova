@@ -16,7 +16,7 @@
 -include_lib("kernel/include/logger.hrl").
 
 -ifdef(TEST).
--export([maybe_inject_csrf_token/2]).
+-export([maybe_inject_csrf_token/2, get_view_name/1]).
 -endif.
 
 -type erlydtl_vars() :: map() | [{Key :: atom() | binary() | string(), Value :: any()}].
@@ -405,7 +405,3 @@ get_view_name([]) ->
     "_dtl";
 get_view_name([H|T]) ->
     [H|get_view_name(T)].
-
--ifdef(TEST).
--compile(export_all).
--endif.

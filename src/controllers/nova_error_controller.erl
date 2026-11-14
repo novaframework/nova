@@ -7,6 +7,10 @@
 	 status_code/1
         ]).
 
+-ifdef(TEST).
+-export([format_arity/1, format_stacktrace/1, preferred_type/1, trim_ows/1]).
+-endif.
+
 -define(MAX_ACCEPT, 1024).
 
 
@@ -150,7 +154,3 @@ format_stacktrace([Hd|Tl]) ->
 
 format_arity(Args) when is_list(Args) -> length(Args);
 format_arity(Arity) -> Arity.
-
--ifdef(TEST).
--compile(export_all).
--endif.

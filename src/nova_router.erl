@@ -44,6 +44,11 @@
          delete_dispatch/1
         ]).
 
+-ifdef(TEST).
+-export([add_plugin/1, apply_callback/3, concat_strings/2, insert/6, method_to_binary/1, normalize_plugins/2,
+         normalize_secure/2, plugins_after_security/2, resolve_secure/3]).
+-endif.
+
 -include_lib("kernel/include/logger.hrl").
 -include("../include/nova_router.hrl").
 -include("../include/nova.hrl").
@@ -976,10 +981,3 @@ routes(_) ->
                {500, fun nova_error_controller:server_error/1, #{}}
               ]
    }].
-
-%% =============================
-%% Test cases
-%% ============================
--ifdef(TEST).
--compile(export_all).
--endif.
