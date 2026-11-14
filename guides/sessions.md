@@ -9,11 +9,11 @@ Sessions are on by default. With `{use_sessions, false}` every function of `nova
 ### `nova_session:set/3`
 
 ```erlang
--spec set(Req :: cowboy_req:req(), Key :: binary(), Value :: binary()) ->
+-spec set(Req :: cowboy_req:req(), Key :: binary(), Value :: term()) ->
                  ok | {error, Reason :: atom()} | no_return().
 ```
 
-Sets a session value. It takes three arguments: the request, the key and the value. Keys are binaries.
+Sets a session value. It takes three arguments: the request, the key and the value. Keys are binaries. The value is any term: it is handed to the session backend as it is, and `nova_session_ets` returns it unchanged from `get/2`. A backend of your own decides what it can store.
 
 ```erlang
 ok = nova_session:set(Req, ~"name", ~"John Doe").
@@ -23,7 +23,7 @@ ok = nova_session:set(Req, ~"name", ~"John Doe").
 
 ```erlang
 -spec get(Req :: cowboy_req:req(), Key :: binary()) ->
-          {ok, Value :: binary()} | {error, Reason :: atom()} | no_return().
+          {ok, Value :: term()} | {error, Reason :: atom()} | no_return().
 ```
 
 Gets a session value. It takes two arguments: the request and the key. It returns `{error, not_found}` when the client has no session or the session has no such key.
