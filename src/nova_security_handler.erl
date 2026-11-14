@@ -3,7 +3,8 @@
 -behaviour(cowboy_middleware).
 
 -export([
-         execute/2
+         execute/2,
+         deny/1
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -42,6 +43,11 @@ execute(Req = #{host := Host}, Env = #{secure := Callback}) ->
     end.
 
 
+%% Stands in for a security value the router could not use, so a
+%% misconfigured route group is closed rather than left open.
+-spec deny(Req :: cowboy_req:req()) -> false.
+deny(_Req) ->
+    false.
 
 handle_response({true, AuthData}, Req, Env) ->
     case maps:get(cowboy_handler, Env, undefined) of

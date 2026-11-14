@@ -147,6 +147,8 @@ routes(_Environment) ->
     }].
 ```
 
+`security` takes `false`, a `fun/1` or the deprecated `{Module, Function}`. Any other value, `true` included, is logged as an error and every request to the group is answered with `401`.
+
 ### The security-function callback
 
 The most simple way to implement a security function is to return a boolean value. If the function returns `false` the request will be stopped and a `401` status code will be returned. There's also an additional return value that can be used to store data that will be available to the controller. This is particularly useful if you want to pass data like user information, roles, etc. to the controller.

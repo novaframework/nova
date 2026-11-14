@@ -536,11 +536,14 @@ render_status_page(StatusCode, Data, Req) ->
 render_status_page(Host, StatusCode, Data, Req, Env) ->
     StorageBackend = storage_backend(),
     Dispatch = StorageBackend:get(dispatch_key(Env)),
+    %% A status page is rendered by a controller. Left in place, the handler
+    %% of a websocket route would run instead and upgrade the connection.
+    Env1 = maps:without([cowboy_handler, arguments], Env),
     {Req0, Env0} =
         case nova_routing_trie:find(Host, StatusCode, '_', Dispatch) of
             {error, _} ->
                 %% Render nova page if exists - We need to determine where to find this path?
-                {Req, Env#{app => nova,
+                {Req, Env1#{app => nova,
                            callback => fun nova_error_controller:status_code/1,
                            secure => false,
                            controller_data => #{status => StatusCode, data => Data}}};
@@ -550,7 +553,7 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
                                                extra_state = ExtraState}} ->
                 {
                  Req#{extra_state => ExtraState, bindings => Bindings, resp_status_code => StatusCode},
-                 Env#{app => App,
+                 Env1#{app => App,
                       callback => Callback,
                       secure => Secure,
                       controller_data => #{status => StatusCode, data => Data},
@@ -635,15 +638,15 @@ Work out which plugins apply to a route entry.
 """.
 normalize_secure(false, _RouterFile) ->
     false;
-normalize_secure(true, RouterFile) ->
-    ?LOG_ERROR(#{reason => <<"'secure' must be false, a fun/1 or {Mod, Fun}. Ignoring 'true'.">>,
-                 router_file => RouterFile}),
-    false;
 normalize_secure({SMod, SFun}, RouterFile) when is_atom(SMod), is_atom(SFun) ->
     ?LOG_DEPRECATED(<<"v0.9.24">>, <<"The {Mod,Fun} format have been deprecated for the 'secure'-section of a route table. Use the new format for routes.">>, RouterFile),
     fun SMod:SFun/1;
-normalize_secure(SCallback, _RouterFile) ->
-    SCallback.
+normalize_secure(SCallback, _RouterFile) when is_function(SCallback, 1) ->
+    SCallback;
+normalize_secure(Invalid, RouterFile) ->
+    ?LOG_ERROR(#{reason => <<"A security value must be false, a fun/1 or {Mod, Fun}. Every request to these routes is denied.">>,
+                 value => Invalid, router_file => RouterFile}),
+    fun nova_security_handler:deny/1.
 
 %% The application-level `secure` only fills in for a route group that
 %% declares no callback, so mounting an application can add protection to
