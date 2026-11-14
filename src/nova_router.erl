@@ -462,7 +462,7 @@ parse_url(Host, [{RemotePath, LocalPath, Options}|Tl], T = #{prefix := Prefix},
                                        local_path => LocalPath,
                                        remote_path => RemotePath,
                                        router_file => maps:get(router_file, Options, undefined)}),
-                        not_found;
+                        throw({error, {static_path_not_found, LocalPath}});
                     {true, false} ->
                         {file, LocalPath};
                     {_, true} ->
@@ -669,12 +669,6 @@ add_plugin(Plugin) ->
     end,
     nova_plugin_manager:ensure_plugin(Plugin).
 
-%%--------------------------------------------------------------------
--doc """
-Work out which plugins apply to a route entry.
-
-`local_or_global` is the default and is how Nova has always behaved: a route entry that declares `plugins` uses exactly those, otherwise it uses the globally configured ones. The merging strategies exist for the cases where you want both, and dedupe on `{Type, Module}` keeping the first occurrence, so ordering within a phase is preserved.
-""".
 normalize_secure(false, _RouterFile) ->
     false;
 normalize_secure({SMod, SFun}, RouterFile) when is_atom(SMod), is_atom(SFun) ->
@@ -709,6 +703,12 @@ resolve_secure(Options, RouteInfo, RouterFile) ->
             normalize_secure(Override, RouterFile)
     end.
 
+%%--------------------------------------------------------------------
+-doc """
+Work out which plugins apply to a route entry.
+
+`local_or_global` is the default and is how Nova has always behaved: a route entry that declares `plugins` uses exactly those, otherwise it uses the globally configured ones. The merging strategies exist for the cases where you want both, and dedupe on `{Type, Module}` keeping the first occurrence, so ordering within a phase is preserved.
+""".
 resolve_plugins(local_or_global, RouteInfo, _RouterFile) ->
     maps:get(plugins, RouteInfo, global_plugins());
 resolve_plugins(local_first, RouteInfo, _RouterFile) ->

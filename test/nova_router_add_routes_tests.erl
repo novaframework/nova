@@ -36,3 +36,10 @@ add_routes_registers_app_test_() ->
         Apps = nova_router:compiled_apps(),
         ?assertMatch({my_app, _}, lists:keyfind(my_app, 1, Apps))
     end}.
+
+missing_static_path_is_named_test_() ->
+    {setup, fun() -> setup() end, fun(S) -> cleanup(S) end, fun() ->
+        Routes = #{routes => [{"/assets", "no/such/directory"}]},
+        ?assertThrow({error, {static_path_not_found, "no/such/directory"}},
+                     nova_router:add_routes(nova, [Routes]))
+    end}.
