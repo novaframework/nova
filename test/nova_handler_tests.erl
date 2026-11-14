@@ -132,8 +132,7 @@ execute_controller_crash_with_stacktrace_test_() ->
                 controller_data => #{}},
         {ok, Req1, _Env1} = nova_handler:execute(Req, Env),
         ?assertEqual(500, maps:get(resp_status_code, Req1)),
-        CrashInfo = maps:get(crash_info, Req1),
-        ?assert(maps:is_key(stacktrace, CrashInfo))
+        ?assertMatch(#{crash_info := #{stacktrace := _}}, Req1)
     end}.
 
 %%====================================================================
@@ -160,7 +159,7 @@ execute_cowboy_handler_crash_test_() ->
         Env = #{cowboy_handler => test_cowboy_handler2, arguments => #{}, app => test_app},
         {ok, Req1, Env1} = nova_handler:execute(Req, Env),
         ?assertEqual(500, maps:get(resp_status_code, Req1)),
-        ?assertEqual(500, maps:get(status_code, maps:get(crash_info, Req1))),
+        ?assertMatch(#{crash_info := #{status_code := 500}}, Req1),
         ?assertNot(maps:is_key(cowboy_handler, Env1)),
         meck:unload(test_cowboy_handler2)
     end}.
@@ -175,9 +174,7 @@ execute_cowboy_handler_crash_with_stacktrace_test_() ->
         {ok, Req1, Env1} = nova_handler:execute(Req, Env),
         ?assertNot(maps:is_key(cowboy_handler, Env1)),
         ?assertEqual(500, maps:get(resp_status_code, Req1)),
-        CrashInfo = maps:get(crash_info, Req1),
-        ?assert(maps:is_key(stacktrace, CrashInfo)),
-        ?assertEqual(500, maps:get(status_code, CrashInfo)),
+        ?assertMatch(#{crash_info := #{stacktrace := _, status_code := 500}}, Req1),
         meck:unload(test_cowboy_handler3)
     end}.
 
@@ -223,7 +220,8 @@ execute_cowboy_handler_upgrade_with_opts_test_() ->
 
 terminate_with_callback_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        ?assertEqual(ok, nova_handler:terminate(normal, #{}, fun erlang:date/0))
+        Req = nova_test_helper:mock_req(~"GET", ~"/"),
+        ?assertEqual(ok, nova_handler:terminate(normal, Req, fun erlang:date/0))
     end}.
 
 

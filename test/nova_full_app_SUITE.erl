@@ -856,8 +856,8 @@ recv_handshake(Socket, Acc) ->
     case binary:longest_common_suffix([Acc, <<"\r\n\r\n">>]) of
         4 -> Acc;
         _ ->
-            {ok, Byte} = gen_tcp:recv(Socket, 1, 5000),
-            recv_handshake(Socket, <<Acc/binary, Byte/binary>>)
+            {ok, <<Byte>>} = gen_tcp:recv(Socket, 1, 5000),
+            recv_handshake(Socket, <<Acc/binary, Byte>>)
     end.
 
 ws_send(Socket, Payload) ->

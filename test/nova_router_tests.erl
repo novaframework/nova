@@ -193,7 +193,7 @@ execute_method_not_allowed_test_() ->
         %% Should get 405 with allow header
         ?assertEqual(405, maps:get(resp_status_code, Req1)),
         AllowHeader = maps:get(<<"allow">>, maps:get(resp_headers, Req1)),
-        ?assertEqual([~"GET", ~"POST"], lists:sort(binary:split(AllowHeader, ~", ", [global]))),
+        ?assertEqual([~"GET", ~"POST"], lists:sort(binary:split(iolist_to_binary(AllowHeader), ~", ", [global]))),
         ?assertMatch(F when is_function(F), maps:get(callback, Env1))
     end}.
 
@@ -428,7 +428,7 @@ add_routes_empty_test_() ->
 add_routes_invalid_throws_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         ?assertThrow({error, {invalid_routes, my_app, not_a_list}},
-                     nova_router:add_routes(my_app, not_a_list))
+                     apply(nova_router, add_routes, [my_app, not_a_list]))
     end}.
 
 %% Regression: add_routes/2 used to crash with {badkey, router_file}

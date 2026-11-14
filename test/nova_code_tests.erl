@@ -4,7 +4,8 @@
 -define(KNOWN, "nova_code_fixture_known").
 
 setup() ->
-    Dir = filename:absname(filename:join(["_build", "test", "tmp", atom_to_list(?MODULE)])),
+    {ok, Cwd} = file:get_cwd(),
+    Dir = Cwd ++ "/_build/test/tmp/" ++ atom_to_list(?MODULE),
     _ = file:del_dir_r(Dir),
     ok = filelib:ensure_path(Dir),
     true = code:add_patha(Dir),

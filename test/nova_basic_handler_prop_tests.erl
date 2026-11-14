@@ -25,39 +25,33 @@ ws_frame() ->
 %%====================================================================
 
 prop_json_post_201() ->
-    ?FORALL(JSON, json_value(),
-            begin
-                Req = nova_test_helper:mock_req(<<"POST">>, <<"/">>),
-                {ok, Req1} = nova_basic_handler:handle_json({json, JSON}, ?CALLBACK, Req),
-                maps:get(resp_status_code, Req1) =:= 201
-            end).
+    ?FORALL(JSON, json_value(), json_status(~"POST", JSON) =:= 201).
 
 prop_json_non_post_200() ->
-    ?FORALL({Method, JSON}, {non_post_method(), json_value()},
-            begin
-                Req = nova_test_helper:mock_req(Method, <<"/">>),
-                {ok, Req1} = nova_basic_handler:handle_json({json, JSON}, ?CALLBACK, Req),
-                maps:get(resp_status_code, Req1) =:= 200
-            end).
+    ?FORALL({Method, JSON}, {non_post_method(), json_value()}, json_status(Method, JSON) =:= 200).
+
+%% A generated value is a term to the type checker until it is matched.
+json_status(Method, JSON) when is_binary(Method), is_map(JSON) ->
+    Req = nova_test_helper:mock_req(Method, ~"/"),
+    {ok, Req1} = nova_basic_handler:handle_json({json, JSON}, ?CALLBACK, Req),
+    maps:get(resp_status_code, Req1).
 
 %% Control characters and invalid UTF-8 are refused; nova_basic_handler_tests
 %% covers those.
 prop_redirect_always_302() ->
-    ?FORALL(Route, printable_route(),
-            begin
-                Req = nova_test_helper:mock_req(<<"GET">>, <<"/">>),
-                {ok, Req1} = nova_basic_handler:handle_redirect({redirect, Route}, ?CALLBACK, Req),
-                maps:get(resp_status_code, Req1) =:= 302 andalso
-                maps:get(<<"location">>, maps:get(resp_headers, Req1)) =:= Route
-            end).
+    ?FORALL(Route, printable_route(), redirects_to(Route)).
+
+redirects_to(Route) when is_binary(Route) ->
+    Req = nova_test_helper:mock_req(~"GET", ~"/"),
+    {ok, Req1} = nova_basic_handler:handle_redirect({redirect, Route}, ?CALLBACK, Req),
+    maps:get(resp_status_code, Req1) =:= 302 andalso
+        maps:get(~"location", maps:get(resp_headers, Req1)) =:= Route.
 
 printable_route() ->
     ?LET(Chars, list(range(16#20, 16#7E)), chars_to_binary(Chars)).
 
-%% Generated values are proper_gen:instance(), which eqwalizer reads as term().
--spec chars_to_binary(dynamic()) -> binary().
-chars_to_binary(Chars) ->
-    list_to_binary(Chars).
+chars_to_binary(Chars) when is_list(Chars) ->
+    list_to_binary([Char || Char <- Chars, is_integer(Char)]).
 
 prop_ws_ok_preserves_data() ->
     ?FORALL(Data, ws_controller_data(),

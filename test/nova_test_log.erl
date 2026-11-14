@@ -35,7 +35,7 @@ stop() ->
     collected().
 
 -spec log(logger:log_event(), logger:handler_config()) -> ok.
-log(#{level := Level, msg := Msg}, #{config := #{collector := Collector, tag := Tag}}) ->
+log(#{level := Level, msg := Msg}, #{config := #{collector := Collector, tag := Tag}}) when is_pid(Collector) ->
     Collector ! {Tag, Level, Msg},
     ok;
 log(Event, #{config := #{collector := Collector}}) when is_pid(Collector) ->

@@ -137,7 +137,7 @@ set_and_get_value() ->
     ?assertEqual({ok, <<"alice">>}, nova_session:get(Req, <<"username">>)).
 
 get_missing_session() ->
-    Req = #{},
+    Req = nova_test_helper:mock_req(~"GET", ~"/"),
     ?assertEqual({error, not_found}, nova_session:get(Req, <<"key">>)).
 
 get_missing_key() ->
@@ -184,7 +184,7 @@ cookie_fallback() ->
     ?assertEqual({ok, <<"works">>}, nova_session:get(Req, <<"via_cookie">>)).
 
 no_session_returns_error() ->
-    Req = #{},
+    Req = nova_test_helper:mock_req(~"GET", ~"/"),
     ?assertEqual({error, not_found}, nova_session:get(Req, <<"key">>)),
     ?assertEqual({error, session_id_not_set}, nova_session:set(Req, <<"k">>, <<"v">>)).
 
@@ -195,7 +195,7 @@ unparsable_cookie_is_no_session_without_stream_handler() ->
     ?assertEqual({error, session_id_not_set}, nova_session:set(Req, ~"k", ~"v")).
 
 no_session_delete_returns_ok() ->
-    Req = #{},
+    Req = nova_test_helper:mock_req(~"GET", ~"/"),
     ?assertEqual({ok, Req}, nova_session:delete(Req)),
     ?assertEqual({ok, Req}, nova_session:delete(Req, <<"key">>)).
 
