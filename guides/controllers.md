@@ -1,217 +1,249 @@
 # Controllers
 
-Controllers are central in how Nova works. They are in charge of handling all user-implemented logic for a request.
-Controllers are located in the `/src/controllers/` directory of your Nova application. A controller is basically a regular Erlang module that exposes functions you've provided in the routing file.
+A controller is an Erlang module with functions that the router calls for a
+request. Controllers live in `src/controllers/` of a Nova application. A
+controller function takes the request and returns a tuple that says what to
+answer.
 
 ![Request life-cycle](assets/controller_flow.png "Request life-cycle")
 
-## Handlers
+```erlang
+-module(my_app_items_controller).
+-export([index/1, show/1, create/1]).
 
-Handlers are modules that interprets the resulting output from a controller and sends it to the requester. Handlers are identified by the first atom in the return of a controller, eg `{json, #{status => "ok"}}` calls the `json` handler. You can read about the handlers below and what their functions are.
+index(_Req) ->
+    {json, #{items => []}}.
 
-### JSON structures
+show(#{bindings := #{~"id" := Id}}) ->
+    {json, #{id => Id}}.
 
-#### Simple interface
+create(#{json := Item}) ->
+    {json, #{created => Item}}.
+```
 
-*Keyword*: `json`
+The request is the Cowboy request map with the keys Nova adds to it, see
+[the request map](request-lifecycle.md#the-request-map). Use the `cowboy_req`
+functions to read headers, the query string and cookies.
 
-*Spec*: `{json, Structure :: map()}`
+## Return values
 
-*Example*: `{json, #{status => "ok"}}.`
+The first element of the returned tuple names a *handler*, the function that
+turns the tuple into a response. The handlers below come with Nova. You can
+add your own, see [Handlers](handlers.md).
 
-Converts the map (Second element in the resulting tuple) and sends it to the requester with *HTTP-status code 200*.
+Every form has a variant with the request as the last element. Use it when
+the controller changed the request, for instance to set a cookie or a
+response header:
 
-#### Advanced interface
+```erlang
+remember(Req) ->
+    Req1 = cowboy_req:set_resp_cookie(~"seen", ~"1", Req, #{path => ~"/"}),
+    {json, 200, #{}, #{ok => true}, Req1}.
+```
 
-*Keyword*: `json`
+Set cookies with `cowboy_req:set_resp_cookie/4`. A `set-cookie` key in a
+headers map is refused by Cowboy and the response becomes a `500`.
 
-*Spec*: `{json, StatusCode :: integer(), Headers :: map(), JSON :: map()}`
+### JSON
 
-*Example*: `{json, 201, #{"x-correlation-id", "EX123"}, #{some_response => true}}`
+| Return | Response |
+|---|---|
+| `{json, JSON}` | `201` when the request method is `POST`, `200` otherwise |
+| `{json, StatusCode, Headers, JSON}` | The given status code and headers |
+| `{json, StatusCode, Headers, JSON, Req}` | As above, with the request handed back |
 
-Same as the simple interface but with two additional elements for specifying HTTP-status code and additional headers.
+```erlang
+{json, #{status => ~"ok"}}
+{json, 202, #{~"x-request-id" => ~"abc"}, #{queued => true}}
+```
 
-*Spec*: `{json, StatusCode :: integer(), Headers :: map(), JSON :: map() | list(), Req :: cowboy_req:req()}`
+`JSON` is a term the configured JSON library can encode, see `json_lib` in
+[Configuration](configuration.md). The `content-type` is `application/json`.
 
-Same as above but also hands back the request, for example after setting a cookie on it. The older order with the request before the JSON is still accepted, but it is deprecated and logs a warning once per controller module.
+The older order `{json, StatusCode, Headers, Req, JSON}` is still accepted. It
+is deprecated and logs a warning once per controller module.
 
-### HTML templates (Using Erlydtl)
+### Views
 
-*Nova* renders templates using ErlyDTL ([https://github.com/erlydtl/erlydtl](https://github.com/erlydtl/erlydtl) which uses the *django template language* to express logic. To get a better overview for the functionality that comes with dtl check their [documentation page](https://django.readthedocs.io/en/1.6.x/ref/templates/builtins.html)
+Renders an ErlyDTL template, see [Views](views.md). `ok` and `view` mean the
+same.
 
-#### Simple interface
+| Return | Response |
+|---|---|
+| `{ok, Variables}`, `{view, Variables}` | The view named after the controller, with status `200` |
+| `{ok, Variables, Options}`, `{view, Variables, Options}` | As above, with options |
+| `{ok, Variables, Options, Req}`, `{view, Variables, Options, Req}` | As above, with the request handed back |
 
-*Keyword*: `view`
+```erlang
+{ok, #{name => ~"Alice"}}
+{view, #{name => ~"Alice"}, #{view => profile, status_code => 201}}
+```
 
-*Spec*: `{view, Variables :: map() | [{Key :: atom() | binary() | string(), Value :: any()}]}`
+`Variables` is a map or a property list. For a controller named
+`my_app_main_controller` the default view is `src/views/my_app_main.dtl`.
 
-*Example*: `{view, #{my_var => "123"}}`
+| Option | Description |
+|---|---|
+| `view` | The template to render, as an atom or a string |
+| `status_code` | The status code, `200` by default |
+| `headers` | The response headers. They replace the default `content-type: text/html`, so include a `content-type` |
 
-Renders the corresponding view with the variables attached. If a controller is named `my_simple_controller.erl` the view is named `my_simple_view.dtl`.
+A template that does not exist gives a `404`.
 
-#### Advanced interface
+### Status codes
 
-*Keyword*: `view`
+| Return | Response |
+|---|---|
+| `{status, StatusCode}` | The status code with an empty body |
+| `{status, StatusCode, Headers}` | With headers |
+| `{status, StatusCode, Headers, Body}` | With headers and a body |
+| `{status, StatusCode, Headers, Body, Req}` | As above, with the request handed back |
 
-*Spec*: `{view, Variables :: map() | [{Key :: atom() | binary() | string(), Value :: any()}], Options :: map()}`
+```erlang
+{status, 204}
+{status, 201, #{~"location" => ~"/api/items/1"}}
+{status, 400, #{~"content-type" => ~"text/plain"}, ~"bad input"}
+{status, 422, #{}, #{error => ~"invalid"}}
+```
 
-*Example*: `{view, #{my_var => "123"}, #{view => my_view_mod}}`
+`Body` is a binary, or a map, which is encoded as JSON and sent with
+`content-type: application/json`.
 
-Same as the simple interface but where you can define some options. Currently the only option for this interface is *view* which enables the user to specify a view other than the corresponding one based on controllers name. In the example above the dtl-file `my_view_mod.dtl` would be rendered.
+`{status, StatusCode}` does not render the status code route registered for
+that code (see [Routing](routing.md)). A `204` and a `304` have no body: one
+given with either status, by this or any other handler, is left out.
 
-### HTTP-status codes
+### Redirects
 
-#### Simple interface
+| Return | Response |
+|---|---|
+| `{redirect, Location}` | `302` with `Location` in the `location` header |
+| `{redirect, Location, Req}` | As above, with the request handed back |
+| `{redirect_local, Path}` | `302`, but only to a path on the same site |
+| `{redirect_local, Path, Req}` | As above, with the request handed back |
 
-*Keyword*: `status`
+```erlang
+{redirect, "/login"}
+```
 
-*Spec*: `{status, StatusCode :: integer()}`
+`Location` is a string or a binary. `redirect` accepts any URL, another site
+included, so do not pass it something the request supplied.
 
-*Example*: `{status, 200}`
+Use `redirect_local` for a target that comes from the request, such as the
+`next` parameter of a login form:
 
-Returns a HTTP-code to the requester with an empty body. It does not render the status-code route registered for that code (see [Routing](routing.md)); call your error controller yourself, or return a body with one of the interfaces below, when the client should get one.
+```erlang
+login_done(Req) ->
+    #{next := Next} = cowboy_req:match_qs([{next, [], ~"/"}], Req),
+    {redirect_local, Next}.
+```
 
-#### Medium interface
+The target has to start with a single `/`. A full URL, `//host`, `/\host` and
+a path with a tab in it are answered with a `400` and logged as a warning.
 
-*Keyword*: `status`
+### Files
 
-*Spec*: `{status, StatusCode :: integer(), ExtraHeaders :: map()}`
+| Return | Response |
+|---|---|
+| `{sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}` | `Length` bytes of the file at `Path`, starting at `Offset` |
+| `{sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime, Req}` | As above, with the request handed back |
 
-*Example*: `{status, 200, #{"content-type" => "application/json"}}`
+```erlang
+download(_Req) ->
+    Path = filename:join(code:priv_dir(my_app), "static/hello.txt"),
+    {sendfile, 200, #{}, {0, filelib:file_size(Path), Path}, ~"text/plain"}.
+```
 
-Same as the simple interface but with an additional field for specifying additional headers.
+The file is sent with Cowboy's sendfile support, see
+[Sending files](https://ninenines.eu/docs/en/cowboy/2.21/guide/resp/) in the
+Cowboy guide. To serve a directory of files, use a static route instead, see
+[Routing](routing.md).
 
-#### Advanced interface
+Incoming files are handled by `nova_multipart_plugin` and not by a return
+value. See [Nova multipart](plugins.md#nova-multipart).
 
-*Keyword*: `status`
+## Errors
 
-*Spec*: `{status, Status :: integer(), ExtraHeaders :: map(), Body :: binary()}`
+A controller can stop with a status code by throwing `{StatusCode, Reason}`:
 
-*Example*: `{status, 200, #{"content-type" => "text/plain"}, "A plain text"}`
+```erlang
+show(#{bindings := #{~"id" := Id}}) ->
+    case my_app_items:find(Id) of
+        {ok, Item} -> {json, Item};
+        not_found -> throw({404, no_such_item})
+    end.
+```
 
-Same as the medium interface but with an additional field for specifying a body. A `204` and a `304` have no body: one given with either status, by this or any other keyword, is left out.
-
-### File transfers (Using cowboys sendfile functionality)
-
-*Keyword*: `sendfile`
-
-*Spec*: `{sendfile, StatusCode :: integer(), Headers :: map(), {Offset :: integer(), Length :: integer(), Path :: list()}, Mime :: binary()}`
-
-*Example*: `{sendfile, 200, #{}, {0, 12345, "path/to/logo.png"}, "image/png"}`
-
-Sends a file using sendfile. This uses cowboys sendfile functionality and more information about it can be found in the [cowboy manual on sendfile](https://ninenines.eu/docs/en/cowboy/2.9/guide/resp/#_sending_files)
-
-### File uploads
-
-Incoming files are handled by `nova_multipart_plugin` and not by a return keyword. See [Nova multipart](plugins.md#nova-multipart).
-
-### Redirecting user
-
-*Keyword*: `redirect`
-
-*Spec*: `{redirect, Route :: list() | binary()}`
-
-*Example*: `{redirect, "/my/other/path}`
-
-Sends a temporary redirect (HTTP status code 302) for the specified path to requester. The target can be any URL, another site included, so do not pass it something the request supplied.
-
-*Keyword*: `redirect_local`
-
-*Spec*: `{redirect_local, Path :: list() | binary()}`
-
-*Example*: `{redirect_local, Next}`
-
-As `redirect`, for a target that comes from the request, such as the `next` parameter of a login form. It only redirects to a path on the site the request was made to: the target has to start with a single `/`. A full URL, `//host`, `/\host` and a path with a tab in it are answered with a `400` and logged as a warning.
-
+The response is the status page for that code. Any other exception is logged
+as `Controller crashed` and answered with the `500` page. A return value no
+handler knows is answered with a `500` as well, unless the controller has a
+fallback controller. See [Error handling](error-handling.md).
 
 ## Fallback controllers
 
-[Phoenix](https://www.phoenixframework.org) have a really useful feature which they call [action_fallback]( https://hexdocs.pm/phoenix/Phoenix.Controller.html#action_fallback/1). We thought it would be a good addition to Nova to include something similar and therefore the `fallback_controller` was introduced. If a controller returns an invalid/unhandled result the fallback controller gets invoked and can take action on the payload. It's good for separating error-handling from the controllers. A fallback controller is set by setting the `fallback_controller` attribute with the module name of the fallback controller.
+When a controller returns something no handler knows, Nova calls the fallback
+controller of the module if it has one. This separates error handling from
+the controllers. The fallback controller is named with the
+`fallback_controller` attribute:
 
-The following example shows how a controller defines a fallback
-
-```
--module(my_main_controller).
--export([
-    error_example/1
-]).
--fallback_controller(my_fallback_controller).
+```erlang
+-module(my_app_main_controller).
+-export([error_example/1]).
+-fallback_controller(my_app_fallback_controller).
 
 error_example(_Req) ->
-    %% Since {error, ...} is not a valid handler the fallback-controller will be invoked
+    %% {error, ...} is not a handler, so the fallback controller is called
     {error, example_error}.
 ```
 
-A fallback controller exposes one function `resolve/2` which returns a handler (like for regular controllers) in order to return the response to client. If we take the previous example and try and build a fallback controller for it:
+A fallback controller exports `resolve/2`. It takes the request and the value
+the controller returned, and returns what a controller can return:
 
+```erlang
+-module(my_app_fallback_controller).
+-export([resolve/2]).
+
+resolve(_Req, {error, example_error}) ->
+    {status, 400, #{~"content-type" => ~"text/plain"}, ~"example_error"}.
 ```
--module(my_fallback_controller).
--export([
-    resolve/2
-]).
-
-resolve(Req, {error, example_error}) ->
-  {status, 400}.
-```
-
-
-
 
 ## Plugins
 
-Plugins are part of the Nova core and can be executed both before and after the execution of a controller. They can both terminate a request early (like the *request plugin* does) or transform data into another structure (*json plugin*). Plugins can be defined in two different places; *Global* plugins are defined in the *sys.config* file and will be executed for every incoming request. If a plugin should only be executed for a limited set of endpoints it can be defined in the router file for that specific application (we call there *local plugins*).
+Plugins run before and after a controller. They are configured globally in
+*sys.config* or for a route group in the router, as a list of
+`{Phase, Module, Options}`:
 
-### Global plugins
-
-Global plugins are defined in the *sys.config* file and can have two different states: *pre* and *post* controller. They are exectued before or after a controller. Global plugins lives under the `nova` application, `plugins` key. An example of a sys.config file:
-
-```
+```erlang
 {nova, [
-  {plugins, [
-    {pre_request, [
-      {nova_request_plugin, #{decode_json_body => true}}
-    ]},
-    {post_request, [
+    {plugins, [
+        {pre_request, nova_request_plugin, #{decode_json_body => true}}
     ]}
-  ]}
-]}.
+]}
 ```
 
-In order to find the valid options one can call the `plugin_info/0` function of each plugin. Currently there are [four plugins](https://github.com/novaframework/nova/tree/master/src/plugins) shipped with Nova.
+```erlang
+routes(_Environment) ->
+    [#{prefix => "/api",
+       security => false,
+       plugins => [
+           {pre_request, nova_request_plugin, #{decode_json_body => true}}
+       ],
+       routes => [
+           {"/items", fun my_app_items_controller:create/1, #{methods => [post]}}
+       ]}].
+```
 
+A route group that declares `plugins` uses those and not the global ones. The
+[Plugins](plugins.md) guide lists the plugins that come with Nova and their
+options, and shows how to write one.
 
-> #### NOTE {: .tip}
+> #### Applications meant to be included {: .tip}
 >
-> If you are creating an application that can be included in another Nova application all of your plugins should be defined in the router-file (Local plugins) in order to avoid being overwritten.
-
-
-### Local plugins
-
-Local plugins works almost as the global ones but for a limited set of paths. Local plugins are therefore declared in the router-file for each *group* of endpoints. They are declared in the same way as the global ones.
-
-Example:
-```
-routes(_Env) ->
-  [#{
-    prefix => "/api/json",
-    security => false,
-    plugins => [
-      {pre_request, [
-        {nova_request_plugin, #{decode_json_body => true}}
-      ]}
-    ],
-    routes => [
-      {"/my_json_route", {my_app_json_controller, json}, #{methods => [get, post]}}
-    ]
-  }].
-```
-
-It's recommended to use this method of specifying routes if you plan to use it as a component in another *Nova application*.
+> An application that other Nova applications include should declare its
+> plugins in its router. The global plugins belong to the release it ends up
+> in.
 
 ## Websockets
 
-*Coming soon*
-
-### Callbacks
-
-*Coming soon*
+A websocket endpoint is a module with the `nova_websocket` behaviour, not a
+controller function. See [Websockets](websockets.md).
