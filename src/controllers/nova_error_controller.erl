@@ -38,7 +38,7 @@ server_error(#{crash_info := #{status_code := StatusCode} = CrashInfo} = Req) ->
                                 message => maps:get(message, CrashInfo,
                                                     ~"Something internal crashed. Please take a look!")},
                               maps:get(extra_msg, CrashInfo, ~""),
-                              maps:get(stacktrace, CrashInfo, [])),
+                              stacktrace(CrashInfo)),
     render(StatusCode, Variables, Req);
 server_error(#{crash_info := #{class := Class, reason := Reason} = CrashInfo} = Req) ->
     Variables = #{status => ~"Internal Server Error",
@@ -95,6 +95,15 @@ debug_details(Variables, ExtraMsg, Stacktrace) ->
 show_details() ->
     nova:is_dev_environment().
 
+%% nova_handler and nova_security_handler take the stacktrace of a crash
+%% only when stacktraces are on.
+stacktrace(#{stacktrace := Stacktrace}) ->
+    Stacktrace;
+stacktrace(#{class := _Class}) ->
+    not_enabled;
+stacktrace(_CrashInfo) ->
+    [].
+
 %% Media ranges as browsers and HTTP clients send them, for example
 %% "text/html,application/xhtml+xml;q=0.9" or "application/json; charset=utf-8".
 %% Cowboy joins repeated accept headers, so only the first ?MAX_ACCEPT bytes
@@ -127,7 +136,14 @@ trim_trailing_ows(Bin, Size) ->
     end.
 
 format_stacktrace(not_enabled) ->
-    ?LOG_WARNING(#{msg => ~"Stacktraces are disabled. Call nova:use_stacktrace(true) or set {use_stacktrace, true} for nova in sys.config to have them"}),
+    Key = {?MODULE, stacktrace_hint},
+    case persistent_term:get(Key, false) of
+        true ->
+            ok;
+        false ->
+            persistent_term:put(Key, true),
+            ?LOG_WARNING(#{msg => ~"Stacktraces are disabled. Call nova:use_stacktrace(true) or set {use_stacktrace, true} for nova in sys.config to have them"})
+    end,
     [];
 format_stacktrace([]) -> [];
 format_stacktrace([{Mod, Func, Arity, TraceOpts}|Tl]) ->
