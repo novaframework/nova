@@ -18,7 +18,7 @@ declares `nova_apps` of its own has those registered too.
 
 | Key | Value | Description |
 |---|---|---|
-| `prefix` | `string()` | Mount the application's routes under this path |
+| `prefix` | `string()` | Mount the application's routes under this path, in front of the prefix each route group declares |
 | `secure` | `false` \| `fun/1` | Security callback for the application's route groups that declare none |
 | `override_secure` | `false` \| `fun/1` | Replace the security callback of every route group, including one the application declares for itself |
 | `plugin_strategy` | see the [routing guide](routing.md) | How the application's route-local plugins combine with the global ones |
@@ -43,6 +43,23 @@ declares `nova_apps` of its own has those registered too.
 
 `another_nova_app` now shares the listener, and the routing table, of
 `my_nova_app`. Its routes answer under `/another`.
+
+### Prefix of a mounted application
+
+The `prefix` in the `nova_apps` entry and the `prefix` of a route group add
+up. A group declared with `prefix => "/users"` in an application mounted with
+`prefix => "/another"` answers under `/another/users`.
+
+The application can look up where it was mounted, for instance to build
+links:
+
+```erlang
+{another_nova_app, MountPrefix} = lists:keyfind(another_nova_app, 1, nova:get_apps()).
+```
+
+An application mounted without a prefix is listed with `"/"`.
+`nova:get_apps/0` reads the default listener's table; use
+`nova_router:compiled_apps/1` for any other.
 
 ### Security of a mounted application
 
