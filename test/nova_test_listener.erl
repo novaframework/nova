@@ -4,7 +4,8 @@
 -module(nova_test_listener).
 
 -export([start/1, try_start/1, configure/1, stop/0, get/2, get/3, request/4, response/4, response/5,
-         websocket_handshake/2, websocket_handshake/3, websocket_texts/4, free_port/0]).
+         websocket_handshake/2, websocket_handshake/3, websocket_texts/4, h2_websocket_connect/4,
+         free_port/0]).
 
 -spec start(map()) -> inet:port_number().
 start(Options) ->
@@ -128,6 +129,44 @@ websocket_texts(Port, Path, Text, Count) when byte_size(Text) < 126 ->
         receive_texts(Socket, Buffered, Count)
     after
         gen_tcp:close(Socket)
+    end.
+
+%% Opens a websocket the HTTP/2 way, with an extended CONNECT (RFC 8441) on
+%% a clear connection, and returns the status the stream is answered with.
+%% The listener needs `enable_connect_protocol` in its Cowboy options.
+-spec h2_websocket_connect(inet:port_number(), iodata(), binary(), [{binary(), binary()}]) -> 100..599.
+h2_websocket_connect(Port, Path, Authority, Headers) ->
+    {ok, Socket} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}, {packet, raw}]),
+    try
+        ok = gen_tcp:send(Socket, [~"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", cow_http2:settings(#{})]),
+        {HeaderBlock, _Encoder} = cow_hpack:encode([{~":method", ~"CONNECT"},
+                                                    {~":protocol", ~"websocket"},
+                                                    {~":scheme", ~"http"},
+                                                    {~":path", iolist_to_binary(Path)},
+                                                    {~":authority", Authority},
+                                                    {~"sec-websocket-version", ~"13"}
+                                                   | Headers]),
+        h2_status(Socket, <<>>, cow_http2:headers(1, nofin, HeaderBlock))
+    after
+        gen_tcp:close(Socket)
+    end.
+
+%% The request is sent once the settings of the server have arrived, since
+%% they are what allows an extended CONNECT.
+h2_status(Socket, Buffer, Request) ->
+    case cow_http2:parse(Buffer) of
+        {ok, {settings, _Settings}, Rest} ->
+            ok = gen_tcp:send(Socket, [cow_http2:settings_ack(), Request]),
+            h2_status(Socket, Rest, Request);
+        {ok, {headers, 1, _IsFin, head_fin, HeaderBlock}, _Rest} ->
+            {ResponseHeaders, _Decoder} = cow_hpack:decode(HeaderBlock),
+            {~":status", Status} = lists:keyfind(~":status", 1, ResponseHeaders),
+            binary_to_integer(Status);
+        {ok, _OtherFrame, Rest} ->
+            h2_status(Socket, Rest, Request);
+        more ->
+            {ok, Data} = gen_tcp:recv(Socket, 0, 5000),
+            h2_status(Socket, <<Buffer/binary, Data/binary>>, Request)
     end.
 
 after_handshake(Socket, Acc) ->
