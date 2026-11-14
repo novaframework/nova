@@ -165,7 +165,8 @@ These changes are part of the release that follows 0.18.3.
   is changed later is not followed until Nova is restarted.
   A route to a single file given as a relative path keeps to the file it named
   when the routes were compiled as well. A directory that is removed while
-  Nova runs gets a `404` where its index used to get a `500`.
+  Nova runs gets a `404` where its index used to get a `500`, and so does a
+  route to a single file whose file is gone. Both are logged once.
 
 - **A `Range` that is not valid, or is sent with `If-Range`, gets the whole
   file.** A static file answered a byte range that is not valid, such as
@@ -261,6 +262,13 @@ These changes are part of the release that follows 0.18.3.
   logged, with a warning that no error page is sent, and the client keeps
   what it was sent. See [Handlers](handlers.md#long-lived-responses).
 
+- **A request is answered once.** A controller or a fallback controller that
+  answered with `cowboy_req:reply/4` and returned without the request that
+  call gave back was answered a second time. What it returned is now not
+  sent, and a warning names the controller, the function and the form of the
+  return. A reply a plugin returns with `stop` for a request that was
+  answered already is dropped the same way, with one warning per plugin.
+
 - **The application that starts a listener reads its own `nova_apps`
   entry.** An entry an application wrote for itself in its own `nova_apps`
   was skipped. The `prefix`, `secure`, `override_secure` and
@@ -283,11 +291,23 @@ These changes are part of the release that follows 0.18.3.
   data. It is now under `auth_data` in the upgrade request as well, where the
   callback of the route group and the plugins that run after it find it.
 
-- **Nova's `500` page follows `accept` as its `404` page does.** It had a
-  body only for an `accept` header of exactly `application/json` or
-  `text/html`. Both pages are now JSON for a request without the header, JSON
-  or HTML when the header names one of them, and have no body when it names
-  neither.
+- **Nova's `404` and `500` pages negotiate on `accept`.** They compared the
+  header with `application/json` and `text/html` as text, and the `500` page
+  had a body only when the header was exactly one of the two. Both pages now
+  read media ranges and quality values: JSON for a request without the
+  header or with `*/*`, the form the header prefers otherwise, and no body
+  only when it admits neither. See
+  [Error handling](error-handling.md#the-default-pages).
+
+- **Nova's `500` page has a body in every environment.** Outside `dev`, a
+  crash in a plugin was answered with a bare `500`.
+  It now gets the generic page, without the class, the reason or the
+  stacktrace. With `render_error_pages` set to `false`, only the HTML form
+  of that page is left out.
+
+- **The router of an Elixir application is found by either name.** An
+  application named `:my_app` had its router looked up as `my_app.Router`.
+  `MyApp.Router` is now found as well.
 
 - **The `headers` of a view are added to the default.** The `headers` option
   of `{ok, Variables, Options}` and `{view, Variables, Options}` replaced

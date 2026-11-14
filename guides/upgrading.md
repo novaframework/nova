@@ -22,6 +22,7 @@ tables with your application in mind. The entries under
 | A listener that could not be started was logged and Nova kept running | The start fails with `{listener_not_started, Reason}` | Free the port, or fix the certificate |
 | An unset `environment` was read as `dev` without notice | It is still read as `dev` by routers, and Nova logs a warning at boot | Set `{environment, prod}` in the release configuration |
 | An application without a router module crashed the start with `undef` | The start fails with `{router_module_not_found, App}` and an error in the log | Add the `<app>_router` module, or set `router_module` |
+| The router of an Elixir application named `:my_app` was looked up as `my_app.Router` | `MyApp.Router` is found as well | Nothing. A `router_module` set for that reason can go |
 | A `secure` key in a route group, and `security` or `secure` in the options of a route, were skipped without notice | They are still not read, and each logs a warning at boot | Declare the callback as `security` on the route group |
 | The entry an application wrote for itself in its own `nova_apps` was skipped | The application that starts a listener is compiled with the `prefix`, `secure`, `override_secure` and `plugin_strategy` of that entry | Remove the entry, or the options that are not meant to apply |
 
@@ -55,15 +56,18 @@ tables with your application in mind. The entries under
 | `nova_request_plugin` read a body of any size | It reads at most `max_body_length`, 1 MB by default, within `body_read_timeout`, 60 seconds | Raise the limits on the route groups that take larger bodies |
 | `decode_json_body` decoded types that start with `application/json` | It decodes `application/json` and `application/*+json` | Decode other types, such as `application/json-seq`, in the controller |
 | The `500` page showed the reason and the stacktrace | They are shown only when `environment` is set to `dev` | Read the log for the details |
-| Nova's `500` page had a body only for an `accept` header of exactly `application/json` or `text/html` | It is JSON without an `accept` header, and JSON or HTML when the header names one of them among others | Nothing, unless a client relied on the empty body |
+| Nova's `404` and `500` pages compared the `accept` header with `application/json` and `text/html` as text, and the `500` page had no body unless the header was exactly one of the two | Both pages negotiate on `accept`, quality values included: JSON without the header and for `*/*`, HTML for a browser, no body only when the header admits neither | Nothing, unless a client relied on the empty body |
+| Outside `dev`, a crash in a plugin was answered with a bare `500` | Nova's `500` page has its generic body in every environment, without the class, the reason or the stacktrace | Nothing |
 | A handler or a controller that streamed its response and returned the request was answered a second time, which was logged as a crash | Nothing more is sent. A failure after the response has begun is logged and gets no error page | Return the request `cowboy_req:stream_reply/3` gave back |
+| A controller that answered with `cowboy_req:reply/4` and returned without the request that call gave back was answered a second time | The client gets the one response. What the controller returned is not sent, and a warning names the controller | Return the request `cowboy_req:reply/4` gave back |
 | The `headers` option of a view replaced the default `content-type: text/html` | The headers are added to it, and one that names a `content-type` replaces it | Nothing |
 | A `url` tag without `application` crashed the view | It renders `#` and logs a warning | Give the tag an `application` |
 | `nova_cors_plugin` sent `access-control-allow-origin` to every request | It is sent only to a request whose `Origin` is allowed | List every origin that needs access in `allow_origins` |
 | `nova_cors_plugin` answered every `OPTIONS` request | It answers preflights only. Other `OPTIONS` requests reach the application | Add a route for `OPTIONS` where the application answers it |
 | A static directory served files through symbolic links that leave it | Such a file is a `404` | Move the file, or set `follow_external_symlinks => true` on the route |
 | A static route to a single file given as a relative path followed the working directory of the node | It serves the file the path named when the routes were compiled | Nothing, unless the application changes the working directory |
-| The index of a static directory that was removed while Nova runs got a `500` | It gets a `404`, logged once per directory | Restore the directory |
+| The index of a static directory that was removed while Nova runs got a `500` | Every request under the directory gets a `404`, and the first is logged | Restore the directory |
+| A static route to a single file whose file was gone got a `500` | It gets a `404`, logged once per file | Restore the file |
 | Uploaded files stayed in the directory of `nova_multipart_file_handler` | They are deleted when the request is over | Call `nova_multipart_spool:keep/1` for the files to keep |
 
 ### Plugins and controllers
