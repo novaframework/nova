@@ -113,7 +113,7 @@ A directory route only serves what is inside that directory. A request whose tra
 A route consists of three different components:
 
 * `Path` - This is the actual path to the endpoint. Eg `"/admin"`
-* `Method` - What method you want to support for this endpoint (get, post, update, delete). If you want to support all methods you can use the `'_'`-atom.
+* `Method` - What method you want to support for this endpoint: `get`, `post`, `put`, `delete`, `options`, `head`, `connect`, `trace` or `patch`, as an atom, a binary or a string in either case. If you want to support all methods you can use the `'_'`-atom. Anything else, a misspelling included, stops the application from starting with `{invalid_method, Method}`. Earlier releases silently treated it as `'_'`, so the route answered every method.
 * `ControllerCallback` - What erlang callback should be called on when the path gets called. This is defined as a function reference, eg `fun my_controller:main/1`.
 
 ## Using prefix

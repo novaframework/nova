@@ -3,11 +3,16 @@
 %%% listener untouched.
 -module(nova_test_listener).
 
--export([start/1, stop/0, get/2, get/3, request/4, websocket_handshake/2, free_port/0]).
+-export([start/1, try_start/1, stop/0, get/2, get/3, request/4, websocket_handshake/2, free_port/0]).
 
 -spec start(map()) -> inet:port_number().
 start(Options) ->
-    Port = free_port(),
+    {ok, Port} = try_start(Options),
+    Port.
+
+-spec try_start(map()) -> {ok, inet:port_number()} | {error, term()}.
+try_start(Options) ->
+    Port = maps:get(port, Options, free_port()),
     application:load(nova),
     application:load(nova_test_app),
     application:load(nova_test_sub_app),
@@ -22,8 +27,10 @@ start(Options) ->
     application:set_env(nova_test_app, nova_apps,
                         [{nova_test_sub_app, maps:get(mounted_options, Options, #{prefix => "/mounted"})}]),
     application:set_env(nova_test_sub_app, router_module, nova_test_mounted_router),
-    {ok, _Started} = application:ensure_all_started(nova_test_app),
-    Port.
+    case application:ensure_all_started(nova_test_app) of
+        {ok, _Started} -> {ok, Port};
+        {error, Reason} -> {error, Reason}
+    end.
 
 %% Unloading puts the environment of both test applications back to what
 %% their .app files declare, for the suites that run after this one.

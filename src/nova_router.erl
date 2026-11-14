@@ -598,7 +598,15 @@ apps_key(DispatchKey)     -> {?NOVA_APPS, DispatchKey}.
 insert_methods([], _Host, _Path, _Value, Tree, _Options, _ToComparator) ->
     Tree;
 insert_methods([Method|Tl], Host, Path, Value, Tree, Options, ToComparator) ->
-    Tree0 = insert(Host, Path, ToComparator(Method), Value, Tree, Options),
+    Comparator =
+        try ToComparator(Method)
+        catch
+            throw:{error, {invalid_method, _}} = Error ->
+                ?LOG_ERROR(#{reason => <<"Unknown HTTP method in the methods of a route. Use get, post, put, delete, options, head, connect, trace, patch or '_'.">>,
+                             route => Path, method => Method}),
+                throw(Error)
+        end,
+    Tree0 = insert(Host, Path, Comparator, Value, Tree, Options),
     insert_methods(Tl, Host, Path, Value, Tree0, Options, ToComparator).
 
 insert(Host, Path, Combinator, Value, Tree, Options) ->
@@ -718,16 +726,33 @@ normalize_plugins([{Type, PluginName, Options}|Tl], Ack) ->
     add_plugin(PluginName),
     normalize_plugins(Tl, [{Type, [{fun PluginName:Type/4, Options}|ExistingPlugins]}|proplists:delete(Type, Ack)]).
 
-method_to_binary(get) -> <<"GET">>;
-method_to_binary(post) -> <<"POST">>;
-method_to_binary(put) -> <<"PUT">>;
-method_to_binary(delete) -> <<"DELETE">>;
-method_to_binary(options) -> <<"OPTIONS">>;
-method_to_binary(head) -> <<"HEAD">>;
-method_to_binary(connect) -> <<"CONNECT">>;
-method_to_binary(trace) -> <<"TRACE">>;
-method_to_binary(patch) -> <<"PATCH">>;
-method_to_binary(_) -> '_'.
+%% A method that is not recognised stops the route table from compiling.
+%% It used to become the wildcard, which opened the route to every method.
+method_to_binary('_') ->
+    '_';
+method_to_binary(Method) when is_atom(Method) ->
+    known_method(atom_to_binary(Method), Method);
+method_to_binary(Method) when is_binary(Method) ->
+    known_method(Method, Method);
+method_to_binary(Method) when is_list(Method) ->
+    try unicode:characters_to_binary(Method) of
+        Name when is_binary(Name) -> known_method(Name, Method);
+        _ -> throw({error, {invalid_method, Method}})
+    catch
+        error:badarg -> throw({error, {invalid_method, Method}})
+    end;
+method_to_binary(Method) ->
+    throw({error, {invalid_method, Method}}).
+
+known_method(Name, Method) ->
+    case string:uppercase(Name) of
+        Upper when Upper =:= <<"GET">>; Upper =:= <<"POST">>; Upper =:= <<"PUT">>;
+                   Upper =:= <<"DELETE">>; Upper =:= <<"OPTIONS">>; Upper =:= <<"HEAD">>;
+                   Upper =:= <<"CONNECT">>; Upper =:= <<"TRACE">>; Upper =:= <<"PATCH">> ->
+            Upper;
+        _ ->
+            throw({error, {invalid_method, Method}})
+    end.
 
 concat_strings(Path1, Path2) when is_binary(Path1) ->
     concat_strings(unicode:characters_to_list(uri_string:unquote(Path1)), Path2);
