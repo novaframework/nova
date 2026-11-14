@@ -23,7 +23,7 @@ websocket_info(_Info, ControllerData) ->
     {ok, ControllerData}.
 
 post_ws_connection(ControllerState = #{module := Module}, State, _Options) ->
-    nova_ws_lifecycle_SUITE:observed({post_ws_connection, Module}),
+    nova_test_observer:observed(nova_ws_lifecycle_observer, {post_ws_connection, Module}),
     {ok, ControllerState, State}.
 
 plugin_info() ->

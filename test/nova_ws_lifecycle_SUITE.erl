@@ -13,8 +13,6 @@
          route_extra_state_wins_over_the_group/1,
          catch_all_route_has_its_template_and_segments/1]).
 
--export([observed/1]).
-
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
@@ -61,14 +59,6 @@ init_per_testcase(_Case, Config) ->
     Config.
 
 end_per_testcase(_Case, _Config) ->
-    ok.
-
-%% Called by the controllers and the plugin of this suite.
-observed(What) ->
-    case whereis(?OBSERVER) of
-        undefined -> ok;
-        Observer -> Observer ! {observed, What}
-    end,
     ok.
 
 refused_upgrade_is_a_500(Config) ->

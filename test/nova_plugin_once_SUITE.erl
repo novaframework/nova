@@ -10,8 +10,6 @@
          crashing_plugin_after_the_security_callback/1,
          passing_plugins_on_an_http_route/1]).
 
--export([observed/1]).
-
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
@@ -57,14 +55,6 @@ init_per_testcase(_Case, Config) ->
     Config.
 
 end_per_testcase(_Case, _Config) ->
-    ok.
-
-%% Called by the plugin and the security callback of this suite.
-observed(What) ->
-    case whereis(?OBSERVER) of
-        undefined -> ok;
-        Observer -> Observer ! {observed, What}
-    end,
     ok.
 
 crashing_plugin_on_a_websocket_route(Config) ->

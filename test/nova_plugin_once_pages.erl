@@ -11,7 +11,7 @@ index(_Req) ->
     {status, 200, #{}, ~"index"}.
 
 allow(_Req) ->
-    nova_plugin_once_SUITE:observed(security),
+    nova_test_observer:observed(nova_plugin_once_observer, security),
     true.
 
 init(ControllerData) ->
@@ -24,7 +24,7 @@ websocket_info(_Info, ControllerData) ->
     {ok, ControllerData}.
 
 pre_request(Req, _Env, #{name := Name} = Options, State) ->
-    nova_plugin_once_SUITE:observed({pre_request, Name}),
+    nova_test_observer:observed(nova_plugin_once_observer, {pre_request, Name}),
     case maps:get(action, Options, pass) of
         pass -> {ok, Req, State};
         crash -> error(plugin_failed);
@@ -32,7 +32,7 @@ pre_request(Req, _Env, #{name := Name} = Options, State) ->
     end.
 
 post_request(Req, _Env, #{name := Name}, State) ->
-    nova_plugin_once_SUITE:observed({post_request, Name}),
+    nova_test_observer:observed(nova_plugin_once_observer, {post_request, Name}),
     {ok, Req, State}.
 
 plugin_info() ->

@@ -17,8 +17,6 @@
          crashing_security_callback_renders_the_500_page/1,
          crashing_security_callback_does_not_upgrade/1]).
 
--export([observed/1]).
-
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
@@ -65,14 +63,6 @@ init_per_testcase(_Case, Config) ->
     Config.
 
 end_per_testcase(_Case, _Config) ->
-    ok.
-
-%% Called by the status pages and the plugin of this suite.
-observed(What) ->
-    case whereis(?OBSERVER) of
-        undefined -> ok;
-        Observer -> Observer ! {observed, What}
-    end,
     ok.
 
 crash_renders_the_500_page(Config) ->

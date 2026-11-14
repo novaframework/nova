@@ -13,5 +13,5 @@ websocket_info(_Info, ControllerData) ->
     {ok, ControllerData}.
 
 terminate(_Reason, _PartialReq, _ControllerData) ->
-    nova_ws_lifecycle_SUITE:observed(terminate),
+    nova_test_observer:observed(nova_ws_lifecycle_observer, terminate),
     ok.

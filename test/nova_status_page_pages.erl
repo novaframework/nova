@@ -29,7 +29,7 @@ server_error(Req) ->
     page(500, cowboy_req:header(~"x-500", Req, ~"ok")).
 
 page(Status, Behaviour) ->
-    nova_status_page_SUITE:observed({page, Status}),
+    nova_test_observer:observed(nova_status_page_observer, {page, Status}),
     case Behaviour of
         ~"ok" -> {status, Status, #{~"content-type" => ~"text/plain"}, [~"page ", integer_to_binary(Status)]};
         ~"crash" -> error(page_failed);
@@ -37,7 +37,7 @@ page(Status, Behaviour) ->
     end.
 
 post_request(Req, _Env, _Options, State) ->
-    nova_status_page_SUITE:observed({post_request, maps:get(bindings, Req, undefined),
+    nova_test_observer:observed(nova_status_page_observer, {post_request, maps:get(bindings, Req, undefined),
                                      maps:get(extra_state, Req, undefined)}),
     {ok, Req, State}.
 
