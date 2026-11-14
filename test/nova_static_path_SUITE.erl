@@ -16,13 +16,16 @@
          symlink_escaping_root/1,
          symlink_escaping_root_when_allowed/1,
          root_that_is_a_symlink/1,
-         index_file/1
+         index_file/1,
+         relative_root_after_the_working_directory_changed/1,
+         root_link_changed_after_the_boot/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
 -define(SECRET, ~"outside-the-static-root").
+-define(RELATIVE_DIR, "nova_static_path_relative").
 
 all() ->
     [
@@ -37,7 +40,9 @@ all() ->
      symlink_escaping_root,
      symlink_escaping_root_when_allowed,
      root_that_is_a_symlink,
-     index_file
+     index_file,
+     relative_root_after_the_working_directory_changed,
+     root_link_changed_after_the_boot
     ].
 
 init_per_suite(Config) ->
@@ -55,18 +60,38 @@ init_per_suite(Config) ->
     ok = file:write_file(filename:join([Root, "indexed", "index.html"]), ~"index"),
     ok = filelib:ensure_path(filename:join(Root, "linked-index")),
     ok = file:make_symlink("../../secret.txt", filename:join([Root, "linked-index", "index.html"])),
+    ok = filelib:ensure_path(?RELATIVE_DIR),
+    ok = file:write_file(filename:join(?RELATIVE_DIR, "file.txt"), ~"inside"),
+    ok = file:write_file(filename:join(?RELATIVE_DIR, "index.html"), ~"index"),
+    Elsewhere = filename:join([Base, "elsewhere", ?RELATIVE_DIR]),
+    ok = filelib:ensure_path(Elsewhere),
+    ok = file:make_symlink(filename:join(Base, "secret.txt"), filename:join(Elsewhere, "file.txt")),
+    ok = file:make_symlink(filename:join(Base, "secret.txt"), filename:join(Elsewhere, "index.html")),
+    ok = filelib:ensure_path(filename:join(Base, "release-1")),
+    ok = filelib:ensure_path(filename:join(Base, "release-2")),
+    ok = file:write_file(filename:join([Base, "release-1", "file.txt"]), ~"inside"),
+    ok = file:write_file(filename:join([Base, "release-1", "index.html"]), ~"index"),
+    ok = file:make_symlink("../secret.txt", filename:join([Base, "release-2", "file.txt"])),
+    ok = file:make_symlink("../secret.txt", filename:join([Base, "release-2", "index.html"])),
+    ok = file:make_symlink("release-1", filename:join(Base, "current")),
     Host = [#{prefix => "",
               routes => [
+                         {"/relative/[...]", ?RELATIVE_DIR},
+                         {"/relative-index", ?RELATIVE_DIR},
+                         {"/current/[...]", filename:join(Base, "current")},
+                         {"/current-index", filename:join(Base, "current")},
                          {"/files/[...]", Root},
                          {"/linked/[...]", Root, #{follow_external_symlinks => true}},
                          {"/via-link/[...]", filename:join(Base, "root-link")},
                          {"/indexed/[...]", filename:join(Root, "indexed")},
                          {"/linked-index/[...]", filename:join(Root, "linked-index")}
                         ]}],
-    [{port, nova_test_listener:start(#{host => Host})}, {secret, filename:join(Base, "secret.txt")} | Config].
+    [{port, nova_test_listener:start(#{host => Host})}, {secret, filename:join(Base, "secret.txt")},
+     {base, Base} | Config].
 
 end_per_suite(_Config) ->
-    nova_test_listener:stop().
+    nova_test_listener:stop(),
+    file:del_dir_r(?RELATIVE_DIR).
 
 file_inside_root(Config) ->
     Port = ?config(port, Config),
@@ -131,6 +156,29 @@ index_file(Config) ->
     ?assertEqual({200, ~"index"}, nova_test_listener:get(Port, "/indexed")),
     refused(Config, "/files/linked-index"),
     refused(Config, "/linked-index").
+
+%% What was checked when the route was compiled is what is served, also
+%% when the same relative path has come to mean another directory.
+relative_root_after_the_working_directory_changed(Config) ->
+    Port = ?config(port, Config),
+    {ok, Cwd} = file:get_cwd(),
+    try
+        ok = file:set_cwd(filename:join(?config(base, Config), "elsewhere")),
+        ?assertEqual({200, ~"inside"}, nova_test_listener:get(Port, "/relative/file.txt")),
+        ?assertEqual({200, ~"index"}, nova_test_listener:get(Port, "/relative")),
+        ?assertEqual({200, ~"index"}, nova_test_listener:get(Port, "/relative-index"))
+    after
+        ok = file:set_cwd(Cwd)
+    end.
+
+root_link_changed_after_the_boot(Config) ->
+    Port = ?config(port, Config),
+    Link = filename:join(?config(base, Config), "current"),
+    ok = file:delete(Link),
+    ok = file:make_symlink("release-2", Link),
+    ?assertEqual({200, ~"inside"}, nova_test_listener:get(Port, "/current/file.txt")),
+    ?assertEqual({200, ~"index"}, nova_test_listener:get(Port, "/current")),
+    ?assertEqual({200, ~"index"}, nova_test_listener:get(Port, "/current-index")).
 
 refused(Config, Path) ->
     {Status, Body} = nova_test_listener:get(?config(port, Config), Path),

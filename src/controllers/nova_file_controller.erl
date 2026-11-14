@@ -81,8 +81,7 @@ serve_file(_Req) ->
 get_dir(#{extra_state := #{pathinfo := Pathinfo, static := Dir, options := Options} = ExtraState} = Req) ->
     %% This case will be invoked if a directory was set with wildcard - pathinfo will then
     %% contain the segments of the wildcard value
-    Root = get_filepath(Dir),
-    case path_inside_root(static_root(ExtraState, Root, Options), Root, Pathinfo, Options) of
+    case path_inside_root(static_root(ExtraState, get_filepath(Dir), Options), Pathinfo, Options) of
         {ok, Filepath0, Resolved} ->
             case filelib:is_dir(Filepath0) of
                 false ->
@@ -102,13 +101,14 @@ get_dir(#{extra_state := #{pathinfo := Pathinfo, static := Dir, options := Optio
             {status, 404}
     end;
 get_dir(#{path := Path, extra_state := #{static := Dir, options := Options} = ExtraState} = Req) ->
-    Filepath = get_filepath(Dir),
+    {_RootSegments, DirSegments} = Resolved = static_root(ExtraState, get_filepath(Dir), Options),
+    Filepath = filename:join(DirSegments),
     {ok, Files} = file:list_dir(Filepath),
     case get_index_file(Files, maps:get(index_files, Options, ["index.html"])) of
         {ok, IndexFile} ->
-            IndexPath = filename:join(Filepath, IndexFile),
-            case inside_root(static_root(ExtraState, Filepath, Options), [IndexFile], Options) of
-                {ok, _Resolved} ->
+            case inside_root(Resolved, [IndexFile], Options) of
+                {ok, {_, IndexSegments}} ->
+                    IndexPath = filename:join(IndexSegments),
                     get_file(Req#{extra_state => #{static => {file, IndexPath}, options => Options}});
                 error ->
                     {status, 404}
@@ -138,12 +138,14 @@ get_dir(_Req) ->
 
 %% The router resolves dot segments before a request gets here. This holds
 %% on its own, so the files served do not depend on what is in front of it.
-path_inside_root(Resolved, Root, Pathinfo, Options) ->
+%% The path returned is the one that was checked, from the resolved root,
+%% so a root that has come to mean another directory is not served from.
+path_inside_root(Resolved, Pathinfo, Options) ->
     case lists:all(fun safe_segment/1, Pathinfo) of
         true ->
             Segments = [binary_to_list(Segment) || Segment <- Pathinfo],
             case inside_root(Resolved, Segments, Options) of
-                {ok, FileResolved} -> {ok, filename:join([Root | Segments]), FileResolved};
+                {ok, {_, FileSegments} = FileResolved} -> {ok, filename:join(FileSegments), FileResolved};
                 error -> error
             end;
         false ->

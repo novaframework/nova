@@ -64,7 +64,10 @@ of `{Module, Function}` in Nova.
 - **A static directory serves only what is inside it.** A file reached through
   a symbolic link that points out of the directory is answered with `404`.
   Move the file into the directory, or set `follow_external_symlinks => true`
-  in the options of the route.
+  in the options of the route. The directory is the one its path named when
+  the routes were compiled: a relative path does not follow a later change of
+  the working directory, and a symbolic link on the way to the directory that
+  is changed later is not followed until Nova is restarted.
 
 - **A `Range` that is not valid, or is sent with `If-Range`, gets the whole
   file.** A static file answered a byte range that is not valid, such as
