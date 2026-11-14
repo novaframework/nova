@@ -2,7 +2,7 @@
 %%% controller in, as the plugins guide describes it.
 -module(nova_request_pipeline_SUITE).
 
--export([all/0, init_per_suite/1, end_per_suite/1]).
+-export([all/0, init_per_suite/1, end_per_suite/1, init_per_testcase/2, end_per_testcase/2]).
 
 -export([
          served_request_runs_both_plugin_phases/1,
@@ -19,9 +19,6 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
-
--define(PRE_REQUEST, 1).
--define(POST_REQUEST, 2).
 
 all() ->
     [
@@ -50,25 +47,32 @@ init_per_suite(Config) ->
     Port = nova_test_listener:free_port(),
     ok = nova_test_listener:configure(#{port => Port, host => Host}),
     application:set_env(nova, plugins, [{pre_request, ?MODULE, #{}}, {post_request, ?MODULE, #{}}]),
-    persistent_term:put(?MODULE, counters:new(2, [])),
     {ok, _Started} = application:ensure_all_started(nova_test_app),
     [{port, Port} | Config].
 
 end_per_suite(_Config) ->
     ok = nova_test_listener:stop(),
     application:set_env(nova, plugins, []),
+    ok.
+
+%% The plugin tells the process of the test case which phase it ran in.
+init_per_testcase(_Case, Config) ->
+    persistent_term:put(?MODULE, self()),
+    Config.
+
+end_per_testcase(_Case, _Config) ->
     persistent_term:erase(?MODULE),
     ok.
 
 pre_request(Req, _Env, #{stop := true}, State) ->
-    bump(?PRE_REQUEST),
+    ran(pre_request),
     {stop, {reply, 403, ~"stopped by a plugin"}, Req, State};
 pre_request(Req, _Env, _Options, State) ->
-    bump(?PRE_REQUEST),
+    ran(pre_request),
     {ok, cowboy_req:set_resp_header(~"x-pipeline", ~"pre_request", Req), State}.
 
 post_request(Req, _Env, _Options, State) ->
-    bump(?POST_REQUEST),
+    ran(post_request),
     {ok, Req, State}.
 
 plugin_info() ->
@@ -79,48 +83,52 @@ plugin_info() ->
       description => ~"Counts the phases it runs in",
       options => []}.
 
-bump(Phase) ->
-    counters:add(persistent_term:get(?MODULE), Phase, 1).
+ran(Phase) ->
+    case persistent_term:get(?MODULE) of
+        TestCase when is_pid(TestCase) -> TestCase ! {?MODULE, Phase}
+    end.
 
-runs(Phase) ->
-    counters:get(persistent_term:get(?MODULE), Phase).
+%% The phases that ran since the test case started, or since the last call.
+%% A response is read until the connection closes, which is after the
+%% post_request plugins of that request.
+phases() ->
+    receive
+        {?MODULE, Phase} -> [Phase | phases()]
+    after 0 ->
+        []
+    end.
 
 served_request_runs_both_plugin_phases(Config) ->
-    {Pre, Post} = {runs(?PRE_REQUEST), runs(?POST_REQUEST)},
     {Status, Headers, Body} = nova_test_listener:response(?config(port, Config), "GET", "/open/", []),
     ?assertEqual({200, ~"page"}, {Status, Body}),
     ?assertEqual(~"pre_request", maps:get(~"x-pipeline", Headers)),
-    ?assertEqual({Pre + 1, Post + 1}, {runs(?PRE_REQUEST), runs(?POST_REQUEST)}).
+    ?assertEqual([pre_request, post_request], phases()).
 
 plugin_answers_before_the_security_callback(Config) ->
     ?assertEqual({403, ~"stopped by a plugin"}, nova_test_listener:get(?config(port, Config), "/stopped/")).
 
 stopped_request_runs_no_post_request_plugin(Config) ->
-    {Pre, Post} = {runs(?PRE_REQUEST), runs(?POST_REQUEST)},
     ?assertMatch({403, _}, nova_test_listener:get(?config(port, Config), "/stopped/")),
-    ?assertEqual({Pre + 1, Post}, {runs(?PRE_REQUEST), runs(?POST_REQUEST)}).
+    ?assertEqual([pre_request], phases()).
 
 denied_request_runs_no_post_request_plugin(Config) ->
-    {Pre, Post} = {runs(?PRE_REQUEST), runs(?POST_REQUEST)},
     {Status, Headers, _Body} = nova_test_listener:response(?config(port, Config), "GET", "/denied/", []),
     ?assertEqual(401, Status),
     ?assertEqual(~"pre_request", maps:get(~"x-pipeline", Headers)),
-    ?assertEqual({Pre + 1, Post}, {runs(?PRE_REQUEST), runs(?POST_REQUEST)}).
+    ?assertEqual([pre_request], phases()).
 
 unmatched_path_runs_no_plugin(Config) ->
-    {Pre, Post} = {runs(?PRE_REQUEST), runs(?POST_REQUEST)},
     {Status, Headers, _Body} = nova_test_listener:response(?config(port, Config), "GET", "/nowhere", []),
     ?assertEqual(404, Status),
     ?assertNot(is_map_key(~"x-pipeline", Headers)),
-    ?assertEqual({Pre, Post}, {runs(?PRE_REQUEST), runs(?POST_REQUEST)}).
+    ?assertEqual([], phases()).
 
 unmatched_method_runs_no_plugin(Config) ->
-    {Pre, Post} = {runs(?PRE_REQUEST), runs(?POST_REQUEST)},
     {Status, Headers, Body} = nova_test_listener:response(?config(port, Config), "POST", "/open/",
                                                           [{"x-marked", "yes"}]),
     ?assertEqual({405, ~"method page"}, {Status, Body}),
     ?assertNot(is_map_key(~"x-pipeline", Headers)),
-    ?assertEqual({Pre, Post}, {runs(?PRE_REQUEST), runs(?POST_REQUEST)}).
+    ?assertEqual([], phases()).
 
 status_page_is_behind_the_security_of_its_group(Config) ->
     {Status, Body} = nova_test_listener:request(?config(port, Config), "POST", "/open/", []),
@@ -130,8 +138,7 @@ status_page_is_behind_the_security_of_its_group(Config) ->
 %% Over HTTP/1.1 the post_request plugins run when the upgrade is answered,
 %% while the connection is open. The request after it gives them the time.
 websocket_upgrade_runs_both_plugin_phases(Config) ->
-    {Pre, Post} = {runs(?PRE_REQUEST), runs(?POST_REQUEST)},
     ?assertEqual([~"connected", ~"pong"],
                  nova_test_listener:websocket_texts(?config(port, Config), "/open/ws", ~"ping", 2)),
     ?assertMatch({200, _}, nova_test_listener:get(?config(port, Config), "/open/")),
-    ?assertEqual({Pre + 2, Post + 2}, {runs(?PRE_REQUEST), runs(?POST_REQUEST)}).
+    ?assertEqual([pre_request, post_request, pre_request, post_request], phases()).

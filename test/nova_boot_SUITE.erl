@@ -54,7 +54,7 @@ listener_starts_after_the_processes_it_needs(_Config) ->
 restarted_supervisor_serves_again(_Config) ->
     Routes = [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}],
     Port = nova_test_listener:start(#{host => [#{routes => Routes}]}),
-    Supervisor = whereis(nova_sup),
+    Supervisor = running(nova_sup),
     Monitor = monitor(process, Supervisor),
     exit(Supervisor, kill),
     receive {'DOWN', Monitor, process, Supervisor, killed} -> ok end,
@@ -119,6 +119,11 @@ pubsub_scope_started_elsewhere_is_left_alone(_Config) ->
         ?assert(is_process_alive(Scope))
     after
         exit(Scope, kill)
+    end.
+
+running(Name) ->
+    case whereis(Name) of
+        Pid when is_pid(Pid) -> Pid
     end.
 
 pubsub_scope() ->

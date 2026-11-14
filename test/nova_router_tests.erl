@@ -209,7 +209,7 @@ execute_cowboy_handler_test_() ->
     end}.
 
 execute_keeps_the_dispatch_key_on_the_request_test_() ->
-    {setup, ?SETUP, ?CLEANUP, fun() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
         Key = {nova_dispatch, test_app, 8081},
         persistent_term:put(Key, persistent_term:get(nova_dispatch)),
         try

@@ -160,12 +160,12 @@ h2_status(Socket, Buffer, Request) ->
             h2_status(Socket, Rest, Request);
         {ok, {headers, 1, _IsFin, head_fin, HeaderBlock}, _Rest} ->
             {ResponseHeaders, _Decoder} = cow_hpack:decode(HeaderBlock),
-            {~":status", Status} = lists:keyfind(~":status", 1, ResponseHeaders),
+            {~":status", <<Status/binary>>} = lists:keyfind(~":status", 1, ResponseHeaders),
             binary_to_integer(Status);
         {ok, _OtherFrame, Rest} ->
             h2_status(Socket, Rest, Request);
         more ->
-            {ok, Data} = gen_tcp:recv(Socket, 0, 5000),
+            {ok, <<Data/binary>>} = gen_tcp:recv(Socket, 0, 5000),
             h2_status(Socket, <<Buffer/binary, Data/binary>>, Request)
     end.
 

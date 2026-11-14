@@ -6,7 +6,7 @@
 -spec start() -> ok.
 start() ->
     _ = logger:remove_handler(?MODULE),
-    logger:add_handler(?MODULE, ?MODULE, #{level => all, config => #{collector => self()}}).
+    ok = logger:add_handler(?MODULE, ?MODULE, #{level => all, config => #{collector => self()}}).
 
 %% The events logged since start/0, oldest first.
 -spec stop() -> [logger:log_event()].
@@ -15,7 +15,7 @@ stop() ->
     collected().
 
 -spec log(logger:log_event(), logger:handler_config()) -> ok.
-log(Event, #{config := #{collector := Collector}}) ->
+log(Event, #{config := #{collector := Collector}}) when is_pid(Collector) ->
     Collector ! {?MODULE, Event},
     ok.
 

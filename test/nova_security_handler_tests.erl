@@ -173,7 +173,7 @@ callback_unexpected_value_test_() ->
 %%====================================================================
 
 invalid_secure_value_test_() ->
-    {setup, ?SETUP, ?CLEANUP,
+    {setup, fun setup/0, fun cleanup/1,
      [fun() ->
               {stop, Req1} = nova_security_handler:execute(req(), (env())#{secure => Invalid}),
               ?assertEqual(401, maps:get(resp_status_code, Req1))

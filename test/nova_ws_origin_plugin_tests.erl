@@ -29,10 +29,13 @@ http3_upgrade_test_() ->
       ?_assertMatch({ok, _Req, undefined},
                     pre_request((http3_connect(#{~"origin" => ?EVIL}))#{protocol => ~"connect-udp"}, #{}))}].
 
+unparseable_upgrade() ->
+    #{version => 'HTTP/1.1', method => ~"GET", host => ~"localhost", port => 80, path => ~"/ws",
+      headers => #{~"host" => ~"localhost", ~"connection" => ~"upgrade, \"", ~"upgrade" => ~"websocket",
+                   ~"origin" => ?EVIL}}.
+
 unparseable_upgrade_is_checked_test() ->
-    Req = #{version => 'HTTP/1.1', method => ~"GET", host => ~"localhost", port => 80, path => ~"/ws",
-            headers => #{~"host" => ~"localhost", ~"connection" => ~"upgrade, \"", ~"upgrade" => ~"websocket",
-                         ~"origin" => ?EVIL}},
+    Req = unparseable_upgrade(),
     ?assertExit({request_error, _Header, _Text}, cowboy_websocket:is_upgrade_request(Req)),
     ?assertMatch({stop, {reply, 403, _Body}, _Req, undefined}, pre_request(Req, #{})),
     ?assertMatch({ok, _Req, undefined}, pre_request(Req, #{allowed_origins => [?EVIL]})).

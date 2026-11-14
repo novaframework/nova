@@ -82,8 +82,7 @@ add_cowboy_handler_route(Path, Secure, PluginOptions) ->
                                   arguments = #{},
                                   plugins = [{pre_request, [{fun ?MODULE:pre_request/4, PluginOptions}]}],
                                   secure = Secure},
-    {ok, Dispatch} = nova_routing_trie:insert('_', Path, '_', Value, persistent_term:get(nova_dispatch), #{}),
-    persistent_term:put(nova_dispatch, Dispatch).
+    add_route(Path, Value).
 
 %% The router refuses to compile such a route, so this is one that got into
 %% the routing table some other way.
@@ -91,6 +90,9 @@ add_route_with_invalid_security(Path) ->
     Value = #nova_handler_value{app = nova_test_app,
                                 callback = fun nova_fail_closed_pages:page/1,
                                 secure = {nova_fail_closed_pages, page}},
+    add_route(Path, Value).
+
+add_route(Path, Value) ->
     {ok, Dispatch} = nova_routing_trie:insert('_', Path, '_', Value, persistent_term:get(nova_dispatch), #{}),
     persistent_term:put(nova_dispatch, Dispatch).
 
