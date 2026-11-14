@@ -9,7 +9,7 @@ correlation_id(Value) ->
     try
         {ok, #{correlation_id := Id, resp_headers := #{~"x-correlation-id" := Id}}, state} =
             nova_correlation_plugin:pre_request(Req, #{}, ?OPTIONS, state),
-        #{~"correlation-id" := Id} = logger:get_process_metadata(),
+        #{'correlation-id' := Id} = logger:get_process_metadata(),
         Id
     after
         logger:unset_process_metadata()
@@ -54,3 +54,24 @@ no_header_configured_ignores_the_client_test() ->
     after
         logger:unset_process_metadata()
     end.
+
+logger_key(Options) ->
+    Req = #{headers => #{}, resp_headers => #{}},
+    try
+        {ok, #{correlation_id := Id}, state} = nova_correlation_plugin:pre_request(Req, #{}, Options, state),
+        [Key || {Key, Value} <- maps:to_list(logger:get_process_metadata()), Value =:= Id]
+    after
+        logger:unset_process_metadata()
+    end.
+
+logger_metadata_key_is_an_atom_test_() ->
+    [?_assertEqual(['correlation-id'], logger_key(#{})),
+     ?_assertEqual([request_id], logger_key(#{logger_metadata_key => request_id})),
+     ?_assertEqual(['correlation-id'], logger_key(#{logger_metadata_key => ~"correlation-id"})),
+     ?_assertEqual([trace_ref], logger_key(#{logger_metadata_key => ~"trace_ref"}))].
+
+logger_metadata_key_naming_no_atom_test() ->
+    Options = #{logger_metadata_key => ~"nova correlation key that names no atom"},
+    {Key, [{error, _Msg}]} = nova_test_log:collect(fun() -> logger_key(Options) end),
+    ?assertEqual(['correlation-id'], Key),
+    ?assertEqual({['correlation-id'], []}, nova_test_log:collect(fun() -> logger_key(Options) end)).
