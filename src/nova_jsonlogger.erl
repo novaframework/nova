@@ -277,8 +277,8 @@ printed_term_is_bounded_test() ->
         term => {reason, lists:seq(1, 100000)},
         short => {reason, <<255, 0>>}
     },
-    {ok, #{~"id" := Id, ~"parts" := Parts, ~"term" := Term, ~"short" := Short}} =
-        thoas:decode(format(#{level => info, msg => {report, Report}, meta => #{}}, #{})),
+    Json = iolist_to_binary(format(#{level => info, msg => {report, Report}, meta => #{}}, #{})),
+    #{~"id" := Id, ~"parts" := Parts, ~"term" := Term, ~"short" := Short} = json:decode(Json),
     ?assertMatch(<<"<<255,0,255,0,", _/binary>>, Id),
     ?assertMatch(<<"[<<255,0>>,<<255,0>>,", _/binary>>, Parts),
     ?assertMatch(<<"{reason,[1,2,3,", _/binary>>, Term),
