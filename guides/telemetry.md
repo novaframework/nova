@@ -126,8 +126,18 @@ A span around each `pre_request` and `post_request` plugin call.
 
 - `plugin` is the plugin module.
 - `callback` is `pre_request` or `post_request`.
-- `result` is `ok`, `break` or `stop`, the first element of what the plugin
-  returned, or `invalid` when the plugin returned anything else.
+- `result` names what the plugin returned:
+  - `ok` for `{ok, Req, State}` and `{ok, {reply, ...}, Req, State}`
+  - `stop` for `{stop, Req, State}`, `{stop, Reply, Req, State}` and
+    `{stop, Req}`
+  - `break` for `{break, Req, State}` and `{break, Reply, Req, State}`
+  - `error` for `{error, Reason}`
+  - `invalid` for anything else, including `{ok, Reply, Req, State}` with a
+    reply that is not `{reply, ...}`
+
+  It describes the return, not what Nova did with it: the request may go on,
+  stop, or end in a `500` page. The `nova_plugin` documentation has the
+  contract.
 - A crashing plugin still renders a `500` page after the `exception` event.
 
 ## Websocket

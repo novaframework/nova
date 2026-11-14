@@ -352,6 +352,7 @@ plugin_telemetry_test_() ->
      fun cleanup/1,
      [fun plugin_telemetry_results/0,
       fun plugin_telemetry_invalid_result/0,
+      fun plugin_telemetry_error_and_stop_result/0,
       fun plugin_telemetry_exception/0,
       fun plugin_telemetry_exception_reason_is_a_tag/0]}.
 
@@ -380,15 +381,49 @@ plugin_telemetry_results() ->
 plugin_telemetry_invalid_result() ->
     Id = attach(),
     try
-        [begin
-             P = fun(_R, _Env, _Opts, _State) -> Return end,
-             ?assertError(_, nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env())),
-             {_, _Start} = next_event([nova, plugin, start]),
-             {_, Stop} = next_event([nova, plugin, stop]),
-             ?assertEqual(invalid, maps:get(result, Stop))
-         end || Return <- [{error, #{}, #{}}, {ok}, {ok, a, b, c, d}, {}]]
+        [?assertEqual({invalid, not_run}, result_and_next_plugin(Return))
+         || Return <- [{error, #{}, #{}}, {ok}, {ok, a, b, c, d}, {}, {break, req()}, {stop, not_a_req},
+                       {error}, not_a_tuple]],
+        %% Whether the request goes on after an ok with a reply Nova cannot
+        %% hand on is the plugin handler's business; the result is invalid
+        %% either way.
+        [?assertMatch({invalid, _}, result_and_next_plugin({ok, Reply, req(), #{}}))
+         || Reply <- [{redirect, ~"/login"}, {status, 401}, not_a_reply, {}]]
     after
         telemetry:detach(Id)
+    end.
+
+plugin_telemetry_error_and_stop_result() ->
+    Id = attach(),
+    try
+        ?assertEqual({error, not_run}, result_and_next_plugin({error, some_reason})),
+        ?assertEqual({stop, not_run}, result_and_next_plugin({stop, req()}))
+    after
+        telemetry:detach(Id)
+    end.
+
+%% Runs a plugin that returns Return in front of a second plugin. Gives the
+%% result of the first plugin's stop event and whether the second one ran.
+%% A return Nova does not support may raise or render a 500 page; which of
+%% the two is not telemetry's to decide, so both are accepted here.
+result_and_next_plugin(Return) ->
+    Self = self(),
+    First = fun(_R, _Env, _Opts, _State) -> Return end,
+    Second = fun(R, _Env, _Opts, State) -> Self ! second_plugin_ran, {ok, R, State} end,
+    try nova_plugin_handler:execute(req([{pre_request, [plugin(First), plugin(Second)]}]), env()) of
+        _ -> ok
+    catch
+        error:_ -> ok
+    end,
+    {_, _Start} = next_event([nova, plugin, start]),
+    {_, Stop} = next_event([nova, plugin, stop]),
+    receive
+        second_plugin_ran ->
+            {_, _} = next_event([nova, plugin, start]),
+            {_, _} = next_event([nova, plugin, stop]),
+            {maps:get(result, Stop), ran}
+    after 0 ->
+            {maps:get(result, Stop), not_run}
     end.
 
 plugin_telemetry_exception() ->

@@ -91,15 +91,17 @@ plugin_module(Callback) ->
     {module, Module} = erlang:fun_info(Callback, module),
     Module.
 
-plugin_result({Tag, _Req, _State})        -> result_tag(Tag);
-plugin_result({Tag, _Reply, _Req, _State}) -> result_tag(Tag);
-plugin_result(_Return) ->
-    invalid.
-
-result_tag(ok)    -> ok;
-result_tag(break) -> break;
-result_tag(stop)  -> stop;
-result_tag(_Tag)  -> invalid.
+%% Names the return, whatever Nova goes on to do with it. {ok, Reply, Req,
+%% State} is part of the plugin contract only with a {reply, ...} reply.
+plugin_result({ok, _Req, _State})                                         -> ok;
+plugin_result({ok, Reply, _Req, _State}) when element(1, Reply) =:= reply -> ok;
+plugin_result({break, _Req, _State})                                      -> break;
+plugin_result({break, _Reply, _Req, _State})                              -> break;
+plugin_result({stop, _Req, _State})                                       -> stop;
+plugin_result({stop, _Reply, _Req, _State})                               -> stop;
+plugin_result({stop, Req}) when is_map(Req)                               -> stop;
+plugin_result({error, _Reason})                                           -> error;
+plugin_result(_Return)                                                    -> invalid.
 
 set_state(Callback, Return) when is_function(Callback) ->
     ReturnList = erlang:tuple_to_list(Return),
