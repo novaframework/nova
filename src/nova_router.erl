@@ -51,7 +51,7 @@
 -type lookup_result() :: {ok, bindings(), Value :: term()} |
                          {ok, bindings(), Value :: term(), PathInfo :: [binary()]} |
                          {error, not_found} |
-                         {error, comparator_not_found, AllowedMethods :: [binary()]}.
+                         {error, comparator_not_found, AllowedMethods :: [nova_routing_trie:comparator()]}.
 
 -export_type([bindings/0, lookup_result/0]).
 

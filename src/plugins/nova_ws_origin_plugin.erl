@@ -57,18 +57,23 @@ plugin_info() ->
       options => [{allowed_origins, ~"same_host, or the list of origins that may open a websocket"}]}.
 
 is_websocket_upgrade(Req) ->
-    Upgrade = cowboy_bstr:to_lower(cowboy_req:header(~"upgrade", Req, <<>>)),
-    binary:match(Upgrade, ~"websocket") =/= nomatch.
+    binary:match(lowercase_header(~"upgrade", Req), ~"websocket") =/= nomatch.
 
+-spec is_allowed(Origin :: binary() | undefined, Req :: cowboy_req:req(),
+                 Allowed :: same_host | [iodata()]) -> boolean().
 is_allowed(undefined, _Req, _Allowed) ->
     true;
 is_allowed(Origin, Req, same_host) ->
     case binary:split(cowboy_bstr:to_lower(Origin), ~"://") of
-        [_Scheme, Authority] -> Authority =:= cowboy_bstr:to_lower(cowboy_req:header(~"host", Req, <<>>));
+        [_Scheme, Authority] -> Authority =:= lowercase_header(~"host", Req);
         _NoAuthority -> false
     end;
-is_allowed(Origin, _Req, Allowed) when is_list(Allowed) ->
-    LowerOrigin = cowboy_bstr:to_lower(Origin),
-    lists:any(fun(AllowedOrigin) ->
-                      cowboy_bstr:to_lower(iolist_to_binary(AllowedOrigin)) =:= LowerOrigin
-              end, Allowed).
+is_allowed(Origin, _Req, Allowed) ->
+    lists:member(cowboy_bstr:to_lower(Origin),
+                 [cowboy_bstr:to_lower(iolist_to_binary(AllowedOrigin)) || AllowedOrigin <- Allowed]).
+
+lowercase_header(Name, Req) ->
+    case cowboy_req:header(Name, Req) of
+        Value when is_binary(Value) -> cowboy_bstr:to_lower(Value);
+        undefined -> <<>>
+    end.

@@ -95,7 +95,7 @@ ensure_plugin(Module) when is_atom(Module) ->
                                                         {Title0, Version0, _, _, _} -> #{title => Title0, version => Version0};
                                                         PluginInfo -> PluginInfo
                                                     end,
-            gen_server:call(?SERVER, {add_plugin, Module, Title, Version});
+            ok = gen_server:call(?SERVER, {add_plugin, Module, Title, Version});
         false ->
             ok
     end.

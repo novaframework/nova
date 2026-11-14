@@ -123,11 +123,11 @@ is_safe_method(_) -> false.
 
 %% Compared on the segments the router matches on. A byte prefix of the raw
 %% path let `/api` cover `/apikeys`, and `/api/../admin` reach `/admin`.
+-spec is_excluded_path(Path :: binary(), Prefixes :: [iodata()]) -> boolean().
 is_excluded_path(Path, Prefixes) ->
     Segments = nova_routing_trie:canonical_segments(Path),
-    lists:any(fun(Prefix) ->
-                      lists:prefix(nova_routing_trie:canonical_segments(iolist_to_binary(Prefix)), Segments)
-              end, Prefixes).
+    [] =/= [Prefix || Prefix <- Prefixes,
+                      lists:prefix(nova_routing_trie:canonical_segments(iolist_to_binary(Prefix)), Segments)].
 
 get_submitted_token(Req, FieldName, HeaderName) ->
     case cowboy_req:header(HeaderName, Req) of

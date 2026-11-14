@@ -33,7 +33,7 @@
 -define(SERVER, ?MODULE).
 
 -record(state, {
-                process_refs = [] :: [pid()]
+                process_refs = [] :: [port()]
                }).
 
 %%%===================================================================
@@ -110,14 +110,12 @@ handle_call(Request, From, State) ->
                          {noreply, NewState :: term(), Timeout :: timeout()} |
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), NewState :: term()}.
-handle_cast({async, Application, Cmd, Args, Options}, State = #state{process_refs = ProcessRefs}) ->
+handle_cast({async, Application, Cmd, Args, Options}, State = #state{process_refs = ProcessRefs})
+  when is_atom(Application), is_list(Cmd), is_list(Args), is_map(Options) ->
     ArgList = argument_string(Args),
-    PortOptions = [use_stdio, {line, 1024}, stderr_to_stdout],
     try
-        Port = case workdir(Application, maps:get(workdir, Options, undefined)) of
-                   undefined -> erlang:open_port({spawn, Cmd ++ " " ++ ArgList}, PortOptions);
-                   Workdir -> erlang:open_port({spawn, Cmd ++ " " ++ ArgList}, [{cd, Workdir} | PortOptions])
-               end,
+        Port = erlang:open_port({spawn, Cmd ++ " " ++ ArgList},
+                                port_options(workdir(Application, maps:get(workdir, Options, undefined)))),
         ?LOG_NOTICE(#{action => <<"Started async command">>, command => Cmd, arguments => ArgList}),
         {noreply, State#state{process_refs = [Port|ProcessRefs]}}
     catch
@@ -126,6 +124,10 @@ handle_cast({async, Application, Cmd, Args, Options}, State = #state{process_ref
                          command => Cmd, arguments => ArgList, reason => Reason}),
             {noreply, State}
     end;
+handle_cast({async, Application, Cmd, Args, Options}, State) ->
+    ?LOG_ERROR(#{msg => <<"Could not start watcher">>, application => Application,
+                 command => Cmd, arguments => Args, options => Options, reason => invalid_watcher}),
+    {noreply, State};
 handle_cast(_Request, State) ->
     {noreply, State}.
 
@@ -212,6 +214,11 @@ workdir(Application, Subdir) ->
         LibDir when Subdir =:= undefined -> LibDir;
         LibDir -> filename:join(LibDir, Subdir)
     end.
+
+port_options(undefined) ->
+    [use_stdio, {line, 1024}, stderr_to_stdout];
+port_options(Workdir) ->
+    [{cd, Workdir} | port_options(undefined)].
 
 argument_string([]) -> "";
 argument_string(Args = [Char | _]) when is_integer(Char) -> Args;

@@ -263,10 +263,11 @@ invalid_utf8_test() ->
         parts => [<<"ok ">>, <<255>>],
         name => [114, 228, 107, 97]
     },
-    {ok, Decoded} = thoas:decode(format(#{level => info, msg => {report, Report}, meta => #{}}, #{})),
-    ?assertEqual(<<"<<255,0>>">>, maps:get(<<"id">>, Decoded)),
-    ?assertEqual(<<"r", 195, 164, "ka">>, maps:get(<<"name">>, Decoded)),
-    ?assert(is_binary(maps:get(<<"parts">>, Decoded))).
+    {ok, #{<<"id">> := Id, <<"name">> := Name, <<"parts">> := Parts}} =
+        thoas:decode(format(#{level => info, msg => {report, Report}, meta => #{}}, #{})),
+    ?assertEqual(<<"<<255,0>>">>, Id),
+    ?assertEqual(<<"r", 195, 164, "ka">>, Name),
+    ?assert(is_binary(Parts)).
 
 meta_without_test() ->
     Error = #{

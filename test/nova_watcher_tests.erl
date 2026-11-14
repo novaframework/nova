@@ -24,7 +24,8 @@ watcher_test_() ->
       fun command_with_arguments/1,
       fun command_with_options/1,
       fun unknown_application_does_not_stop_the_watcher/1,
-      fun missing_workdir_does_not_stop_the_watcher/1]}.
+      fun missing_workdir_does_not_stop_the_watcher/1,
+      fun malformed_watcher_does_not_stop_the_watcher/1]}.
 
 runs_in_the_workdir_and_leaves_the_node_where_it_was({Cwd, Dir}) ->
     ?_test(begin
@@ -89,6 +90,15 @@ missing_workdir_does_not_stop_the_watcher({_Cwd, Dir}) ->
                _ = sys:get_state(nova_watcher),
                ?assertEqual(Watcher, whereis(nova_watcher)),
                ?assertNot(filelib:is_file(filename:join(Dir, "ran")))
+           end).
+
+malformed_watcher_does_not_stop_the_watcher({_Cwd, _Dir}) ->
+    ?_test(begin
+               Watcher = whereis(nova_watcher),
+               ok = nova_watcher:async_cast(nova, ~"touch", ["ran"], #{}),
+               ok = nova_watcher:async_cast(nova, "touch", ["ran"], [not_a_map]),
+               _ = sys:get_state(nova_watcher),
+               ?assertEqual(Watcher, whereis(nova_watcher))
            end).
 
 appears(File) ->
