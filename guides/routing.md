@@ -294,7 +294,10 @@ matched them as a byte prefix of the raw path.
 
 Once a path matches, the method is resolved. An exact method wins over a route
 declared with `'_'`. If the path matches but the method does not, Nova answers
-`405` with an `allow` header listing the methods that path does accept.
+`405` with an `allow` header listing the methods that path does accept. No
+plugin runs for such a request, with one exception: a CORS preflight runs the
+plugins of the route for the method it asks about before the `405`, so that
+`nova_cors_plugin` can answer it.
 
 If two routes declare the same path *and* the same method, the first one
 registered wins and the second is logged and ignored. Set

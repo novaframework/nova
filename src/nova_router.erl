@@ -139,7 +139,8 @@ execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
             AllowHeader = iolist_to_binary(lists:join(<<", ">>, AllowedMethods)),
             %% Set the 'allow'-header
             Req1 = cowboy_req:set_resp_header(<<"allow">>, AllowHeader, Req),
-            render_status_page('_', 405, #{error => "Method not allowed"}, Req1, Env);
+            {ok, Req2, Env1} = render_status_page('_', 405, #{error => "Method not allowed"}, Req1, Env),
+            {ok, with_preflight_plugins(Req2, Host, Path, Dispatch), Env1};
         {ok, Bindings, #nova_handler_value{app = App, callback = Callback, secure = Secure, plugins = RoutePlugins,
                                            extra_state = ExtraState}} ->
             {Route, Plugins} = take_route(RoutePlugins),
@@ -609,6 +610,34 @@ take_route(Plugins)                          -> {undefined, Plugins}.
 
 put_route(undefined, Req) -> Req;
 put_route(Route, Req)     -> Req#{nova_route => Route}.
+
+%% A CORS preflight asks, with OPTIONS, about a request it is going to make
+%% with another method. A route that does not take OPTIONS still has to let
+%% the plugins of the route for that method answer, or the browser never
+%% sends the request. They run before the 405 page, which stays the answer
+%% when none of them stops the request.
+with_preflight_plugins(Req = #{method := ~"OPTIONS"}, Host, Path, Dispatch) ->
+    case cowboy_req:header(~"origin", Req) =/= undefined andalso
+        cowboy_req:header(~"access-control-request-method", Req) of
+        Requested when is_binary(Requested) ->
+            case route_plugins(nova_routing_trie:find(Host, Path, Requested, Dispatch)) of
+                undefined ->
+                    Req;
+                RoutePlugins ->
+                    {_Route, Plugins} = take_route(RoutePlugins),
+                    Req#{plugins => proplists:delete(after_security, Plugins)}
+            end;
+        _ ->
+            Req
+    end;
+with_preflight_plugins(Req, _Host, _Path, _Dispatch) ->
+    Req.
+
+route_plugins({ok, _Bindings, Value})            -> route_plugins(Value);
+route_plugins({ok, _Bindings, Value, _Pathinfo}) -> route_plugins(Value);
+route_plugins(#nova_handler_value{plugins = Plugins})   -> Plugins;
+route_plugins(#cowboy_handler_value{plugins = Plugins}) -> Plugins;
+route_plugins(_NoRoute)                          -> undefined.
 
 %% The routing record of a websocket route has no field for extra_state and
 %% has to keep its arity, so the state travels in the handler arguments: the

@@ -202,7 +202,9 @@ A correlation ID from the request is used when it is 1 to 255 visible ASCII char
 
 This plugin answers CORS preflights (an `OPTIONS` request with both `Origin` and `Access-Control-Request-Method`) itself with a `204` and the CORS headers, so the controller never sees them. Any other request, including a plain `OPTIONS`, goes on to the application with the CORS headers added to the response.
 
-The router picks the route, and checks its `methods`, before any plugin runs. A preflight therefore only reaches the plugin on a route that accepts `OPTIONS`: leave `methods` out, or list `options` in it. A route whose `methods` do not include `options` answers the preflight with a `405` and no CORS headers, and the browser blocks the real request.
+The route does not have to accept `OPTIONS` for that. A preflight names the method of the request it is about, in `Access-Control-Request-Method`, and Nova runs the `pre_request` and `post_request` plugins of the route for that method on it. `{"/orders", fun orders:create/1, #{methods => [post]}}` in a route group with this plugin therefore answers the preflight for a `POST`. Without a plugin that answers, the preflight gets the `405` it always got, as does a preflight for a method the path has no route for, and a plain `OPTIONS`. The security callback of the route does not run for a preflight, and neither do plugins listed in `plugins_after_security`.
+
+The plugin never sends `access-control-allow-credentials`, so a browser does not expose a response to a request made with cookies or HTTP authentication.
 
 ```erlang
 {pre_request, nova_cors_plugin, #{allow_origins => [<<"https://app.example.com">>,
