@@ -48,10 +48,12 @@ The subscriptions are kept by a `pg` scope registered as `nova_scope`, which Nov
 
 -export_type([channel/0]).
 
+-doc """
+A pubsub channel. Backed by `pg`, so any atom or binary works. Binaries are
+useful for dynamic, per-entity channels (per tenant, for example), which
+would grow the atom table as atoms.
+""".
 -type channel() :: atom() | binary().
-%% A pubsub channel. Backed by `pg', so any atom or binary works; binaries
-%% are useful for dynamic, per-entity channels (e.g. per-tenant) without
-%% growing the atom table.
 
 -define(SCOPE, nova_scope).
 

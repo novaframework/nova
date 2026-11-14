@@ -60,7 +60,10 @@ Each listener owns its own routing table, so an application started on a second 
 %%%===================================================================
 
 %%--------------------------------------------------------------------
--doc "Starts the supervisor".
+-doc """
+Starts the supervisor, which starts the listener of the bootstrap
+application as its last child. The `nova` application calls it.
+""".
 -spec start_link() -> {ok, Pid :: pid()} | ignore | {error, Error :: any()}.
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
@@ -109,7 +112,7 @@ get_started_applications() ->
         App <- Apps].
 
 %%--------------------------------------------------------------------
--doc "Every Cowboy listener Nova has started. Used by the graceful shutdown in nova_app, which has to drain all of them and not just the first.".
+-doc "The `ranch` reference of every Cowboy listener Nova has started.".
 -spec listeners() -> [ranch:ref()].
 listeners() ->
     [Ref || #nova_listener{ref = Ref} <- all_listeners()].
@@ -481,7 +484,11 @@ get_version(Application) ->
             not_found
     end.
 
--doc "Recursively resolve nested nova_apps. Each nova_app can declare its own nova_apps dependencies. An application comes before the applications it mounts, and routes are first-wins, so where both declare the same route or status page the mounting application's is kept. An application already resolved is skipped, so a cycle terminates.".
+%% Recursively resolve nested nova_apps. Each nova_app can declare its own
+%% nova_apps dependencies. An application comes before the applications it
+%% mounts, and routes are first-wins, so where both declare the same route or
+%% status page the mounting application's is kept. An application already
+%% resolved is skipped, so a cycle terminates.
 -spec resolve_nova_apps([nova_app()]) -> [nova_app()].
 resolve_nova_apps(Apps) ->
     {Resolved, _Seen} = resolve_nova_apps(Apps, [], []),

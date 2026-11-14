@@ -15,6 +15,7 @@
          detect_language/0
         ]).
 
+-doc "The state a plugin keeps between calls. Any term.".
 -type state() :: any().
 -export_type([state/0]).
 
