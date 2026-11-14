@@ -126,7 +126,7 @@ trim_trailing_ows(Bin, Size) ->
     end.
 
 format_stacktrace(not_enabled) ->
-    logger:warning(<<"Stacktrace disabled. If you want to enable stacktraces call nova:stracktrace(true) or update your sys.config - Read more in the docs">>),
+    ?LOG_WARNING(#{msg => ~"Stacktraces are disabled. Call nova:use_stacktrace(true) or set {use_stacktrace, true} for nova in sys.config to have them"}),
     [];
 format_stacktrace([]) -> [];
 format_stacktrace([{Mod, Func, Arity, TraceOpts}|Tl]) ->

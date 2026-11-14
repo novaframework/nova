@@ -45,7 +45,11 @@ format_stacktrace_multiple_entries_test() ->
     ?assertEqual(2, length(Result)).
 
 format_stacktrace_not_enabled_test() ->
-    ?assertEqual([], nova_error_controller:format_stacktrace(not_enabled)).
+    {Frames, Events} = nova_test_log:collect(fun() -> nova_error_controller:format_stacktrace(not_enabled) end),
+    ?assertEqual([], Frames),
+    [{warning, {report, #{msg := Message}}}] = Events,
+    ?assertNotEqual(nomatch, binary:match(Message, ~"nova:use_stacktrace(true)")),
+    ?assertNotEqual(nomatch, binary:match(Message, ~"{use_stacktrace, true}")).
 
 %%====================================================================
 %% format_arity/1
