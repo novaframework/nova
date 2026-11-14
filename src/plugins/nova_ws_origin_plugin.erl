@@ -64,16 +64,23 @@ is_websocket_upgrade(Req) ->
 is_allowed(undefined, _Req, _Allowed) ->
     true;
 is_allowed(Origin, Req, same_host) ->
-    case binary:split(cowboy_bstr:to_lower(Origin), ~"://") of
+    case binary:split(ascii_lowercase(Origin), ~"://") of
         [_Scheme, Authority] -> Authority =:= lowercase_header(~"host", Req);
         _NoAuthority -> false
     end;
 is_allowed(Origin, _Req, Allowed) ->
-    lists:member(cowboy_bstr:to_lower(Origin),
-                 [cowboy_bstr:to_lower(iolist_to_binary(AllowedOrigin)) || AllowedOrigin <- Allowed]).
+    lists:member(ascii_lowercase(Origin),
+                 [ascii_lowercase(iolist_to_binary(AllowedOrigin)) || AllowedOrigin <- Allowed]).
 
 lowercase_header(Name, Req) ->
     case cowboy_req:header(Name, Req) of
-        Value when is_binary(Value) -> cowboy_bstr:to_lower(Value);
+        Value when is_binary(Value) -> ascii_lowercase(Value);
         undefined -> <<>>
     end.
+
+%% Header values may hold any byte, so this folds ASCII only.
+ascii_lowercase(Value) ->
+    << <<(ascii_lowercase_byte(Byte))>> || <<Byte>> <= Value >>.
+
+ascii_lowercase_byte(Byte) when Byte >= $A, Byte =< $Z -> Byte + 32;
+ascii_lowercase_byte(Byte) -> Byte.
