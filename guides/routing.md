@@ -190,6 +190,8 @@ Nothing else is read:
 * A `security` or `secure` key in the options map of a single route is not read. Put routes that need another callback in a route group of their own.
 * A `secure` key in a route group is not read. The key of a route group is `security`.
 
+Each such key is logged as a warning when the routes are compiled, with the application, the path and the key. It adds no callback to the routes.
+
 `rebar3 nova audit` lists the routes that change state and have no callback, see [Rebar3 Nova](rebar3_nova.md). The [Security](security.md) guide has complete examples.
 
 ### Invoking security functions for a set of endpoints

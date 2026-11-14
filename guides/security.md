@@ -68,7 +68,8 @@ Things to know:
 
 * **Only the route group is read.** A `security` or `secure` key in the
   options of a single route, and a `secure` key in a route group, are not
-  read and protect nothing. A group without `security` is public.
+  read and protect nothing. Nova logs a warning for each when the routes are
+  compiled. A group without `security` is public.
 * **Invalid values stop the boot.** `security` takes `false` or a `fun/1`.
   Anything else, `true` included, stops the application from starting with
   `{invalid_security, Value}`.
