@@ -63,7 +63,7 @@ The options map takes:
 |---|---|
 | `view` | The template to render, as an atom or a string, without the `.dtl` extension |
 | `status_code` | The status code of the response, `200` by default |
-| `headers` | The headers of the response. They replace the default `content-type: text/html`, so include a `content-type` |
+| `headers` | Headers of the response. They are added to the default `content-type: text/html`, which stays unless they name a `content-type` |
 
 When the template does not exist the response is `404`.
 
@@ -106,8 +106,8 @@ is mounted under in front of a path:
 ```
 
 For an application included with `{admin_app, #{prefix => "/admin"}}` the tag
-renders `/admin/items`. For an application that is not part of the release it
-renders `#` and logs a warning.
+renders `/admin/items`. For an application Nova has not compiled, and for a
+tag without `application`, it renders `#` and logs a warning.
 
 ## Template features
 

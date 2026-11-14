@@ -86,7 +86,7 @@ same.
 |---|---|
 | `view` | The template to render, as an atom or a string |
 | `status_code` | The status code, `200` by default |
-| `headers` | The response headers. They replace the default `content-type: text/html`, so include a `content-type` |
+| `headers` | Response headers. They are added to the default `content-type: text/html`, which stays unless they name a `content-type` |
 
 A template that does not exist gives a `404`.
 
