@@ -19,7 +19,9 @@
                    {crash, error | exit | throw, any()}.
 -export_type([reason/0]).
 
--callback init(State :: map()) -> {ok, State0 :: map()} | any().
+-callback init(State :: map()) -> {ok, State0 :: map()} |
+                                  {ok, State0 :: map(), WebsocketOptions :: cowboy_websocket:opts()} |
+                                  any().
 -callback websocket_init(State :: map()) -> Result :: call_result().
 -optional_callbacks([websocket_init/1]).
 

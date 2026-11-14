@@ -4,7 +4,7 @@
 -module(nova_test_listener).
 
 -export([start/1, try_start/1, configure/1, stop/0, get/2, get/3, request/4, response/4,
-         websocket_handshake/2, websocket_texts/4, free_port/0]).
+         websocket_handshake/2, websocket_handshake/3, websocket_texts/4, free_port/0]).
 
 -spec start(map()) -> inet:port_number().
 start(Options) ->
@@ -89,11 +89,16 @@ response(Port, Method, Path, Headers) ->
 
 -spec websocket_handshake(inet:port_number(), iodata()) -> binary().
 websocket_handshake(Port, Path) ->
+    websocket_handshake(Port, Path, []).
+
+-spec websocket_handshake(inet:port_number(), iodata(), [{iodata(), iodata()}]) -> binary().
+websocket_handshake(Port, Path, Headers) ->
     exchange(Port, ["GET ", Path, " HTTP/1.1\r\n",
                     "host: localhost\r\n",
                     "upgrade: websocket\r\n",
                     "connection: Upgrade\r\n",
                     "sec-websocket-key: ", base64:encode(crypto:strong_rand_bytes(16)), "\r\n",
+                    [[Name, ": ", Value, "\r\n"] || {Name, Value} <- Headers],
                     "sec-websocket-version: 13\r\n\r\n"],
              first_packet).
 

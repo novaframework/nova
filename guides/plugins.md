@@ -108,6 +108,7 @@ Nova has a couple of plugins for some general purposes.
 |nova_cors_plugin|This plugin will handle cors and add the cors headers into the request.|[nova_cors_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_cors_plugin.erl)|
 |nova_multipart_plugin|This plugin reads `multipart/form-data` bodies and streams uploaded files to a handler.|[nova_multipart_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_multipart_plugin.erl)|
 |nova_request_plugin|This plugin will handle incomming data like qs, form urlencoded and json. Multipart bodies are left to `nova_multipart_plugin`.|[nova_request_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_request_plugin.erl)|
+|nova_ws_origin_plugin|This plugin refuses a websocket upgrade that a page on another origin started. Options are described in the module.|[nova_ws_origin_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_ws_origin_plugin.erl)|
 
 
 ### Nova correlation
