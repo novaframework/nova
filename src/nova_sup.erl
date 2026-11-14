@@ -37,6 +37,9 @@ Each listener owns its own routing table, so an application started on a second 
 %% Started by the supervisor as its last child
 -export([start_listener_child/1]).
 
+%% Started by the supervisor as its first child
+-export([start_pubsub_scope/0]).
+
 %% Keyed on bind: one listener per {Host, Port} is the invariant
 %% add_application/2 relies on, so that pair is the table key.
 -record(nova_listener, {
@@ -124,8 +127,6 @@ init([]) ->
 
     Environment = nova:get_environment(),
 
-    nova_pubsub:start(),
-
     ?LOG_NOTICE(#{msg => <<"Starting nova">>, environment => Environment}),
 
     ensure_listener_table(),
@@ -149,13 +150,21 @@ init([]) ->
             _ -> Children0
         end,
 
-    {ok, {SupFlags, Children ++ [listener_child(Configuration)]}}.
+    {ok, {SupFlags, [pubsub_scope_child() | Children] ++ [listener_child(Configuration)]}}.
 
 %%--------------------------------------------------------------------
 -doc false.
 -spec start_listener_child(Configuration :: map()) -> ignore | {error, Reason :: any()}.
 start_listener_child(Configuration) ->
     setup_cowboy(Configuration).
+
+-doc false.
+-spec start_pubsub_scope() -> {ok, pid()} | ignore.
+start_pubsub_scope() ->
+    case pg:start_link(nova_scope) of
+        {ok, Pid} -> {ok, Pid};
+        {error, {already_started, _Pid}} -> ignore
+    end.
 
 %%%===================================================================
 %%% Internal functions
@@ -173,6 +182,17 @@ child(Id, Type, Mod) ->
 
 child(Id, Mod) ->
     child(Id, worker, Mod).
+
+%% The scope nova_pubsub and the ETS session backend use. As a child it is
+%% restarted when it dies. A scope that something else started before Nova
+%% is left with its owner.
+pubsub_scope_child() ->
+    #{id => nova_pubsub_scope,
+      start => {?MODULE, start_pubsub_scope, []},
+      restart => permanent,
+      shutdown => 5000,
+      type => worker,
+      modules => [pg]}.
 
 %% The listener is owned by ranch, so this child only binds it and leaves no
 %% process behind. It is last, so no request arrives before the processes a
