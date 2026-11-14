@@ -701,23 +701,22 @@ normalize_secure(Invalid, RouterFile) ->
                  value => Invalid, router_file => RouterFile}),
     throw({error, {invalid_security, Invalid}}).
 
-%% The application-level `secure` only fills in for a route group that
-%% declares no callback, so mounting an application can add protection to
-%% its routes but never take away what the application declared for itself.
+%% An application mounted with `secure` has that callback in front of every
+%% route group, and a group that declares `security` has its own behind it:
+%% both have to allow a request, so neither the application that mounts nor
+%% the one that is mounted can take away what the other one asks for. Both
+%% values are checked here, also where only one ends up on the route.
 %% Replacing a declared callback takes the explicit `override_secure`.
 resolve_secure(Options, RouteInfo, RouterFile) ->
     case override_callbacks(Options, RouterFile) of
         [] ->
-            AppDefault = maps:get(secure, Options, false),
-            case normalize_secure(maps:get(security, RouteInfo, false), RouterFile) of
-                false ->
-                    normalize_secure(AppDefault, RouterFile);
-                GroupCallback when is_map_key(secure, Options), AppDefault =/= GroupCallback ->
-                    ?LOG_WARNING(#{reason => <<"'secure' in nova_apps does not replace the security callback a route group declares. Use 'override_secure' to replace it.">>,
-                                   app => maps:get(app, Options), router_file => RouterFile}),
-                    GroupCallback;
-                GroupCallback ->
-                    GroupCallback
+            Mount = normalize_secure(maps:get(secure, Options, false), RouterFile),
+            Group = normalize_secure(maps:get(security, RouteInfo, false), RouterFile),
+            case {Mount, Group} of
+                {false, _} -> Group;
+                {_, false} -> Mount;
+                {Same, Same} -> Same;
+                _ -> [Mount, Group]
             end;
         [Override] ->
             Override;

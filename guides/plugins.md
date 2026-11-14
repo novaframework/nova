@@ -107,7 +107,9 @@ ends it, and the steps after it do not run.
 
 1. **Routing.** The path and the method are looked up in the routing table.
 2. **`pre_request` plugins**, in the order they are listed.
-3. **The security callback** of the route.
+3. **The security callback** of the route. A route of an included
+   application can have two, see the
+   [multi-app guide](multi-app.md#security-of-a-mounted-application).
 4. **The controller**, or the upgrade of a `protocol => ws` route.
 5. **`post_request` plugins.** The response has been sent by then.
 

@@ -195,6 +195,8 @@ get_user(Req) ->
 
 Once the security function has been called, the data will be available in the `Req` object under the `auth_data` key.
 
+A route group of an [included application](multi-app.md#security-of-a-mounted-application) can have two callbacks, the `secure` of the application that includes it and its own `security`. Both have to allow the request, and the controller gets the data of the group's callback when that returns some, otherwise the data of the other one.
+
 ```erlang
 -module(my_controller).
 -export([main/1]).
@@ -259,9 +261,14 @@ callbacks have to allow a request. The
 has the details.
 
 `override_secure` is the only option that replaces a callback a route group
-declares. `secure` in the same place is a default: it applies to the groups
-that declare no callback, and is ignored, with a warning in the log, by a
-group that has one. To open up a group that declares a callback, override it
+declares. `secure` in the same place adds one: its callback runs in front of
+every route group of the included application. A group that declares
+`security` keeps its callback, which runs second, and a request has to be
+allowed by both. The first of the two that does not allow it answers the
+request, with the redirect, status, headers and body it returns, and the
+other one is not run. The controller gets the `auth_data` of the group's
+callback when that returns `{true, Data}`, and otherwise the data of the
+`secure` callback. To open up a group that declares a callback, override it
 with a callback that returns `true`.
 
 

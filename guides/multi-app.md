@@ -31,7 +31,7 @@ first, which let them replace a route of yours together with its security.
 | Key | Value | Description |
 |---|---|---|
 | `prefix` | `string()` | Mount the application's routes under this path, in front of the prefix each route group declares |
-| `secure` | `false` \| `fun/1` | Security callback for the application's route groups that declare none |
+| `secure` | `false` \| `fun/1` | Security callback that runs in front of every route group of the application, before the callback a group declares for itself |
 | `override_secure` | `false` \| `fun/1` | Replace the security callback of every route group, including one the application declares for itself, and of every route group of the applications it includes |
 | `plugin_strategy` | see the [routing guide](routing.md) | How the application's route-local plugins combine with the global ones |
 
@@ -75,14 +75,34 @@ An application mounted without a prefix is listed with `"/"`.
 
 ### Security of a mounted application
 
-A route group that declares a `security` callback keeps it when the
-application is mounted. `secure` only applies to the groups that declare none
-(or `false`), so mounting an application can put a callback in front of its
-routes but cannot take one away. `secure => false` leaves every group as the
-application declared it.
+`secure` puts a callback in front of every route group of the mounted
+application. A route group that declares a `security` callback keeps it, so
+such a group has two, and a request has to be allowed by both. Mounting an
+application can add a callback to its routes but cannot take one away, and
+the application cannot opt a group out of the callback it is mounted with.
+
+| `secure` of the entry | `security` of the route group | What runs |
+|---|---|---|
+| a callback | a callback | the callback of the entry, then the one of the group |
+| a callback | none, or `false` | the callback of the entry |
+| none, or `false` | a callback | the callback of the group |
+| none, or `false` | none, or `false` | nothing |
+
+The first callback that does not allow the request answers it, with `401`, a
+redirect, or the status, headers and body it returns. The other callback is
+not run then. A callback that raises is answered with `500`.
+
+When both allow the request, the controller gets the `auth_data` of the
+group's callback if that returns `{true, Data}`, and otherwise the data of
+the entry's callback. A group's callback that returns `true` leaves the data
+of the entry's callback in place.
+
+A callback that is both the `secure` of the entry and the `security` of the
+group runs once. Websocket routes follow the same rules.
 
 Replacing a callback the application declares takes `override_secure`, see
 the [routing guide](routing.md#overriding-security-for-an-included-application).
+With `override_secure`, neither `secure` nor the callback of a group runs.
 
 ### Applications included by an included application
 

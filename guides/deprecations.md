@@ -136,9 +136,22 @@ of `{Module, Function}` in Nova.
   passing the outer callback is now refused by it. Nothing else is handed
   down: see the [multi-app guide](multi-app.md#applications-included-by-an-included-application).
 
-- **`secure` no longer replaces a callback a route group declares.** In a
-  `nova_apps` entry it applies to the groups of the included application that
-  declare no `security`, and is ignored, with a warning, by a group that
-  declares one. Earlier releases let it replace the group's callback,
-  `secure => false` included. Use `override_secure` to replace a callback the
-  application declares; see the [routing guide](routing.md#overriding-security-for-an-included-application).
+- **`secure` and the `security` of a route group both have to allow a
+  request.** In a `nova_apps` entry, `secure` used to replace the `security`
+  callback of every route group of the included application, `secure => false`
+  included. A group now keeps its callback next to it: the `secure` callback
+  runs first, the callback of the group second, and the first that does not
+  allow the request answers it. What to look for after the upgrade:
+
+  - A request that `secure` lets through to a group with a stricter callback
+    of its own is now refused by that callback. It used to reach the
+    controller.
+  - A request that the callback of a group allows is still subject to
+    `secure`, as it was.
+  - With `secure => false`, a group that declares `security` is protected by
+    it, where it used to be left open.
+  - The controller gets the `auth_data` of the group's callback when that
+    returns some, and otherwise that of `secure`.
+
+  Use `override_secure` to replace a callback the application declares; see
+  the [multi-app guide](multi-app.md#security-of-a-mounted-application).
