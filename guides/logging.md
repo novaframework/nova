@@ -44,6 +44,8 @@ line. Set it as the formatter of a handler in *sys.config*:
 | `new_line_type` | `nl`, `crlf`, `cr`, `unix`, `windows` or `macos9` |
 | `key_mapping` | A map that renames keys of the output, such as `#{level => severity}` |
 | `format_funs` | A map from a key to a function that formats its value |
+| `meta_with` | A list of metadata keys. Only these are written next to the report. `level` is one of them |
+| `meta_without` | A list of metadata keys to leave out. `[report_cb]` by default |
 | `redact` | Apply the redaction rules below to every report and its metadata. `false` by default |
 
 The report and the logger metadata are merged into one object.
