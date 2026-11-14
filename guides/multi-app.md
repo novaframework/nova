@@ -35,6 +35,21 @@ first, which let them replace a route of yours together with its security.
 | `override_secure` | `false` \| `fun/1` | Replace the security callback of every route group, including one the application declares for itself, and of every route group of the applications it includes |
 | `plugin_strategy` | see the [routing guide](routing.md) | How the application's route-local plugins combine with the global ones |
 
+An application that starts a listener, the one named in
+`bootstrap_application` or one started with `nova_sup:add_application/2`,
+can list itself in its own `nova_apps`. Its routes are then compiled with
+the options of that entry:
+
+```erlang
+{my_nova_app, [
+   {nova_apps, [{my_nova_app, #{plugin_strategy => global_first}},
+                {another_nova_app, #{prefix => "/another"}}]}
+  ]}.
+```
+
+An entry an included application writes for itself is not used. Such an
+application gets its options from the entry that includes it.
+
 ### Example
 
 *rebar.config*:

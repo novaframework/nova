@@ -181,12 +181,12 @@ A route is protected by the security callback of its route group. Where the call
 | Where | Key | Effect |
 |---|---|---|
 | Route group map | `security` | The callback runs for every route of the group |
-| Entry of an included application in `nova_apps` | `secure` | The callback runs in front of every route group of that application |
-| Entry of an included application in `nova_apps` | `override_secure` | The callback replaces the ones the application declares |
+| `nova_apps` entry of an application | `secure` | The callback runs in front of every route group of that application |
+| `nova_apps` entry of an application | `override_secure` | The callback replaces the ones the application declares |
 
 Nothing else is read:
 
-* A route group without a `security` key has no callback. Its routes are public, unless the application is included with `secure` or `override_secure`.
+* A route group without a `security` key has no callback. Its routes are public, unless the `nova_apps` entry of the application has `secure` or `override_secure`.
 * A `security` or `secure` key in the options map of a single route is not read. Put routes that need another callback in a route group of their own.
 * A `secure` key in a route group is not read. The key of a route group is `security`.
 
@@ -295,15 +295,16 @@ the application's `nova_apps` options to combine them instead (available since
 0.17.0):
 
 ```erlang
-{nova_apps, [{admin_app, #{plugin_strategy => global_first}}]}
+{nova_apps, [{my_app, #{plugin_strategy => global_first}}]}
 ```
 
-`plugin_strategy` is an option of the entry of an included application and
-applies to every route entry of that application. The application named in
-`bootstrap_application` has no such entry, and an entry for it in its own
-`nova_apps` is not used, so its route groups always follow
-`local_or_global`. A `plugin_strategy` key on a single route entry is
-ignored, and a warning is logged once per application.
+`plugin_strategy` is an option of a `nova_apps` entry and applies to every
+route entry of the application the entry names. The application that starts
+the listener sets it for its own routes with an entry for itself in its own
+`nova_apps`, as above, and for an application it includes in the entry of
+that application. A
+`plugin_strategy` key on a single route entry is ignored, and a warning is
+logged once per application.
 
 | Value | Plugins used |
 |---|---|
