@@ -21,7 +21,7 @@
                  }).
 
 -record(state, {
-                next :: any(),
+                next :: {module(), term()} | undefined,
                 req,
                 session :: #session{} | undefined
                }).
@@ -37,7 +37,7 @@ init(StreamID, Req, Opts) ->
     {Commands, Next} = cowboy_stream:init(StreamID, Req1, Opts),
     {Commands, #state{req = Req0, next = Next, session = Session}}.
 
--spec data(cowboy_stream:streamid(), cowboy_stream:fin(), cowboy_req:resp_body(), State)
+-spec data(cowboy_stream:streamid(), cowboy_stream:fin(), binary(), State)
           -> {cowboy_stream:commands(), State} when State::state().
 data(StreamID, IsFin, Data, State = #state{next = Next}) ->
     {Commands, Next0} = cowboy_stream:data(StreamID, IsFin, Data, Next),
