@@ -25,7 +25,26 @@ watcher_test_() ->
       fun command_with_options/1,
       fun unknown_application_does_not_stop_the_watcher/1,
       fun missing_workdir_does_not_stop_the_watcher/1,
-      fun malformed_watcher_does_not_stop_the_watcher/1]}.
+      fun malformed_watcher_does_not_stop_the_watcher/1,
+      fun command_of_nested_characters_runs/1,
+      fun command_holding_more_than_characters_does_not_stop_the_watcher/1]}.
+
+configured_watchers_start_with_the_watcher_test() ->
+    {ok, Cwd} = file:get_cwd(),
+    Dir = filename:join(Cwd, "nova_watcher_tests_" ++ integer_to_list(erlang:unique_integer([positive]))),
+    ok = file:make_dir(Dir),
+    application:load(nova),
+    application:set_env(nova, bootstrap_application, nova),
+    application:set_env(nova, watchers, [{"touch", [filename:join(Dir, "ran")]}]),
+    {ok, _Pid} = nova_watcher:start_link(),
+    try
+        ?assert(appears(filename:join(Dir, "ran")))
+    after
+        ok = nova_watcher:stop(),
+        application:unset_env(nova, watchers),
+        application:unset_env(nova, bootstrap_application),
+        ok = file:del_dir_r(Dir)
+    end.
 
 runs_in_the_workdir_and_leaves_the_node_where_it_was({Cwd, Dir}) ->
     ?_test(begin
@@ -99,6 +118,23 @@ malformed_watcher_does_not_stop_the_watcher({_Cwd, _Dir}) ->
                ok = nova_watcher:async_cast(nova, "touch", ["ran"], [not_a_map]),
                _ = sys:get_state(nova_watcher),
                ?assertEqual(Watcher, whereis(nova_watcher))
+           end).
+
+command_of_nested_characters_runs({_Cwd, Dir}) ->
+    ?_test(begin
+               ok = nova_watcher:async_cast(nova, [["touch", [$\s]], [filename:join(Dir, "ran")]], [], #{}),
+               ?assert(appears(filename:join(Dir, "ran")))
+           end).
+
+command_holding_more_than_characters_does_not_stop_the_watcher({_Cwd, Dir}) ->
+    ?_test(begin
+               Watcher = whereis(nova_watcher),
+               ok = nova_watcher:async_cast(nova, [~"touch ", filename:join(Dir, "binary")], [], #{}),
+               ok = nova_watcher:async_cast(nova, [touch, $\s | filename:join(Dir, "atom")], [], #{}),
+               ok = nova_watcher:async_cast(nova, "touch " ++ filename:join(Dir, "ran"), [], #{}),
+               ?assert(appears(filename:join(Dir, "ran"))),
+               ?assertEqual(Watcher, whereis(nova_watcher)),
+               ?assertEqual({ok, ["ran"]}, file:list_dir(Dir))
            end).
 
 appears(File) ->
