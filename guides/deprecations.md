@@ -254,6 +254,57 @@ These changes are part of the release that follows 0.18.3.
   Use `override_secure` to replace a callback the application declares; see
   the [multi-app guide](multi-app.md#security-of-a-mounted-application).
 
+- **A response that has begun is not answered again.** A handler or a
+  controller that streamed with `cowboy_req:stream_reply/3` and returned the
+  request it streamed with was answered a second time, which was logged as a
+  crash. Nothing more is sent now. A failure after the response has begun is
+  logged, with a warning that no error page is sent, and the client keeps
+  what it was sent. See [Handlers](handlers.md#long-lived-responses).
+
+- **The application that starts a listener reads its own `nova_apps`
+  entry.** An entry an application wrote for itself in its own `nova_apps`
+  was skipped. The `prefix`, `secure`, `override_secure` and
+  `plugin_strategy` of that entry now apply to the routes of the application
+  named in `bootstrap_application`, and of one started with
+  `nova_sup:add_application/2`. Remove the entry if they are not meant to.
+
+- **A security key that is not read is logged.** A `secure` key in a route
+  group, and a `security` or `secure` key in the options of a single route,
+  are not read and never were. Each now logs a warning when the routes are
+  compiled. Declare the callback as `security` on the route group.
+
+- **A route takes the `extra_state` of its route group.** A route without
+  `extra_state` had `undefined` in the request, whatever its group declared,
+  while a websocket route got the one of the group. Both now do. A route in a
+  group that declares none still has `undefined`.
+
+- **The security data of a websocket route is in the upgrade request.** What
+  the callback returned in `{true, AuthData}` was only in the controller
+  data. It is now under `auth_data` in the upgrade request as well, where the
+  callback of the route group and the plugins that run after it find it.
+
+- **Nova's `500` page follows `accept` as its `404` page does.** It had a
+  body only for an `accept` header of exactly `application/json` or
+  `text/html`. Both pages are now JSON for a request without the header, JSON
+  or HTML when the header names one of them, and have no body when it names
+  neither.
+
+- **The `headers` of a view are added to the default.** The `headers` option
+  of `{ok, Variables, Options}` and `{view, Variables, Options}` replaced
+  `content-type: text/html`, so a view that set another header was sent
+  without a content type. The default now stays unless the option names a
+  `content-type`.
+
+- **A `url` tag without `application` renders `#`.** It crashed the view. It
+  now logs the warning an unknown application gets.
+
+- **A missing router module is reported.** An application without a
+  `router_module` and without a module named `<app>_router` crashed the start
+  with `undef`. The start now fails with `{router_module_not_found, App}`.
+
+- **`nova:use_stacktrace(false)` returns `ok`.** It returned `true` or
+  `false`.
+
 ### Sessions
 
 - **The session cookie is issued lazily.** Nova used to set a `session_id`
