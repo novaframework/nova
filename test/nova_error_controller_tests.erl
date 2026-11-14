@@ -250,11 +250,60 @@ extra_msg_is_hidden_when_environment_is_unset_test_() ->
              #{} = Decoded = json:decode(iolist_to_binary(Json)),
              ?assertNot(is_map_key(~"extra_msg", Decoded)),
              ?assertNot(is_map_key(~"stacktrace", Decoded)),
-             ?assertEqual({status, 500},
-                          nova_error_controller:server_error(
-                            (json_req())#{crash_info => #{class => error, reason => secret}}))
+             {status, 500, _, Crash} =
+                 nova_error_controller:server_error((json_req())#{crash_info => #{class => error, reason => secret}}),
+             ?assertEqual(nomatch, binary:match(iolist_to_binary(Crash), ~"secret"))
          after
              application:set_env(nova, environment, dev)
+         end
+     end}.
+
+%% A crash in a plugin leaves a class and a reason and no status code.
+%% Outside dev its page is the generic one, in the form the client accepts.
+crash_page_outside_dev_follows_the_accept_header_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         application:set_env(nova, environment, prod),
+         try
+             CrashInfo = #{class => error, reason => secret, stacktrace => [{secret_mod, secret_fun, 1, []}]},
+             {status, 500, JsonHeaders, Json} =
+                 nova_error_controller:server_error((json_req())#{crash_info => CrashInfo}),
+             ?assertEqual(~"application/json", maps:get(~"content-type", JsonHeaders)),
+             ?assertEqual(#{~"status" => ~"Internal Server Error",
+                            ~"title" => ~"500 Internal Server Error",
+                            ~"message" => ~"Something internal crashed. Please take a look!"},
+                          json:decode(iolist_to_binary(Json))),
+             {status, 500, NoAcceptHeaders, _} =
+                 nova_error_controller:server_error((nova_test_helper:mock_req(~"GET", ~"/"))#{crash_info => CrashInfo}),
+             ?assertEqual(~"application/json", maps:get(~"content-type", NoAcceptHeaders)),
+             {status, 500, HtmlHeaders, Html} =
+                 nova_error_controller:server_error((browser_req())#{crash_info => CrashInfo}),
+             ?assertEqual(~"text/html", maps:get(~"content-type", HtmlHeaders)),
+             ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Html), ~"500 Internal Server Error")),
+             ?assertEqual(nomatch, binary:match(iolist_to_binary(Html), ~"secret")),
+             Png = nova_test_helper:with_header(~"accept", ~"image/png", nova_test_helper:mock_req(~"GET", ~"/")),
+             ?assertMatch({status, 500, _, <<>>}, nova_error_controller:server_error(Png#{crash_info => CrashInfo}))
+         after
+             application:set_env(nova, environment, dev)
+         end
+     end}.
+
+%% render_error_pages turns the HTML page off. A client that asks for JSON,
+%% or for nothing in particular, still gets the JSON body.
+server_error_without_error_pages_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         application:set_env(nova, render_error_pages, false),
+         try
+             CrashInfo = #{status_code => 500, class => error, reason => boom},
+             [begin
+                  {status, 500, Headers, Body} = nova_error_controller:server_error(Req#{crash_info => CrashInfo}),
+                  ?assertEqual(~"application/json", maps:get(~"content-type", Headers)),
+                  ?assertMatch(#{~"title" := ~"500 Internal Server Error"}, json:decode(iolist_to_binary(Body)))
+              end || Req <- [json_req(), nova_test_helper:mock_req(~"GET", ~"/")]],
+             ?assertEqual({status, 500}, nova_error_controller:server_error((browser_req())#{crash_info => CrashInfo}))
+         after
+             application:unset_env(nova, render_error_pages)
          end
      end}.
 

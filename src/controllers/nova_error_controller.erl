@@ -39,23 +39,17 @@ server_error(#{crash_info := #{status_code := StatusCode} = CrashInfo} = Req) ->
                                                     ~"Something internal crashed. Please take a look!")},
                               maps:get(extra_msg, CrashInfo, ~""),
                               maps:get(stacktrace, CrashInfo, [])),
-    case application:get_env(nova, render_error_pages, true) of
-        true ->
-            render(StatusCode, Variables, Req);
-        _ ->
-            {status, StatusCode}
-    end;
+    render(StatusCode, Variables, Req);
 server_error(#{crash_info := #{class := Class, reason := Reason} = CrashInfo} = Req) ->
+    Variables = #{status => ~"Internal Server Error",
+                  title => ~"500 Internal Server Error",
+                  message => ~"Something internal crashed. Please take a look!"},
     case show_details() of
         true ->
-            Variables = debug_details(#{status => ~"Internal Server Error",
-                                        title => ~"500 Internal Server Error",
-                                        message => ~"Something internal crashed. Please take a look!"},
-                                      iolist_to_binary(io_lib:format("Class: ~p~nReason: ~p", [Class, Reason])),
-                                      maps:get(stacktrace, CrashInfo, [])),
-            render(500, Variables, Req);
+            Details = iolist_to_binary(io_lib:format("Class: ~p~nReason: ~p", [Class, Reason])),
+            render(500, debug_details(Variables, Details, maps:get(stacktrace, CrashInfo, [])), Req);
         false ->
-            {status, 500}
+            render(500, Variables, Req)
     end;
 server_error(Req) ->
     server_error(Req#{crash_info => #{status_code => 500}}).
@@ -66,10 +60,19 @@ render(StatusCode, Variables, Req) ->
             Json = nova_json:encode(Variables),
             {status, StatusCode, #{~"content-type" => ~"application/json"}, Json};
         html ->
-            {ok, Body} = nova_basic_handler:render_dtl(nova_error_dtl, Variables, []),
-            {status, StatusCode, #{~"content-type" => ~"text/html"}, Body};
+            html_page(StatusCode, Variables);
         none ->
             {status, StatusCode, #{~"content-type" => ~"text/html"}, <<>>}
+    end.
+
+%% render_error_pages is about the HTML page only.
+html_page(StatusCode, Variables) ->
+    case application:get_env(nova, render_error_pages, true) of
+        true ->
+            {ok, Body} = nova_basic_handler:render_dtl(nova_error_dtl, Variables, []),
+            {status, StatusCode, #{~"content-type" => ~"text/html"}, Body};
+        _ ->
+            {status, StatusCode}
     end.
 
 %% A client that sends no accept header gets JSON. One that sends a header
