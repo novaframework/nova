@@ -96,8 +96,6 @@ show_details() ->
 %% "text/html,application/xhtml+xml;q=0.9" or "application/json; charset=utf-8".
 %% Cowboy joins repeated accept headers, so only the first ?MAX_ACCEPT bytes
 %% are looked at, and every step is linear in them.
-preferred_type(undefined) ->
-    none;
 preferred_type(Accept) ->
     Head = binary:part(Accept, 0, min(byte_size(Accept), ?MAX_ACCEPT)),
     Types = [media_type(Range) || Range <- binary:split(Head, ~",", [global])],
