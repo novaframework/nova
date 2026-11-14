@@ -61,7 +61,6 @@ init_per_testcase(_Case, Config) ->
     Config.
 
 end_per_testcase(_Case, _Config) ->
-    catch unregister(?OBSERVER),
     ok.
 
 %% Called by the controllers and the plugin of this suite.

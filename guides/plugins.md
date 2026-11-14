@@ -92,7 +92,7 @@ The default is `[]`, which is the order Nova has always had. A listed plugin kee
 
 The security callback of such a route cannot read what a listed plugin produces: `json`, `params`, `parsed_qs` and `files` are not in `Req` yet. A callback that needs the body, for instance to check a signature over it, has to keep the body-reading plugin out of the list. A plugin that depends on a listed one, such as `nova_csrf_plugin` reading the token from a multipart form, has to be listed too, after it.
 
-A websocket route runs its `pre_request` plugins on the upgrade request. For the time after the upgrade it has the phases `pre_ws_request`, `post_ws_request` and `post_ws_connection`. See the `nova_websocket` documentation.
+A websocket route runs its `pre_request` plugins on the upgrade request. For the time after the upgrade it has the phases `pre_ws_request` and `post_ws_request`, which run around every callback of the controller, and `post_ws_connection`, which runs once when the connection goes away: after `terminate/3` if the controller exports it, and also when it does not or when it crashes. `post_ws_connection` does not run for an upgrade that was refused. See the `nova_websocket` documentation.
 
 
 ## Reading the matched route

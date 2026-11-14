@@ -36,8 +36,9 @@ The upgrade request runs the route's `pre_request` plugins like any HTTP
 request. `nova_ws_handler` has plugin phases of its own for the time after
 the upgrade: `pre_ws_request` and `post_ws_request` run around every
 `websocket_init/1`, `websocket_handle/2` and `websocket_info/2` call, and
-`post_ws_connection` runs once when the connection goes away, whether or not
-the controller exports `terminate/3`. A plugin exports the phase as a
+`post_ws_connection` runs once when the connection goes away, after
+`terminate/3` and whether or not the controller exports it. It does not run
+for an upgrade that was refused. A plugin exports the phase as a
 function of `(ControllerState, State, Options)` and returns
 `{ok, ControllerState, State}`, `{break, State}`, `{stop, State}` or
 `{error, Reason}`.
