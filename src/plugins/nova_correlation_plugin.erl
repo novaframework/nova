@@ -11,6 +11,8 @@ Set `request_correlation_header` in the plugin config to read the correlation ID
 
 Notice: Cowboy request headers are always in lowercase.
 
+The value is used when it is 1 to 255 visible ASCII characters (no spaces, control characters or bytes above 126). Any other value is ignored and an ID is generated, since the ID is written to the logger metadata and to the response.
+
 ### Default Correlation ID Generation
 
 If the header name is not defined or the request lacks a correlation ID header, then the plugin generates a v4 UUID automatically.
@@ -44,6 +46,8 @@ The plugin defines a field called `correlation_id` in the request object for con
 
 -include_lib("kernel/include/logger.hrl").
 
+-define(MAX_CORRELATION_ID_SIZE, 255).
+
 %%--------------------------------------------------------------------
 -doc "Pre-request callback to either pick up correlation id from request headers or generate a new uuid correlation id.".
 pre_request(Req0, _Env, Opts, State) ->
@@ -75,10 +79,22 @@ get_correlation_id(Req, #{ request_correlation_header := CorrelationHeader }) ->
         undefined ->
             uuid();
         CorrId ->
-            CorrId
+            case is_correlation_id(CorrId) of
+                true -> CorrId;
+                false -> uuid()
+            end
     end;
 get_correlation_id(_Req, _Opts) ->
     uuid().
+
+is_correlation_id(CorrId) ->
+    byte_size(CorrId) >= 1 andalso byte_size(CorrId) =< ?MAX_CORRELATION_ID_SIZE
+        andalso is_visible_ascii(CorrId).
+
+is_visible_ascii(<<Byte, Rest/binary>>) when Byte > $\s, Byte < 127 ->
+    is_visible_ascii(Rest);
+is_visible_ascii(Bytes) ->
+    Bytes =:= <<>>.
 
 uuid() ->
     jhn_uuid:gen(v4, [binary]).

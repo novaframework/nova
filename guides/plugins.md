@@ -124,6 +124,8 @@ This plugin will generate a uuid v4 and set it as a response header as `X-Correl
 |request_correlation_header|This is if you want a different correlation header than the standard `X-Correlation-ID`|
 |logger_metadata_key| This is if you want to have a different metadata key then the standard `correaltion_id`|
 
+A correlation ID from the request is used when it is 1 to 255 visible ASCII characters. A value with spaces, control characters or other bytes, or a longer one, is ignored and a new ID is generated, because the ID is copied to the logger metadata and to the response.
+
 ### Nova cors
 
 This plugins will make it so that if we get method OPTIONS it will just return back the CORS headers. In this case you don't need a controller to handle it and the plugin stops after this.
