@@ -102,8 +102,10 @@ of `{Module, Function}` in Nova.
 - **`nova_jsonlogger` encodes strings as UTF-8.** A string with characters
   above 255 was printed as a list of integers and is now text. A binary or
   string that is not UTF-8 is printed as an Erlang term, `"<<255,0>>"`, where
-  the whole event used to be printed outside JSON. Adjust log queries that
-  match on the old output.
+  the whole event used to be printed outside JSON. A value that is printed
+  as a term, which a tuple or a list that is not a string also is, is cut
+  off after about 4096 characters. Adjust log queries that match on the old
+  output.
 
 - **A second listener renders its own status pages.** The page for a crashed
   controller or a thrown `{Status, Reason}` is looked up in the routing table
