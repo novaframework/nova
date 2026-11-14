@@ -97,9 +97,12 @@ init_per_suite(Config) ->
     [{port, nova_test_listener:start(#{host => Host})}, {secret, filename:join(Base, "secret.txt")},
      {base, Base} | Config].
 
-end_per_suite(_Config) ->
+%% The fixture holds links that lead back into it, which `rebar3 ct --retry`
+%% cannot copy, so it does not stay behind in the logs.
+end_per_suite(Config) ->
     nova_test_listener:stop(),
-    file:del_dir_r(?RELATIVE_DIR).
+    file:del_dir_r(?RELATIVE_DIR),
+    file:del_dir_r(?config(base, Config)).
 
 file_inside_root(Config) ->
     Port = ?config(port, Config),
