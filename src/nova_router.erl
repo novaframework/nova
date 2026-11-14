@@ -516,10 +516,11 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     %% We need to add this app info to nova-env
     nova:set_env(apps, lists:keystore(App, 1, mounted_apps(), {App, #{prefix => Prefix}})),
 
+    Group = maps:with([extra_state], RouteInfo),
     {ok, Dispatch1} = parse_url(Host, maps:get(routes, RouteInfo, []),
-                                #{prefix => Prefix,
-                                  router_file => maps:get(router_file, Options),
-                                  insert_opts => maps:get(insert_opts, Options, #{})},
+                                Group#{prefix => Prefix,
+                                       router_file => maps:get(router_file, Options),
+                                       insert_opts => maps:get(insert_opts, Options, #{})},
                                 Value, Dispatch),
 
     Dispatch2 = compile(SubApps, Dispatch1, Options#{value => Value, prefix => Prefix}),
@@ -597,7 +598,7 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
 
             Methods = maps:get(methods, Options, ['_']),
 
-            ExtraState = route_extra_state(Options, Value#nova_handler_value.extra_state),
+            ExtraState = route_extra_state(Options, T),
             Value0 = Value#nova_handler_value{extra_state = ExtraState},
 
             Value1 = Value0#nova_handler_value{callback = Callback,
@@ -620,7 +621,7 @@ parse_url(Host,
     Value0 =  #cowboy_handler_value{
                   app = App,
                   handler = nova_ws_handler,
-                  arguments = websocket_arguments(Mod, App, Options, Value#nova_handler_value.extra_state),
+                  arguments = websocket_arguments(Mod, App, Options, T),
                   plugins = with_route(RealPath, Value#nova_handler_value.plugins),
                   secure = Secure},
 
@@ -725,22 +726,22 @@ route_plugins(#nova_handler_value{plugins = Plugins})   -> Plugins;
 route_plugins(#cowboy_handler_value{plugins = Plugins}) -> Plugins;
 route_plugins(_NoRoute)                          -> undefined.
 
-%% A route without an extra_state of its own takes the one of its route
-%% group. A group that declares none carries #{}, which is none for a route.
-route_extra_state(#{extra_state := ExtraState}, _GroupExtraState) -> ExtraState;
-route_extra_state(_Options, GroupExtraState) when GroupExtraState =:= #{} -> undefined;
-route_extra_state(_Options, GroupExtraState) -> GroupExtraState.
+%% A route without an extra_state of its own takes the one its route group
+%% declares, an empty map included, and has undefined when the group
+%% declares none.
+route_extra_state(#{extra_state := ExtraState}, _Group) -> ExtraState;
+route_extra_state(_Options, #{extra_state := ExtraState}) -> ExtraState;
+route_extra_state(_Options, _Group) -> undefined.
 
 %% The routing record of a websocket route has no field for extra_state and
 %% has to keep its arity, so the state travels in the handler arguments: the
 %% one the route declares, or else the one its route group declares.
-websocket_arguments(Mod, App, #{extra_state := ExtraState}, _GroupExtraState) ->
+websocket_arguments(Mod, App, #{extra_state := ExtraState}, _Group) ->
     #{module => Mod, app => App, extra_state => ExtraState};
-websocket_arguments(Mod, App, _Options, GroupExtraState)
-  when GroupExtraState =:= undefined; GroupExtraState =:= #{} ->
-    #{module => Mod, app => App};
-websocket_arguments(Mod, App, _Options, GroupExtraState) ->
-    #{module => Mod, app => App, extra_state => GroupExtraState}.
+websocket_arguments(Mod, App, _Options, #{extra_state := ExtraState}) ->
+    #{module => Mod, app => App, extra_state => ExtraState};
+websocket_arguments(Mod, App, _Options, _Group) ->
+    #{module => Mod, app => App}.
 
 handler_extra_state(#{extra_state := ExtraState}) -> ExtraState;
 handler_extra_state(_Arguments)                   -> undefined.
