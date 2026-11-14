@@ -15,8 +15,6 @@
          origin_plugin_leaves_other_requests_alone/1,
          route_without_the_plugin_accepts_any_origin/1]).
 
--export([init/1, websocket_handle/2, websocket_info/2, page/1]).
-
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
@@ -37,38 +35,22 @@ all() ->
 init_per_suite(Config) ->
     Routes = [#{prefix => "/plain",
                 plugins => [],
-                routes => [{"/ws", ?MODULE, #{protocol => ws}}]},
+                routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]},
               #{prefix => "/small",
                 plugins => [],
-                routes => [{"/ws", ?MODULE, #{protocol => ws}}]},
+                routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]},
               #{prefix => "/same-host",
                 plugins => [{pre_request, nova_ws_origin_plugin, #{}}],
-                routes => [{"/ws", ?MODULE, #{protocol => ws}},
-                           {"/page", fun ?MODULE:page/1, #{methods => [get]}}]},
+                routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}},
+                           {"/page", fun nova_ws_upgrade_pages:page/1, #{methods => [get]}}]},
               #{prefix => "/listed",
                 plugins => [{pre_request, nova_ws_origin_plugin,
                              #{allowed_origins => [~"https://app.example.com", "https://other.example.com"]}}],
-                routes => [{"/ws", ?MODULE, #{protocol => ws}}]}],
+                routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]}],
     [{port, nova_test_listener:start(#{host => Routes})} | Config].
 
 end_per_suite(_Config) ->
     nova_test_listener:stop().
-
-init(ControllerData = #{req := #{path := ~"/small/ws"}}) ->
-    {ok, ControllerData, #{max_frame_size => ?SMALL_FRAME}};
-init(ControllerData) ->
-    {ok, ControllerData}.
-
-websocket_handle({text, Text}, ControllerData) ->
-    {reply, {text, Text}, ControllerData};
-websocket_handle(_Frame, ControllerData) ->
-    {ok, ControllerData}.
-
-websocket_info(_Info, ControllerData) ->
-    {ok, ControllerData}.
-
-page(_Req) ->
-    {status, 200, #{}, ~"page"}.
 
 init_options_reach_the_connection(Config) ->
     Port = ?config(port, Config),

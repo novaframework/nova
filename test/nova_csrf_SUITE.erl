@@ -16,8 +16,6 @@
          excluded_path_needs_no_token/1,
          path_next_to_an_excluded_one_needs_a_token/1]).
 
--export([token/1, form/1, submit/1]).
-
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
@@ -36,33 +34,24 @@ all() ->
      path_next_to_an_excluded_one_needs_a_token].
 
 init_per_suite(Config) ->
-    {ok, nova_csrf_SUITE_dtl} =
+    {ok, nova_csrf_pages_dtl} =
         erlydtl:compile_template(<<"<input name=\"_csrf_token\" value=\"{{ csrf_token }}\">">>,
-                                 nova_csrf_SUITE_dtl, [{out_dir, false}]),
+                                 nova_csrf_pages_dtl, [{out_dir, false}]),
     Routes = [#{prefix => "/csrf",
                 plugins => [{pre_request, nova_request_plugin, #{read_urlencoded_body => true}},
                             {pre_request, nova_csrf_plugin, #{excluded_paths => [~"/csrf/hooks"]}}],
-                routes => [{"/token", fun ?MODULE:token/1, #{methods => [get]}},
-                           {"/form", fun ?MODULE:form/1, #{methods => [get]}},
-                           {"/submit", fun ?MODULE:submit/1, #{methods => [post, put, patch, delete]}},
-                           {"/hooks/incoming", fun ?MODULE:submit/1, #{methods => [post]}},
-                           {"/hooks-admin", fun ?MODULE:submit/1, #{methods => [post]}}]}],
+                routes => [{"/token", fun nova_csrf_pages:token/1, #{methods => [get]}},
+                           {"/form", fun nova_csrf_pages:form/1, #{methods => [get]}},
+                           {"/submit", fun nova_csrf_pages:submit/1, #{methods => [post, put, patch, delete]}},
+                           {"/hooks/incoming", fun nova_csrf_pages:submit/1, #{methods => [post]}},
+                           {"/hooks-admin", fun nova_csrf_pages:submit/1, #{methods => [post]}}]}],
     [{port, nova_test_listener:start(#{host => Routes})} | Config].
 
 end_per_suite(_Config) ->
     nova_test_listener:stop(),
-    code:purge(nova_csrf_SUITE_dtl),
-    code:delete(nova_csrf_SUITE_dtl),
+    code:purge(nova_csrf_pages_dtl),
+    code:delete(nova_csrf_pages_dtl),
     ok.
-
-token(Req) ->
-    {status, 200, #{}, maps:get(csrf_token, Req, ~"no token")}.
-
-form(_Req) ->
-    {ok, #{}}.
-
-submit(_Req) ->
-    {status, 200, #{}, ~"submitted"}.
 
 first_visit_starts_a_session_with_a_token(Config) ->
     {200, Headers, Token} = nova_test_listener:response(?config(port, Config), "GET", "/csrf/token", []),

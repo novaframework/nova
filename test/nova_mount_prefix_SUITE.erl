@@ -11,8 +11,6 @@
          unmounted_application_reports_the_root/1
         ]).
 
--export([page/1]).
-
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
@@ -24,7 +22,7 @@ all() ->
     ].
 
 init_per_suite(Config) ->
-    Routes = [{"/page", fun ?MODULE:page/1, #{methods => [get]}}],
+    Routes = [{"/page", fun nova_mount_prefix_pages:page/1, #{methods => [get]}}],
     Port = nova_test_listener:start(#{host => [#{prefix => "/host", routes => Routes}],
                                       mounted => [#{prefix => "/group", routes => Routes},
                                                   #{routes => Routes}],
@@ -33,9 +31,6 @@ init_per_suite(Config) ->
 
 end_per_suite(_Config) ->
     nova_test_listener:stop().
-
-page(_Req) ->
-    {status, 200, #{}, ~"page"}.
 
 mount_and_group_prefixes_concatenate(Config) ->
     Port = ?config(port, Config),

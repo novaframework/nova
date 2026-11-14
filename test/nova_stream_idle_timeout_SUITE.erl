@@ -10,7 +10,7 @@
          stream_with_its_own_idle_timeout_survives/1
         ]).
 
--export([stream/1, stream_with_idle_timeout/1, handle_stream/3]).
+-export([handle_stream/3]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
@@ -26,8 +26,8 @@ all() ->
 init_per_suite(Config) ->
     Host = [#{prefix => "",
               routes => [
-                         {"/stream", fun ?MODULE:stream/1, #{methods => [get]}},
-                         {"/stream-with-idle-timeout", fun ?MODULE:stream_with_idle_timeout/1,
+                         {"/stream", fun nova_stream_idle_timeout_pages:stream/1, #{methods => [get]}},
+                         {"/stream-with-idle-timeout", fun nova_stream_idle_timeout_pages:stream_with_idle_timeout/1,
                           #{methods => [get]}}
                         ]}],
     Port = nova_test_listener:start(#{host => Host,
@@ -37,12 +37,6 @@ init_per_suite(Config) ->
 
 end_per_suite(_Config) ->
     nova_test_listener:stop().
-
-stream(_Req) ->
-    {test_stream, listener_default}.
-
-stream_with_idle_timeout(_Req) ->
-    {test_stream, infinity}.
 
 handle_stream({test_stream, IdleTimeout}, _Callback, Req0) ->
     case IdleTimeout of

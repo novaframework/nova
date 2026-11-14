@@ -8,7 +8,6 @@
          pre_ws_request_plugin_can_stop_the_connection/1,
          route_without_plugins_is_unaffected/1]).
 
--export([init/1, websocket_handle/2, websocket_info/2]).
 -export([pre_ws_request/3, post_ws_request/3, plugin_info/0]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -23,31 +22,20 @@ all() ->
 init_per_suite(Config) ->
     Routes = [#{prefix => "/pre",
                 plugins => [{pre_ws_request, ?MODULE, #{mark => ~"pre plugin ran"}}],
-                routes => [{"/ws", ?MODULE, #{protocol => ws}}]},
+                routes => [{"/ws", nova_ws_plugin_pages, #{protocol => ws}}]},
               #{prefix => "/post",
                 plugins => [{post_ws_request, ?MODULE, #{}}],
-                routes => [{"/ws", ?MODULE, #{protocol => ws}}]},
+                routes => [{"/ws", nova_ws_plugin_pages, #{protocol => ws}}]},
               #{prefix => "/stopping",
                 plugins => [{pre_ws_request, ?MODULE, #{stop => true}}],
-                routes => [{"/ws", ?MODULE, #{protocol => ws}}]},
+                routes => [{"/ws", nova_ws_plugin_pages, #{protocol => ws}}]},
               #{prefix => "/plain",
                 plugins => [],
-                routes => [{"/ws", ?MODULE, #{protocol => ws}}]}],
+                routes => [{"/ws", nova_ws_plugin_pages, #{protocol => ws}}]}],
     [{port, nova_test_listener:start(#{host => Routes})} | Config].
 
 end_per_suite(_Config) ->
     nova_test_listener:stop().
-
-init(ControllerData) ->
-    {ok, ControllerData}.
-
-websocket_handle({text, _Text}, ControllerData) ->
-    {reply, {text, maps:get(mark, ControllerData, ~"no plugin ran")}, ControllerData};
-websocket_handle(_Frame, ControllerData) ->
-    {ok, ControllerData}.
-
-websocket_info(_Info, ControllerData) ->
-    {ok, ControllerData}.
 
 pre_ws_request(_ControllerState, State, #{stop := true}) ->
     {stop, State};

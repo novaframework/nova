@@ -13,7 +13,7 @@
          plugin_sees_the_routed_path/1
         ]).
 
--export([page/1, canonical/1, pre_request/4, plugin_info/0]).
+-export([pre_request/4, plugin_info/0]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
@@ -30,23 +30,17 @@ all() ->
 init_per_suite(Config) ->
     Host = [
             #{plugins => [{pre_request, nova_csrf_plugin, #{excluded_paths => [~"/api"]}}],
-              routes => [{"/api/hook", fun ?MODULE:page/1, #{methods => [post]}},
-                         {"/apikeys", fun ?MODULE:page/1, #{methods => [post]}},
-                         {"/admin/delete", fun ?MODULE:page/1, #{methods => [post]}}]},
+              routes => [{"/api/hook", fun nova_canonical_path_pages:page/1, #{methods => [post]}},
+                         {"/apikeys", fun nova_canonical_path_pages:page/1, #{methods => [post]}},
+                         {"/admin/delete", fun nova_canonical_path_pages:page/1, #{methods => [post]}}]},
             #{prefix => "/seen",
               plugins => [{pre_request, ?MODULE, #{}}],
-              routes => [{"/by/plugin", fun ?MODULE:canonical/1, #{methods => [get]}}]}
+              routes => [{"/by/plugin", fun nova_canonical_path_pages:canonical/1, #{methods => [get]}}]}
            ],
     [{port, nova_test_listener:start(#{host => Host})} | Config].
 
 end_per_suite(_Config) ->
     nova_test_listener:stop().
-
-page(_Req) ->
-    {status, 200, #{}, ~"page"}.
-
-canonical(#{seen_by_plugin := Path}) ->
-    {status, 200, #{}, Path}.
 
 pre_request(Req, _Env, _Options, State) ->
     {ok, Req#{seen_by_plugin => nova_router:canonical_path(Req)}, State}.

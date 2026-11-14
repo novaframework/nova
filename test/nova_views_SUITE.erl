@@ -15,9 +15,6 @@
          url_tag_adds_the_prefix_of_a_mounted_application/1,
          url_tag_of_an_unknown_application_is_a_hash/1]).
 
--export([default_view/1, view_tuple/1, proplist/1, other_view/1, string_view/1, with_options/1,
-         with_request/1, no_template/1, links/1]).
-
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
@@ -35,7 +32,7 @@ all() ->
      url_tag_of_an_unknown_application_is_a_hash].
 
 init_per_suite(Config) ->
-    ok = compile_view(nova_views_SUITE_dtl, ~"<h1>{{ title }}</h1>"),
+    ok = compile_view(nova_views_pages_dtl, ~"<h1>{{ title }}</h1>"),
     ok = compile_view(nova_views_other_dtl, ~"<p>other: {{ title }}</p>"),
     ok = compile_view(nova_views_links_dtl,
                       ~"""
@@ -46,21 +43,21 @@ init_per_suite(Config) ->
     Page = fun(Path, Callback) -> {Path, Callback, #{methods => [get]}} end,
     Routes = [#{prefix => "/views",
                 plugins => [],
-                routes => [Page("/default", fun ?MODULE:default_view/1),
-                           Page("/view-tuple", fun ?MODULE:view_tuple/1),
-                           Page("/proplist", fun ?MODULE:proplist/1),
-                           Page("/other", fun ?MODULE:other_view/1),
-                           Page("/string", fun ?MODULE:string_view/1),
-                           Page("/options", fun ?MODULE:with_options/1),
-                           Page("/request", fun ?MODULE:with_request/1),
-                           Page("/no-template", fun ?MODULE:no_template/1),
-                           Page("/links", fun ?MODULE:links/1)]}],
+                routes => [Page("/default", fun nova_views_pages:default_view/1),
+                           Page("/view-tuple", fun nova_views_pages:view_tuple/1),
+                           Page("/proplist", fun nova_views_pages:proplist/1),
+                           Page("/other", fun nova_views_pages:other_view/1),
+                           Page("/string", fun nova_views_pages:string_view/1),
+                           Page("/options", fun nova_views_pages:with_options/1),
+                           Page("/request", fun nova_views_pages:with_request/1),
+                           Page("/no-template", fun nova_views_pages:no_template/1),
+                           Page("/links", fun nova_views_pages:links/1)]}],
     [{port, nova_test_listener:start(#{host => Routes})} | Config].
 
 end_per_suite(_Config) ->
     nova_test_listener:stop(),
     [begin code:purge(View), code:delete(View) end
-     || View <- [nova_views_SUITE_dtl, nova_views_other_dtl, nova_views_links_dtl]],
+     || View <- [nova_views_pages_dtl, nova_views_other_dtl, nova_views_links_dtl]],
     ok.
 
 compile_view(Module, Template) ->
@@ -71,35 +68,6 @@ compile_view(Module, Template) ->
         {ok, Module} -> ok;
         {ok, Module, _Warnings} -> ok
     end.
-
-default_view(_Req) ->
-    {ok, #{title => ~"default"}}.
-
-view_tuple(_Req) ->
-    {view, #{title => ~"view tuple"}}.
-
-proplist(_Req) ->
-    {ok, [{title, ~"proplist"}]}.
-
-other_view(_Req) ->
-    {ok, #{title => ~"named"}, #{view => nova_views_other}}.
-
-string_view(_Req) ->
-    {ok, #{title => ~"string"}, #{view => "nova_views_other"}}.
-
-with_options(_Req) ->
-    {ok, #{title => ~"<b>created</b>"}, #{status_code => 201,
-                                         headers => #{~"content-type" => ~"text/html; charset=utf-8",
-                                                      ~"x-view" => ~"yes"}}}.
-
-with_request(Req) ->
-    {ok, #{title => ~"request"}, #{}, cowboy_req:set_resp_header(~"x-from-controller", ~"yes", Req)}.
-
-no_template(_Req) ->
-    {ok, #{}, #{view => nova_views_missing}}.
-
-links(_Req) ->
-    {ok, #{}, #{view => nova_views_links}}.
 
 ok_renders_the_view_named_after_the_controller(Config) ->
     {Status, Headers, Body} = response(Config, "/views/default"),

@@ -15,8 +15,6 @@
          no_trailing_segments/1
         ]).
 
--export([pathinfo/1, extra_state/1]).
-
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
@@ -36,15 +34,15 @@ all() ->
 init_per_suite(Config) ->
     Host = [#{prefix => "",
               routes => [
-                         {"/fun/[...]", fun ?MODULE:pathinfo/1, #{}},
-                         {"/fun-get/[...]", fun ?MODULE:pathinfo/1, #{methods => [get]}},
-                         {"/fun-state/[...]", fun ?MODULE:extra_state/1,
+                         {"/fun/[...]", fun nova_catch_all_pages:pathinfo/1, #{}},
+                         {"/fun-get/[...]", fun nova_catch_all_pages:pathinfo/1, #{methods => [get]}},
+                         {"/fun-state/[...]", fun nova_catch_all_pages:extra_state/1,
                           #{methods => [get], extra_state => #{answer => 42}}},
-                         {"/fun-other-state/[...]", fun ?MODULE:extra_state/1,
+                         {"/fun-other-state/[...]", fun nova_catch_all_pages:extra_state/1,
                           #{methods => [get], extra_state => [answer]}},
                          {"/inline/[...]", fun(_Req) -> {status, 200, #{}, ~"inline"} end,
                           #{methods => [get]}},
-                         {"/mod-fun/[...]", {?MODULE, pathinfo}, #{methods => [get]}},
+                         {"/mod-fun/[...]", {nova_catch_all_pages, pathinfo}, #{methods => [get]}},
                          {"/assets/[...]", "assets"},
                          {"/ws/[...]", nova_test_app_ws_controller, #{protocol => ws}}
                         ]}],
@@ -52,14 +50,6 @@ init_per_suite(Config) ->
 
 end_per_suite(_Config) ->
     nova_test_listener:stop().
-
-pathinfo(#{extra_state := #{pathinfo := Pathinfo}}) ->
-    {status, 200, #{}, lists:join(~"|", Pathinfo)};
-pathinfo(_Req) ->
-    {status, 200, #{}, ~"no pathinfo"}.
-
-extra_state(#{extra_state := ExtraState}) ->
-    {status, 200, #{}, io_lib:format("~0p", [ExtraState])}.
 
 function_route(Config) ->
     Port = ?config(port, Config),

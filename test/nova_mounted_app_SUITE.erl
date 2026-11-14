@@ -9,8 +9,6 @@
          group_without_callback_stays_open/1
         ]).
 
--export([page/1, require_token/1]).
-
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
@@ -21,9 +19,9 @@ all() ->
     ].
 
 init_per_suite(Config) ->
-    Routes = [{"/", fun ?MODULE:page/1, #{methods => [get]}}],
+    Routes = [{"/", fun nova_mounted_app_pages:page/1, #{methods => [get]}}],
     Mounted = [
-               #{prefix => "/admin", security => fun ?MODULE:require_token/1, routes => Routes},
+               #{prefix => "/admin", security => fun nova_mounted_app_pages:require_token/1, routes => Routes},
                #{prefix => "/open", routes => Routes}
               ],
     Port = nova_test_listener:start(#{mounted => Mounted,
@@ -32,12 +30,6 @@ init_per_suite(Config) ->
 
 end_per_suite(_Config) ->
     nova_test_listener:stop().
-
-page(_Req) ->
-    {status, 200, #{}, ~"page"}.
-
-require_token(Req) ->
-    cowboy_req:header(~"authorization", Req) =:= ~"let-me-in".
 
 group_callback_survives_secure_false(Config) ->
     Port = ?config(port, Config),

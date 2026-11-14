@@ -9,23 +9,15 @@
          runtime_listeners_keep_their_own_tables/1
         ]).
 
--export([page/1, require_token/1]).
-
 -include_lib("stdlib/include/assert.hrl").
 
--define(PAGE, {"/", fun ?MODULE:page/1, #{methods => [get]}}).
+-define(PAGE, {"/", fun nova_router_restart_pages:page/1, #{methods => [get]}}).
 
 all() ->
     [
      restart_replaces_the_routing_table,
      runtime_listeners_keep_their_own_tables
     ].
-
-page(_Req) ->
-    {status, 200, #{}, ~"page"}.
-
-require_token(Req) ->
-    cowboy_req:header(~"authorization", Req) =:= ~"let-me-in".
 
 restart_replaces_the_routing_table(_Config) ->
     Before = [#{prefix => "/old", routes => [?PAGE]},
@@ -41,7 +33,7 @@ restart_replaces_the_routing_table(_Config) ->
     end,
 
     After = [#{prefix => "/new", routes => [?PAGE]},
-             #{prefix => "/kept", security => fun ?MODULE:require_token/1, routes => [?PAGE]}],
+             #{prefix => "/kept", security => fun nova_router_restart_pages:require_token/1, routes => [?PAGE]}],
     Port2 = nova_test_listener:start(#{host => After}),
     try
         ?assertMatch({404, _}, nova_test_listener:get(Port2, "/old/")),

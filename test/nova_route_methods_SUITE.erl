@@ -10,8 +10,6 @@
          mistyped_method_fails_the_boot/1
         ]).
 
--export([page/1]).
-
 -include_lib("stdlib/include/assert.hrl").
 
 all() ->
@@ -27,13 +25,10 @@ init_per_testcase(_Case, Config) ->
 end_per_testcase(_Case, _Config) ->
     nova_test_listener:stop().
 
-page(_Req) ->
-    {status, 200, #{}, ~"page"}.
-
 every_spelling_restricts_the_route(_Config) ->
     Spellings = [{"/atom", post}, {"/upper-atom", 'POST'}, {"/binary", ~"POST"},
                  {"/lower-binary", ~"post"}, {"/string", "POST"}, {"/lower-string", "post"}],
-    Routes = [{Path, fun ?MODULE:page/1, #{methods => [Method]}} || {Path, Method} <- Spellings],
+    Routes = [{Path, fun nova_route_methods_pages:page/1, #{methods => [Method]}} || {Path, Method} <- Spellings],
     Port = nova_test_listener:start(#{host => [#{routes => Routes}]}),
     [begin
          ?assertMatch({405, _}, nova_test_listener:get(Port, Path)),
@@ -42,9 +37,9 @@ every_spelling_restricts_the_route(_Config) ->
      end || {Path, _Method} <- Spellings].
 
 unknown_method_fails_the_boot(_Config) ->
-    Routes = [{"/", fun ?MODULE:page/1, #{methods => [update]}}],
+    Routes = [{"/", fun nova_route_methods_pages:page/1, #{methods => [update]}}],
     ?assertMatch({error, _}, nova_test_listener:try_start(#{host => [#{routes => Routes}]})).
 
 mistyped_method_fails_the_boot(_Config) ->
-    Routes = [{"/", fun ?MODULE:page/1, #{methods => [get, pots]}}],
+    Routes = [{"/", fun nova_route_methods_pages:page/1, #{methods => [get, pots]}}],
     ?assertMatch({error, _}, nova_test_listener:try_start(#{host => [#{routes => Routes}]})).

@@ -13,8 +13,6 @@
          dispatch_key_of_a_request/1
         ]).
 
--export([crash/1, missing/1, key/1, first_error/1, second_error/1, second_not_found/1]).
-
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
@@ -29,15 +27,15 @@ all() ->
     ].
 
 init_per_suite(Config) ->
-    First = [#{routes => [{"/crash", fun ?MODULE:crash/1, #{methods => [get]}},
-                          {"/key", fun ?MODULE:key/1, #{methods => [get]}},
-                          {500, fun ?MODULE:first_error/1, #{}}]}],
-    Second = [#{routes => [{"/crash", fun ?MODULE:crash/1, #{methods => [get]}},
-                           {"/missing", fun ?MODULE:missing/1, #{methods => [get]}},
-                           {"/key", fun ?MODULE:key/1, #{methods => [get]}},
-                           {"/only-second", fun ?MODULE:key/1, #{methods => [get]}},
-                           {500, fun ?MODULE:second_error/1, #{}},
-                           {404, fun ?MODULE:second_not_found/1, #{}}]}],
+    First = [#{routes => [{"/crash", fun nova_second_listener_pages:crash/1, #{methods => [get]}},
+                          {"/key", fun nova_second_listener_pages:key/1, #{methods => [get]}},
+                          {500, fun nova_second_listener_pages:first_error/1, #{}}]}],
+    Second = [#{routes => [{"/crash", fun nova_second_listener_pages:crash/1, #{methods => [get]}},
+                           {"/missing", fun nova_second_listener_pages:missing/1, #{methods => [get]}},
+                           {"/key", fun nova_second_listener_pages:key/1, #{methods => [get]}},
+                           {"/only-second", fun nova_second_listener_pages:key/1, #{methods => [get]}},
+                           {500, fun nova_second_listener_pages:second_error/1, #{}},
+                           {404, fun nova_second_listener_pages:second_not_found/1, #{}}]}],
     FirstPort = nova_test_listener:start(#{host => First, mounted => Second, nova_apps => []}),
     SecondPort = nova_test_listener:free_port(),
     {ok, nova_test_sub_app, _Host, SecondPort} =
@@ -47,24 +45,6 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
     nova_sup:remove_application(nova_test_sub_app),
     nova_test_listener:stop().
-
-crash(_Req) ->
-    error(controller_crashed).
-
-missing(_Req) ->
-    throw({404, missing}).
-
-key(Req) ->
-    {status, 200, #{}, io_lib:format("~0p", [nova_router:dispatch_key(Req)])}.
-
-first_error(_Req) ->
-    {status, 500, #{}, ~"first 500"}.
-
-second_error(_Req) ->
-    {status, 500, #{}, ~"second 500"}.
-
-second_not_found(_Req) ->
-    {status, 404, #{}, ~"second 404"}.
 
 crash_renders_the_listeners_own_page(Config) ->
     ?assertEqual({500, ~"second 500"}, nova_test_listener:get(?config(second_port, Config), "/crash")).

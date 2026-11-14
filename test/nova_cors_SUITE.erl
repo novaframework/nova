@@ -7,8 +7,6 @@
          preflight_is_answered_by_the_plugin/1,
          route_without_the_plugin_gets_no_cors_headers/1]).
 
--export([page/1]).
-
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
@@ -20,17 +18,14 @@ all() ->
 init_per_suite(Config) ->
     Routes = [#{prefix => "/cors",
                 plugins => [{pre_request, nova_cors_plugin, #{allow_origins => ~"https://app.example.com"}}],
-                routes => [{"/page", fun ?MODULE:page/1, #{}}]},
+                routes => [{"/page", fun nova_cors_pages:page/1, #{}}]},
               #{prefix => "/plain",
                 plugins => [],
-                routes => [{"/page", fun ?MODULE:page/1, #{}}]}],
+                routes => [{"/page", fun nova_cors_pages:page/1, #{}}]}],
     [{port, nova_test_listener:start(#{host => Routes})} | Config].
 
 end_per_suite(_Config) ->
     nova_test_listener:stop().
-
-page(#{method := Method}) ->
-    {status, 200, #{}, <<"controller saw ", Method/binary>>}.
 
 request_gets_the_cors_headers(Config) ->
     {200, Headers, Body} = nova_test_listener:response(?config(port, Config), "GET", "/cors/page", []),

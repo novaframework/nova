@@ -19,7 +19,7 @@
          unexpected_security_return_denies/1
         ]).
 
--export([page/1, crash/1, unexpected/1, deny/1, pre_request/4, plugin_info/0]).
+-export([pre_request/4, plugin_info/0]).
 
 -export([init/2]).
 
@@ -45,28 +45,28 @@ all() ->
     ].
 
 init_per_suite(Config) ->
-    Routes = [{"/", fun ?MODULE:page/1, #{methods => [get]}}],
+    Routes = [{"/", fun nova_fail_closed_pages:page/1, #{methods => [get]}}],
     Host = [
             #{prefix => "/crashing-plugin",
               plugins => [{pre_request, ?MODULE, #{}}],
               routes => [{"/ws", nova_test_app_ws_controller, #{protocol => ws}} | Routes]},
             #{prefix => "/protected-crashing-plugin",
-              security => fun ?MODULE:deny/1,
+              security => fun nova_fail_closed_pages:deny/1,
               plugins => [{pre_request, ?MODULE, #{}}],
               routes => [{"/ws", nova_test_app_ws_controller, #{protocol => ws}}]},
             #{prefix => "/protected-failing-plugin",
-              security => fun ?MODULE:deny/1,
+              security => fun nova_fail_closed_pages:deny/1,
               plugins => [{pre_request, ?MODULE, #{return => {error, refused}}}],
               routes => [{"/ws", nova_test_app_ws_controller, #{protocol => ws}} | Routes]},
             #{prefix => "/invalid", security => true, routes => Routes},
-            #{prefix => "/crashing", security => fun ?MODULE:crash/1, routes => Routes},
-            #{prefix => "/unexpected", security => fun ?MODULE:unexpected/1, routes => Routes}
+            #{prefix => "/crashing", security => fun nova_fail_closed_pages:crash/1, routes => Routes},
+            #{prefix => "/unexpected", security => fun nova_fail_closed_pages:unexpected/1, routes => Routes}
            ],
     Port = nova_test_listener:start(#{host => Host}),
     persistent_term:put(?MODULE, counters:new(1, [])),
-    ok = add_cowboy_handler_route("/cowboy/crashing-plugin", fun ?MODULE:deny/1, #{}),
-    ok = add_cowboy_handler_route("/cowboy/failing-plugin", fun ?MODULE:deny/1, #{return => {error, refused}}),
-    ok = add_cowboy_handler_route("/cowboy/denied", fun ?MODULE:deny/1, #{return => ok}),
+    ok = add_cowboy_handler_route("/cowboy/crashing-plugin", fun nova_fail_closed_pages:deny/1, #{}),
+    ok = add_cowboy_handler_route("/cowboy/failing-plugin", fun nova_fail_closed_pages:deny/1, #{return => {error, refused}}),
+    ok = add_cowboy_handler_route("/cowboy/denied", fun nova_fail_closed_pages:deny/1, #{return => ok}),
     ok = add_cowboy_handler_route("/cowboy/open", false, #{return => ok}),
     [{port, Port} | Config].
 
@@ -91,18 +91,6 @@ init(Req, State) ->
 
 handler_calls() ->
     counters:get(persistent_term:get(?MODULE), 1).
-
-page(_Req) ->
-    {status, 200, #{}, ~"page"}.
-
-crash(_Req) ->
-    error(security_callback_crashed).
-
-unexpected(_Req) ->
-    {ok, allowed}.
-
-deny(_Req) ->
-    false.
 
 pre_request(Req, _Env, #{return := ok}, State) ->
     {ok, Req, State};

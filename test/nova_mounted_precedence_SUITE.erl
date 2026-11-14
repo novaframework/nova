@@ -11,8 +11,6 @@
          mounted_routes_without_a_clash_are_served/1
         ]).
 
--export([host_page/1, mounted_page/1, host_not_found/1, mounted_not_found/1, deny/1]).
-
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
@@ -26,38 +24,23 @@ all() ->
 
 init_per_suite(Config) ->
     Host = [
-            #{routes => [{"/login", fun ?MODULE:host_page/1, #{methods => [get]}},
-                         {404, fun ?MODULE:host_not_found/1, #{}}]},
+            #{routes => [{"/login", fun nova_mounted_precedence_pages:host_page/1, #{methods => [get]}},
+                         {404, fun nova_mounted_precedence_pages:host_not_found/1, #{}}]},
             #{prefix => "/admin",
-              security => fun ?MODULE:deny/1,
-              routes => [{"/", fun ?MODULE:host_page/1, #{methods => [get]}}]}
+              security => fun nova_mounted_precedence_pages:deny/1,
+              routes => [{"/", fun nova_mounted_precedence_pages:host_page/1, #{methods => [get]}}]}
            ],
     Mounted = [
-               #{routes => [{"/login", fun ?MODULE:mounted_page/1, #{methods => [get]}},
-                            {"/admin", fun ?MODULE:mounted_page/1, #{methods => [get]}},
-                            {"/mounted-only", fun ?MODULE:mounted_page/1, #{methods => [get]}},
-                            {404, fun ?MODULE:mounted_not_found/1, #{}}]}
+               #{routes => [{"/login", fun nova_mounted_precedence_pages:mounted_page/1, #{methods => [get]}},
+                            {"/admin", fun nova_mounted_precedence_pages:mounted_page/1, #{methods => [get]}},
+                            {"/mounted-only", fun nova_mounted_precedence_pages:mounted_page/1, #{methods => [get]}},
+                            {404, fun nova_mounted_precedence_pages:mounted_not_found/1, #{}}]}
               ],
     Port = nova_test_listener:start(#{host => Host, mounted => Mounted, mounted_options => #{}}),
     [{port, Port} | Config].
 
 end_per_suite(_Config) ->
     nova_test_listener:stop().
-
-host_page(_Req) ->
-    {status, 200, #{}, ~"host"}.
-
-mounted_page(_Req) ->
-    {status, 200, #{}, ~"mounted"}.
-
-host_not_found(_Req) ->
-    {status, 404, #{}, ~"host 404"}.
-
-mounted_not_found(_Req) ->
-    {status, 404, #{}, ~"mounted 404"}.
-
-deny(_Req) ->
-    false.
 
 host_route_wins(Config) ->
     ?assertEqual({200, ~"host"}, nova_test_listener:get(?config(port, Config), "/login")).
