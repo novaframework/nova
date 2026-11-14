@@ -1,7 +1,7 @@
 %%% Author: Niclas Axelsson <niclas@burbas.se>
 
 -module(nova_ws_handler).
--moduledoc "Callback controller for handling websockets".
+-moduledoc false.
 
 -export([
          init/2,

@@ -3,7 +3,7 @@
 %%% Created : 10 Aug 2024 by Niclas Axelsson <niclas@burbas.se>
 %%%-------------------------------------------------------------------
 -module(nova_plugin_manager).
--moduledoc "Main manager for handling plugins".
+-moduledoc false.
 
 -behaviour(gen_server).
 

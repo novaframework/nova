@@ -70,7 +70,7 @@ If you use readiness probes, your health endpoint should reflect the application
 
 ## How it works
 
-Nova implements graceful shutdown in `nova_app:prep_stop/1`, which is called by OTP before the supervision tree is terminated. The sequence is:
+Nova implements graceful shutdown in the `prep_stop` callback of its application, which is called by OTP before the supervision tree is terminated. The sequence is:
 
 1. **Delay**: Sleep for `shutdown_delay` milliseconds. During this time, the listener is still active and serving requests normally. This covers the load balancer propagation window.
 2. **Suspend**: Call `ranch:suspend_listener/1` on every listener Nova has started, so no new TCP connections are accepted. Existing connections continue to be served.

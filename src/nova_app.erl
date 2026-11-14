@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 -module(nova_app).
--moduledoc "Nova application behaviour callback".
+-moduledoc false.
 
 -behaviour(application).
 
