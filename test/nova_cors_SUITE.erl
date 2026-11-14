@@ -28,14 +28,15 @@ end_per_suite(_Config) ->
     nova_test_listener:stop().
 
 request_gets_the_cors_headers(Config) ->
-    {200, Headers, Body} = nova_test_listener:response(?config(port, Config), "GET", "/cors/page", []),
+    {200, Headers, Body} = nova_test_listener:response(?config(port, Config), "GET", "/cors/page",
+                                                       [{"origin", "https://app.example.com"}]),
     ?assertEqual(~"controller saw GET", Body),
     ?assertEqual(~"https://app.example.com", maps:get(~"access-control-allow-origin", Headers)),
     ?assert(is_map_key(~"access-control-allow-headers", Headers)),
     ?assert(is_map_key(~"access-control-allow-methods", Headers)).
 
 preflight_is_answered_by_the_plugin(Config) ->
-    {200, Headers, Body} = nova_test_listener:response(?config(port, Config), "OPTIONS", "/cors/page",
+    {204, Headers, Body} = nova_test_listener:response(?config(port, Config), "OPTIONS", "/cors/page",
                                                        [{"origin", "https://app.example.com"},
                                                         {"access-control-request-method", "POST"}]),
     ?assertEqual(<<>>, Body),
