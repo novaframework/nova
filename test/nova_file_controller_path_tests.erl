@@ -264,6 +264,27 @@ static_path_test_() ->
                        ?assertEqual([{status, 404}, {status, 404}], Results),
                        ?assertMatch([#{directory := Gone, reason := enoent}], Logged)
                end},
+              {"a file asked for under a root that is gone is a 404, and the root is logged once",
+               fun() ->
+                       Gone = filename:join(Base, "gone-with-files"),
+                       ok = filelib:ensure_path(Gone),
+                       State = nova_file_controller:static_state({dir, Gone}, #{}),
+                       ok = file:del_dir(Gone),
+                       ok = nova_test_log:start(),
+                       Results = [get_compiled_dir(State, [~"one.txt"]), get_compiled_dir(State, [~"two.txt"]),
+                                  get_compiled_dir(State, [~"sub", ~"three.txt"])],
+                       Logged = [Report || #{level := error, msg := {report, Report}} <- nova_test_log:stop()],
+                       ?assertEqual([{status, 404}, {status, 404}, {status, 404}], Results),
+                       ?assertMatch([#{directory := Gone, reason := enoent}], Logged)
+               end},
+              {"a file that is not there under a root that is logs nothing",
+               fun() ->
+                       ok = nova_test_log:start(),
+                       Result = get_dir(Base, [~"no-such-file.txt"]),
+                       Logged = [Report || #{level := error, msg := {report, Report}} <- nova_test_log:stop()],
+                       ?assertEqual({status, 404}, Result),
+                       ?assertEqual([], Logged)
+               end},
               {"a file that is gone since the route was compiled is a 404, and is logged once",
                fun() ->
                        Gone = filename:join(Base, "gone.txt"),

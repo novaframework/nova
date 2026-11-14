@@ -115,14 +115,14 @@ serve_dir(Resolved, #{extra_state := #{pathinfo := Pathinfo, options := Options}
                             %% It's a file
                             get_file(Req#{extra_state => #{static => {file, Filepath0}, options => Options}});
                         false ->
-                            {status, 404}
+                            not_found(Resolved)
                     end;
                 true ->
                     get_dir(Req#{extra_state => #{static => {dir, Filepath0}, static_root => {Filepath0, FileResolved},
                                                   options => Options}})
             end;
         error ->
-            {status, 404}
+            not_found(Resolved)
     end;
 serve_dir({_RootSegments, DirSegments} = Resolved, #{path := Path, extra_state := #{options := Options}} = Req) ->
     Filepath = filename:join(DirSegments),
@@ -160,6 +160,17 @@ serve_index(Files, Filepath, Resolved, Path, Options, Req) ->
                     {ok, #{date => calendar:local_time(), parent_dir => ParentDir, path => Path, files => FileInfos}}
             end
     end.
+
+%% A file that is not there is the business of the client. A root that is
+%% not there is the business of the operator, and nobody may ever ask for
+%% the directory itself, so the root is looked at before the 404.
+not_found({RootSegments, _DirSegments}) ->
+    Root = filename:join(RootSegments),
+    case file:read_file_info(Root) of
+        {ok, _Info} -> ok;
+        {error, Reason} -> unusable_root(Root, Reason)
+    end,
+    {status, 404}.
 
 %% A static directory that cannot be served is the same on every request,
 %% so it is logged the first time only.
