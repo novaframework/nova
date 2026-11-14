@@ -264,6 +264,21 @@ static_path_test_() ->
                        ?assertEqual([{status, 404}, {status, 404}], Results),
                        ?assertMatch([#{directory := Gone, reason := enoent}], Logged)
                end},
+              {"a file that is gone since the route was compiled is a 404, and is logged once",
+               fun() ->
+                       Gone = filename:join(Base, "gone.txt"),
+                       ok = file:write_file(Gone, ~"here"),
+                       State = nova_file_controller:static_state({file, Gone}, #{}),
+                       Request = #{headers => #{}, extra_state => State},
+                       ?assertEqual(~"here", served(nova_file_controller:get_file(Request))),
+                       ok = file:delete(Gone),
+                       ok = nova_test_log:start(),
+                       Results = [nova_file_controller:get_file(Request),
+                                  nova_file_controller:get_file(Request#{headers => #{~"range" => ~"bytes=0-1"}})],
+                       Logged = [Report || #{level := error, msg := {report, Report}} <- nova_test_log:stop()],
+                       ?assertEqual([{status, 404}, {status, 404}], Results),
+                       ?assertMatch([#{file := Gone, reason := enoent}], Logged)
+               end},
 
               {"follow_external_symlinks serves a link out of the root",
                ?_assertEqual(?SECRET, served(get_dir(Base, "root", [~"link-outside"],

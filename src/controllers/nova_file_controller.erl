@@ -55,9 +55,17 @@ serve_file(#{extra_state := #{static := File, options := Options}, headers := He
                 MType
         end,
 
-    %% Fetch file size
-    #{size := Size} = file_info(filename:dirname(Filepath), filename:basename(Filepath)),
+    case file:read_file_info(Filepath) of
+        {ok, #file_info{size = Size}} ->
+            serve_file(Filepath, Size, MimeType, Headers);
+        {error, Reason} ->
+            unusable_file(Filepath, Reason),
+            {status, 404}
+    end;
+serve_file(_Req) ->
+    {status, 404}.
 
+serve_file(Filepath, Size, MimeType, Headers) ->
     %% Check if Range header is present
     case maps:get(<<"range">>, Headers, undefined) of
         undefined ->
@@ -80,10 +88,7 @@ serve_file(#{extra_state := #{static := File, options := Options}, headers := He
                 _ ->
                     {status, 416, #{<<"content-range">> => <<"bytes */", (integer_to_binary(Size))/binary>>}}
             end
-    end;
-
-serve_file(_Req) ->
-    {status, 404}.
+    end.
 
 get_dir(#{extra_state := #{static := Dir, options := Options} = ExtraState} = Req) ->
     Root = get_filepath(Dir),
@@ -166,6 +171,17 @@ unusable_root(Directory, Reason) ->
         false ->
             persistent_term:put(Key, true),
             ?LOG_ERROR(#{msg => ~"Static directory cannot be served", directory => Directory, reason => Reason})
+    end.
+
+%% As is a static file that is gone or cannot be read.
+unusable_file(File, Reason) ->
+    Key = {?MODULE, unusable_file, File},
+    case persistent_term:get(Key, false) of
+        true ->
+            ok;
+        false ->
+            persistent_term:put(Key, true),
+            ?LOG_ERROR(#{msg => ~"Static file cannot be served", file => File, reason => Reason})
     end.
 
 
