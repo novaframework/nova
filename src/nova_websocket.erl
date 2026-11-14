@@ -10,8 +10,8 @@ Behaviour for websocket controllers. Route to one with `protocol => ws`:
 controller data (with `req` set to the upgrade request, and `auth_data` when
 the route's security function returned `{true, AuthData}`) and returns
 `{ok, State}` to accept the connection. Any other return refuses the upgrade
-and is logged as an error; the client gets an empty `204 No Content`, not an
-error status.
+and is logged as an error; the client gets a `500`, rendered by the status
+page route for `500` when the application has one.
 
 After the upgrade, `websocket_init/1`, `websocket_handle/2` and
 `websocket_info/2` return one of:

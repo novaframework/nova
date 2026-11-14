@@ -23,6 +23,9 @@
 execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
     try Handler:init(Req, Arguments) of
+        %% nova_ws_handler refusing the upgrade
+        {status, StatusCode, Req2, _State} when is_integer(StatusCode) ->
+            render_response(Req2, maps:remove(cowboy_handler, Env), StatusCode);
         {ok, Req2, State} ->
             Result = call_terminate(Handler, normal, Req2, State),
             {ok, Req2, Env#{result => Result}};

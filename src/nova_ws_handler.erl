@@ -41,7 +41,8 @@ upgrade_ws(Module, Req, State, ControllerData) ->
         Error ->
             ?LOG_ERROR(#{msg => ~"Websocket handler returned unknown result", handler => Module,
                          returned => nova_redact:term(Error)}),
-            nova_router:render_status_page(500, Req)
+            %% nova_handler renders the 500 status page for this
+            {status, 500, Req#{crash_info => #{class => error, reason => unsupported_websocket_init_result}}, State}
     end.
 
 websocket_init(State = #{mod := Mod}) ->
