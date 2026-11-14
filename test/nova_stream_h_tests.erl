@@ -65,6 +65,7 @@ stream_test_() ->
       fun delete_expires_cookie/0,
       fun write_after_delete_issues_new_cookie/0,
       fun stream_reply_carries_cookie/0,
+      fun status_with_a_reason_phrase_carries_cookie/0,
       fun request_is_marked_for_nova_handler/0,
       fun tells_whether_the_response_has_begun/0,
       fun second_response_is_left_to_cowboy/0,
@@ -251,6 +252,14 @@ stream_reply_carries_cookie() ->
     [Other, Cookie] = set_cookies(Headers),
     ?assertEqual(~"other=1", Other),
     ?assertEqual(Id, cookie_value(Cookie)).
+
+status_with_a_reason_phrase_carries_cookie() ->
+    {#{nova_session_id := Id}, State} = start(req()),
+    State1 = event({written, Id}, State),
+    {[{response, ~"200 OK", Replied, <<>>}], _} = nova_stream_h:info(1, {response, ~"200 OK", #{}, <<>>}, State1),
+    {[{headers, ~"200 OK", Streamed}], _} = nova_stream_h:info(1, {headers, ~"200 OK", #{}}, State1),
+    ?assertEqual([Id], [cookie_value(Cookie) || Cookie <- set_cookies(Replied)]),
+    ?assertEqual([Id], [cookie_value(Cookie) || Cookie <- set_cookies(Streamed)]).
 
 request_is_marked_for_nova_handler() ->
     {Req, _State} = start(req()),
