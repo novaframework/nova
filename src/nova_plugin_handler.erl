@@ -103,6 +103,14 @@ handle_result({stop, Req0, State0}, Callback, State, _Tl, _CallbackType, _Req, _
 handle_result({stop, Req0}, Callback, _State, _Tl, _CallbackType, _Req, _Env) when is_map(Req0) ->
     deprecated_stop(Callback),
     {stop, Req0};
+%% The controller has answered by the time the post_request plugins run, and
+%% Cowboy exits on a second reply.
+handle_result({stop, _Reply, Req0, State0}, Callback, State, _Tl, post_request, _Req, _Env)
+  when is_map_key(has_sent_resp, Req0) ->
+    set_state(Callback, State, State0),
+    warn_once(Callback, late_reply_warned,
+              ~"Plugin replied in post_request, after the response was sent. The reply is dropped"),
+    {stop, Req0};
 handle_result({stop, Reply, Req0, State0}, Callback, State, _Tl, _CallbackType, _Req, Env) ->
     set_state(Callback, State, State0),
     case handle_reply(Reply, Req0) of

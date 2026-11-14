@@ -78,6 +78,19 @@ plugin_given_as_a_module_test_() ->
     end}.
 
 %%====================================================================
+%% A post_request plugin cannot reply: the controller already has
+%%====================================================================
+
+post_request_reply_after_the_response_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        P = fun(R, _Env, _Opts, _State) -> {stop, {reply, 503, ~"too late"}, R, #{}} end,
+        Sent = (req([{post_request, [plugin(P)]}]))#{resp_status_code => 200, has_sent_resp => true},
+        {stop, Req1} = nova_plugin_handler:execute(Sent, env(#{plugin_state => pre_request})),
+        ?assertEqual(200, maps:get(resp_status_code, Req1)),
+        ?assertNot(is_map_key(crash_info, Req1))
+    end}.
+
+%%====================================================================
 %% Empty pre_request plugins -> sets plugin_state
 %%====================================================================
 
