@@ -8,7 +8,7 @@ A request without an `Origin` header is let through, since only browsers send it
 
 ## Options
 
-- `allowed_origins` - `same_host` (the default) accepts an origin whose host and port are the ones in the `Host` header, or the ones the request was sent to when it has no `Host` header, as over HTTP/2. The scheme of the origin is not compared. A list accepts exactly the origins in it, such as `[~"https://example.com"]`. Use a list when a proxy in front of Nova rewrites the `Host` header.
+- `allowed_origins` - `same_host` (the default) accepts an origin whose host and port are the ones in the `Host` header, or the ones the request was sent to when it has no `Host` header, as over HTTP/2. Only host and port are compared, not the scheme, apart from the port an origin leaves out being the one of its scheme. A list accepts exactly the origins in it, such as `[~"https://example.com"]`. Use a list when a proxy in front of Nova rewrites the `Host` header.
 
 ## Example configuration
 
