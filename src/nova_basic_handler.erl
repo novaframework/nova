@@ -79,11 +79,15 @@ deprecated_json_order(Callback) ->
 -doc """
 Handler for regular views. This will render a template with given variables. If not another view is specified in options a view that corresponds to the controller will be rendered. The first element of the returned tuple could be either ok or view - they are identical in their functionality.
 
-\-module(my_first_controller). -compile(export_all).
+```erlang
+-module(my_first_controller).
+-export([my_function/1]).
 
-my_function(_Req) -> \{ok, []\}.
+my_function(_Req) ->
+    {ok, []}.
+```
 
-The example above will then render the view named 'app_main.dtl'
+The example above will then render the view named 'my_first.dtl'
 
 The tuple can have three different forms:
 
