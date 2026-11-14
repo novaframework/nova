@@ -9,6 +9,8 @@
 -include_lib("kernel/include/file.hrl").
 
 -define(MAX_SYMLINKS, 40).
+-define(MAX_RANGE_DIGITS, 19).
+-define(PAST_ANY_FILE, 1 bsl 64).
 
 %% The extra_state of a static route, for the router. The root of a
 %% directory is resolved here, when the route is compiled, so a request only
@@ -260,17 +262,34 @@ parse_range(RangeSpec, FileSize) ->
             error
     end.
 
+%% A client chooses how many digits a number has. One of more than 19
+%% digits is past the end of any file, so it is never made into an integer.
 digits(<<>>) ->
     error;
 digits(Binary) ->
-    digits(Binary, 0).
+    case all_digits(Binary) of
+        true -> significant_digits(without_leading_zeros(Binary));
+        false -> error
+    end.
 
-digits(<<Digit, Rest/binary>>, Number) when Digit >= $0, Digit =< $9 ->
-    digits(Rest, Number * 10 + Digit - $0);
-digits(<<>>, Number) ->
-    {ok, Number};
-digits(_NotADigit, _Number) ->
-    error.
+all_digits(<<Digit, Rest/binary>>) when Digit >= $0, Digit =< $9 ->
+    all_digits(Rest);
+all_digits(<<>>) ->
+    true;
+all_digits(_NotADigit) ->
+    false.
+
+without_leading_zeros(<<$0, Rest/binary>>) ->
+    without_leading_zeros(Rest);
+without_leading_zeros(Digits) ->
+    Digits.
+
+significant_digits(<<>>) ->
+    {ok, 0};
+significant_digits(Digits) when byte_size(Digits) > ?MAX_RANGE_DIGITS ->
+    {ok, ?PAST_ANY_FILE};
+significant_digits(Digits) ->
+    {ok, binary_to_integer(Digits)}.
 
 get_index_file([], _) -> false;
 get_index_file([File|Tl], IndexFiles) ->

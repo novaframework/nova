@@ -17,6 +17,7 @@
          last_before_first/1,
          malformed/1,
          whitespace/1,
+         long_numbers/1,
          other_unit/1,
          several_ranges/1,
          if_range/1,
@@ -43,6 +44,7 @@ all() ->
      last_before_first,
      malformed,
      whitespace,
+     long_numbers,
      other_unit,
      several_ranges,
      if_range,
@@ -114,6 +116,18 @@ whitespace(Config) ->
     whole(Config, "bytes=0 -1"),
     whole(Config, "bytes=0- 1"),
     whole(Config, "bytes=- 3").
+
+%% As many digits as fit in a header value of the default 4096 bytes.
+long_numbers(Config) ->
+    Many = lists:duplicate(4000, $1),
+    unsatisfiable(Config, "bytes=" ++ Many ++ "-"),
+    partial(Config, "bytes=0-" ++ Many, ?CONTENT, ~"bytes 0-9/10"),
+    partial(Config, "bytes=-" ++ Many, ?CONTENT, ~"bytes 0-9/10"),
+    partial(Config, "bytes=" ++ lists:duplicate(4000, $0) ++ "5-", ~"56789", ~"bytes 5-9/10"),
+    unsatisfiable(Config, "bytes=9999999999999999999-"),
+    unsatisfiable(Config, "bytes=10000000000000000000-"),
+    partial(Config, "bytes=0-9999999999999999999", ?CONTENT, ~"bytes 0-9/10"),
+    partial(Config, "bytes=0-10000000000000000000", ?CONTENT, ~"bytes 0-9/10").
 
 other_unit(Config) ->
     whole(Config, "items=0-1"),
