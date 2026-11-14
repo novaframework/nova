@@ -398,7 +398,31 @@ cowboy_options(Configuration, DispatchKey, Dispatch) ->
     end.
 
 %% Returns {ok, IsTls} so the caller can record how the listener was bound.
+%% ranch owns the listener, so it outlives a nova_sup that went down without
+%% nova_app:prep_stop/1 stopping it. Only a listener Nova started is replaced.
 bind(Ref, Host, Port, Configuration, CowboyOptions) ->
+    case bind_listener(Ref, Host, Port, Configuration, CowboyOptions) of
+        {error, {already_started, _Pid}} = AlreadyStarted ->
+            case stop_nova_listener(Ref) of
+                ok -> bind_listener(Ref, Host, Port, Configuration, CowboyOptions);
+                {error, _Reason} -> AlreadyStarted
+            end;
+        Result ->
+            Result
+    end.
+
+stop_nova_listener(Ref) ->
+    try ranch:get_protocol_options(Ref) of
+        #{env := #{nova_dispatch_key := _DispatchKey}} ->
+            ?LOG_NOTICE(#{msg => <<"Replacing the listener of an earlier nova_sup">>, listener => Ref}),
+            cowboy:stop_listener(Ref);
+        _OtherOwner ->
+            {error, not_nova}
+    catch
+        error:badarg -> {error, not_found}
+    end.
+
+bind_listener(Ref, Host, Port, Configuration, CowboyOptions) ->
     case maps:get(use_ssl, Configuration, false) of
         false ->
             case cowboy:start_clear(Ref, [{port, Port}, {ip, Host}], CowboyOptions) of

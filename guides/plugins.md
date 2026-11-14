@@ -59,6 +59,8 @@ stop(State) ->
     ok.
 ```
 
+`init/0` runs while `nova_sup` is starting, when the routes that use the plugin are compiled, and `nova_sup` waits for it to return. It must not call into `nova_sup`, as in `supervisor:which_children(nova_sup)` or `nova_sup:add_application/2`: `nova_sup` cannot answer before `init/0` has returned, so Nova fails to start, after five seconds of waiting.
+
 Adding a plugin
 
 Example:

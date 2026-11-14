@@ -6,6 +6,8 @@
 -export([
          port_in_use_fails_the_boot/1,
          listener_starts_after_the_processes_it_needs/1,
+         restarted_supervisor_serves_again/1,
+         listener_of_another_owner_fails_the_boot/1,
          pubsub_scope_is_restarted/1,
          pubsub_scope_started_elsewhere_is_left_alone/1
         ]).
@@ -16,6 +18,8 @@ all() ->
     [
      port_in_use_fails_the_boot,
      listener_starts_after_the_processes_it_needs,
+     restarted_supervisor_serves_again,
+     listener_of_another_owner_fails_the_boot,
      pubsub_scope_is_restarted,
      pubsub_scope_started_elsewhere_is_left_alone
     ].
@@ -40,6 +44,29 @@ listener_starts_after_the_processes_it_needs(_Config) ->
     ?assertEqual(nova_listener, lists:last(Ids)),
     ?assertEqual([], [nova_handlers, nova_plugin_manager, nova_session_ets] -- lists:droplast(Ids)),
     ?assertEqual([], nova_sup:listeners()).
+
+restarted_supervisor_serves_again(_Config) ->
+    Routes = [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}],
+    Port = nova_test_listener:start(#{host => [#{routes => Routes}]}),
+    Supervisor = whereis(nova_sup),
+    Monitor = monitor(process, Supervisor),
+    exit(Supervisor, kill),
+    receive {'DOWN', Monitor, process, Supervisor, killed} -> ok end,
+    ?assert(stopped(nova, 50)),
+    ?assertMatch({ok, _}, application:ensure_all_started(nova)),
+    ?assertEqual({200, ~"page"}, nova_test_listener:get(Port, "/")),
+    ?assertEqual([nova_listener], nova_sup:listeners()).
+
+listener_of_another_owner_fails_the_boot(_Config) ->
+    Port = nova_test_listener:free_port(),
+    {ok, _} = application:ensure_all_started(cowboy),
+    {ok, _} = cowboy:start_clear(nova_listener, [{port, Port}], #{env => #{dispatch => cowboy_router:compile([])}}),
+    try
+        ?assertMatch({error, _}, nova_test_listener:try_start(#{port => nova_test_listener:free_port()})),
+        ?assertEqual(Port, ranch:get_port(nova_listener))
+    after
+        cowboy:stop_listener(nova_listener)
+    end.
 
 pubsub_scope_is_restarted(_Config) ->
     _Port = nova_test_listener:start(#{}),
@@ -66,6 +93,17 @@ pubsub_scope_started_elsewhere_is_left_alone(_Config) ->
 pubsub_scope() ->
     {nova_pubsub_scope, Pid, worker, [pg]} = lists:keyfind(nova_pubsub_scope, 1, supervisor:which_children(nova_sup)),
     Pid.
+
+stopped(_Application, 0) ->
+    false;
+stopped(Application, Attempts) ->
+    case lists:keymember(Application, 1, application:which_applications()) of
+        false ->
+            true;
+        true ->
+            timer:sleep(100),
+            stopped(Application, Attempts - 1)
+    end.
 
 restarted(_Old, 0) ->
     false;
