@@ -5,6 +5,8 @@
 
 -define(KEY, {nova_dispatch, ?MODULE}).
 
+-export([group_callback/1, host_callback/1, page/1]).
+
 setup() ->
     Prev = nova_test_helper:setup_nova_env(),
     application:set_env(nova, dispatch_backend, persistent_term),
