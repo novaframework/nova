@@ -63,6 +63,8 @@ A handler returns `{ok, Req}`; Nova replies with `resp_status_code` (200 if unse
 -type handler_callback() :: {Module :: atom(), Function :: atom()} |
                             fun((...) -> handler_return()).
 
+-define(REGISTERED, {?MODULE, registered}).
+
 -record(state, {
 
                }).
@@ -133,6 +135,7 @@ init([]) ->
                                  {sendfile, fun nova_basic_handler:handle_sendfile/3},
                                  {ws, fun nova_basic_handler:handle_ws/2},
                                  {view, fun nova_basic_handler:handle_view/3}]),
+    ets:insert(?HANDLERS_TABLE, maps:to_list(persistent_term:get(?REGISTERED, #{}))),
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------
@@ -149,6 +152,7 @@ init([]) ->
                          {stop, Reason :: term(), NewState :: term()}.
 handle_call({unregister_handler, Handle}, _From, State) ->
     ets:delete(?HANDLERS_TABLE, Handle),
+    forget(Handle),
     ?LOG_DEBUG(#{action => <<"Removed handler">>, handler => Handle}),
     {reply, ok, State};
 
@@ -174,6 +178,7 @@ handle_cast({register_handler, Handle, Callback}, State) ->
         [] ->
             ?LOG_DEBUG(#{action => <<"Registered handler">>, handler => Handle}),
             ets:insert(?HANDLERS_TABLE, {Handle, Callback0}),
+            remember(Handle, Callback0),
             {noreply, State};
         _ ->
             ?LOG_ERROR(#{msg => <<"Another handler is already registered on that name">>, handler => Handle}),
@@ -201,8 +206,26 @@ handle_info(_Info, State) ->
 -doc false.
 -spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
                 State :: term()) -> any().
-terminate(_Reason, _State) ->
+terminate(Reason, _State) ->
+    case Reason of
+        normal -> persistent_term:erase(?REGISTERED);
+        shutdown -> persistent_term:erase(?REGISTERED);
+        {shutdown, _} -> persistent_term:erase(?REGISTERED);
+        _Crash -> ok
+    end,
     ok.
+
+%% The table goes when this process does. Handlers are registered once, by
+%% application code, so what was registered is kept where a restart after a
+%% crash finds it.
+remember(Handle, Callback) ->
+    persistent_term:put(?REGISTERED, (persistent_term:get(?REGISTERED, #{}))#{Handle => Callback}).
+
+forget(Handle) ->
+    case persistent_term:get(?REGISTERED, #{}) of
+        #{Handle := _} = Registered -> persistent_term:put(?REGISTERED, maps:remove(Handle, Registered));
+        _ -> ok
+    end.
 
 %%--------------------------------------------------------------------
 %% Convert process state when code is changed
