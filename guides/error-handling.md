@@ -12,6 +12,7 @@ change it.
 | A controller throws `{StatusCode, Reason}` | The page for that status code | `Controller threw an exception` |
 | A controller crashes | The `500` page | `Controller crashed` |
 | A controller returns something no handler knows | The fallback controller of the module if it has one, otherwise the `500` page | |
+| A controller or a handler fails after the response has begun | What was sent already. No page | The failure, and a warning that no page is sent |
 | A `pre_request` plugin crashes or returns `{error, Reason}` | The `500` page | `Plugin crashed` |
 | The security callback crashes | The `500` page | `Security handler crashed` |
 | The security callback refuses the request | `401`, or what the callback returned. No page is rendered | |

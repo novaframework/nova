@@ -130,6 +130,7 @@ for.
 | `Request error in controller`, `Request error in plugin` | warning | The client sent something that could not be parsed, or sent the body too slowly. The request got `400`, `408` or `413` |
 | `Controller refused to redirect to a location that is not a local path` | warning | `{redirect_local, Path}` was given something that is not a path on the site. The request got `400` |
 | `Controller redirected to an invalid location` | error | `{redirect, Location}` was given something that cannot be a `location` header |
+| `The response had begun when the controller failed, so no error page is sent` | warning | A controller or a handler failed after it began to stream the response. The client keeps what was sent |
 | `Nova could not render template` | error | The template of a view does not exist. The request got a `404` |
 | `Invalid nova_request_plugin option, using the default` | warning | `max_body_length` or `body_read_timeout` has a value that is not valid |
 | `nova_multipart_plugin needs handler => {Mod, InitArgs}.` | error | The plugin is configured without a handler |

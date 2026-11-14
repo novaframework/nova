@@ -89,8 +89,14 @@ one idle timer per connection and ignores it; set
 the client leaving, which stops the request process, so bound its lifetime
 yourself.
 
-Nova sends the response when a handler returns. A handler that streamed the
-response itself therefore has to stay in the function for as long as the
-stream lasts. Returning `{ok, Req}` after the response was sent makes Nova
-attempt a second response, which is logged as `Controller crashed` with the
-reason `response_already_sent`.
+Nova sends the response when a handler returns, unless the response has
+begun. A handler that streamed the response returns `{ok, Req}` with the
+request `cowboy_req:stream_reply/3` gave it, and nothing more is sent. A
+controller that streams does the same with the request in its return, such
+as `{status, 200, #{}, <<>>, Req}`.
+
+A handler or a controller that fails after the response has begun is logged
+as any other failure. No error page is sent: the client keeps what it was
+sent, the response ends there, and the connection stays open for the next
+request. Nova logs a warning when it holds back a page this way. It relies on
+`nova_stream_h` being in `stream_handlers`, where it is by default.
