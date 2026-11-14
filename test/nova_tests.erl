@@ -5,7 +5,7 @@ setup() ->
     nova_test_helper:setup_nova_env().
 
 cleanup(Prev) ->
-    catch persistent_term:erase(nova_use_stacktrace),
+    _ = persistent_term:erase(nova_use_stacktrace),
     nova_test_helper:cleanup_nova_env(Prev).
 
 nova_test_() ->

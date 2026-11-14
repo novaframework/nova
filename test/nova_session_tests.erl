@@ -1,6 +1,5 @@
 -module(nova_session_tests).
 -include_lib("eunit/include/eunit.hrl").
--include("../include/nova_pubsub.hrl").
 
 %%====================================================================
 %% Integration tests for nova_session + nova_session_ets

@@ -1,6 +1,5 @@
 -module(nova_security_handler_tests).
 -include_lib("eunit/include/eunit.hrl").
--include("../include/nova_router.hrl").
 
 %% Logger handler callback: forwards every event to the test process.
 -export([log/2]).
