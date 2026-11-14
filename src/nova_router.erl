@@ -782,13 +782,15 @@ normalize_secure(Invalid, RouterFile) ->
 %% route group, and a group that declares `security` has its own behind it:
 %% both have to allow a request, so neither the application that mounts nor
 %% the one that is mounted can take away what the other one asks for. Both
-%% values are checked here, also where only one ends up on the route.
-%% Replacing a declared callback takes the explicit `override_secure`.
+%% values are checked here, also where only one ends up on the route, or
+%% neither because an `override_secure` replaces them: that is the explicit
+%% way to replace a declared callback.
 resolve_secure(Options, RouteInfo, RouterFile) ->
-    case override_callbacks(Options, RouterFile) of
+    Overrides = override_callbacks(Options, RouterFile),
+    Mount = normalize_secure(maps:get(secure, Options, false), RouterFile),
+    Group = normalize_secure(maps:get(security, RouteInfo, false), RouterFile),
+    case Overrides of
         [] ->
-            Mount = normalize_secure(maps:get(secure, Options, false), RouterFile),
-            Group = normalize_secure(maps:get(security, RouteInfo, false), RouterFile),
             case {Mount, Group} of
                 {false, _} -> Group;
                 {_, false} -> Mount;
@@ -797,7 +799,7 @@ resolve_secure(Options, RouteInfo, RouterFile) ->
             end;
         [Override] ->
             Override;
-        Overrides ->
+        _Several ->
             Overrides
     end.
 
