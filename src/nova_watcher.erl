@@ -111,8 +111,8 @@ handle_call(Request, From, State) ->
                          {stop, Reason :: term(), NewState :: term()}.
 handle_cast({async, Application, Cmd, Args, Options}, State = #state{process_refs = ProcessRefs})
   when is_atom(Application), is_list(Cmd), is_list(Args), is_map(Options) ->
-    ArgList = argument_string(Args),
     try
+        ArgList = argument_string(Args),
         Port = erlang:open_port({spawn, characters(Cmd ++ " " ++ ArgList)},
                                 port_options(workdir(Application, maps:get(workdir, Options, undefined)))),
         ?LOG_NOTICE(#{action => <<"Started async command">>, command => Cmd, arguments => ArgList}),
@@ -120,7 +120,7 @@ handle_cast({async, Application, Cmd, Args, Options}, State = #state{process_ref
     catch
         error:Reason ->
             ?LOG_ERROR(#{msg => <<"Could not start watcher">>, application => Application,
-                         command => Cmd, arguments => ArgList, reason => Reason}),
+                         command => Cmd, arguments => Args, reason => Reason}),
             {noreply, State}
     end;
 handle_cast({async, Application, Cmd, Args, Options}, State) ->
