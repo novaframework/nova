@@ -8,7 +8,11 @@ A request without an `Origin` header is let through, since only browsers send it
 
 ## Options
 
-- `allowed_origins` - `same_host` (the default) accepts an origin whose host and port are the ones in the `Host` header, or the ones the request was sent to when it has no `Host` header, as over HTTP/2. Only host and port are compared, not the scheme, apart from the port an origin leaves out being the one of its scheme. A list accepts exactly the origins in it, such as `[~"https://example.com"]`. Use a list when a proxy in front of Nova rewrites the `Host` header.
+- `allowed_origins` - `same_host` (the default) accepts an origin whose host and port are the ones in the `Host` header, or the ones the request was sent to when it has no `Host` header, as over HTTP/2. Only host and port are compared, not the scheme, apart from the port an origin leaves out being the one of its scheme. `same_origin` also compares the scheme: the origin must have the scheme, host and port of the request, where a port that is left out is the one of the scheme. A list accepts exactly the origins in it, such as `[~"https://example.com"]`. Use a list when a proxy in front of Nova rewrites the `Host` header or terminates TLS.
+
+With `same_host` a page loaded from `http://example.com` can open a websocket to `wss://example.com` over HTTP/1.1. `same_origin` refuses it.
+
+Neither `same_host` nor `same_origin` stops DNS rebinding, where another name is pointed at the address of the server: the origin and the host of such a request are the same name. A list of origins does, since the other name is not in it.
 
 ## Example configuration
 
@@ -60,7 +64,7 @@ plugin_info() ->
       url => ~"https://github.com/novaframework/nova",
       authors => [~"Nova team <info@novaframework.org>"],
       description => ~"Refuses websocket upgrades from other origins",
-      options => [{allowed_origins, ~"same_host, or the list of origins that may open a websocket"}]}.
+      options => [{allowed_origins, ~"same_host, same_origin, or the list of origins that may open a websocket"}]}.
 
 %% The check Cowboy makes before it upgrades, which also knows the extended
 %% CONNECT of HTTP/2 and HTTP/3. A request it cannot parse is checked too.
@@ -72,7 +76,7 @@ is_websocket_upgrade(Req) ->
     end.
 
 -spec is_allowed(Origin :: binary() | undefined, Req :: cowboy_req:req(),
-                 Allowed :: same_host | [iodata()]) -> boolean().
+                 Allowed :: same_host | same_origin | [iodata()]) -> boolean().
 is_allowed(undefined, _Req, _Allowed) ->
     true;
 is_allowed(Origin, Req, same_host) ->
@@ -82,6 +86,13 @@ is_allowed(Origin, Req, same_host) ->
                 undefined -> is_request_authority(Scheme, Authority, Req);
                 Host -> Authority =:= cowboy_bstr:to_lower(Host)
             end;
+        _NoAuthority ->
+            false
+    end;
+is_allowed(Origin, Req, same_origin) ->
+    case binary:split(cowboy_bstr:to_lower(Origin), ~"://") of
+        [Scheme, Authority] ->
+            Scheme =:= cowboy_req:scheme(Req) andalso is_request_authority(Scheme, Authority, Req);
         _NoAuthority ->
             false
     end;
