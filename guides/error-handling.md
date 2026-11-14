@@ -46,13 +46,15 @@ request.
 The pages that come with Nova answer in the format the `accept` header of
 the request asks for:
 
-| `accept` contains | Response body |
+| `accept` header | Response body |
 |---|---|
-| `application/json` | A JSON object |
-| `text/html` | An HTML page |
-| Neither | Empty |
+| Not sent | A JSON object |
+| Names `application/json` | A JSON object |
+| Names `text/html` and not `application/json` | An HTML page |
+| Names neither | Empty |
 
-A `404` for a request without an `accept` header is answered with JSON.
+The header is searched for those two media types as they are written, so a
+wildcard such as `*/*` names neither.
 
 The `500` page has a title and a generic message. The reason of the crash and
 the stacktrace are only added when `environment` is set to `dev` under
