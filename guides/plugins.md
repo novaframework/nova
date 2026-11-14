@@ -157,7 +157,9 @@ This plugin will generate a uuid v4 and set it as a response header as `X-Correl
 
 ### Nova cors
 
-This plugin answers CORS preflights (an `OPTIONS` request with both `Origin` and `Access-Control-Request-Method`) itself with a `204` and the CORS headers, so you don't need a controller for them. Any other request, including a plain `OPTIONS`, goes on to the application with the CORS headers added to the response.
+This plugin answers CORS preflights (an `OPTIONS` request with both `Origin` and `Access-Control-Request-Method`) itself with a `204` and the CORS headers, so the controller never sees them. Any other request, including a plain `OPTIONS`, goes on to the application with the CORS headers added to the response.
+
+The router picks the route, and checks its `methods`, before any plugin runs. A preflight therefore only reaches the plugin on a route that accepts `OPTIONS`: leave `methods` out, or list `options` in it. A route whose `methods` do not include `options` answers the preflight with a `405` and no CORS headers, and the browser blocks the real request.
 
 ```erlang
 {pre_request, nova_cors_plugin, #{allow_origins => [<<"https://app.example.com">>,
