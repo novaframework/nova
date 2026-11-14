@@ -134,10 +134,14 @@ for.
 | `Request error in controller`, `Request error in plugin` | warning | The client sent something that could not be parsed, or sent the body too slowly. The request got `400`, `408` or `413` |
 | `Controller refused to redirect to a location that is not a local path` | warning | `{redirect_local, Path}` was given something that is not a path on the site. The request got `400` |
 | `Controller redirected to an invalid location` | error | `{redirect, Location}` was given something that cannot be a `location` header |
+| `The request was answered before the controller returned, so what it returned is not sent` | warning | A controller or a fallback controller answered the request itself and returned without the request it answered with. The report has the `controller`, the `function`, the `return` form and the `route` |
+| `Plugin replied after the response was sent. The reply is dropped` | warning | A plugin returned `stop` with a reply for a request that was answered already. Logged once per plugin |
+| `Stacktraces are disabled. Call nova:use_stacktrace(true) ...` | warning | In the `dev` environment, a `500` page was rendered for a crash that was caught without its stacktrace. Logged once per node |
 | `The response had begun when the controller failed, so no error page is sent` | warning | A controller or a handler failed after it began to stream the response. The client keeps what was sent |
 | `Nova could not render template` | error | The template of a view does not exist. The request got a `404` |
 | `Template could not find application` | warning | A `url` tag names an application Nova has not compiled, or none. It rendered `#` |
-| `Static directory cannot be served` | error | The directory of a static route was requested and is gone, cannot be read or cannot be resolved. Logged once per directory. The request got a `404` |
+| `Static directory cannot be served` | error | The directory of a static route is gone, cannot be read or cannot be resolved. Logged once per directory, with the first request under it. The request got a `404` |
+| `Static file cannot be served` | error | The file of a static route to a single file is gone or cannot be read. Logged once per file. The request got a `404` |
 | `Invalid nova_request_plugin option, using the default` | warning | `max_body_length` or `body_read_timeout` has a value that is not valid |
 | `nova_multipart_plugin needs handler => {Mod, InitArgs}.` | error | The plugin is configured without a handler |
 | `Deprecation warning. Since version: ...` | warning | Something [deprecated](deprecations.md) is used |
