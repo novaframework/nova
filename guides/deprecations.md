@@ -149,6 +149,9 @@ of `{Module, Function}` in Nova.
   the routes were compiled: a relative path does not follow a later change of
   the working directory, and a symbolic link on the way to the directory that
   is changed later is not followed until Nova is restarted.
+  A route to a single file given as a relative path keeps to the file it named
+  when the routes were compiled as well. A directory that is removed while
+  Nova runs gets a `404` where its index used to get a `500`.
 
 - **A `Range` that is not valid, or is sent with `If-Range`, gets the whole
   file.** A static file answered a byte range that is not valid, such as
