@@ -10,6 +10,8 @@ spool_test_() ->
       fun owner_crash_deletes_its_files_only/1,
       fun kept_file_no_longer_counts/1,
       fun unknown_path_is_not_tracked/1,
+      fun string_and_binary_path_name_one_file/1,
+      fun unknown_request_is_refused/1,
       fun stopping_the_spool_deletes_what_it_tracks/1]}.
 
 setup() ->
@@ -94,6 +96,21 @@ unknown_path_is_not_tracked(Dir) ->
         ?assertEqual({error, not_tracked}, nova_multipart_spool:discard(Path)),
         ?assertEqual({error, not_tracked}, nova_multipart_spool:grow(Path, 1)),
         ?assertEqual({error, not_tracked}, nova_multipart_spool:renamed(Path, Path))
+    end.
+
+string_and_binary_path_name_one_file(Dir) ->
+    fun() ->
+        Path = filename:join(Dir, "upl\x{f6}ad"),
+        spool(Path, ~"data"),
+        ok = nova_multipart_spool:keep(unicode:characters_to_binary(Path)),
+        ?assertEqual(#{files => 0, bytes => 0}, nova_multipart_spool:usage()),
+        ?assertEqual({ok, ~"data"}, file:read_file(Path))
+    end.
+
+unknown_request_is_refused(_Dir) ->
+    fun() ->
+        ?assertEqual({error, badarg}, gen_server:call(nova_multipart_spool, {track, not_a_path, self()})),
+        ?assertEqual(#{files => 0, bytes => 0}, nova_multipart_spool:usage())
     end.
 
 stopping_the_spool_deletes_what_it_tracks(Dir) ->

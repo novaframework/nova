@@ -51,7 +51,7 @@ Either takes `infinity`. A part that would pass a limit is refused with `{error,
 
 -type path() :: file:filename_all().
 
--record(state, {files = #{} :: #{path() => {Owner :: pid(), Bytes :: non_neg_integer()}},
+-record(state, {files = #{} :: #{binary() => {Owner :: pid(), Bytes :: non_neg_integer()}},
                 owners = #{} :: #{pid() => reference()},
                 bytes = 0 :: non_neg_integer()}).
 
@@ -63,28 +63,28 @@ start_link() ->
 -doc "Ties `Path` to the calling process: the file is deleted when that process ends, unless it was kept. Call it before creating the file.".
 -spec track(Path :: path()) -> ok | {error, spool_full | spool_not_running}.
 track(Path) ->
-    call({track, Path, self()}).
+    call({track, name(Path), self()}).
 
 -doc "Counts `Bytes` more for a tracked file. Call it before writing them.".
 -spec grow(Path :: path(), Bytes :: non_neg_integer()) ->
           ok | {error, spool_full | not_tracked | spool_not_running}.
 grow(Path, Bytes) ->
-    call({grow, Path, Bytes}).
+    call({grow, name(Path), Bytes}).
 
 -doc "Tells the spool that a tracked file now lives at `NewPath`.".
 -spec renamed(Path :: path(), NewPath :: path()) -> ok | {error, not_tracked | spool_not_running}.
 renamed(Path, NewPath) ->
-    call({renamed, Path, NewPath}).
+    call({renamed, name(Path), name(NewPath)}).
 
 -doc "Deletes a tracked file now and forgets it.".
 -spec discard(Path :: path()) -> ok | {error, not_tracked | spool_not_running}.
 discard(Path) ->
-    call({discard, Path}).
+    call({discard, name(Path)}).
 
 -doc "Takes a tracked file over from the spool, which then neither deletes it nor counts it. The caller owns the file from here on.".
 -spec keep(Path :: path()) -> ok | {error, not_tracked | spool_not_running}.
 keep(Path) ->
-    call({keep, Path}).
+    call({keep, name(Path)}).
 
 -doc "The number of files the spool tracks and the bytes counted for them.".
 -spec usage() -> #{files := non_neg_integer(), bytes := non_neg_integer()}.
@@ -101,6 +101,17 @@ call(Request) ->
         exit:{noproc, _} -> {error, spool_not_running}
     end.
 
+%% The spool knows a file by the name the file module gives the operating
+%% system, so a path is the same file whether it came as a string or a binary.
+-spec name(path()) -> binary().
+name(Path) when is_binary(Path) ->
+    Path;
+name(Path) ->
+    case unicode:characters_to_binary(Path, unicode, file:native_name_encoding()) of
+        Name when is_binary(Name) -> Name;
+        _ -> error(badarg, [Path])
+    end.
+
 -doc false.
 -spec init([]) -> {ok, #state{}}.
 init([]) ->
@@ -109,7 +120,8 @@ init([]) ->
 
 -doc false.
 -spec handle_call(term(), gen_server:from(), #state{}) -> {reply, term(), #state{}}.
-handle_call({track, Path, Owner}, _From, State = #state{files = Files, owners = Owners}) ->
+handle_call({track, Path, Owner}, _From, State = #state{files = Files, owners = Owners})
+  when is_binary(Path), is_pid(Owner) ->
     case within(max_files, map_size(Files) + 1) of
         true ->
             Owners1 = case Owners of
@@ -120,7 +132,8 @@ handle_call({track, Path, Owner}, _From, State = #state{files = Files, owners = 
         false ->
             {reply, {error, spool_full}, State}
     end;
-handle_call({grow, Path, Bytes}, _From, State = #state{files = Files, bytes = Total}) ->
+handle_call({grow, Path, Bytes}, _From, State = #state{files = Files, bytes = Total})
+  when is_binary(Path), is_integer(Bytes), Bytes >= 0 ->
     case Files of
         #{Path := {Owner, Size}} ->
             case within(max_bytes, Total + Bytes) of
@@ -132,12 +145,13 @@ handle_call({grow, Path, Bytes}, _From, State = #state{files = Files, bytes = To
         _ ->
             {reply, {error, not_tracked}, State}
     end;
-handle_call({renamed, Path, NewPath}, _From, State = #state{files = Files}) ->
-    case maps:take(Path, Files) of
-        {Entry, Files1} -> {reply, ok, State#state{files = Files1#{NewPath => Entry}}};
-        error -> {reply, {error, not_tracked}, State}
+handle_call({renamed, Path, NewPath}, _From, State = #state{files = Files})
+  when is_binary(Path), is_binary(NewPath) ->
+    case Files of
+        #{Path := Entry} -> {reply, ok, State#state{files = (maps:remove(Path, Files))#{NewPath => Entry}}};
+        _ -> {reply, {error, not_tracked}, State}
     end;
-handle_call({discard, Path}, _From, State) ->
+handle_call({discard, Path}, _From, State) when is_binary(Path) ->
     case forget(Path, State) of
         {ok, State1} ->
             _ = file:delete(Path),
@@ -145,13 +159,15 @@ handle_call({discard, Path}, _From, State) ->
         error ->
             {reply, {error, not_tracked}, State}
     end;
-handle_call({keep, Path}, _From, State) ->
+handle_call({keep, Path}, _From, State) when is_binary(Path) ->
     case forget(Path, State) of
         {ok, State1} -> {reply, ok, State1};
         error -> {reply, {error, not_tracked}, State}
     end;
 handle_call(usage, _From, State = #state{files = Files, bytes = Bytes}) ->
-    {reply, #{files => map_size(Files), bytes => Bytes}, State}.
+    {reply, #{files => map_size(Files), bytes => Bytes}, State};
+handle_call(_Request, _From, State) ->
+    {reply, {error, badarg}, State}.
 
 -doc false.
 -spec handle_cast(term(), #state{}) -> {noreply, #state{}}.
@@ -175,19 +191,21 @@ terminate(_Reason, #state{files = Files}) ->
     [file:delete(Path) || Path <- maps:keys(Files)],
     ok.
 
+-spec forget(binary(), #state{}) -> {ok, #state{}} | error.
 forget(Path, State = #state{files = Files, owners = Owners, bytes = Total}) ->
-    case maps:take(Path, Files) of
-        {{Owner, Bytes}, Files1} ->
+    case Files of
+        #{Path := {Owner, Bytes}} ->
+            Files1 = maps:remove(Path, Files),
             Owners1 = case [true || _Path := {FileOwner, _Bytes} <- Files1, FileOwner =:= Owner] of
                           [] ->
-                              {Monitor, Rest} = maps:take(Owner, Owners),
+                              #{Owner := Monitor} = Owners,
                               erlang:demonitor(Monitor, [flush]),
-                              Rest;
+                              maps:remove(Owner, Owners);
                           _ ->
                               Owners
                       end,
             {ok, State#state{files = Files1, owners = Owners1, bytes = Total - Bytes}};
-        error ->
+        _ ->
             error
     end.
 
