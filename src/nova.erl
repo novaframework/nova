@@ -28,10 +28,12 @@ get_main_app() ->
 
 
 %%--------------------------------------------------------------------
--doc "Returns a proplist with all nova applications and their prefix. This function is useful when calulating dynamic routes.".
+-doc "Returns a proplist with all nova applications and their prefix. This function is useful when calulating dynamic routes. The applications of the default listener come first, followed by those that are only served by another listener.".
 -spec get_apps() -> [{App :: atom(), Prefix :: list()}].
 get_apps() ->
-    nova_router:compiled_apps().
+    Default = nova_router:compiled_apps(),
+    Others = [Entry || Key <- nova_sup:dispatch_keys(), Entry <- nova_router:compiled_apps(Key)],
+    Default ++ [Entry || {App, _Prefix} = Entry <- lists:ukeysort(1, Others), not lists:keymember(App, 1, Default)].
 
 %%--------------------------------------------------------------------
 -doc "Returns which environment nova is started in. This fetches the environment-variable in sys.config for Nova and returns the value found. Defaults to: dev".

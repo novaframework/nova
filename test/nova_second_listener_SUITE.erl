@@ -10,7 +10,8 @@
          not_found_renders_the_listeners_own_page/1,
          bootstrap_listener_keeps_its_pages/1,
          lookup_by_dispatch_key/1,
-         dispatch_key_of_a_request/1
+         dispatch_key_of_a_request/1,
+         apps_of_every_listener_are_listed/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -23,7 +24,8 @@ all() ->
      not_found_renders_the_listeners_own_page,
      bootstrap_listener_keeps_its_pages,
      lookup_by_dispatch_key,
-     dispatch_key_of_a_request
+     dispatch_key_of_a_request,
+     apps_of_every_listener_are_listed
     ].
 
 init_per_suite(Config) ->
@@ -73,3 +75,13 @@ dispatch_key_of_a_request(Config) ->
     Expected = iolist_to_binary(io_lib:format("~0p", [{nova_dispatch, nova_test_sub_app, SecondPort}])),
     ?assertEqual({200, ~"nova_dispatch"}, nova_test_listener:get(?config(first_port, Config), "/key")),
     ?assertEqual({200, Expected}, nova_test_listener:get(SecondPort, "/key")).
+
+%% The url tag of a template finds an application by what nova:get_apps/0
+%% lists, whichever listener serves it.
+apps_of_every_listener_are_listed(_Config) ->
+    Apps = nova:get_apps(),
+    ?assert(lists:keymember(nova_test_app, 1, Apps)),
+    ?assert(lists:keymember(nova_test_sub_app, 1, Apps)),
+    ?assertEqual(length(Apps), length(lists:ukeysort(1, Apps))),
+    ?assertEqual(~"/only-second",
+                 nova_erlydtl_inventory:url([~"/only-second", {application, ~"nova_test_sub_app"}], [])).

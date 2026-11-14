@@ -17,7 +17,8 @@ Each listener owns its own routing table, so an application started on a second 
          add_application/2,
          remove_application/1,
          get_started_applications/0,
-         listeners/0
+         listeners/0,
+         dispatch_keys/0
         ]).
 
 %% Supervisor callbacks
@@ -112,6 +113,12 @@ get_started_applications() ->
 -spec listeners() -> [ranch:ref()].
 listeners() ->
     [Ref || #nova_listener{ref = Ref} <- all_listeners()].
+
+%%--------------------------------------------------------------------
+-doc "The key of the routing table of every listener Nova has started, for the `nova_router` functions that take a `DispatchKey`.".
+-spec dispatch_keys() -> [nova_router:dispatch_key()].
+dispatch_keys() ->
+    [Key || #nova_listener{dispatch_key = Key} <- all_listeners()].
 
 %%%===================================================================
 %%% Supervisor callbacks
