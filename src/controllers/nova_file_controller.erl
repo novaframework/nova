@@ -7,6 +7,8 @@
 
 -include_lib("kernel/include/file.hrl").
 
+-define(MAX_SYMLINKS, 40).
+
 get_file(#{extra_state := #{static := File, options := Options}, headers := Headers}) ->
     Filepath = get_filepath(File),
     MimeType =
@@ -49,27 +51,38 @@ get_file(_Req) ->
 get_dir(#{extra_state := #{pathinfo := Pathinfo, static := Dir, options := Options}} = Req) ->
     %% This case will be invoked if a directory was set with wildcard - pathinfo will then
     %% contain the segments of the wildcard value
-    Filepath = get_filepath(Dir),
-    Filepath0 = lists:foldl(fun(F, Acc) -> filename:join(Acc, binary_to_list(F)) end, Filepath, Pathinfo),
-    case filelib:is_dir(Filepath0) of
-        false ->
-            %% Check if it's a file
-            case filelib:is_file(Filepath0) of
-                true ->
-                    %% It's a file
-                    get_file(Req#{extra_state => #{static => {file, Filepath0}, options => Options}});
+    Root = get_filepath(Dir),
+    case path_inside_root(Root, Pathinfo, Options) of
+        {ok, Filepath0} ->
+            case filelib:is_dir(Filepath0) of
                 false ->
-                    {status, 404}
+                    %% Check if it's a file
+                    case filelib:is_file(Filepath0) of
+                        true ->
+                            %% It's a file
+                            get_file(Req#{extra_state => #{static => {file, Filepath0}, options => Options}});
+                        false ->
+                            {status, 404}
+                    end;
+                true ->
+                    get_dir(Req#{extra_state => #{static => {dir, Filepath0}, static_root => Root,
+                                                  options => Options}})
             end;
-        true ->
-            get_dir(Req#{extra_state => #{static => {dir, Filepath0}, options => Options}})
+        error ->
+            {status, 404}
     end;
-get_dir(#{path := Path, extra_state := #{static := Dir, options := Options}} = Req) ->
+get_dir(#{path := Path, extra_state := #{static := Dir, options := Options} = ExtraState} = Req) ->
     Filepath = get_filepath(Dir),
     {ok, Files} = file:list_dir(Filepath),
     case get_index_file(Files, maps:get(index_files, Options, ["index.html"])) of
         {ok, IndexFile} ->
-            get_file(Req#{extra_state => #{static => {file, filename:join(Filepath, IndexFile)}, options => Options}});
+            IndexPath = filename:join(Filepath, IndexFile),
+            case inside_root(maps:get(static_root, ExtraState, Filepath), IndexPath, Options) of
+                true ->
+                    get_file(Req#{extra_state => #{static => {file, IndexPath}, options => Options}});
+                false ->
+                    {status, 404}
+            end;
         false ->
             case maps:get(list_dir, Options, false) of
                 false ->
@@ -92,6 +105,68 @@ get_dir(_Req) ->
 %%%%%%%%%%%%%%%%%%%%%%%%
 %% Internal functions %%
 %%%%%%%%%%%%%%%%%%%%%%%%
+
+%% The router resolves dot segments before a request gets here. This holds
+%% on its own, so the files served do not depend on what is in front of it.
+path_inside_root(Root, Pathinfo, Options) ->
+    case lists:all(fun safe_segment/1, Pathinfo) of
+        true ->
+            Filepath = filename:join([Root | [binary_to_list(Segment) || Segment <- Pathinfo]]),
+            case inside_root(Root, Filepath, Options) of
+                true  -> {ok, Filepath};
+                false -> error
+            end;
+        false ->
+            error
+    end.
+
+safe_segment(<<>>)     -> false;
+safe_segment(<<".">>)  -> false;
+safe_segment(<<"..">>) -> false;
+safe_segment(Segment) when is_binary(Segment) ->
+    binary:match(Segment, [<<"/">>, <<"\\">>, <<0>>]) =:= nomatch;
+safe_segment(_Segment) ->
+    false.
+
+%% Symbolic links are resolved on both sides, so a link below the root is
+%% served only if it lands inside the root, unless the route opts out with
+%% follow_external_symlinks.
+inside_root(Root, Filepath, Options) ->
+    ResolveLinks = not maps:get(follow_external_symlinks, Options, false),
+    case {canonical_path(Root, ResolveLinks), canonical_path(Filepath, ResolveLinks)} of
+        {{ok, RootSegments}, {ok, FileSegments}} ->
+            lists:prefix(RootSegments, FileSegments);
+        _ ->
+            false
+    end.
+
+canonical_path(Path, ResolveLinks) ->
+    canonical_path(filename:split(filename:absname(Path)), [], ResolveLinks, ?MAX_SYMLINKS).
+
+canonical_path([], Resolved, _ResolveLinks, _LinksLeft) ->
+    {ok, lists:reverse(Resolved)};
+canonical_path(["." | Rest], Resolved, ResolveLinks, LinksLeft) ->
+    canonical_path(Rest, Resolved, ResolveLinks, LinksLeft);
+canonical_path([".." | Rest], [_Volume] = Resolved, ResolveLinks, LinksLeft) ->
+    canonical_path(Rest, Resolved, ResolveLinks, LinksLeft);
+canonical_path([".." | Rest], [_Parent | Resolved], ResolveLinks, LinksLeft) ->
+    canonical_path(Rest, Resolved, ResolveLinks, LinksLeft);
+canonical_path([Segment | Rest], Resolved, false, LinksLeft) ->
+    canonical_path(Rest, [Segment | Resolved], false, LinksLeft);
+canonical_path([Segment | Rest], Resolved, true, LinksLeft) ->
+    case file:read_link_all(filename:join(lists:reverse([Segment | Resolved]))) of
+        {ok, Target} when is_list(Target), LinksLeft > 0 ->
+            case filename:pathtype(Target) of
+                absolute ->
+                    canonical_path(filename:split(Target) ++ Rest, [], true, LinksLeft - 1);
+                _Relative ->
+                    canonical_path(filename:split(Target) ++ Rest, Resolved, true, LinksLeft - 1)
+            end;
+        {ok, _Target} ->
+            error;
+        {error, _NotALink} ->
+            canonical_path(Rest, [Segment | Resolved], true, LinksLeft)
+    end.
 
 parse_range(RangeSpec, FileSize) ->
     %% Parse the "bytes=" range header value

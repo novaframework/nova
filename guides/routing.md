@@ -104,6 +104,8 @@ Example:
 {"/with-index/[...]", "assets/another-dir", #{index_files => ["index.html"]}}
 ```
 
+A directory route only serves what is inside that directory. A request whose trailing segments are empty, `.` or `..`, or contain `/`, `\` or a NUL byte, is answered with `404`, whatever the router in front of it let through. Symbolic links are resolved first: a link that points inside the directory is served, one that points out of it is a `404`. Set `follow_external_symlinks => true` in the options of the route to serve links that leave the directory.
+
 ## How to create routes
 
 A route consists of three different components:
