@@ -39,4 +39,4 @@ Nova starts `npm run watch` inside the `priv/my_js_application` directory of `my
 - The command runs in its own working directory. The working directory of the Erlang node is not changed.
 - Output from watcher processes is printed to the Erlang console when the `environment` is `dev`, and dropped otherwise. It is not written to Nova log files.
 - A watcher that exits is not restarted. A warning is logged when it exits abnormally.
-- A watcher that cannot be started (unknown application, for example) is logged as an error and skipped.
+- A watcher that cannot be started (an unknown application, or arguments that are not strings, for example) is logged as the error `Could not start watcher` and skipped. The other watchers are started.
