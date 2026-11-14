@@ -71,16 +71,23 @@ terminate_controller(Reason, PartialReq, State = #{controller_data := Controller
                                                    plugins := Plugins}) ->
     case erlang:function_exported(Mod, terminate, 3) of
         true ->
-            erlang:apply(Mod, terminate, [Reason, PartialReq, ControllerData]),
-            %% Call post_ws_connection-plugins
-            TerminatePlugins = proplists:get_value(post_ws_connection, Plugins, []),
-            ControllerState = #{module => Mod,
-                                function => terminate,
-                                arguments => [Reason, PartialReq, State]},
-            run_plugins(TerminatePlugins, post_ws_connection, ControllerState, State);
-        _ ->
+            try
+                Mod:terminate(Reason, PartialReq, ControllerData)
+            catch
+                Class:TerminateReason:Stacktrace ->
+                    ?LOG_ERROR(#{msg => ~"Controller crashed", class => Class,
+                                 reason => nova_redact:term(TerminateReason),
+                                 stacktrace => nova_redact:stacktrace(Stacktrace)})
+            end;
+        false ->
             ok
-    end;
+    end,
+    TerminatePlugins = proplists:get_value(post_ws_connection, Plugins, []),
+    ControllerState = #{module => Mod,
+                        function => terminate,
+                        arguments => [Reason, PartialReq, State]},
+    _ = run_plugins(TerminatePlugins, post_ws_connection, ControllerState, State),
+    ok;
 terminate_controller(Reason, PartialReq, State) ->
     ?LOG_ERROR(#{msg => ~"Terminate called", reason => nova_redact:term(Reason),
                  partial_req => nova_redact:term(PartialReq), state => nova_redact:term(State)}),
