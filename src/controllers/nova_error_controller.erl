@@ -56,7 +56,9 @@ server_error(#{crash_info := #{class := Class, reason := Reason} = CrashInfo} = 
             render(500, Variables, Req);
         false ->
             {status, 500}
-    end.
+    end;
+server_error(Req) ->
+    server_error(Req#{crash_info => #{status_code => 500}}).
 
 render(StatusCode, Variables, Req) ->
     case preferred_type(cowboy_req:header(~"accept", Req)) of

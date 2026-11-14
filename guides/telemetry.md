@@ -103,6 +103,9 @@ Plugins and the security callback are outside it.
     status code. Nova routes `404` and `500` itself.
   - A controller that returns something Nova cannot handle emits the status
     page `stop` nested inside its own span.
+  - A status page that raises, a `{Status, Reason}` included, emits
+    `exception`. Nova then renders the `500` page, or its own `500` page
+    when the one that raised was the application's.
 
   One request can therefore produce two controller spans. To count requests,
   filter out `status_page => true`.

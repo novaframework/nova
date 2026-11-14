@@ -68,13 +68,15 @@ call_terminate(Module, Reason, Req, State) ->
 %% INTERNAL FUNCTIONS %%
 %%%%%%%%%%%%%%%%%%%%%%%%
 
+%% StatusPage is false for the controller of a route, or the status whose
+%% page is being rendered.
 execute_controller(Req, Env = #{callback := Callback}, StatusPage) ->
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
-    try run_controller(Callback, Req, Env, StatusPage) of
+    try run_controller(Callback, Req, Env, StatusPage =/= false) of
         HandlerReturn ->
             HandlerReturn
     catch
-        Class:{Status, Reason} when is_integer(Status) ->
+        Class:{Status, Reason} when is_integer(Status), StatusPage =:= false ->
             %% This makes it so that we don't need to fetch the stacktrace
             ?LOG_ERROR(#{msg => <<"Controller threw an exception">>,
                          class => Class,
@@ -83,28 +85,46 @@ execute_controller(Req, Env = #{callback := Callback}, StatusPage) ->
         Class:Reason0:Stacktrace when UseStacktrace == true ->
             Reason = nova_redact:term(Reason0),
             FormattedStacktrace = nova:format_stacktrace(Stacktrace),
-            ?LOG_ERROR(#{msg => <<"Controller crashed">>,
-                         class => Class,
-                         reason => Reason,
-                         stacktrace => FormattedStacktrace}),
+            ?LOG_ERROR((crash_report(StatusPage))#{class => Class,
+                                                   reason => Reason,
+                                                   stacktrace => FormattedStacktrace}),
             terminate(Reason0, Req, Callback),
             %% Build the payload object
             Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 500,
                                                               stacktrace => FormattedStacktrace}),
-            render_response(Req#{crash_info => Payload}, Env, 500);
+            render_crash(Req#{crash_info => Payload}, Env, StatusPage);
         Class:Reason0 ->
             Reason = nova_redact:term(Reason0),
-            ?LOG_ERROR(#{msg => <<"Controller crashed">>,
-                         class => Class,
-                         reason => Reason}),
+            ?LOG_ERROR((crash_report(StatusPage))#{class => Class,
+                                                   reason => Reason}),
             terminate(Reason0, Req, Callback),
             %% Build the payload object
             Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 500}),
-            render_response(Req#{crash_info => Payload}, Env, 500)
+            render_crash(Req#{crash_info => Payload}, Env, StatusPage)
     end.
 
+crash_report(false) ->
+    #{msg => <<"Controller crashed">>};
+crash_report(StatusPage) ->
+    #{msg => ~"Status page crashed", status_page => StatusPage}.
+
+%% A status page that fails is never looked up again, or a page that always
+%% fails would be rendered without end. The page of another status hands
+%% over to the 500 page, the 500 page of the application to Nova's own, and
+%% Nova's own to a bare 500.
+render_crash(Req, Env = #{callback := Callback}, 500) ->
+    case Callback =:= fun nova_error_controller:server_error/1 of
+        true ->
+            {ok, cowboy_req:reply(500, maps:without([resp_body], Req)), Env};
+        false ->
+            execute_controller(Req, Env#{app => nova, callback => fun nova_error_controller:server_error/1}, 500)
+    end;
+render_crash(Req, Env, _StatusPage) ->
+    render_response(Req, Env, 500).
+
 %% {Status, Reason} raised in any class is how a controller asks execute/2 for
-%% a status page, so it ends the span as a stop with that status.
+%% a status page, so it ends the span as a stop with that status. A status
+%% page cannot ask for another one: whatever it raises is a crash.
 run_controller(Callback, Req, Env, StatusPage) ->
     {module, Module} = erlang:fun_info(Callback, module),
     {name, Action} = erlang:fun_info(Callback, name),
@@ -121,7 +141,7 @@ run_controller(Callback, Req, Env, StatusPage) ->
         nova_telemetry:stop(Span, #{status => maps:get(resp_status_code, Req0, 200)}),
         HandlerReturn
     catch
-        Class:{Status, _} = Reason:Stacktrace when is_integer(Status) ->
+        Class:{Status, _} = Reason:Stacktrace when is_integer(Status), not StatusPage ->
             nova_telemetry:stop(Span, #{status => Status}),
             erlang:raise(Class, Reason, Stacktrace);
         Class:Reason:Stacktrace ->
@@ -224,7 +244,7 @@ render_response(Req, Env, StatusCode) ->
                     {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, fun erlang:date/0, Req),
                     render_response(Req0, Env);
                 {ok, _Bindings, #nova_handler_value{callback = Callback}} ->
-                    execute_controller(Req, Env#{app => nova, callback => Callback}, true)
+                    execute_controller(Req, Env#{app => nova, callback => Callback}, StatusCode)
             end;
         false ->
             {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, fun(_) -> ok end, Req),

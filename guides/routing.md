@@ -313,6 +313,8 @@ A route whose path is an integer handles that status code:
 
 Nova registers its own 404 and 500 handlers; an application's routes for the same codes replace them. A status-code route is rendered when no route matches (404), when the method is not allowed (405), when a controller or plugin crashes or a plugin returns `{error, Reason}` (500), when a controller throws `{Status, Reason}`, and when a controller returns something no handler understands. It is *not* rendered for a `{status, Code}` returned by a controller, nor for a request the security function refuses or a plugin stops.
 
+A status-code route that crashes, or throws `{Status, Reason}` itself, is not rendered a second time. The request gets the 500 page; when it was the application's 500 page that failed, Nova's own; and a `500` without a body should that fail as well.
+
 ## The matched route
 
 When a request matches a route, Nova stores the route's template in the
