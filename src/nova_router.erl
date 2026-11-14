@@ -14,9 +14,13 @@
 -export([
          compile/1,
          compile/2,
+         compile_fresh/2,
          lookup_url/1,
          lookup_url/2,
          lookup_url/3,
+         lookup_url/4,
+         dispatch_key/1,
+         canonical_path/1,
          render_status_page/2,
          render_status_page/3,
          render_status_page/5,
@@ -47,7 +51,7 @@
 -type lookup_result() :: {ok, bindings(), Value :: term()} |
                          {ok, bindings(), Value :: term(), PathInfo :: [binary()]} |
                          {error, not_found} |
-                         {error, comparator_not_found, AllowedMethods :: [binary()]}.
+                         {error, comparator_not_found, AllowedMethods :: [nova_routing_trie:comparator()]}.
 
 -export_type([bindings/0, lookup_result/0]).
 
@@ -104,6 +108,19 @@ compile(Apps, DispatchKey) ->
     StorageBackend:put(DispatchKey, Dispatch),
     Dispatch.
 
+%%--------------------------------------------------------------------
+-doc "As compile/2, but starting from an empty routing table that replaces whatever is stored under `DispatchKey`. A listener that is starting uses this, so routes and security callbacks from an earlier run in the same VM are not carried over.".
+-spec compile_fresh(Apps :: [atom() | {atom(), map()}], DispatchKey :: dispatch_key()) ->
+          nova_routing_trie:trie().
+compile_fresh(Apps, DispatchKey) ->
+    UseStrict = application:get_env(nova, use_strict_routing, false),
+    StorageBackend = storage_backend(),
+    StorageBackend:put(apps_key(DispatchKey), []),
+    Dispatch = compile(Apps, nova_routing_trie:new(#{strict => UseStrict}),
+                       #{dispatch_key => DispatchKey}),
+    StorageBackend:put(DispatchKey, Dispatch),
+    Dispatch.
+
 -spec execute(Req, Env :: cowboy_middleware:env()) -> {ok, Req, Env0} | {stop, Req}
                                                           when Req::cowboy_req:req(),
                                                                Env0::cowboy_middleware:env().
@@ -141,7 +158,7 @@ execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
             {Route, Plugins} = take_route(RoutePlugins),
             {ok,
              put_route(Route, Req#{plugins => Plugins,
-                                   extra_state => ExtraState#{pathinfo => Pathinfo},
+                                   extra_state => with_pathinfo(ExtraState, Pathinfo),
                                    bindings => Bindings}),
              Env#{app => App,
                   callback => Callback,
@@ -161,12 +178,26 @@ execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
                   secure => Secure
                  }
             };
+        {ok, Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
+                                              plugins = Plugins, secure = Secure}, Pathinfo} ->
+            {ok,
+             Req#{plugins => Plugins,
+                  extra_state => #{pathinfo => Pathinfo},
+                  bindings => Bindings},
+             Env#{app => App,
+                  cowboy_handler => Handler,
+                  arguments => Args,
+                  secure => Secure
+                 }
+            };
         Error ->
             ?LOG_ERROR(#{reason => <<"Unexpected return from nova_routing_trie:find/4">>,
                          return_object => Error}),
             render_status_page(Host, 404, #{error => Error}, Req, Env)
     end.
 
+%%--------------------------------------------------------------------
+-doc "Look up a path in the routing table of the default listener, for any host and method. Use lookup_url/4 for the table of another listener.".
 -spec lookup_url(Path :: nova_routing_trie:path()) -> lookup_result().
 lookup_url(Path) ->
     lookup_url('_', Path).
@@ -178,16 +209,31 @@ lookup_url(Host, Path) ->
 -spec lookup_url(Host :: binary() | atom(), Path :: nova_routing_trie:path(),
                  Method :: nova_routing_trie:comparator()) -> lookup_result().
 lookup_url(Host, Path, Method) ->
-    StorageBackend = storage_backend(),
-    Dispatch = StorageBackend:get(?NOVA_DISPATCH),
-    lookup_url(Host, Path, Method, Dispatch).
+    lookup_url(Host, Path, Method, ?NOVA_DISPATCH).
 
+%%--------------------------------------------------------------------
+-doc "As lookup_url/3, but in the routing table addressed by `DispatchKey`. dispatch_key/1 gives the key of the listener a request came in on.".
 -spec lookup_url(Host :: binary() | atom(), Path :: nova_routing_trie:path(),
                  Method :: nova_routing_trie:comparator(),
-                 Dispatch :: nova_routing_trie:trie()) -> lookup_result().
-lookup_url(Host, Path, Method, Dispatch) ->
-    nova_routing_trie:find(Host, Path, Method, Dispatch).
+                 DispatchKey :: dispatch_key()) -> lookup_result().
+lookup_url(Host, Path, Method, DispatchKey) ->
+    StorageBackend = storage_backend(),
+    nova_routing_trie:find(Host, Path, Method, StorageBackend:get(DispatchKey)).
 
+%%--------------------------------------------------------------------
+-doc """
+The path a request is routed on, as opposed to the `path` of the request, which is what the client sent. Empty segments are dropped and `.` and `..` are resolved, so `/public/../admin//users` gives `/admin/users`.
+
+A plugin or security callback that decides by path must look at this one. Compare whole segments, not bytes: `/api` is not a prefix of `/apikeys`.
+""".
+-spec canonical_path(Req :: cowboy_req:req() | binary()) -> binary().
+canonical_path(#{path := Path}) ->
+    canonical_path(Path);
+canonical_path(Path) when is_binary(Path) ->
+    case nova_routing_trie:canonical_segments(Path) of
+        [] -> <<"/">>;
+        Segments -> iolist_to_binary([[$/, Segment] || Segment <- Segments])
+    end.
 
 %%--------------------------------------------------------------------
 -doc "Works the same way as add_routes/2 but with the exception that you don't need to provide the routes explicitly. When using this it's expected that there's a routing-module associated with the application. Eg. for the application 'test' the corresponding router would then be 'test_router'. Read more about routers in the official documentation.".
@@ -372,15 +418,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     ok = warn_route_plugin_strategy(App, RouteInfo, RouterFile),
     Plugins = resolve_plugins(maps:get(plugin_strategy, Options, local_or_global), RouteInfo, RouterFile),
 
-    Secure =
-        case maps:get(override_secure, Options, false) of
-            false ->
-                normalize_secure(maps:get(secure, Options, maps:get(security, RouteInfo, false)), RouterFile);
-            %% The including application overrides the security callback the
-            %% sub-application declared for itself.
-            Override ->
-                normalize_secure(Override, RouterFile)
-        end,
+    Secure = resolve_secure(Options, RouteInfo, RouterFile),
 
     Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins),
                                 extra_state = maps:get(extra_state, RouteInfo, #{})},
@@ -431,7 +469,7 @@ parse_url(Host, [{RemotePath, LocalPath, Options}|Tl], T = #{prefix := Prefix},
                                        local_path => LocalPath,
                                        remote_path => RemotePath,
                                        router_file => maps:get(router_file, Options, undefined)}),
-                        not_found;
+                        throw({error, {static_path_not_found, LocalPath}});
                     {true, false} ->
                         {file, LocalPath};
                     {_, true} ->
@@ -517,7 +555,7 @@ render_status_page(StatusCode, Req) ->
 -spec render_status_page(StatusCode :: integer(), Data :: map(), Req :: cowboy_req:req()) ->
                                 {ok, Req0 :: cowboy_req:req(), Env :: map()}.
 render_status_page(StatusCode, Data, Req) ->
-    render_status_page('_', StatusCode, Data, Req, #{}).
+    render_status_page('_', StatusCode, Data, Req, #{nova_dispatch_key => dispatch_key(Req)}).
 
 -spec render_status_page(Host :: binary() | atom(),
                          StatusCode :: integer(),
@@ -527,11 +565,14 @@ render_status_page(StatusCode, Data, Req) ->
 render_status_page(Host, StatusCode, Data, Req, Env) ->
     StorageBackend = storage_backend(),
     Dispatch = StorageBackend:get(dispatch_key(Env)),
+    %% A status page is rendered by a controller. Left in place, the handler
+    %% of a websocket route would run instead and upgrade the connection.
+    Env1 = maps:without([cowboy_handler, arguments], Env),
     {Req0, Env0} =
         case nova_routing_trie:find(Host, StatusCode, '_', Dispatch) of
             {error, _} ->
                 %% Render nova page if exists - We need to determine where to find this path?
-                {Req, Env#{app => nova,
+                {Req, Env1#{app => nova,
                            callback => fun nova_error_controller:status_code/1,
                            secure => false,
                            controller_data => #{status => StatusCode, data => Data}}};
@@ -541,7 +582,7 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
                                                extra_state = ExtraState}} ->
                 {
                  Req#{extra_state => ExtraState, bindings => Bindings, resp_status_code => StatusCode},
-                 Env#{app => App,
+                 Env1#{app => App,
                       callback => Callback,
                       secure => Secure,
                       controller_data => #{status => StatusCode, data => Data},
@@ -566,6 +607,15 @@ take_route(Plugins)                          -> {undefined, Plugins}.
 put_route(undefined, Req) -> Req;
 put_route(Route, Req)     -> Req#{nova_route => Route}.
 
+%% A route declared without extra_state carries undefined, and one may carry
+%% any term. Only a map can take the catch-all's trailing segments.
+with_pathinfo(ExtraState, Pathinfo) when is_map(ExtraState) ->
+    ExtraState#{pathinfo => Pathinfo};
+with_pathinfo(undefined, Pathinfo) ->
+    #{pathinfo => Pathinfo};
+with_pathinfo(ExtraState, _Pathinfo) ->
+    ExtraState.
+
 %% The module the dispatch table is stored in. Configurable, so it has to be
 %% narrowed to a module before it can be called.
 -spec storage_backend() -> module().
@@ -577,10 +627,20 @@ storage_backend() ->
             persistent_term
     end.
 
-%% The listener's dispatch key, defaulting to the one the bootstrap listener
-%% uses so an Env built before multi-listener support still resolves.
-dispatch_key(Env) ->
-    maps:get(nova_dispatch_key, Env, ?NOVA_DISPATCH).
+%%--------------------------------------------------------------------
+-doc "The key of the routing table serving a request, for the functions that take a `DispatchKey`. Takes the request, or the middleware environment where that is at hand. Anything that does not belong to a listener gives the key of the default listener.".
+-spec dispatch_key(ReqOrEnv :: cowboy_req:req() | cowboy_middleware:env()) -> dispatch_key().
+dispatch_key(#{nova_dispatch_key := DispatchKey}) ->
+    DispatchKey;
+dispatch_key(#{ref := Listener}) ->
+    try ranch:get_protocol_options(Listener) of
+        #{env := #{nova_dispatch_key := DispatchKey}} -> DispatchKey;
+        _ -> ?NOVA_DISPATCH
+    catch
+        error:badarg -> ?NOVA_DISPATCH
+    end;
+dispatch_key(_) ->
+    ?NOVA_DISPATCH.
 
 %% Each dispatch table keeps its own list of compiled applications.
 apps_key(?NOVA_DISPATCH)  -> ?NOVA_APPS;
@@ -589,7 +649,15 @@ apps_key(DispatchKey)     -> {?NOVA_APPS, DispatchKey}.
 insert_methods([], _Host, _Path, _Value, Tree, _Options, _ToComparator) ->
     Tree;
 insert_methods([Method|Tl], Host, Path, Value, Tree, Options, ToComparator) ->
-    Tree0 = insert(Host, Path, ToComparator(Method), Value, Tree, Options),
+    Comparator =
+        try ToComparator(Method)
+        catch
+            throw:{error, {invalid_method, _}} = Error ->
+                ?LOG_ERROR(#{reason => <<"Unknown HTTP method in the methods of a route. Use get, post, put, delete, options, head, connect, trace, patch or '_'.">>,
+                             route => Path, method => Method}),
+                throw(Error)
+        end,
+    Tree0 = insert(Host, Path, Comparator, Value, Tree, Options),
     insert_methods(Tl, Host, Path, Value, Tree0, Options, ToComparator).
 
 insert(Host, Path, Combinator, Value, Tree, Options) ->
@@ -619,6 +687,41 @@ add_plugin(Plugin) ->
             ok;
         _ ->
             StorageBackend:put(?NOVA_PLUGINS, Plugins1)
+    end,
+    nova_plugin_manager:ensure_plugin(Plugin).
+
+normalize_secure(false, _RouterFile) ->
+    false;
+normalize_secure({SMod, SFun}, RouterFile) when is_atom(SMod), is_atom(SFun) ->
+    ?LOG_DEPRECATED(<<"v0.9.24">>, <<"The {Mod,Fun} format have been deprecated for the 'secure'-section of a route table. Use the new format for routes.">>, RouterFile),
+    fun SMod:SFun/1;
+normalize_secure(SCallback, _RouterFile) when is_function(SCallback, 1) ->
+    SCallback;
+normalize_secure(Invalid, RouterFile) ->
+    ?LOG_ERROR(#{reason => <<"A security value must be false, a fun/1 or {Mod, Fun}. Every request to these routes is denied.">>,
+                 value => Invalid, router_file => RouterFile}),
+    fun nova_security_handler:deny/1.
+
+%% The application-level `secure` only fills in for a route group that
+%% declares no callback, so mounting an application can add protection to
+%% its routes but never take away what the application declared for itself.
+%% Replacing a declared callback takes the explicit `override_secure`.
+resolve_secure(Options, RouteInfo, RouterFile) ->
+    case maps:get(override_secure, Options, false) of
+        false ->
+            AppDefault = maps:get(secure, Options, false),
+            case normalize_secure(maps:get(security, RouteInfo, false), RouterFile) of
+                false ->
+                    normalize_secure(AppDefault, RouterFile);
+                GroupCallback when is_map_key(secure, Options), AppDefault =/= GroupCallback ->
+                    ?LOG_WARNING(#{reason => <<"'secure' in nova_apps does not replace the security callback a route group declares. Use 'override_secure' to replace it.">>,
+                                   app => maps:get(app, Options), router_file => RouterFile}),
+                    GroupCallback;
+                GroupCallback ->
+                    GroupCallback
+            end;
+        Override ->
+            normalize_secure(Override, RouterFile)
     end.
 
 %%--------------------------------------------------------------------
@@ -627,18 +730,6 @@ Work out which plugins apply to a route entry.
 
 `local_or_global` is the default and is how Nova has always behaved: a route entry that declares `plugins` uses exactly those, otherwise it uses the globally configured ones. The merging strategies exist for the cases where you want both, and dedupe on `{Type, Module}` keeping the first occurrence, so ordering within a phase is preserved.
 """.
-normalize_secure(false, _RouterFile) ->
-    false;
-normalize_secure(true, RouterFile) ->
-    ?LOG_ERROR(#{reason => <<"'secure' must be false, a fun/1 or {Mod, Fun}. Ignoring 'true'.">>,
-                 router_file => RouterFile}),
-    false;
-normalize_secure({SMod, SFun}, RouterFile) when is_atom(SMod), is_atom(SFun) ->
-    ?LOG_DEPRECATED(<<"v0.9.24">>, <<"The {Mod,Fun} format have been deprecated for the 'secure'-section of a route table. Use the new format for routes.">>, RouterFile),
-    fun SMod:SFun/1;
-normalize_secure(SCallback, _RouterFile) ->
-    SCallback.
-
 resolve_plugins(local_or_global, RouteInfo, _RouterFile) ->
     maps:get(plugins, RouteInfo, global_plugins());
 resolve_plugins(local_first, RouteInfo, _RouterFile) ->
@@ -703,16 +794,33 @@ normalize_plugins([{Type, PluginName, Options}|Tl], Ack) ->
     add_plugin(PluginName),
     normalize_plugins(Tl, [{Type, [{fun PluginName:Type/4, Options}|ExistingPlugins]}|proplists:delete(Type, Ack)]).
 
-method_to_binary(get) -> <<"GET">>;
-method_to_binary(post) -> <<"POST">>;
-method_to_binary(put) -> <<"PUT">>;
-method_to_binary(delete) -> <<"DELETE">>;
-method_to_binary(options) -> <<"OPTIONS">>;
-method_to_binary(head) -> <<"HEAD">>;
-method_to_binary(connect) -> <<"CONNECT">>;
-method_to_binary(trace) -> <<"TRACE">>;
-method_to_binary(patch) -> <<"PATCH">>;
-method_to_binary(_) -> '_'.
+%% A method that is not recognised stops the route table from compiling.
+%% It used to become the wildcard, which opened the route to every method.
+method_to_binary('_') ->
+    '_';
+method_to_binary(Method) when is_atom(Method) ->
+    known_method(atom_to_binary(Method), Method);
+method_to_binary(Method) when is_binary(Method) ->
+    known_method(Method, Method);
+method_to_binary(Method) when is_list(Method) ->
+    try unicode:characters_to_binary(Method) of
+        Name when is_binary(Name) -> known_method(Name, Method);
+        _ -> throw({error, {invalid_method, Method}})
+    catch
+        error:badarg -> throw({error, {invalid_method, Method}})
+    end;
+method_to_binary(Method) ->
+    throw({error, {invalid_method, Method}}).
+
+known_method(Name, Method) ->
+    case string:uppercase(Name) of
+        Upper when Upper =:= <<"GET">>; Upper =:= <<"POST">>; Upper =:= <<"PUT">>;
+                   Upper =:= <<"DELETE">>; Upper =:= <<"OPTIONS">>; Upper =:= <<"HEAD">>;
+                   Upper =:= <<"CONNECT">>; Upper =:= <<"TRACE">>; Upper =:= <<"PATCH">> ->
+            Upper;
+        _ ->
+            throw({error, {invalid_method, Method}})
+    end.
 
 concat_strings(Path1, Path2) when is_binary(Path1) ->
     concat_strings(unicode:characters_to_list(uri_string:unquote(Path1)), Path2);

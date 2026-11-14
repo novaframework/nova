@@ -76,11 +76,17 @@ The routing object consists of three or four fields.
 
 As you saw in the initial example in the [Basic components](#basic-components) section, we defined a route for the root path `/`.
 
+A route ending in `[...]` matches any number of trailing segments. They reach the controller as a list of binaries under `pathinfo` in the `extra_state` of the `Req`. If the route declares an `extra_state` that is not a map it is passed on as it is, without `pathinfo`. A websocket controller finds the same under `req` in its controller data.
+
 ### Websocket routing ###
 
 ```
 {Route :: list(), Controller :: atom(), Options :: map()}
 ```
+
+The `init/1` callback of a websocket controller returns `{ok, State}` to accept the connection. It can return `{ok, State, Options}` to also set the options of the connection, where `Options` is a `cowboy_websocket:opts()` map such as `#{max_frame_size => 65536, idle_timeout => 30000}`.
+
+A browser sends the cookies of your site with a websocket upgrade started by any page. When the connection relies on a session cookie, add `nova_ws_origin_plugin` as a `pre_request` plugin on the route to refuse upgrades from other origins. It is not on by default.
 
 > #### Important {: .tip}
 >
@@ -104,12 +110,16 @@ Example:
 {"/with-index/[...]", "assets/another-dir", #{index_files => ["index.html"]}}
 ```
 
+A directory route only serves what is inside that directory. A request whose trailing segments are empty, `.` or `..`, or contain `/`, `\` or a NUL byte, is answered with `404`, whatever the router in front of it let through. Symbolic links are resolved first: a link that points inside the directory is served, one that points out of it is a `404`. Set `follow_external_symlinks => true` in the options of the route to serve links that leave the directory.
+
+A `Range` request for one byte range is answered with `206` and that part of the file, a suffix range such as `bytes=-500` included. A range that cannot be parsed or lies past the end of the file gets `416`. A range unit other than `bytes`, or a request for several ranges, gets the whole file with `200`. The local path of a static route may be relative to the working directory of the node.
+
 ## How to create routes
 
 A route consists of three different components:
 
 * `Path` - This is the actual path to the endpoint. Eg `"/admin"`
-* `Method` - What method you want to support for this endpoint (get, post, update, delete). If you want to support all methods you can use the `'_'`-atom.
+* `Method` - What method you want to support for this endpoint: `get`, `post`, `put`, `delete`, `options`, `head`, `connect`, `trace` or `patch`, as an atom, a binary or a string in either case. If you want to support all methods you can use the `'_'`-atom. Anything else, a misspelling included, stops the application from starting with `{invalid_method, Method}`. Earlier releases silently treated it as `'_'`, so the route answered every method.
 * `ControllerCallback` - What erlang callback should be called on when the path gets called. This is defined as a function reference, eg `fun my_controller:main/1`.
 
 ## Using prefix
@@ -142,6 +152,8 @@ routes(_Environment) ->
         ]
     }].
 ```
+
+`security` takes `false`, a `fun/1` or the deprecated `{Module, Function}`. Any other value, `true` included, is logged as an error and every request to the group is answered with `401`.
 
 ### The security-function callback
 
@@ -247,6 +259,12 @@ itself. Set `override_secure` in the options for that application:
 It takes the same values as `secure`: `false` for no override, a `fun/1`, or
 the deprecated `{Module, Function}`.
 
+`override_secure` is the only option that replaces a callback a route group
+declares. `secure` in the same place is a default: it applies to the groups
+that declare no callback, and is ignored, with a warning in the log, by a
+group that has one. To open up a group that declares a callback, override it
+with a callback that returns `true`.
+
 
 ## Route precedence
 
@@ -261,6 +279,14 @@ time, at each path segment in turn:
 Matching backtracks, so a route is only skipped if nothing below it can match.
 `/users/new` and `/users/:id` can therefore both be declared: `/users/new`
 serves the literal path and `/users/:id` serves everything else.
+
+A request path is matched after empty segments are dropped and `.` and `..`
+are resolved, so `/public/../admin//users` is routed as `/admin/users`. The
+`path` in the request map is still what the client sent. A plugin or security
+callback that decides by path must use `nova_router:canonical_path(Req)`, and
+compare whole segments: `/api` is not a prefix of `/apikeys`. The
+`excluded_paths` of `nova_csrf_plugin` are matched this way. Earlier releases
+matched them as a byte prefix of the raw path.
 
 Once a path matches, the method is resolved. An exact method wins over a route
 declared with `'_'`. If the path matches but the method does not, Nova answers
@@ -336,6 +362,11 @@ This will add the routes defined in the second argument to the `my_app` applicat
 
 **Note**: If a route already exists it will be overwritten. This is the one
 place where a later route wins; routes compiled at startup keep the first.
+
+Routes added this way live in the routing table of the running listener. When
+Nova starts, each listener compiles its table from the routers again, so
+routes added at runtime, and routes a router no longer returns, are gone
+after a restart.
 
 If the application has a router module you can leave the routes out and let
 Nova call it for you:

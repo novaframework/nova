@@ -95,7 +95,15 @@ method_to_binary_wildcard_test() ->
     ?assertEqual('_', nova_router:method_to_binary('_')).
 
 method_to_binary_unknown_atom_test() ->
-    ?assertEqual('_', nova_router:method_to_binary(foobar)).
+    ?assertThrow({error, {invalid_method, foobar}}, nova_router:method_to_binary(foobar)).
+
+method_to_binary_accepts_every_spelling_test_() ->
+    [?_assertEqual(<<"POST">>, nova_router:method_to_binary(Method))
+     || Method <- ['POST', 'Post', <<"POST">>, <<"post">>, "POST", "post"]].
+
+method_to_binary_rejects_what_is_not_a_method_test_() ->
+    [?_assertThrow({error, {invalid_method, Method}}, nova_router:method_to_binary(Method))
+     || Method <- [gett, update, <<"P O">>, <<>>, "", "pots", 1, {get}, [get]]].
 
 %%====================================================================
 %% concat_strings/2

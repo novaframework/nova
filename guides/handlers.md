@@ -80,6 +80,32 @@ Once registered, when a controller returns `{console, Format, Args}`, Nova will 
 - Handlers can also perform post-processing, such as logging, analytics, or header manipulation.
 - You may unregister or override default handlers if needed.
 
+## Long-lived responses
+
+A handler can keep the connection and stream the response, for
+server-sent events for instance, with `cowboy_req:stream_reply/3` and
+`cowboy_req:stream_body/3`. Cowboy closes a connection that has been idle for
+`idle_timeout` (60 seconds by default), and only data it *receives* resets
+that timer. A response that just keeps sending is cut when the timeout
+passes.
+
+Give such a response a timeout of its own before streaming, rather than
+raising the limit for every request on the listener:
+
+```erlang
+handle_events({events, Source}, _Callback, Req0) ->
+    cowboy_req:cast({set_options, #{idle_timeout => infinity}}, Req0),
+    Req = cowboy_req:stream_reply(200, #{<<"content-type">> => <<"text/event-stream">>}, Req0),
+    stream(Source, Req).
+```
+
+The option lasts for that response only. It works for HTTP/1.1. HTTP/2 has
+one idle timer per connection and ignores it; set
+`reset_idle_timeout_on_send => true` in the `options` of
+`cowboy_configuration` there. A stream with no idle timeout is only ended by
+the client leaving, which stops the request process, so bound its lifetime
+yourself.
+
 ## Best Practices
 
 - Keep handler logic focused and single-purpose.

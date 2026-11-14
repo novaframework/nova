@@ -11,7 +11,7 @@ __Important:__`nova_request_plugin` must run before this plugin so that form par
 * `field_name` — form field name (default `<<"_csrf_token">>`)
 * `header_name` — header name (default `<<"x-csrf-token">>`)
 * `session_key` — session storage key (default `<<"_csrf_token">>`)
-* `excluded_paths` — list of path prefixes to skip (default `[]`)
+* `excluded_paths` — list of path prefixes to skip (default `[]`). A prefix covers whole segments of the path the request is routed on: `<<"/api">>` skips `/api` and `/api/hooks`, not `/apikeys`, and `/api/../admin` is checked as `/admin`
 """.
 -behaviour(nova_plugin).
 
@@ -121,13 +121,13 @@ is_safe_method(<<"HEAD">>) -> true;
 is_safe_method(<<"OPTIONS">>) -> true;
 is_safe_method(_) -> false.
 
-is_excluded_path(_Path, []) ->
-    false;
-is_excluded_path(Path, [Prefix | Rest]) ->
-    case binary:match(Path, Prefix) of
-        {0, _} -> true;
-        _ -> is_excluded_path(Path, Rest)
-    end.
+%% Compared on the segments the router matches on. A byte prefix of the raw
+%% path let `/api` cover `/apikeys`, and `/api/../admin` reach `/admin`.
+-spec is_excluded_path(Path :: binary(), Prefixes :: [iodata()]) -> boolean().
+is_excluded_path(Path, Prefixes) ->
+    Segments = nova_routing_trie:canonical_segments(Path),
+    [] =/= [Prefix || Prefix <- Prefixes,
+                      lists:prefix(nova_routing_trie:canonical_segments(iolist_to_binary(Prefix)), Segments)].
 
 get_submitted_token(Req, FieldName, HeaderName) ->
     case cowboy_req:header(HeaderName, Req) of

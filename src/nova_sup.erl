@@ -38,6 +38,12 @@ Each listener owns its own routing table, so an application started on a second 
 
 -type nova_app() :: atom() | {atom(), map()}.
 
+%% Started by the supervisor as its last child
+-export([start_listener_child/1]).
+
+%% Started by the supervisor as its first child
+-export([start_pubsub_scope/0]).
+
 %% Keyed on bind: one listener per {Host, Port} is the invariant
 %% add_application/2 relies on, so that pair is the table key.
 -record(nova_listener, {
@@ -125,8 +131,6 @@ init([]) ->
 
     Environment = nova:get_environment(),
 
-    nova_pubsub:start(),
-
     ?LOG_NOTICE(#{msg => <<"Starting nova">>, environment => Environment}),
 
     ensure_listener_table(),
@@ -155,10 +159,21 @@ init([]) ->
             _ -> Children0
         end,
 
-    setup_cowboy(Configuration),
+    {ok, {SupFlags, [pubsub_scope_child() | Children] ++ [listener_child(Configuration)]}}.
 
+%%--------------------------------------------------------------------
+-doc false.
+-spec start_listener_child(Configuration :: map()) -> ignore | {error, Reason :: any()}.
+start_listener_child(Configuration) ->
+    setup_cowboy(Configuration).
 
-    {ok, {SupFlags, Children}}.
+-doc false.
+-spec start_pubsub_scope() -> {ok, pid()} | ignore.
+start_pubsub_scope() ->
+    case pg:start_link(nova_scope) of
+        {ok, Pid} -> {ok, Pid};
+        {error, {already_started, _Pid}} -> ignore
+    end.
 
 %%%===================================================================
 %%% Internal functions
@@ -176,6 +191,27 @@ child(Id, Type, Mod) ->
 
 child(Id, Mod) ->
     child(Id, worker, Mod).
+
+%% The scope nova_pubsub and the ETS session backend use. As a child it is
+%% restarted when it dies. A scope that something else started before Nova
+%% is left with its owner.
+pubsub_scope_child() ->
+    #{id => nova_pubsub_scope,
+      start => {?MODULE, start_pubsub_scope, []},
+      restart => permanent,
+      shutdown => 5000,
+      type => worker,
+      modules => [pg]}.
+
+%% The listener is owned by ranch, so this child only binds it and leaves no
+%% process behind. It is last, so no request arrives before the processes a
+%% request needs are running, and a listener that cannot be bound stops the
+%% supervisor from starting.
+listener_child(Configuration) ->
+    #{id => ?NOVA_LISTENER,
+      start => {?MODULE, start_listener_child, [Configuration]},
+      restart => temporary,
+      type => worker}.
 
 %% The table survives a nova_sup restart, so creating it has to be idempotent.
 %% It is public because add_application/2 and remove_application/1 are called
@@ -216,9 +252,11 @@ setup_cowboy(Configuration) ->
             persistent_term:put(nova_use_stacktrace, UseStacktrace),
             ?LOG_NOTICE(#{msg => <<"Nova is running">>,
                           url => unicode:characters_to_binary(io_lib:format("http://~s:~B", [Host0, Port])),
-                          cowboy_version => CowboyVersion, nova_version => NovaVersion, app => App});
+                          cowboy_version => CowboyVersion, nova_version => NovaVersion, app => App}),
+            ignore;
         {error, Error} ->
-            ?LOG_ERROR(#{msg => <<"Cowboy could not start">>, reason => Error})
+            ?LOG_ERROR(#{msg => <<"Cowboy could not start">>, reason => Error}),
+            {error, {listener_not_started, Error}}
     end.
 
 -spec start_cowboy(Configuration :: map()) ->
@@ -234,10 +272,10 @@ start_cowboy(Configuration) ->
                 throw({error, no_nova_app_defined});
             App ->
                 ExtraApps = application:get_env(App, nova_apps, []),
-                %% nova is compiled last so that its own 404/500 routes act as
-                %% defaults. Routes are first-wins, so compiling nova first
-                %% made an application's own status-code routes unreachable.
-                nova_router:compile(resolve_nova_apps([App | ExtraApps] ++ [nova]))
+                %% Routes are first-wins. The bootstrap application comes
+                %% first so nothing it mounts can take over one of its routes,
+                %% and nova last so its 404/500 routes are only defaults.
+                nova_router:compile_fresh(resolve_nova_apps([App | ExtraApps] ++ [nova]), nova_dispatch)
         end,
 
     Host = maps:get(ip, Configuration, {0, 0, 0, 0}),
@@ -268,7 +306,7 @@ start_listener(App, Host, Port, Configuration) ->
     Ref = {?NOVA_LISTENER, App, Port},
     DispatchKey = {nova_dispatch, App, Port},
     ExtraApps = application:get_env(App, nova_apps, []),
-    Dispatch = nova_router:compile(resolve_nova_apps([App | ExtraApps] ++ [nova]), DispatchKey),
+    Dispatch = nova_router:compile_fresh(resolve_nova_apps([App | ExtraApps] ++ [nova]), DispatchKey),
     CowboyOptions = cowboy_options(Configuration, DispatchKey, Dispatch),
     case bind(Ref, Host, Port, Configuration, CowboyOptions) of
         {ok, Tls} ->
@@ -413,15 +451,15 @@ get_version(Application) ->
             not_found
     end.
 
--doc "Recursively resolve nested nova_apps. Each nova_app can declare its own nova_apps dependencies. Dependencies are resolved depth-first so child app routes are registered before the parent. An application already resolved is skipped, so a cycle terminates.".
+-doc "Recursively resolve nested nova_apps. Each nova_app can declare its own nova_apps dependencies. An application comes before the applications it mounts, and routes are first-wins, so where both declare the same route or status page the mounting application's is kept. An application already resolved is skipped, so a cycle terminates.".
 -spec resolve_nova_apps([nova_app()]) -> [nova_app()].
 resolve_nova_apps(Apps) ->
     {Resolved, _Seen} = resolve_nova_apps(Apps, [], []),
-    Resolved.
+    lists:reverse(Resolved).
 
 -spec resolve_nova_apps([nova_app()], [nova_app()], [atom()]) -> {[nova_app()], [atom()]}.
 resolve_nova_apps([], Acc, Seen) ->
-    {lists:reverse(Acc), Seen};
+    {Acc, Seen};
 resolve_nova_apps([App | Rest], Acc, Seen) ->
     Name = nova_app_name(App),
     case lists:member(Name, Seen) of
@@ -429,8 +467,8 @@ resolve_nova_apps([App | Rest], Acc, Seen) ->
             resolve_nova_apps(Rest, Acc, Seen);
         false ->
             Nested = application:get_env(Name, nova_apps, []),
-            {NestedApps, Seen0} = resolve_nova_apps(Nested, [], [Name | Seen]),
-            resolve_nova_apps(Rest, [App | lists:reverse(NestedApps)] ++ Acc, Seen0)
+            {Acc0, Seen0} = resolve_nova_apps(Nested, [App | Acc], [Name | Seen]),
+            resolve_nova_apps(Rest, Acc0, Seen0)
     end.
 
 %% A nova_app is either the application name or {Name, Options}.

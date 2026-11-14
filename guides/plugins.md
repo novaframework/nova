@@ -156,6 +156,7 @@ Nova has a couple of plugins for some general purposes.
 |nova_cors_plugin|This plugin will handle cors and add the cors headers into the request.|[nova_cors_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_cors_plugin.erl)|
 |nova_multipart_plugin|This plugin reads `multipart/form-data` bodies and streams uploaded files to a handler.|[nova_multipart_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_multipart_plugin.erl)|
 |nova_request_plugin|This plugin will handle incomming data like qs, form urlencoded and json. Multipart bodies are left to `nova_multipart_plugin`.|[nova_request_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_request_plugin.erl)|
+|nova_ws_origin_plugin|This plugin refuses a websocket upgrade that a page on another origin started. Options are described in the module.|[nova_ws_origin_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_ws_origin_plugin.erl)|
 
 
 ### Nova correlation
@@ -171,6 +172,8 @@ This plugin will generate a uuid v4 and set it as a response header as `X-Correl
 |------|-----------|
 |request_correlation_header|This is if you want a different correlation header than the standard `X-Correlation-ID`|
 |logger_metadata_key| This is if you want to have a different metadata key then the standard `correaltion_id`|
+
+A correlation ID from the request is used when it is 1 to 255 visible ASCII characters. A value with spaces, control characters or other bytes, or a longer one, is ignored and a new ID is generated, because the ID is copied to the logger metadata and to the response.
 
 ### Nova cors
 

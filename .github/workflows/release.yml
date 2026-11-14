@@ -1,19 +1,34 @@
 name: Release
 
+# Runs when "Build and test" has finished for a push to master, and releases
+# the commit that run tested, only if it passed.
 on:
-  push:
+  workflow_run:
+    workflows: ["Build and test"]
+    types: [completed]
     branches: [master]
 
-permissions:
-  contents: write
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Get latest tag
         id: latest_tag
@@ -74,6 +89,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "${{ steps.next.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.event.workflow_run.head_sha }}" \
             --title "${{ steps.next.outputs.version }}" \
             --generate-notes \
             --latest

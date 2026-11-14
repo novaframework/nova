@@ -21,12 +21,14 @@ path_string() ->
 %% Properties
 %%====================================================================
 
-%% method_to_binary always returns a binary for known methods, or '_' for unknown
+%% method_to_binary returns the wildcard or a method, and refuses anything else
 prop_method_to_binary_returns_binary_or_wildcard() ->
     ?FORALL(Method, any_method(),
-            begin
-                Result = nova_router:method_to_binary(Method),
-                is_binary(Result) orelse Result =:= '_'
+            try nova_router:method_to_binary(Method) of
+                Result -> is_binary(Result) orelse Method =:= '_'
+            catch
+                throw:{error, {invalid_method, Method}} ->
+                    not lists:member(Method, [get, post, put, delete, options, head, connect, trace, patch, '_'])
             end).
 
 %% Known HTTP methods always produce a binary (never '_')
@@ -58,7 +60,7 @@ prop_concat_strings_binary_path2_equiv() ->
 proper_test_() ->
     Opts = [{numtests, 100}, {to_file, user}],
     [
-     {"method_to_binary returns binary or '_'",
+     {"method_to_binary returns a method, '_' or refuses",
       ?_assert(proper:quickcheck(prop_method_to_binary_returns_binary_or_wildcard(), Opts))},
      {"known method always binary",
       ?_assert(proper:quickcheck(prop_known_method_always_binary(), Opts))},

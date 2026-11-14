@@ -11,6 +11,7 @@
 -export([
          start_link/0,
          add_plugin/1,
+         ensure_plugin/1,
          add_plugin/3,
          get_state/1,
          set_state/2
@@ -85,6 +86,21 @@ add_plugin(Module, Name, Version) ->
     end.
 
 %%--------------------------------------------------------------------
+-doc "Adds a plugin as add_plugin/1 does, and returns once it is initialised. The router calls this for every plugin a route uses, so one that first appears in routes added at runtime has its state before the first request. Returns at once when the manager is not running, since it adds every plugin of the routing table when it starts.".
+-spec ensure_plugin(Module :: atom()) -> ok.
+ensure_plugin(Module) when is_atom(Module) ->
+    case ets:whereis(?TABLE) =/= undefined andalso not ets:member(?TABLE, Module) of
+        true ->
+            #{title := Title, version := Version} = case Module:plugin_info() of
+                                                        {Title0, Version0, _, _, _} -> #{title => Title0, version => Version0};
+                                                        PluginInfo -> PluginInfo
+                                                    end,
+            ok = gen_server:call(?SERVER, {add_plugin, Module, Title, Version});
+        false ->
+            ok
+    end.
+
+%%--------------------------------------------------------------------
 -doc "Gets the state of a plugin. The plugin can be specified either as a module or as a callback function. The callback function is used to extract the module name in order to retrieve the state.".
 -spec get_state(Module :: atom() | Callback :: function()) ->
           {ok, State :: nova:state()} | {error, not_found}.
@@ -155,6 +171,14 @@ handle_call({set_state, Module, P, NewState}, _From, State) ->
     ?LOG_DEBUG(<<"Set state for plugin ~p; NewState: ~p">>, [Module, NewState]),
     ets:insert(?TABLE, P#plugin{state = NewState}),
     {reply, ok, State};
+handle_call({add_plugin, Module, Name, Version}, _From, State) ->
+    case ets:member(?TABLE, Module) of
+        true ->
+            {reply, ok, State};
+        false ->
+            {noreply, State0} = handle_cast({add_plugin, Module, Name, Version}, State),
+            {reply, ok, State0}
+    end;
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.

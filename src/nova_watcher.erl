@@ -33,7 +33,7 @@
 -define(SERVER, ?MODULE).
 
 -record(state, {
-                process_refs = [] :: [pid()]
+                process_refs = [] :: [port()]
                }).
 
 %%%===================================================================
@@ -55,8 +55,10 @@ async_cast(Application, Cmd, Args, Options) ->
 async_cast(Application, Cmd, Options) ->
     async_cast(Application, Cmd, [], Options).
 
+async_cast(Cmd, Args) when is_list(Args) ->
+    async_cast(main_app(), Cmd, Args, #{});
 async_cast(Cmd, Options) ->
-    async_cast(nova:get_main_app(), Cmd, Options).
+    async_cast(main_app(), Cmd, Options).
 
 async_cast(Cmd) ->
     async_cast(Cmd, #{}).
@@ -108,21 +110,24 @@ handle_call(Request, From, State) ->
                          {noreply, NewState :: term(), Timeout :: timeout()} |
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), NewState :: term()}.
-handle_cast({async, Application, Cmd, Args, Options}, State = #state{process_refs = ProcessRefs}) ->
-    LibDir = code:lib_dir(Application),
-    Workdir =
-        case maps:get(workdir, Options, undefined) of
-            undefined ->
-                LibDir;
-            Subdir ->
-                filename:join([LibDir, Subdir])
-        end,
-    %% Set working directory
-    file:set_cwd(Workdir),
-    ArgList = string:join(Args, " "),
-    Port = erlang:open_port({spawn, Cmd ++ " " ++ ArgList}, [use_stdio, {line, 1024}, stderr_to_stdout]),
-    ?LOG_NOTICE(#{action => <<"Started async command">>, command => Cmd, arguments => ArgList}),
-    {noreply, State#state{process_refs = [Port|ProcessRefs]}};
+handle_cast({async, Application, Cmd, Args, Options}, State = #state{process_refs = ProcessRefs})
+  when is_atom(Application), is_list(Cmd), is_list(Args), is_map(Options) ->
+    ArgList = argument_string(Args),
+    try
+        Port = erlang:open_port({spawn, Cmd ++ " " ++ ArgList},
+                                port_options(workdir(Application, maps:get(workdir, Options, undefined)))),
+        ?LOG_NOTICE(#{action => <<"Started async command">>, command => Cmd, arguments => ArgList}),
+        {noreply, State#state{process_refs = [Port|ProcessRefs]}}
+    catch
+        error:Reason ->
+            ?LOG_ERROR(#{msg => <<"Could not start watcher">>, application => Application,
+                         command => Cmd, arguments => ArgList, reason => Reason}),
+            {noreply, State}
+    end;
+handle_cast({async, Application, Cmd, Args, Options}, State) ->
+    ?LOG_ERROR(#{msg => <<"Could not start watcher">>, application => Application,
+                 command => Cmd, arguments => Args, options => Options, reason => invalid_watcher}),
+    {noreply, State};
 handle_cast(_Request, State) ->
     {noreply, State}.
 
@@ -194,6 +199,30 @@ format_status(Status) ->
 %%% Internal functions
 %%%===================================================================
 
+main_app() ->
+    case nova:get_main_app() of
+        {ok, Application} -> Application;
+        undefined -> undefined
+    end.
+
+%% The directory is handed to the port, so the working directory of the node,
+%% which relative static routes are resolved against, stays where it was.
+workdir(Application, Subdir) ->
+    case code:lib_dir(Application) of
+        {error, bad_name} when Subdir =:= undefined -> undefined;
+        {error, bad_name} -> error({unknown_application, Application});
+        LibDir when Subdir =:= undefined -> LibDir;
+        LibDir -> filename:join(LibDir, Subdir)
+    end.
+
+port_options(undefined) ->
+    [use_stdio, {line, 1024}, stderr_to_stdout];
+port_options(Workdir) ->
+    [{cd, Workdir} | port_options(undefined)].
+
+argument_string([]) -> "";
+argument_string(Args = [Char | _]) when is_integer(Char) -> Args;
+argument_string(Args) -> string:join(Args, " ").
 
 
 

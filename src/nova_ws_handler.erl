@@ -36,6 +36,8 @@ upgrade_ws(Module, Req, State, ControllerData) ->
     case Module:init(ControllerData) of
         {ok, NewControllerData} ->
             {cowboy_websocket, Req, State#{controller_data => NewControllerData}};
+        {ok, NewControllerData, WebsocketOptions} when is_map(WebsocketOptions) ->
+            {cowboy_websocket, Req, State#{controller_data => NewControllerData}, WebsocketOptions};
         Error ->
             ?LOG_ERROR(#{msg => ~"Websocket handler returned unknown result", handler => Module,
                          returned => nova_redact:term(Error)}),
@@ -166,6 +168,9 @@ run_plugins([], _Callback, #{controller_result := {stop, _} = Signal}, _State) -
     Signal;
 run_plugins([], _Callback, _ControllerState, State) ->
     {ok, State};
+run_plugins([{Plugin, Options}|Tl], Callback, ControllerState, State) when is_function(Plugin) ->
+    {module, Module} = erlang:fun_info(Plugin, module),
+    run_plugins([{Module, Options}|Tl], Callback, ControllerState, State);
 run_plugins([{Module, Options}|Tl], Callback, ControllerState, State) ->
     try erlang:apply(Module, Callback, [ControllerState, State, Options]) of
         {ok, ControllerState0, State0} ->

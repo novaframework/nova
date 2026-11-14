@@ -14,13 +14,22 @@ how it is mounted.
 Included applications are resolved depth-first, so an application that
 declares `nova_apps` of its own has those registered too.
 
+Your own application's routes are registered before those of the applications
+it includes. Where both declare the same path and method, or a page for the
+same status code, yours is served and the included application's is logged as
+a conflicting route and ignored. With `use_strict_routing` the clash stops the
+application from starting instead. Status code routes are not prefixed, so one
+declared by an included application applies to the whole listener when yours
+declares none for that code. Earlier releases registered included applications
+first, which let them replace a route of yours together with its security.
+
 ### Options
 
 | Key | Value | Description |
 |---|---|---|
-| `prefix` | `string()` | Mount the application's routes under this path |
-| `secure` | `false` \| `fun/1` | Security callback for the application's routes |
-| `override_secure` | `false` \| `fun/1` | Replace the security callback the application declares for itself |
+| `prefix` | `string()` | Mount the application's routes under this path, in front of the prefix each route group declares |
+| `secure` | `false` \| `fun/1` | Security callback for the application's route groups that declare none |
+| `override_secure` | `false` \| `fun/1` | Replace the security callback of every route group, including one the application declares for itself |
 | `plugin_strategy` | see the [routing guide](routing.md) | How the application's route-local plugins combine with the global ones |
 
 ### Example
@@ -43,6 +52,34 @@ declares `nova_apps` of its own has those registered too.
 
 `another_nova_app` now shares the listener, and the routing table, of
 `my_nova_app`. Its routes answer under `/another`.
+
+### Prefix of a mounted application
+
+The `prefix` in the `nova_apps` entry and the `prefix` of a route group add
+up. A group declared with `prefix => "/users"` in an application mounted with
+`prefix => "/another"` answers under `/another/users`.
+
+The application can look up where it was mounted, for instance to build
+links:
+
+```erlang
+{another_nova_app, MountPrefix} = lists:keyfind(another_nova_app, 1, nova:get_apps()).
+```
+
+An application mounted without a prefix is listed with `"/"`.
+`nova:get_apps/0` reads the default listener's table; use
+`nova_router:compiled_apps/1` for any other.
+
+### Security of a mounted application
+
+A route group that declares a `security` callback keeps it when the
+application is mounted. `secure` only applies to the groups that declare none
+(or `false`), so mounting an application can put a callback in front of its
+routes but cannot take one away. `secure => false` leaves every group as the
+application declared it.
+
+Replacing a callback the application declares takes `override_secure`, see
+the [routing guide](routing.md#overriding-security-for-an-included-application).
 
 ## Starting an application at runtime
 
@@ -95,7 +132,15 @@ nova_sup:get_started_applications().
 
 `nova_router:compiled_apps/0` lists the applications compiled into the default
 listener's routing table, and `nova_router:compiled_apps/1` does the same for
-any other.
+any other. `nova_router:lookup_url/1,2,3` and `nova:get_apps/0` also read the
+default table. Inside a request, `nova_router:dispatch_key(Req)` gives the key
+of the listener it came in on, for `nova_router:compiled_apps/1` and
+`nova_router:lookup_url/4`.
+
+The page for a status code is looked up in the routing table of the listener
+the request came in on, also when a controller crashes or throws
+`{Status, Reason}`. Earlier releases rendered the default listener's page for
+those on every listener.
 
 ## Graceful shutdown
 
