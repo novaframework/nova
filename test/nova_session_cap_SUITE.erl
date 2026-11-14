@@ -36,7 +36,7 @@ cookieless_requests_stop_adding_sessions(Config) ->
     Answers = [nova_test_listener:get(?config(port, Config), "/csrf/token") || _ <- lists:seq(1, 40)],
     ?assertEqual([200], lists:usort([Status || {Status, _Body} <- Answers])),
     ?assertEqual(?MAX_SESSIONS, ets:info(?TABLE, size)),
-    ?assertEqual(~"no token", element(2, lists:last(Answers))).
+    ?assertMatch({200, ~"no token"}, lists:last(Answers)).
 
 session_from_before_the_cap_still_works(Config) ->
     ?assertEqual(?MAX_SESSIONS, ets:info(?TABLE, size)),

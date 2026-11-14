@@ -135,7 +135,7 @@ init([]) ->
                                  {sendfile, fun nova_basic_handler:handle_sendfile/3},
                                  {ws, fun nova_basic_handler:handle_ws/2},
                                  {view, fun nova_basic_handler:handle_view/3}]),
-    ets:insert(?HANDLERS_TABLE, maps:to_list(persistent_term:get(?REGISTERED, #{}))),
+    ets:insert(?HANDLERS_TABLE, maps:to_list(registered_handlers())),
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------
@@ -219,7 +219,13 @@ terminate(Reason, _State) ->
 %% application code, so what was registered is kept where a restart after a
 %% crash finds it.
 remember(Handle, Callback) ->
-    persistent_term:put(?REGISTERED, (persistent_term:get(?REGISTERED, #{}))#{Handle => Callback}).
+    persistent_term:put(?REGISTERED, (registered_handlers())#{Handle => Callback}).
+
+-spec registered_handlers() -> map().
+registered_handlers() ->
+    case persistent_term:get(?REGISTERED, #{}) of
+        Registered when is_map(Registered) -> Registered
+    end.
 
 forget(Handle) ->
     case persistent_term:get(?REGISTERED, #{}) of

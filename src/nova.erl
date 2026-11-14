@@ -33,7 +33,8 @@ get_main_app() ->
 get_apps() ->
     Default = nova_router:compiled_apps(),
     Others = [Entry || Key <- nova_sup:dispatch_keys(), Entry <- nova_router:compiled_apps(Key)],
-    Default ++ [Entry || {App, _Prefix} = Entry <- lists:ukeysort(1, Others), not lists:keymember(App, 1, Default)].
+    Default ++ [{App, Prefix} || {App, Prefix} <- lists:ukeysort(1, Others),
+                                 is_atom(App), is_list(Prefix), not lists:keymember(App, 1, Default)].
 
 %%--------------------------------------------------------------------
 -doc "Returns which environment nova is started in. This fetches the environment-variable in sys.config for Nova and returns the value found. Defaults to: dev".

@@ -70,7 +70,7 @@ malformed_form_is_a_400(Config) ->
 well_formed_input_reaches_the_controller(Config) ->
     {200, Body} = post(Config, "/parsed/echo?page=2", fields(100)),
     #{~"parsed_qs" := #{~"page" := ~"2"}, ~"params" := Params} = json:decode(Body),
-    ?assertEqual(100, map_size(Params)).
+    ?assert(is_map(Params) andalso map_size(Params) =:= 100).
 
 parse_qs_false_leaves_the_query_string_alone(Config) ->
     {{200, Body}, Events} = nova_test_log:collect(fun() -> get(Config, "/unparsed/echo?a=%zz") end),

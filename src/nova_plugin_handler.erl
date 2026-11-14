@@ -25,7 +25,7 @@ execute(Req, Env) ->
 %% nova_security_handler calls this once the request is let through.
 -spec after_security(Req, Env) -> {ok, Req, Env} | {stop, Req}
               when Req :: cowboy_req:req(), Env :: cowboy_middleware:env().
-after_security(Req = #{plugins := Plugins}, Env) ->
+after_security(Req = #{plugins := Plugins}, Env) when is_list(Plugins) ->
     case proplists:get_value(after_security, Plugins, []) of
         [] -> {ok, Req, Env};
         AfterSecurity -> run_plugins(AfterSecurity, pre_request, Req, Env)

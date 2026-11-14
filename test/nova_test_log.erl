@@ -21,7 +21,7 @@ collect(Fun) ->
 %% The reports logged at error level.
 -spec errors([{logger:level(), term()}]) -> [map()].
 errors(Events) ->
-    [Report || {error, {report, Report}} <- Events].
+    [Report || {error, {report, Report}} <- Events, is_map(Report)].
 
 log(#{level := Level, msg := Msg}, #{config := #{collector := Collector, tag := Tag}}) ->
     Collector ! {Tag, Level, Msg},

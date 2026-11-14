@@ -102,7 +102,8 @@ modulate_state_urlencoded_body_errors_test() ->
                                                        nova_test_helper:mock_req(~"POST", ~"/")))#{body => Body}
            end,
     Fields = fun(Count) ->
-                     iolist_to_binary(lists:join(~"&", [[~"f", integer_to_binary(N), ~"=v"] || N <- lists:seq(1, Count)]))
+                     [First | Rest] = [<<"f", (integer_to_binary(N))/binary, "=v">> || N <- lists:seq(1, Count)],
+                     iolist_to_binary([First | [[~"&", Field] || Field <- Rest]])
              end,
     ?assertMatch({ok, #{params := #{~"f100" := ~"v"}}, state},
                  nova_request_plugin:modulate_state(Post(Fields(100)), [{read_urlencoded_body, true}], state)),

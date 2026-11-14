@@ -848,7 +848,7 @@ normalize_plugins(Plugins, AfterSecurity) ->
 normalize_plugins([], _AfterSecurity, Ack) -> Ack;
 normalize_plugins([{Type, PluginName, Options}|Tl], AfterSecurity, Ack) ->
     Phase = plugin_phase(Type, PluginName, AfterSecurity),
-    ExistingPlugins = proplists:get_value(Phase, Ack, []),
+    ExistingPlugins = lists:append([PhasePlugins || {Existing, PhasePlugins} <- Ack, Existing =:= Phase]),
     add_plugin(PluginName),
     normalize_plugins(Tl, AfterSecurity,
                       [{Phase, [{fun PluginName:Type/4, Options}|ExistingPlugins]}|proplists:delete(Phase, Ack)]).

@@ -249,10 +249,10 @@ get_handler(_RetObj) ->
     {error, not_found}.
 
 -spec render_response(Req :: cowboy_req:req(), Env :: map()) -> {ok, Req :: cowboy_req:req(), State :: map()}.
-render_response(Req = #{resp_status_code := StatusCode}, Env) ->
+render_response(Req = #{resp_status_code := StatusCode}, Env) when is_integer(StatusCode); is_binary(StatusCode) ->
     Req0 = cowboy_req:reply(StatusCode, without_refused_body(StatusCode, Req)),
     {ok, Req0, Env};
-render_response(Req, Env) ->
+render_response(Req, Env) when not is_map_key(resp_status_code, Req) ->
     Req0 = cowboy_req:reply(200, Req),
     {ok, Req0, Env}.
 
