@@ -1,0 +1,2 @@
+[rebar]
+profile = "test,eqwalizer"
