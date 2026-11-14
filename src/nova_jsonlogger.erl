@@ -89,7 +89,11 @@ encode(Data, Config) ->
     end.
 
 jsonify(A) when is_atom(A) -> A;
-jsonify(B) when is_binary(B) -> B;
+jsonify(B) when is_binary(B) ->
+    case unicode:characters_to_binary(B) of
+        B -> B;
+        _NotUtf8 -> printed(B)
+    end;
 jsonify(I) when is_integer(I) -> I;
 jsonify(F) when is_float(F) -> F;
 jsonify(B) when is_boolean(B) -> B;
@@ -97,16 +101,20 @@ jsonify(P) when is_pid(P) -> jsonify(pid_to_list(P));
 jsonify(P) when is_port(P) -> jsonify(port_to_list(P));
 jsonify(F) when is_function(F) -> jsonify(erlang:fun_to_list(F));
 jsonify(L) when is_list(L) ->
-    try list_to_binary(L) of
-        S -> S
+    try unicode:characters_to_binary(L) of
+        S when is_binary(S) -> S;
+        _NotUtf8 -> printed(L)
     catch
         error:badarg ->
-            unicode:characters_to_binary(io_lib:format("~0p", [L]))
+            printed(L)
     end;
 jsonify({M, F, A}) when is_atom(M), is_atom(F), is_integer(A) ->
     <<(atom_to_binary(M, utf8))/binary, $:, (atom_to_binary(F, utf8))/binary, $/, (integer_to_binary(A))/binary>>;
 jsonify(Any) ->
-    unicode:characters_to_binary(io_lib:format("~0p", [Any])).
+    printed(Any).
+
+printed(Term) ->
+    unicode:characters_to_binary(io_lib:format("~0p", [Term])).
 
 apply_format_funs(Data, #{format_funs := Callbacks}) ->
     maps:fold(
@@ -248,6 +256,17 @@ list_format_test() ->
         <<"{\"level\":\"error\",\"report\":\"[{hej,\\\"hopp\\\"}]\",\"time\":1}">>,
         format(ErrorReport, #{})
     ).
+
+invalid_utf8_test() ->
+    Report = #{
+        id => <<255, 0>>,
+        parts => [<<"ok ">>, <<255>>],
+        name => [114, 228, 107, 97]
+    },
+    {ok, Decoded} = thoas:decode(format(#{level => info, msg => {report, Report}, meta => #{}}, #{})),
+    ?assertEqual(<<"<<255,0>>">>, maps:get(<<"id">>, Decoded)),
+    ?assertEqual(<<"r", 195, 164, "ka">>, maps:get(<<"name">>, Decoded)),
+    ?assert(is_binary(maps:get(<<"parts">>, Decoded))).
 
 meta_without_test() ->
     Error = #{
