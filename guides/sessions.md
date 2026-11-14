@@ -1,6 +1,8 @@
 # Sessions
 
-Sessions in Nova are handled by the `nova_session` module. This module is responsible for setting and getting session-values, as well as managing the session data. This means that you can store data in sessions without having to worry about session ids or anything like that - it's all handled for you.
+Sessions in Nova are handled by the `nova_session` module. It stores values for a client between requests and takes care of the session id and its cookie.
+
+Sessions are on by default. With `{use_sessions, false}` every function of `nova_session` throws `{nova_session, unsupported_session_used}`, which a controller that does not catch it answers with a `500`.
 
 ## API
 
@@ -11,10 +13,10 @@ Sessions in Nova are handled by the `nova_session` module. This module is respon
                  ok | {error, Reason :: atom()} | no_return().
 ```
 
-This function is used to set a session value. It takes two arguments: the request object, the name of the session-key and the value.
+Sets a session value. It takes three arguments: the request, the key and the value. Keys are binaries.
 
 ```erlang
-nova_session:set(Req, "name", "John Doe").
+ok = nova_session:set(Req, ~"name", ~"John Doe").
 ```
 
 ### `nova_session:get/2`
@@ -24,10 +26,10 @@ nova_session:set(Req, "name", "John Doe").
           {ok, Value :: binary()} | {error, Reason :: atom()} | no_return().
 ```
 
-This function is used to get a session value. It takes two arguments: the request object and the name of the session-key.
+Gets a session value. It takes two arguments: the request and the key. It returns `{error, not_found}` when the client has no session or the session has no such key.
 
 ```erlang
-nova_session:get(Req, "name").
+{ok, Name} = nova_session:get(Req, ~"name").
 ```
 
 ### `nova_session:delete/2`
@@ -37,10 +39,10 @@ nova_session:get(Req, "name").
                                                           {error, Reason :: atom()} | no_return().
 ```
 
-This function is used to delete a value. It takes two arguments: the request object and the name of the value. The rest of the session is kept.
+Deletes a value. It takes two arguments: the request and the key. The rest of the session is kept.
 
 ```erlang
-nova_session:delete(Req, "name").
+{ok, Req1} = nova_session:delete(Req, ~"name").
 ```
 
 ### `nova_session:delete/1`
@@ -67,13 +69,13 @@ Moves the client to a new, empty session: the old session's data is deleted and 
 ```erlang
 login(Req) ->
     {ok, Req1} = nova_session:renew(Req),
-    ok = nova_session:set(Req1, <<"user_id">>, UserId),
+    ok = nova_session:set(Req1, ~"user_id", UserId),
     {redirect, "/"}.
 ```
 
 The cookie is written by `nova_stream_h`, so it reaches the client even when the controller does not return `Req1`. This works for changes made by the process serving the request, which is where controllers, plugins, security functions and `c:nova_websocket:init/1` run (a session written in `init/1` gets its cookie on the `101` response). A process spawned with the request can still read and write session data, but no cookie is sent for what it does.
 
-A `stream_handlers` configuration without `nova_stream_h` keeps storing session data, and `renew/1` and `delete/1` then set or expire the cookie on the request they return, with the same attributes. Return that request, for example with `{json, 200, #{}, Req1, Body}` or `{redirect, Path, Req1}`, or the cookie is lost. A `set/3` from a client without a cookie does not start a session there, and presented ids are used without the check described below.
+A `stream_handlers` configuration without `nova_stream_h` keeps storing session data, and `renew/1` and `delete/1` then set or expire the cookie on the request they return, with the same attributes. Return that request, for example with `{json, 200, #{}, Body, Req1}` or `{redirect, Path, Req1}`, or the cookie is lost. A `set/3` from a client without a cookie does not start a session there, and presented ids are used without the check described below.
 
 ## The session cookie
 

@@ -1,51 +1,79 @@
 # Nova Pubsub
 
-With version 0.9.4 we introduced the concept of a pubsub-like mechanism in Nova so that users can build distributed services. Internally it relies on OTP's `pg` module, which provides distributed named process groups. The concept is really simple and there's not much depth in the current implementation - it should only be used as a simple message bus. If you need more advanced features please take a look at [RabbitMQ](https://www.rabbitmq.com/) or [MQTT](https://mqtt.org).
+`nova_pubsub` is a small publish and subscribe mechanism for sending messages
+between processes, on one node or across a cluster. It is built on OTP's `pg`
+module, which provides distributed named process groups. It is meant as a
+simple message bus: messages are not stored and delivery is not confirmed. If
+you need more, look at a message broker such as
+[RabbitMQ](https://www.rabbitmq.com/) or a protocol such as
+[MQTT](https://mqtt.org).
 
 ## Basic concepts
 
-The idea is that a process subscribes to a *topic*. If there's any messages sent to this topic all the *subscribed* processes receivs that message.
+A process joins a *channel*. A message broadcast to that channel is sent to
+every process that joined it. A message carries a *topic*, which the
+receivers use to tell the messages of one channel apart.
 
 ![Processes](assets/pubsub.png)
 
-*This picture shows how two processes have subscribed to a topic (Or channel) "Messages". When another process then sends *"Hello"* on this topic the other two will receive it.
+*Two processes have joined the channel "Messages". When a third process
+broadcasts "Hello" on it, both receive the message.*
+
+| Function | Description |
+|---|---|
+| `nova_pubsub:join/1,2` | Add the calling process, or the given one, to a channel |
+| `nova_pubsub:leave/1,2` | Remove it. Returns `not_joined` when it was not a member |
+| `nova_pubsub:broadcast/3` | Send a message with a topic to every member of a channel, on every node |
+| `nova_pubsub:local_broadcast/3` | As `broadcast/3`, to the members on this node only |
+| `nova_pubsub:get_members/1`, `nova_pubsub:get_local_members/1` | The members of a channel |
+
+A channel is an atom or a binary. A topic is a string or a binary.
+
+A member receives the message as a `#nova_pubsub{}` record, defined in
+`nova_pubsub.hrl`, with the fields `channel`, `sender`, `topic` and
+`payload`.
 
 ## Example
+
 ```erlang
--module(test_module).
--export([player1/0,
-         player2/0,
-         start_game/0]).
+-module(my_app_pong).
+-export([player/3]).
 
-player1() ->
-  spawn(fun() ->
-    nova_pubsub:join(game_of_pong),
-    game_loop(1, "pong", "ping")
-  end).
+-include_lib("nova/include/nova_pubsub.hrl").
+-include_lib("kernel/include/logger.hrl").
 
-player2() ->
-  spawn(fun() ->
-    nova_pubsub:join(game_of_pong),
-    game_loop(2, "ping", "pong")
-  end).
+player(Name, Expected, Smash) ->
+    spawn(fun() ->
+                  ok = nova_pubsub:join(game_of_pong),
+                  game_loop(Name, Expected, Smash)
+          end).
 
-game_loop(Player, ExpectedMessage, Smash) ->
-  receive
-    ExpectedMessage ->
-      io:format("Player ~d received ~s and returning ~s~n", [Player, ExpectedMessage, Smash]),
-      nova_pubsub:broadcast(game_of_pong, "match1", Smash),
-      game_loop(Player, ExpectedMessage, Smash);
-  _ ->
-      game_loop(Player, ExpectedMessage, Smash)
-  end.
+game_loop(Name, Expected, Smash) ->
+    receive
+        #nova_pubsub{topic = "match1", payload = Expected} ->
+            ?LOG_INFO(#{player => Name, received => Expected, returning => Smash}),
+            nova_pubsub:broadcast(game_of_pong, "match1", Smash),
+            game_loop(Name, Expected, Smash);
+        _ ->
+            game_loop(Name, Expected, Smash)
+    end.
 ```
-Here we are subscribing to a topic *"game_of_pong"* which we later use to send either ping or pong to, depending on which player that are serving.
-This can ofcourse be extended to do so much more, but this is a taste of what one can use nova_pubsub to.
 
+Two players that answer each other, and the serve that starts the game:
+
+```erlang
+my_app_pong:player(~"one", ~"ping", ~"pong"),
+my_app_pong:player(~"two", ~"pong", ~"ping"),
+nova_pubsub:broadcast(game_of_pong, "match1", ~"ping").
+```
+
+A websocket controller receives the record in `websocket_info/2`, see
+[Websockets](websockets.md#pubsub).
 
 ## Configuration
 
-It does not require any specific parameters set in order to work. Just remember to enable *distributed erlang*.
+Pubsub is started with Nova and has no settings. To reach processes on other
+nodes the nodes have to be connected with distributed Erlang.
 
 ## When the scope is restarted
 

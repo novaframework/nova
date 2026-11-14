@@ -1,12 +1,10 @@
 # Watchers
 
-Watchers in Nova allow you to run background processes or commands alongside your web application. This concept is inspired by the [Phoenix Framework](https://www.phoenixframework.org/), providing a way to automate tasks such as asset compilation, monitoring, or other long-running jobs.
+A watcher is an external command that Nova starts together with your application, such as an asset compiler that rebuilds on file changes. The concept comes from the [Phoenix Framework](https://www.phoenixframework.org/).
 
 ## What are Watchers?
 
-A watcher is a process started when your Nova application launches. You can use watchers to run external commands (like `npm run watch` for JavaScript assets) or any other tool that needs to operate continuously while your application is running.
-
-Watchers are especially useful for development workflows, but can also be used in production for tasks like real-time log monitoring, notification systems, or custom daemons.
+A watcher is an OS process started when Nova starts, for instance `npm run watch` for JavaScript assets. Watchers are mostly useful during development. They are started in every environment, so configure them in the development configuration only.
 
 ## Configuration
 
@@ -32,7 +30,7 @@ Watchers are configured in your `sys.config` file under the `watchers` key of yo
 ]}
 ```
 
-In this example, Nova will start `npm run watch` inside the `priv/my_js_application` directory of `my_application` when the server launches. This keeps your JavaScript assets up to date automatically.
+Nova starts `npm run watch` inside the `priv/my_js_application` directory of `my_application` when it starts.
 
 ## How Watchers Work
 
@@ -42,19 +40,3 @@ In this example, Nova will start `npm run watch` inside the `priv/my_js_applicat
 - Output from watcher processes is printed to the Erlang console when the `environment` is `dev`, and dropped otherwise. It is not written to Nova log files.
 - A watcher that exits is not restarted. A warning is logged when it exits abnormally.
 - A watcher that cannot be started (unknown application, for example) is logged as an error and skipped.
-
-## Best Practices
-
-- Use watchers for tasks that need to run for the lifetime of your application.
-- Keep watcher commands simple and reliable; if a watcher process fails, it can affect your development or deployment workflow.
-- Organize watcher-related files (like build scripts) in your project’s `priv` or other dedicated directories.
-
-## Advanced Use Cases
-
-- Run multiple watchers for different applications or tasks.
-- Run file watchers, asset compilers, or custom Erlang processes.
-- Use watchers in production for monitoring, alerts, or data collection.
-
----
-
-Watchers are a powerful tool for automating your workflow in Nova. For more advanced usage, check the Nova source code or community resources!

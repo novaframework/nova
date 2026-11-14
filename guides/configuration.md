@@ -1,22 +1,28 @@
 # Configuration
 
-There's a lot of parameters that can be configured in Nova. This document will try to explain them all.
+Nova is configured through the application environment, normally in *sys.config*. This page lists every key Nova reads.
 
 ## Cowboy configuration
 
-Nova uses Cowboy as the webserver. Cowboy is a very flexible webserver and Nova tries to expose as much of this flexibility as possible. This means that you can configure Cowboy in a lot of different ways. The configuration is done in the `nova`-application under `cowboy_configuration`-key in your *sys.config*.
+Nova uses Cowboy as the webserver. The listener is configured with a map under the `cowboy_configuration` key of the `nova` application:
+
+```erlang
+{nova, [
+    {cowboy_configuration, #{port => 8080}}
+]}
+```
 
 | Key | Description | Value | Default |
 |-----|-------------|-------|---------|
-| `stream_handlers` | Stream handlers are used to handle streaming requests. You can configure multiple stream handlers. Read more in the subsection *Stream handlers* | `list()` | `[nova_stream_h, cowboy_compress_h, cowboy_stream_h]` |
-| `middleware_handlers` | Middleware handlers are used to handle middleware requests. You can configure multiple middleware handlers. Read more in the subsection *Middleware handlers* | `list()` | `[nova_router, nova_plugin_handler, nova_security_handler, nova_handler, nova_plugin_handler]` |
-| `options` | Cowboy options. Read more in the subsection *Cowboy options* | `map()` | `#{compress => true}` |
+| `stream_handlers` | The Cowboy stream handlers, in order. `nova_stream_h` sets the `server` header and issues the session cookie. A list of your own replaces the default, so keep `nova_stream_h` in it when you use sessions | `list()` | `[nova_stream_h, cowboy_compress_h, cowboy_stream_h]` |
+| `middleware_handlers` | The Cowboy middlewares, in order. The default is the Nova request pipeline, see [Request lifecycle](request-lifecycle.md). A list of your own replaces it | `list()` | `[nova_router, nova_plugin_handler, nova_security_handler, nova_handler, nova_plugin_handler]` |
+| `options` | Cowboy protocol options, see [`cowboy_http`](https://ninenines.eu/docs/en/cowboy/2.21/manual/cowboy_http/). Nova sets `stream_handlers`, `middlewares` and its own keys in `env` | `map()` | `#{compress => true}` |
 | `ip` | IP to bind to | `tuple` | `{0, 0, 0, 0}` |
 | `port` | Port to bind to | `integer()` | `8080` |
-| `use_ssl` | If SSL should be used | `boolean()` | `false` |
-| `ssl_options` | Transport options for SSL. Nova uses ranch_ssl module so read about available options on [their page](https://ninenines.eu/docs/en/ranch/2.0/manual/ranch_ssl/). | `ranch_ssl:opts()` | `#{cert => "/path/to/fullchain.pem", key => "/path/to/privkey.pem"}` |
+| `use_ssl` | Serve TLS on `ssl_port` instead of plain HTTP on `port`. There is one listener | `boolean()` | `false` |
+| `ssl_options` | Transport options for the TLS listener, as a map. Nova passes them to `ranch_ssl`, see [its manual](https://ninenines.eu/docs/en/ranch/2.4/manual/ranch_ssl/). A TLS listener needs at least a certificate and a key, for instance `#{certfile => "/path/to/fullchain.pem", keyfile => "/path/to/privkey.pem"}` | `map()` | `#{}` |
 | `ssl_port` | Port to bind to when using SSL | `integer()` | `8443` |
-| `ca_cert` | Path to CA-cert *Deprecated since 0.10.3 - Read with `ssl_options`*| `string()` | `undefined` |
+| `ca_cert` | Path to CA-cert *Deprecated since 0.10.3 - Replaced with `ssl_options`*| `string()` | `undefined` |
 | `cert` | Path to cert *Deprecated since 0.10.3 - Replaced with `ssl_options`*| `string()` | `undefined` |
 
 The listener is started last, after everything a request needs is running. If it cannot be started, for instance because the port is in use or a certificate cannot be read, Nova logs `Cowboy could not start` and fails to start with `{listener_not_started, Reason}`. Earlier releases logged the error and kept running without a listener.
@@ -30,10 +36,11 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 
 | Key | Description | Value | Default |
 |-----|-------------|-------|---------|
-| `use_persistent_term` | Use `persistent_term` module to store routing tree | `boolean()` | `true` |
-| `use_stacktrace` | If Nova should include stacktrace in error-pages and crash logs. What is redacted from both is listed under *Redaction in logs and error pages*. | `boolean()` | `false` |
+| `use_persistent_term` | When `false`, the compiled routing table is also added to the Cowboy environment under `dispatch` | `boolean()` | `true` |
+| `dispatch_backend` | Module that stores the routing table and the plugin list. It has to export `get/1`, `get/2` and `put/2` as `persistent_term` does. Anything but a module name logs `dispatch_backend must be a module` and the default is used | `module()` | `persistent_term` |
+| `use_stacktrace` | If Nova should include the stacktrace in crash logs and, in the `dev` environment, on error pages. Read when the listener starts. What is redacted from both is listed under *Redaction in logs and error pages*. | `boolean()` | `false` |
 | `redact_keys` | Extra key fragments whose values are redacted from crash logs and error pages, on top of the built-in list. Atoms, binaries or strings; a key matches when its name contains the fragment, see *Redaction in logs and error pages*. | `[atom() \| binary() \| string()]` | `[]` |
-| `render_error_pages` | If Nova should render error-pages for HTML-request | `boolean()` | `true` |
+| `render_error_pages` | If Nova should render a page for a status code. With `false` the response has the status code and no body. See [Error handling](error-handling.md) | `boolean()` | `true` |
 | `use_sessions` | Turn off/on support for sessions | `boolean()` | `true` |
 | `session_manager` | Specify a module to use as the session manager. Defaults to `nova_session_ets`, which keeps sessions in memory: they do not survive a restart, and with several nodes and no sticky sessions users are signed out when they reach another node. Use a shared session store for those cases; see the [Sessions](sessions.md) guide. | `atom()` | `nova_session_ets` |
 | `session_cookie_name` | Name of the session cookie. It must be an RFC 6265 token: ASCII letters, digits and the symbols a token allows such as `-`, `_` and `.`, but no spaces, `:`, `/`, `@`, `=` or quotes. Nova refuses to start with any other name, including an empty binary or a value that is not a binary. `<<"__Host-session_id">>` is recommended for new applications; see the [Sessions](sessions.md) guide. | `binary()` | `<<"session_id">>` |
@@ -43,7 +50,8 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 | `use_strict_routing`    | If the routing module should work under the strict mode. Using strict mode will cause errors if non-deterministic paths are detected. This is a beta-function so use with caution. | `boolean()` | `false` |
 | `environment` | The environment Nova runs in. It is passed to the `routes/1` callback of every router and returned by `nova:get_environment/0`. When it is not set it is read as `dev` there, so routes a router only returns for `dev` are served, and Nova logs a warning at boot: set it in every release, usually to `prod`. The session cookie and the error pages only treat it as `dev` when it is set to `dev` (`nova:is_dev_environment/0`). | `atom()` | not set, read as `dev` |
 | `bootstrap_application` | Define which application to bootstrap with Nova. This should be the name of your application. | `atom()` | *Will crash if not defined* |
-| `cowboy_configuration` | If you need some additional configuration done to Cowboy this is the place. Check `nova_sup` module to learn which keys that can be defined. | `map()` | `#{}` |
+| `cowboy_configuration` | The listener configuration, see *Cowboy configuration* above. | `map()` | `#{}` |
+| `plugins` | The global plugins, a list of `{Phase, Module, Options}`. They run for every route group that declares no `plugins` of its own. See the [Plugins](plugins.md) guide. | `[{atom(), module(), map()}]` | `[]` |
 | `plugins_after_security` | `pre_request` plugin modules that run after the route's security callback and not before it, for route groups that do not set the key themselves. The security callback of such a route cannot read what those plugins produce (`json`, `params`, `files`). See the [Plugins](plugins.md#running-a-plugin-after-the-security-callback) guide. | `[module()]` | `[]` |
 | `multipart_spool` | Bounds on the upload files spooled at one time by `nova_multipart_file_handler`: `max_files` and `max_bytes`, each an integer or `infinity`. A part past a bound gets a `503`. See the [Plugins](plugins.md#nova-multipart) guide. | `map()` | `#{max_files => 1024, max_bytes => 8000000000}` |
 | `telemetry_request_fields` | Request fields to add to the controller telemetry metadata. `path` (the raw request path) and `peer` (the client's address) are the only ones accepted and are left out by default. See the [Telemetry](telemetry.md) guide. | `[path \| peer]` | `[]` |
@@ -79,13 +87,16 @@ Anything else is logged as is: a secret held under another key, or in a plain tu
 
 ## Application parameters
 
-These parameters can be specified in your *main* application (Eg the one you've specified in the `bootstrap`-section).
+These parameters are set in the environment of your own application, not under `nova`. `watchers` is only read from the application named in `bootstrap_application`. `router_module` and `nova_apps` are read from every application Nova mounts.
 
 | Key | Description | Value |
 |-----|-------------|-------|
 | `json_lib` | JSON lib to use. Read more in the subsection *Configure json lib* | `atom()` |
 | `watchers` | Watchers are external programs that will run together with Nova, in every environment. Each one is a tuple `{Command}`, `{Command, Arguments}`, `{Command, Options}`, `{App, Command, Options}` or `{App, Command, Arguments, Options}` (Like `[{my_app, "npm", ["run", "watch"], #{workdir => "priv/assets/js/my-app"}}]`). See the [Watchers](watchers.md) guide. | `[{string()}] | [{string(), [string()]}] | [{string(), map()}] | [{atom(), string(), map()}] | [{atom(), string(), [string()], map()}]` |
-| `router_module` | Module that contains the `routes/1` callback | `atom()` |
+| `router_module` | Module that contains the `routes/1` callback. Defaults to the application name followed by `_router`, such as `my_app_router` | `atom()` |
+| `nova_apps` | Other Nova applications to serve from the same listener, each an application name or `{Name, Options}`. See [Multiple applications](multi-app.md) | `[atom() \| {atom(), map()}]` |
+
+Nova writes a key `apps` to the environment of the bootstrap application for its own use. Do not set it.
 
 
 ### Configure json_lib
@@ -107,15 +118,7 @@ The module defined for this should expose two different functions:
 
 ## Handling errors in Nova
 
-Nova will by default render a error page if an error occurs. This page will be rendered using the `nova_error`-template. This template can be overridden by defining a template with the same name in your application.
-By defauly Nova outputs a lot of information, including the stacktrace. This might not be a good approach in production. To turn off stacktraces in production you can add the following to your *sys.config*:
-
-```erlang
-{nova, [{render_error_pages, false}]}
-```
-
-This will exclude stacktrace from the error page.
-
-The details of a crash (the message describing what went wrong and the stacktrace) are only part of the error page, HTML or JSON, when `nova`'s `environment` is set to `dev`. With any other value, and when `environment` is not set at all, the page only has its title and a generic message. `nova:get_environment/0` returns `dev` for an unset `environment`, but the error page does not go by that: it wants the explicit setting.
-
-*Note* Nova is aware about which `accept`-headers the request is sent with and will respond with the correct content-type. If the request is sent with `application/json` Nova will respond with a JSON-structure instead of a HTML-page.
+A request that fails is answered with a status page. Which page, what it
+contains and how to replace it is described in
+[Error handling](error-handling.md). The settings involved are
+`render_error_pages`, `use_stacktrace` and `environment` in the table above.
