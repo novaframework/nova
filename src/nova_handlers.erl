@@ -54,13 +54,27 @@ A handler returns `{ok, Req}`; Nova replies with `resp_status_code` (200 if unse
 
 -define(HANDLERS_TABLE, nova_handlers_table).
 
+-doc """
+What a handler returns. Nova matches it against `{ok, Req}` and replies with
+the status, headers and body set on that `Req`. The other shapes of this type
+fail that match and are handled as a crash of the controller.
+""".
 -type handler_return() :: {ok, State2 :: nova:state()} |
                           {Module :: atom(), State :: nova:state()} |
                           {error, Reason :: any()}.
 
 -export_type([handler_return/0]).
 
+-doc """
+A handler: a fun of arity 3 that gets the return value of the controller,
+the controller callback and the request.
+""".
 -type handler() :: fun((...) -> handler_return()).
+
+-doc """
+What `register_handler/2` takes: a handler, or the deprecated
+`{Module, Function}`, which stands for `fun Module:Function/3`.
+""".
 -type handler_callback() :: {Module :: atom(), Function :: atom()} | handler().
 -export_type([handler/0, handler_callback/0]).
 
@@ -86,7 +100,13 @@ start_link() ->
 
 
 %%--------------------------------------------------------------------
--doc "Registers a new handler. This can then be used in a nova controller by returning a tuple where the first element is the name of the handler.".
+-doc """
+Registers a new handler. This can then be used in a nova controller by
+returning a tuple where the first element is the name of the handler.
+
+The handler is registered asynchronously and the return is always `ok`. A
+name that already has a handler keeps it, and an error is logged.
+""".
 -spec register_handler(Handle :: atom(), Callback :: handler_callback()) ->
                               ok | {error, Reason :: atom()}.
 register_handler(Handle, Callback) ->

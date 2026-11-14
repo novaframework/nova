@@ -1,5 +1,13 @@
 -module(nova_basic_handler).
--moduledoc false.
+-moduledoc """
+The handlers of the return values Nova knows: `json`, `ok`, `view`, `status`,
+`redirect`, `redirect_local` and `sendfile` for controllers, and `ws` for the
+callbacks of a websocket controller. Nova registers them with `nova_handlers`
+when it starts.
+
+Applications do not call these functions. They are documented for what each
+return value does, and as examples of a handler.
+""".
 -export([
          handle_json/3,
          handle_ok/3,
@@ -20,6 +28,7 @@
 -export([maybe_inject_csrf_token/2, get_view_name/1]).
 -endif.
 
+-doc "The variables a template is rendered with, as a map or a list of pairs.".
 -type erlydtl_vars() :: map() | [{Key :: atom() | binary() | string(), Value :: any()}].
 
 %% A Cowboy request, told apart from a JSON object by the keys Cowboy sets.
@@ -302,7 +311,7 @@ handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _
 
 
 %%--------------------------------------------------------------------
--doc "Handles upgrading to websocket. This is a special handler in regards to arguments. The tuple-object for websocket only takes two arguments; What the initial state of the websocket handler should be and the request object.".
+-doc false.
 -spec handle_websocket({websocket, ControllerData :: any()} |
                        {websocket, ControllerData :: any(), Req0 :: cowboy_req:req()},
                        Callback :: function(), Req :: cowboy_req:req()) ->
@@ -330,11 +339,15 @@ handle_websocket({websocket, ControllerData}, Callback, Req) ->
 
 %%--------------------------------------------------------------------
 -doc """
-Handles basic websocket operations. This is a special handler in regards to arguments. Handlers for websocket only takes two arguments; What the controller returned and the state. And the handler should return what cowboy expects.
+Handles what a callback of a websocket controller returns, see
+`t:nova_websocket:call_result/0`. Unlike the other handlers it takes two
+arguments: the return value and the state of the connection.
 
-Example of a valid return value is \{reply, Frame, State\}
-
-The reply payload may be a single frame or a list of them, per nova_websocket:call_result/0.
+It returns the state with the new controller data. The frames of a `reply`,
+one frame or a list of them, are queued for sending, and `hibernate` is
+noted. `{stop, ControllerData}` gives `{stop, State}`, which closes the
+connection. A bare `ok` leaves the state as it is. Any other return value
+matches no clause and crashes the connection process.
 """.
 handle_ws({reply, Frames, NewControllerData}, State = #{commands := Commands}) ->
     State#{controller_data => NewControllerData,
@@ -385,6 +398,7 @@ handle_view(View, Variables, Options, Req) ->
 
 %% The one place that calls a compiled template. The module is made by
 %% erlydtl when the application is built, so it is only known by name.
+-doc false.
 render_dtl(View, Variables, Options) ->
     case code:is_loaded(View) of
         false ->

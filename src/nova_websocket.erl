@@ -64,6 +64,16 @@ websocket_info(_Msg, State) ->
 ```
 """.
 
+-doc """
+What `websocket_init/1`, `websocket_handle/2` and `websocket_info/2` return.
+
+- `{ok, State}` sends nothing.
+- `{reply, Frame, State}` sends one frame, or each frame of a list in order.
+- `{stop, State}` closes the connection.
+
+With `hibernate` as the last element the connection process hibernates until
+the next frame or message.
+""".
 -type call_result() :: {ok, State :: map()} |
                        {ok, State :: map(), hibernate} |
                        {reply, OutFrame :: cow_ws:frame() | [OutFrame :: cow_ws:frame()],
@@ -73,9 +83,17 @@ websocket_info(_Msg, State) ->
                        {stop, State :: map()}.
 -export_type([call_result/0]).
 
+-doc "A frame from the client, as `websocket_handle/2` gets it.".
 -type in_frame() :: ping | pong | {text | binary | ping | pong, binary()}.
 -export_type([in_frame/0]).
 
+-doc """
+Why a connection went away, as `terminate/3` gets it. The values are those of
+`cowboy_websocket`: `remote` when the client closed the connection, `stop`
+when a callback returned `{stop, State}`, `timeout` when the connection was
+idle for too long, `{error, Reason}` for a socket or protocol error, and
+`{crash, Class, Reason}` when the connection process crashed.
+""".
 -type reason() ::  normal | stop | timeout | remote |
                    {remote, cow_ws:close_code(), binary()} |
                    {error, badencoding | badframe | closed | atom()} |
@@ -84,16 +102,51 @@ websocket_info(_Msg, State) ->
 
 %% The options of the connection. They are Cowboy's today; the callback
 %% names Nova's type so that can change without changing the callback.
+-doc """
+The options of a connection, as `init/1` returns them in
+`{ok, State, Options}`: those of `cowboy_websocket`, such as `idle_timeout`
+and `max_frame_size`.
+""".
 -type opts() :: cowboy_websocket:opts().
 -export_type([opts/0]).
 
+-doc """
+Called in the request process, before the upgrade, with the controller data:
+a map with the upgrade request under `req`, and `auth_data` when the
+security callback of the route returned `{true, AuthData}`.
+
+`{ok, State}` accepts the connection, and `{ok, State, Options}` accepts it
+with the given `t:opts/0`. `State` is what the other callbacks get. Any other
+return refuses the upgrade: it is logged as an error and the client gets the
+`500` page.
+""".
 -callback init(State :: map()) -> {ok, State0 :: map()} |
                                   {ok, State0 :: map(), WebsocketOptions :: opts()} |
                                   any().
+-doc """
+Called in the connection process once the connection is open, with the state
+`init/1` returned and the pid of the connection process under
+`ws_handler_process`. Optional. Use it for what belongs to the connection
+process, such as joining a `nova_pubsub` channel.
+""".
 -callback websocket_init(State :: map()) -> Result :: call_result().
 -optional_callbacks([websocket_init/1]).
 
+-doc """
+Called for every frame the client sends. A crash is logged as
+`Controller crashed` and closes the connection.
+""".
 -callback websocket_handle(Frame :: in_frame(), State :: map()) -> call_result().
+-doc """
+Called for every Erlang message the connection process receives, a
+`nova_pubsub` broadcast for instance. A crash is logged as
+`Controller crashed` and closes the connection.
+""".
 -callback websocket_info(Info :: any(), State :: map()) -> call_result().
+-doc """
+Called when the connection goes away, with the reason, what is left of the
+upgrade request and the state. Optional. The return value is not used, and a
+crash is logged and does not stop the `post_ws_connection` plugins.
+""".
 -callback terminate(Reason :: reason(), PartialReq :: map(), State :: map()) -> ok.
 -optional_callbacks([terminate/3]).
