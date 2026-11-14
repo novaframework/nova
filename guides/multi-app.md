@@ -97,6 +97,10 @@ group's callback if that returns `{true, Data}`, and otherwise the data of
 the entry's callback. A group's callback that returns `true` leaves the data
 of the entry's callback in place.
 
+The group's callback is given the request with the data of the entry's
+callback under `auth_data`, whether the route leads to a controller or to a
+websocket.
+
 A callback that is both the `secure` of the entry and the `security` of the
 group runs once. Websocket routes follow the same rules.
 

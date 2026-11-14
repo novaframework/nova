@@ -8,7 +8,8 @@ Behaviour for websocket controllers. Route to one with `protocol => ws`:
 
 `init/1` runs in the request process before the upgrade. It gets the
 controller data (with `req` set to the upgrade request, and `auth_data` when
-the route's security function returned `{true, AuthData}`) and returns
+the route's security function returned `{true, AuthData}`, which is also in
+the upgrade request under `auth_data`, as on an HTTP route) and returns
 `{ok, State}` to accept the connection. Any other return refuses the upgrade
 and is logged as an error; the client gets a `500`, rendered by the status
 page route for `500` when the application has one.

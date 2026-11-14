@@ -72,7 +72,8 @@ handle_response({true, AuthData}, Req, Env) ->
     case maps:get(cowboy_handler, Env, undefined) of
         nova_ws_handler ->
             Args = maps:get(arguments, Env, #{}),
-            {allowed, Req, Env#{arguments => Args#{controller_data => #{auth_data => AuthData}}}};
+            {allowed, Req#{auth_data => AuthData},
+             Env#{arguments => Args#{controller_data => #{auth_data => AuthData}}}};
         _ ->
             {allowed, Req#{auth_data => AuthData}, Env}
     end;

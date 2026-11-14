@@ -10,6 +10,7 @@
          controller_needs_both/1,
          websocket_needs_both/1,
          websocket_gets_the_data/1,
+         group_sees_the_data_of_the_mount/1,
          cowboy_handler_needs_both/1,
          group_without_a_callback_has_the_one_of_the_mount/1,
          group_of_an_application_that_is_not_mounted_has_its_own/1,
@@ -38,6 +39,7 @@ groups() ->
     [{mount_and_group, [], [controller_needs_both,
                             websocket_needs_both,
                             websocket_gets_the_data,
+                            group_sees_the_data_of_the_mount,
                             cowboy_handler_needs_both,
                             group_without_a_callback_has_the_one_of_the_mount,
                             group_of_an_application_that_is_not_mounted_has_its_own,
@@ -108,6 +110,22 @@ websocket_gets_the_data(Config) ->
                                                                     ~"who", 1)})
      || Mount <- [~"allow", ~"data"], Group <- [~"allow", ~"data"]],
     ?assertEqual([mount, group, mount, group, mount, group, mount, group], nova_secure_layers_pages:calls()).
+
+%% The callback of the group finds what the one of the mount returned in the
+%% request, whatever the route leads to.
+group_sees_the_data_of_the_mount(Config) ->
+    Decisions = [{mount, ~"data"}, {group, ~"data-seen"}],
+    Seen = ~"{group,saw,mount}",
+    ?assertMatch({200, _Headers, Seen, [mount, group]}, request(Config, "/mounted/both/", Decisions)),
+    ?assertMatch({200, _Headers, Seen, [mount, group]}, request(Config, "/mounted/both/cowboy", Decisions)),
+    ?assertEqual([Seen],
+                 nova_test_listener:websocket_texts(?config(port, Config), path("/mounted/both/ws", Decisions),
+                                                    ~"who", 1)),
+    ?assertEqual([~"{group,saw,none}"],
+                 nova_test_listener:websocket_texts(?config(port, Config),
+                                                    path("/mounted/both/ws",
+                                                         [{mount, ~"allow"}, {group, ~"data-seen"}]),
+                                                    ~"who", 1)).
 
 cowboy_handler_needs_both(Config) ->
     [?assertEqual({Mount, Group, both_layers(200, Mount, Group)},
