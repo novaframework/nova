@@ -136,6 +136,107 @@ of `{Module, Function}` in Nova.
   `{error, comparator_not_found, AllowedMethods}` for a path that exists but
   does not accept the method.
 
+- **CSRF `excluded_paths` cover whole segments.** They are matched against the
+  path the request is routed on, segment by segment, where earlier releases
+  compared the bytes of the raw path. `<<"/webhook">>` excludes `/webhook` and
+  `/webhook/stripe` but no longer `/webhooks/stripe`, whose `POST` now gets a
+  `403`. List every path that is to be excluded.
+
+- **A static directory serves only what is inside it.** A file reached through
+  a symbolic link that points out of the directory is answered with `404`.
+  Move the file into the directory, or set `follow_external_symlinks => true`
+  in the options of the route. The directory is the one its path named when
+  the routes were compiled: a relative path does not follow a later change of
+  the working directory, and a symbolic link on the way to the directory that
+  is changed later is not followed until Nova is restarted.
+
+- **A `Range` that is not valid, or is sent with `If-Range`, gets the whole
+  file.** A static file answered a byte range that is not valid, such as
+  `bytes=5-2`, with `416`, and took no notice of `If-Range`. Both now get the
+  whole file with `200`, as RFC 9110 asks for.
+
+- **An invalid `security` value stops the boot.** `security => true` was logged
+  and the group left open, and any other value that is not `false`, a `fun/1`
+  or `{Module, Function}` crashed on every request. Both now fail the start
+  with `{invalid_security, Value}`, and so do `secure` and `override_secure`
+  in `nova_apps`. Give the group a callback, or `false` for none.
+
+- **An invalid route method stops the boot.** Only the lowercase atoms `get`,
+  `post`, `put`, `delete`, `options`, `head`, `connect`, `trace` and `patch`
+  were recognised, and anything else was treated as `'_'`, so the route
+  answered every method. An atom that is none of those in either case, or a
+  binary or string that is not a method token, now fails the start with
+  `{invalid_method, Method}`. A route declared with `<<"GET">>`, `"GET"` or
+  `'GET'` answers only that method from now on, and `405` for the others. If
+  it was meant to answer every method, declare `'_'`.
+
+- **Methods are case-sensitive.** A method written as a binary or a string is
+  matched as it is written, and so is the method of a request: `get` does not
+  match a route declared for `GET` and gets a `405`. Write `<<"PURGE">>`, not
+  `<<"purge">>`.
+
+- **A correlation ID from the request is checked.** `nova_correlation_plugin`
+  takes it over only when it is 1 to 255 visible ASCII characters. Anything
+  else is replaced by a generated ID, so a caller that sends such a value no
+  longer finds it in the response or in the logs.
+
+- **`nova_jsonlogger` encodes strings as UTF-8.** A string with characters
+  above 255 was printed as a list of integers and is now text. A binary or
+  string that is not UTF-8 is printed as an Erlang term, `"<<255,0>>"`, where
+  the whole event used to be printed outside JSON. A value that is printed
+  as a term, which a tuple or a list that is not a string also is, is cut
+  off after about 4096 characters. Adjust log queries that match on the old
+  output.
+
+- **A second listener renders its own status pages.** The page for a crashed
+  controller or a thrown `{Status, Reason}` is looked up in the routing table
+  of the listener the request came in on, and is Nova's default page when that
+  listener declares none. Earlier releases rendered the default listener's
+  page everywhere. Declare the status code routes in the application each
+  listener serves.
+
+- **Your own routes win a clash with an included application.** Where both
+  declare the same path and method, or a page for the same status code, the
+  included application's route is ignored and a warning names it. Earlier
+  releases registered included applications first, so theirs was served. Move
+  or remove one of the two; with `use_strict_routing` the clash stops the
+  boot.
+
+- **A listener that cannot be started stops the boot.** A port in use or an
+  unreadable certificate fails the start with `{listener_not_started, Reason}`.
+  Earlier releases logged the error and kept running without a listener, so a
+  node that used to come up without serving anything now does not come up.
+
+- **`override_secure` covers the applications an included application
+  includes.** An application in the `nova_apps` of an included application
+  was served without the `override_secure` of the entry that included its
+  parent, and an `override_secure` given to an application in the `apps` of a
+  route group replaced the one around it. The outer callback now runs for
+  those routes too, in front of an `override_secure` of their own, and both
+  have to allow the request. A request that reached such a route without
+  passing the outer callback is now refused by it. Nothing else is handed
+  down: see the [multi-app guide](multi-app.md#applications-included-by-an-included-application).
+
+- **`secure` and the `security` of a route group both have to allow a
+  request.** In a `nova_apps` entry, `secure` used to replace the `security`
+  callback of every route group of the included application, `secure => false`
+  included. A group now keeps its callback next to it: the `secure` callback
+  runs first, the callback of the group second, and the first that does not
+  allow the request answers it. What to look for after the upgrade:
+
+  - A request that `secure` lets through to a group with a stricter callback
+    of its own is now refused by that callback. It used to reach the
+    controller.
+  - A request that the callback of a group allows is still subject to
+    `secure`, as it was.
+  - With `secure => false`, a group that declares `security` is protected by
+    it, where it used to be left open.
+  - The controller gets the `auth_data` of the group's callback when that
+    returns some, and otherwise that of `secure`.
+
+  Use `override_secure` to replace a callback the application declares; see
+  the [multi-app guide](multi-app.md#security-of-a-mounted-application).
+
 ### Sessions
 
 - **The session cookie is issued lazily.** Nova used to set a `session_id`

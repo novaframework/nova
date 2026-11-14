@@ -137,6 +137,8 @@ stop(State) ->
     ok.
 ```
 
+`init/0` runs while `nova_sup` is starting, when the routes that use the plugin are compiled, and `nova_sup` waits for it to return. It must not call into `nova_sup`, as in `supervisor:which_children(nova_sup)` or `nova_sup:add_application/2`: `nova_sup` cannot answer before `init/0` has returned, so Nova fails to start, after five seconds of waiting.
+
 Adding a plugin
 
 Example:
@@ -175,6 +177,52 @@ increment(#{<<"json">> := #{<<"id">> := Id, <<"value">> := Value}})->
     {json,200,#{},#{<<"id">> => Id , <<"received">> => Value, <<"increment">> => Value+1}}.
 
 ```
+## Request pipeline
+
+A request passes these steps in this order. A step that answers the request
+ends it, and the steps after it do not run.
+
+1. **Routing.** The path and the method are looked up in the routing table.
+2. **`pre_request` plugins**, in the order they are listed.
+3. **The security callback** of the route. A route of an included
+   application can have two, see the
+   [multi-app guide](multi-app.md#security-of-a-mounted-application).
+4. **The controller**, or the upgrade of a `protocol => ws` route.
+5. **`post_request` plugins.** The response has been sent by then.
+
+What follows from that order:
+
+- A `pre_request` plugin sees every request to its routes, also the ones the
+  security callback is about to refuse, and `auth_data` is not set yet.
+  `nova_csrf_plugin` and `nova_ws_origin_plugin` are `pre_request` plugins, so
+  they refuse a request before the security callback is asked.
+- The security callback sees what the plugins added to the request, such as
+  `json` and `params` from `nova_request_plugin`.
+- A `pre_request` plugin that returns `{stop, ...}` answers the request itself.
+  The security callback, the controller and the `post_request` plugins do not
+  run.
+- A `pre_request` plugin that crashes is logged and answered with the `500`
+  page. The controller is not called and a websocket is not upgraded.
+- A request the security callback refuses is answered with `401`, or with what
+  the callback returned, and one whose callback crashes with `500`. Neither
+  reaches the controller or the `post_request` plugins.
+- A request that matches no route gets the `404` page, or `405` when the path
+  exists for another method, and runs no plugins at all. Headers that a plugin
+  adds to every response, CORS headers or a correlation ID, are missing from
+  those two.
+- A page declared for a status code is a route like any other. Declared in a
+  group with `security`, the `404` and `405` pages are only rendered for a
+  request that callback lets through, and every other request gets a `401`.
+  Declare status pages in a group without one.
+
+A websocket upgrade is a request and passes the same steps, so the origin
+check and the security callback have run before the connection is accepted.
+Over HTTP/1.1 the `post_request` plugins run when the upgrade has been
+answered, not when the connection ends. Over HTTP/2 they do not run. After
+that every frame and message runs the `pre_ws_request` plugins, the controller
+and the `post_ws_request` plugins. `post_ws_connection` plugins run when the
+connection ends, and only for a controller that exports `terminate/3`.
+
 ## Nova plugins
 
 Nova has a couple of plugins for some general purposes.

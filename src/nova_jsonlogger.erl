@@ -34,6 +34,7 @@ With `redact => true` in its configuration the formatter takes request data and 
 %%%_* Macros ===========================================================
 %%%_* Options ----------------------------------------------------------
 -define(NEW_LINE, false).
+-define(PRINTED_CHARS_LIMIT, 4096).
 
 %%%_* Code =============================================================
 %%%_ * API -------------------------------------------------------------
@@ -128,7 +129,7 @@ jsonify(Any) ->
     printed(Any).
 
 printed(Term) ->
-    unicode:characters_to_binary(io_lib:format("~0p", [Term])).
+    unicode:characters_to_binary(io_lib:format("~0p", [Term], [{chars_limit, ?PRINTED_CHARS_LIMIT}])).
 
 apply_format_funs(Data, #{format_funs := Callbacks}) ->
     maps:fold(
@@ -282,6 +283,21 @@ invalid_utf8_test() ->
     ?assertEqual(<<"<<255,0>>">>, Id),
     ?assertEqual(<<"r", 195, 164, "ka">>, Name),
     ?assert(is_binary(Parts)).
+
+printed_term_is_bounded_test() ->
+    Report = #{
+        id => binary:copy(<<255, 0>>, 512 * 1024),
+        parts => lists:duplicate(100000, <<255, 0>>),
+        term => {reason, lists:seq(1, 100000)},
+        short => {reason, <<255, 0>>}
+    },
+    Json = iolist_to_binary(format(#{level => info, msg => {report, Report}, meta => #{}}, #{})),
+    #{~"id" := Id, ~"parts" := Parts, ~"term" := Term, ~"short" := Short} = json:decode(Json),
+    ?assertMatch(<<"<<255,0,255,0,", _/binary>>, Id),
+    ?assertMatch(<<"[<<255,0>>,<<255,0>>,", _/binary>>, Parts),
+    ?assertMatch(<<"{reason,[1,2,3,", _/binary>>, Term),
+    [?assert(byte_size(Printed) < 2 * 4096) || Printed <- [Id, Parts, Term]],
+    ?assertEqual(~"{reason,<<255,0>>}", Short).
 
 meta_without_test() ->
     Error = #{

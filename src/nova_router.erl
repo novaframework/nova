@@ -15,6 +15,7 @@
          compile/1,
          compile/2,
          compile_fresh/2,
+         overrides_in_force/1,
          lookup_url/1,
          lookup_url/2,
          lookup_url/3,
@@ -117,7 +118,11 @@ compile(Apps, DispatchKey) ->
     Dispatch.
 
 %%--------------------------------------------------------------------
--doc "As compile/2, but starting from an empty routing table that replaces whatever is stored under `DispatchKey`. A listener that is starting uses this, so routes and security callbacks from an earlier run in the same VM are not carried over.".
+%% As compile/2, but starting from an empty routing table that replaces
+%% whatever is stored under DispatchKey. For nova_sup: a listener that is
+%% starting uses this, so routes and security callbacks from an earlier run
+%% in the same VM are not carried over.
+-doc false.
 -spec compile_fresh(Apps :: [atom() | {atom(), map()}], DispatchKey :: dispatch_key()) ->
           nova_routing_trie:trie().
 compile_fresh(Apps, DispatchKey) ->
@@ -133,11 +138,12 @@ compile_fresh(Apps, DispatchKey) ->
                                                           when Req::cowboy_req:req(),
                                                                Env0::cowboy_middleware:env().
 execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
+    StorageBackend = storage_backend(),
+    DispatchKey = dispatch_key(Env),
     %% nova_session only tells nova_stream_h about session changes made by the
     %% process serving the request.
-    Req = Req0#{nova_session_owner => self()},
-    StorageBackend = storage_backend(),
-    Dispatch = StorageBackend:get(dispatch_key(Env)),
+    Req = Req0#{nova_dispatch_key => DispatchKey, nova_session_owner => self()},
+    Dispatch = StorageBackend:get(DispatchKey),
     case nova_routing_trie:find(Host, Path, Method, Dispatch) of
         {error, not_found} ->
             logger:debug(<<"Path ~p not found for ~p in ~p">>, [Path, Method, Host]),
@@ -378,7 +384,7 @@ compile([], Dispatch, _Options) -> Dispatch;
 compile([{App, AppOptions}|Tl], Dispatch, GlobalOptions) ->
     %% Per-application options win over the global ones, and must not leak
     %% into the applications compiled after this one.
-    Dispatch0 = compile([App], Dispatch, maps:merge(GlobalOptions, AppOptions)),
+    Dispatch0 = compile([App], Dispatch, mount_options(GlobalOptions, AppOptions)),
     compile(Tl, Dispatch0, GlobalOptions);
 compile([App|Tl], Dispatch, Options) ->
     Router = router_module(App),
@@ -403,6 +409,25 @@ compile([App|Tl], Dispatch, Options) ->
     StorageBackend:put(apps_key(maps:get(dispatch_key, Options, ?NOVA_DISPATCH)), CompiledApps0),
 
     compile(Tl, Dispatch1, Options).
+
+%% An override_secure that is in force around an application is the one
+%% option its own entry does not replace. It stays in force, in front of the
+%% override_secure of the entry.
+mount_options(GlobalOptions, AppOptions) ->
+    Options = maps:merge(GlobalOptions, AppOptions),
+    Options#{override_secure => maps:get(override_secure, AppOptions, false),
+             inherited_override_secure => overrides_in_force(GlobalOptions) ++
+                 maps:get(inherited_override_secure, AppOptions, [])}.
+
+%%--------------------------------------------------------------------
+%% The override_secure values that apply to an application mounted with
+%% Options, outermost first, as they were written. For nova_sup, which hands
+%% them to the applications that one mounts in turn.
+-doc false.
+-spec overrides_in_force(Options :: map()) -> [term()].
+overrides_in_force(Options) ->
+    maps:get(inherited_override_secure, Options, []) ++
+        [Override || Override <- [maps:get(override_secure, Options, false)], Override =/= false].
 
 %%--------------------------------------------------------------------
 -doc "The router module for an application. Either configured explicitly with the `router_module` application environment key, or derived from the application name using the convention for the language in use.".
@@ -477,10 +502,10 @@ parse_url(Host, [{RemotePath, LocalPath, Options}|Tl], T = #{prefix := Prefix},
                 case {filelib:is_file(LocalPath), filelib:is_file(PrivPath)} of
                     {false, false} ->
                         %% No dir nor file
-                        ?LOG_WARNING(#{reason => <<"Could not find local path for the given resource">>,
-                                       local_path => LocalPath,
-                                       remote_path => RemotePath,
-                                       router_file => maps:get(router_file, Options, undefined)}),
+                        ?LOG_ERROR(#{reason => <<"Could not find local path for the given resource">>,
+                                     local_path => LocalPath,
+                                     remote_path => RemotePath,
+                                     router_file => maps:get(router_file, Options, undefined)}),
                         throw({error, {static_path_not_found, LocalPath}});
                     {true, false} ->
                         {file, LocalPath};
@@ -504,7 +529,7 @@ parse_url(Host, [{RemotePath, LocalPath, Options}|Tl], T = #{prefix := Prefix},
     Value0 = #nova_handler_value{
                 app = App,
                 callback = fun nova_file_controller:TargetFun/1,
-                extra_state = #{static => Payload, options => Options},
+                extra_state = nova_file_controller:static_state(Payload, Options),
                 plugins = with_route(RealPath, Value#nova_handler_value.plugins),
                 secure = Secure
                },
@@ -685,17 +710,10 @@ storage_backend() ->
     end.
 
 %%--------------------------------------------------------------------
--doc "The key of the routing table serving a request, for the functions that take a `DispatchKey`. Takes the request, or the middleware environment where that is at hand. Anything that does not belong to a listener gives the key of the default listener.".
+-doc "The key of the routing table serving a request, for the functions that take a `DispatchKey`. Takes the request, which carries the key once it has passed the router, or the middleware environment where that is at hand. Anything else gives the key of the default listener.".
 -spec dispatch_key(ReqOrEnv :: cowboy_req:req() | cowboy_middleware:env()) -> dispatch_key().
 dispatch_key(#{nova_dispatch_key := DispatchKey}) ->
     DispatchKey;
-dispatch_key(#{ref := Listener}) ->
-    try ranch:get_protocol_options(Listener) of
-        #{env := #{nova_dispatch_key := DispatchKey}} -> DispatchKey;
-        _ -> ?NOVA_DISPATCH
-    catch
-        error:badarg -> ?NOVA_DISPATCH
-    end;
 dispatch_key(_) ->
     ?NOVA_DISPATCH.
 
@@ -710,7 +728,7 @@ insert_methods([Method|Tl], Host, Path, Value, Tree, Options, ToComparator) ->
         try ToComparator(Method)
         catch
             throw:{error, {invalid_method, _}} = Error ->
-                ?LOG_ERROR(#{reason => <<"Unknown HTTP method in the methods of a route. Use get, post, put, delete, options, head, connect, trace, patch or '_'.">>,
+                ?LOG_ERROR(#{reason => <<"Unknown HTTP method in the methods of a route. Use get, post, put, delete, options, head, connect, trace, patch or '_', or a binary or string for any other method.">>,
                              route => Path, method => Method}),
                 throw(Error)
         end,
@@ -718,7 +736,8 @@ insert_methods([Method|Tl], Host, Path, Value, Tree, Options, ToComparator) ->
     insert_methods(Tl, Host, Path, Value, Tree0, Options, ToComparator).
 
 insert(Host, Path, Combinator, Value, Tree, Options) ->
-    try nova_routing_trie:insert(Host, Path, Combinator, Value, Tree, Options) of
+    App = route_app({Host, Path, Combinator, Value}),
+    try nova_routing_trie:insert(Host, Path, Combinator, Value, Tree, Options#{app => App}) of
         {ok, Tree0} ->
             Tree0;
         {error, conflict, Conflict} ->
@@ -755,31 +774,43 @@ normalize_secure({SMod, SFun}, RouterFile) when is_atom(SMod), is_atom(SFun) ->
 normalize_secure(SCallback, _RouterFile) when is_function(SCallback, 1) ->
     SCallback;
 normalize_secure(Invalid, RouterFile) ->
-    ?LOG_ERROR(#{reason => <<"A security value must be false, a fun/1 or {Mod, Fun}. Every request to these routes is denied.">>,
+    ?LOG_ERROR(#{reason => <<"A security value must be false, a fun/1 or {Mod, Fun}.">>,
                  value => Invalid, router_file => RouterFile}),
-    fun nova_security_handler:deny/1.
+    throw({error, {invalid_security, Invalid}}).
 
-%% The application-level `secure` only fills in for a route group that
-%% declares no callback, so mounting an application can add protection to
-%% its routes but never take away what the application declared for itself.
+%% An application mounted with `secure` has that callback in front of every
+%% route group, and a group that declares `security` has its own behind it:
+%% both have to allow a request, so neither the application that mounts nor
+%% the one that is mounted can take away what the other one asks for. Both
+%% values are checked here, also where only one ends up on the route.
 %% Replacing a declared callback takes the explicit `override_secure`.
 resolve_secure(Options, RouteInfo, RouterFile) ->
-    case maps:get(override_secure, Options, false) of
-        false ->
-            AppDefault = maps:get(secure, Options, false),
-            case normalize_secure(maps:get(security, RouteInfo, false), RouterFile) of
-                false ->
-                    normalize_secure(AppDefault, RouterFile);
-                GroupCallback when is_map_key(secure, Options), AppDefault =/= GroupCallback ->
-                    ?LOG_WARNING(#{reason => <<"'secure' in nova_apps does not replace the security callback a route group declares. Use 'override_secure' to replace it.">>,
-                                   app => maps:get(app, Options), router_file => RouterFile}),
-                    GroupCallback;
-                GroupCallback ->
-                    GroupCallback
+    case override_callbacks(Options, RouterFile) of
+        [] ->
+            Mount = normalize_secure(maps:get(secure, Options, false), RouterFile),
+            Group = normalize_secure(maps:get(security, RouteInfo, false), RouterFile),
+            case {Mount, Group} of
+                {false, _} -> Group;
+                {_, false} -> Mount;
+                {Same, Same} -> Same;
+                _ -> [Mount, Group]
             end;
-        Override ->
-            normalize_secure(Override, RouterFile)
+        [Override] ->
+            Override;
+        Overrides ->
+            Overrides
     end.
+
+%% Every override_secure in force has to allow a request: those of the
+%% applications this one was mounted through first, then its own.
+override_callbacks(Options, RouterFile) ->
+    Callbacks = [normalize_secure(Override, RouterFile) || Override <- overrides_in_force(Options)],
+    without_repeats([Callback || Callback <- Callbacks, Callback =/= false]).
+
+without_repeats([Callback | Rest]) ->
+    [Callback | without_repeats([Other || Other <- Rest, Other =/= Callback])];
+without_repeats([]) ->
+    [].
 
 %%--------------------------------------------------------------------
 -doc """
@@ -878,15 +909,17 @@ plugins_after_security(RouteInfo, RouterFile) ->
 
 %% A method that is not recognised stops the route table from compiling.
 %% It used to become the wildcard, which opened the route to every method.
+%% An atom is one of the methods Nova knows. A binary or a string is any
+%% method, such as PURGE or PROPFIND, in the case it is sent in.
 method_to_binary('_') ->
     '_';
 method_to_binary(Method) when is_atom(Method) ->
     known_method(atom_to_binary(Method), Method);
 method_to_binary(Method) when is_binary(Method) ->
-    known_method(Method, Method);
+    method_token(Method, Method);
 method_to_binary(Method) when is_list(Method) ->
     try unicode:characters_to_binary(Method) of
-        Name when is_binary(Name) -> known_method(Name, Method);
+        Name when is_binary(Name) -> method_token(Name, Method);
         _ -> throw({error, {invalid_method, Method}})
     catch
         error:badarg -> throw({error, {invalid_method, Method}})
@@ -903,6 +936,23 @@ known_method(Name, Method) ->
         _ ->
             throw({error, {invalid_method, Method}})
     end.
+
+%% RFC 9110 section 9.1: a method is a token, and it is case-sensitive.
+method_token(Name, Method) ->
+    case Name =/= <<>> andalso is_token(Name) of
+        true -> Name;
+        false -> throw({error, {invalid_method, Method}})
+    end.
+
+is_token(<<Char, Rest/binary>>) ->
+    is_token_char(Char) andalso is_token(Rest);
+is_token(<<>>) ->
+    true.
+
+is_token_char(Char) when Char >= $a, Char =< $z; Char >= $A, Char =< $Z; Char >= $0, Char =< $9 ->
+    true;
+is_token_char(Char) ->
+    lists:member(Char, "!#$%&'*+-.^_`|~").
 
 concat_strings(Path1, Path2) when is_binary(Path1) ->
     concat_strings(unicode:characters_to_list(uri_string:unquote(Path1)), Path2);

@@ -58,7 +58,6 @@ init_per_suite(Config) ->
               security => fun nova_fail_closed_pages:deny/1,
               plugins => [{pre_request, ?MODULE, #{return => {error, refused}}}],
               routes => [{"/ws", nova_test_app_ws_controller, #{protocol => ws}} | Routes]},
-            #{prefix => "/invalid", security => true, routes => Routes},
             #{prefix => "/crashing", security => fun nova_fail_closed_pages:crash/1, routes => Routes},
             #{prefix => "/unexpected", security => fun nova_fail_closed_pages:unexpected/1, routes => Routes}
            ],
@@ -68,6 +67,7 @@ init_per_suite(Config) ->
     ok = add_cowboy_handler_route("/cowboy/failing-plugin", fun nova_fail_closed_pages:deny/1, #{return => {error, refused}}),
     ok = add_cowboy_handler_route("/cowboy/denied", fun nova_fail_closed_pages:deny/1, #{return => ok}),
     ok = add_cowboy_handler_route("/cowboy/open", false, #{return => ok}),
+    ok = add_route_with_invalid_security("/invalid/"),
     [{port, Port} | Config].
 
 end_per_suite(_Config) ->
@@ -82,6 +82,17 @@ add_cowboy_handler_route(Path, Secure, PluginOptions) ->
                                   arguments = #{},
                                   plugins = [{pre_request, [{fun ?MODULE:pre_request/4, PluginOptions}]}],
                                   secure = Secure},
+    add_route(Path, Value).
+
+%% The router refuses to compile such a route, so this is one that got into
+%% the routing table some other way.
+add_route_with_invalid_security(Path) ->
+    Value = #nova_handler_value{app = nova_test_app,
+                                callback = fun nova_fail_closed_pages:page/1,
+                                secure = {nova_fail_closed_pages, page}},
+    add_route(Path, Value).
+
+add_route(Path, Value) ->
     {ok, Dispatch} = nova_routing_trie:insert('_', Path, '_', Value, persistent_term:get(nova_dispatch), #{}),
     persistent_term:put(nova_dispatch, Dispatch).
 

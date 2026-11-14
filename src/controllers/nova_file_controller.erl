@@ -2,15 +2,36 @@
 -moduledoc false.
 -export([
          get_file/1,
-         get_dir/1
+         get_dir/1,
+         static_state/2
         ]).
 
 -include_lib("kernel/include/file.hrl").
 
 -define(MAX_SYMLINKS, 40).
+-define(MAX_RANGE_DIGITS, 19).
+-define(PAST_ANY_FILE, 1 bsl 64).
 
+%% The extra_state of a static route, for the router. The root of a
+%% directory is resolved here, when the route is compiled, so a request only
+%% has to resolve the segments that come after it.
+-doc false.
+-spec static_state(Static :: tuple(), Options :: map()) -> map().
+static_state({dir, _LocalPath} = Dir, Options) ->
+    directory_state(Dir, Options);
+static_state({priv_dir, _App, _LocalPath} = Dir, Options) ->
+    directory_state(Dir, Options);
+static_state(File, Options) ->
+    #{static => File, options => Options}.
+
+directory_state(Dir, Options) ->
+    Root = get_filepath(Dir),
+    #{static => Dir, options => Options, static_root => {Root, resolve_root(Root, Options)}}.
+
+%% No ETag or Last-Modified is sent with a file, so an If-Range has nothing
+%% to match and the range it guards is not used (RFC 9110 section 13.1.5).
 get_file(#{headers := #{<<"range">> := Range} = Headers} = Req) ->
-    case ignored_range(Range) of
+    case is_map_key(~"if-range", Headers) orelse ignored_range(Range) of
         true -> serve_file(Req#{headers => maps:remove(<<"range">>, Headers)});
         false -> serve_file(Req)
     end;
@@ -47,8 +68,9 @@ serve_file(#{extra_state := #{static := File, options := Options}, headers := He
                                     ~"content-length" => integer_to_binary(Length),
                                     ~"x-content-type-options" => ~"nosniff"},
                     {sendfile, 206, RespHeaders, {Start, Length, Filepath}, MimeType};
+                error ->
+                    {sendfile, 200, #{}, {0, Size, Filepath}, MimeType};
                 _ ->
-                    %% Invalid range request
                     {status, 416, #{<<"content-range">> => <<"bytes */", (integer_to_binary(Size))/binary>>}}
             end
     end;
@@ -56,12 +78,11 @@ serve_file(#{extra_state := #{static := File, options := Options}, headers := He
 serve_file(_Req) ->
     {status, 404}.
 
-get_dir(#{extra_state := #{pathinfo := Pathinfo, static := Dir, options := Options}} = Req) ->
+get_dir(#{extra_state := #{pathinfo := Pathinfo, static := Dir, options := Options} = ExtraState} = Req) ->
     %% This case will be invoked if a directory was set with wildcard - pathinfo will then
     %% contain the segments of the wildcard value
-    Root = get_filepath(Dir),
-    case path_inside_root(Root, Pathinfo, Options) of
-        {ok, Filepath0} ->
+    case path_inside_root(static_root(ExtraState, get_filepath(Dir), Options), Pathinfo, Options) of
+        {ok, Filepath0, Resolved} ->
             case filelib:is_dir(Filepath0) of
                 false ->
                     %% Check if it's a file
@@ -73,22 +94,23 @@ get_dir(#{extra_state := #{pathinfo := Pathinfo, static := Dir, options := Optio
                             {status, 404}
                     end;
                 true ->
-                    get_dir(Req#{extra_state => #{static => {dir, Filepath0}, static_root => Root,
+                    get_dir(Req#{extra_state => #{static => {dir, Filepath0}, static_root => {Filepath0, Resolved},
                                                   options => Options}})
             end;
         error ->
             {status, 404}
     end;
 get_dir(#{path := Path, extra_state := #{static := Dir, options := Options} = ExtraState} = Req) ->
-    Filepath = get_filepath(Dir),
+    {_RootSegments, DirSegments} = Resolved = static_root(ExtraState, get_filepath(Dir), Options),
+    Filepath = filename:join(DirSegments),
     {ok, Files} = file:list_dir(Filepath),
     case get_index_file(Files, maps:get(index_files, Options, ["index.html"])) of
         {ok, IndexFile} ->
-            IndexPath = filename:join(Filepath, IndexFile),
-            case inside_root(maps:get(static_root, ExtraState, Filepath), IndexPath, Options) of
-                true ->
+            case inside_root(Resolved, [IndexFile], Options) of
+                {ok, {_, IndexSegments}} ->
+                    IndexPath = filename:join(IndexSegments),
                     get_file(Req#{extra_state => #{static => {file, IndexPath}, options => Options}});
-                false ->
+                error ->
                     {status, 404}
             end;
         false ->
@@ -116,13 +138,15 @@ get_dir(_Req) ->
 
 %% The router resolves dot segments before a request gets here. This holds
 %% on its own, so the files served do not depend on what is in front of it.
-path_inside_root(Root, Pathinfo, Options) ->
+%% The path returned is the one that was checked, from the resolved root,
+%% so a root that has come to mean another directory is not served from.
+path_inside_root(Resolved, Pathinfo, Options) ->
     case lists:all(fun safe_segment/1, Pathinfo) of
         true ->
-            Filepath = filename:join([Root | [binary_to_list(Segment) || Segment <- Pathinfo]]),
-            case inside_root(Root, Filepath, Options) of
-                true  -> {ok, Filepath};
-                false -> error
+            Segments = [binary_to_list(Segment) || Segment <- Pathinfo],
+            case inside_root(Resolved, Segments, Options) of
+                {ok, {_, FileSegments} = FileResolved} -> {ok, filename:join(FileSegments), FileResolved};
+                error -> error
             end;
         false ->
             error
@@ -138,15 +162,39 @@ safe_segment(_Segment) ->
 
 %% Symbolic links are resolved on both sides, so a link below the root is
 %% served only if it lands inside the root, unless the route opts out with
-%% follow_external_symlinks.
-inside_root(Root, Filepath, Options) ->
-    ResolveLinks = not maps:get(follow_external_symlinks, Options, false),
-    case {canonical_path(Root, ResolveLinks), canonical_path(Filepath, ResolveLinks)} of
-        {{ok, RootSegments}, {ok, FileSegments}} ->
-            lists:prefix(RootSegments, FileSegments);
-        _ ->
-            false
+%% follow_external_symlinks. The directory the segments are in is already
+%% resolved, so only the segments are looked at here.
+inside_root({RootSegments, DirSegments}, Segments, Options) ->
+    case canonical_path(Segments, lists:reverse(DirSegments), resolve_links(Options), ?MAX_SYMLINKS) of
+        {ok, FileSegments} ->
+            case lists:prefix(RootSegments, FileSegments) of
+                true -> {ok, {RootSegments, FileSegments}};
+                false -> error
+            end;
+        error ->
+            error
+    end;
+inside_root(error, _Segments, _Options) ->
+    error.
+
+%% Where a directory resolved to, and the root it is served from. The
+%% router resolves the root of a static route when it compiles the route.
+%% A directory is resolved here when it is not the one that was compiled,
+%% which a priv directory is after a release upgrade, and when the request
+%% did not come through the router.
+static_root(#{static_root := {Dir, Resolved}}, Dir, _Options) ->
+    Resolved;
+static_root(_ExtraState, Dir, Options) ->
+    resolve_root(Dir, Options).
+
+resolve_root(Dir, Options) ->
+    case canonical_path(Dir, resolve_links(Options)) of
+        {ok, Segments} -> {Segments, Segments};
+        error -> error
     end.
+
+resolve_links(Options) ->
+    not maps:get(follow_external_symlinks, Options, false).
 
 canonical_path(Path, ResolveLinks) ->
     canonical_path(filename:split(filename:absname(Path)), [], ResolveLinks, ?MAX_SYMLINKS).
@@ -183,13 +231,19 @@ ignored_range(<<"bytes=", RangeSpec/binary>>) ->
 ignored_range(_OtherUnit) ->
     true.
 
+%% RFC 9110 section 14.1.1: a range that is not written as one, or whose
+%% last position is before its first, is invalid and gives error, which
+%% sends the whole file. A valid range that no part of the file answers,
+%% a suffix of no bytes included, is unsatisfiable.
 parse_range(RangeSpec, FileSize) ->
     case binary:split(RangeSpec, <<"-">>, [global]) of
         [<<>>, SuffixLength] ->
             case digits(SuffixLength) of
-                {ok, Length} when Length > 0 ->
+                {ok, 0} ->
+                    unsatisfiable;
+                {ok, Length} ->
                     {ok, {max(FileSize - Length, 0), FileSize - 1}};
-                _ ->
+                error ->
                     error
             end;
         [First, <<>>] ->
@@ -210,17 +264,34 @@ parse_range(RangeSpec, FileSize) ->
             error
     end.
 
+%% A client chooses how many digits a number has. One of more than 19
+%% digits is past the end of any file, so it is never made into an integer.
 digits(<<>>) ->
     error;
 digits(Binary) ->
-    digits(Binary, 0).
+    case all_digits(Binary) of
+        true -> significant_digits(without_leading_zeros(Binary));
+        false -> error
+    end.
 
-digits(<<Digit, Rest/binary>>, Number) when Digit >= $0, Digit =< $9 ->
-    digits(Rest, Number * 10 + Digit - $0);
-digits(<<>>, Number) ->
-    {ok, Number};
-digits(_NotADigit, _Number) ->
-    error.
+all_digits(<<Digit, Rest/binary>>) when Digit >= $0, Digit =< $9 ->
+    all_digits(Rest);
+all_digits(<<>>) ->
+    true;
+all_digits(_NotADigit) ->
+    false.
+
+without_leading_zeros(<<$0, Rest/binary>>) ->
+    without_leading_zeros(Rest);
+without_leading_zeros(Digits) ->
+    Digits.
+
+significant_digits(<<>>) ->
+    {ok, 0};
+significant_digits(Digits) when byte_size(Digits) > ?MAX_RANGE_DIGITS ->
+    {ok, ?PAST_ANY_FILE};
+significant_digits(Digits) ->
+    {ok, binary_to_integer(Digits)}.
 
 get_index_file([], _) -> false;
 get_index_file([File|Tl], IndexFiles) ->

@@ -6,7 +6,13 @@
 -export([
          port_in_use_fails_the_boot/1,
          listener_starts_after_the_processes_it_needs/1,
+         restarted_supervisor_serves_again/1,
+         listener_of_another_owner_fails_the_boot/1,
+         invalid_security_fails_the_boot/1,
+         invalid_security_of_a_mounted_application_fails_the_boot/1,
+         invalid_security_of_a_mounted_application_fails_the_boot_next_to_a_group_callback/1,
          pubsub_scope_is_restarted/1,
+         restarted_pubsub_scope_has_no_members/1,
          pubsub_scope_started_elsewhere_is_left_alone/1,
          unset_environment_is_warned_about_once/1,
          set_environment_is_not_warned_about/1,
@@ -19,7 +25,13 @@ all() ->
     [
      port_in_use_fails_the_boot,
      listener_starts_after_the_processes_it_needs,
+     restarted_supervisor_serves_again,
+     listener_of_another_owner_fails_the_boot,
+     invalid_security_fails_the_boot,
+     invalid_security_of_a_mounted_application_fails_the_boot,
+     invalid_security_of_a_mounted_application_fails_the_boot_next_to_a_group_callback,
      pubsub_scope_is_restarted,
+     restarted_pubsub_scope_has_no_members,
      pubsub_scope_started_elsewhere_is_left_alone,
      unset_environment_is_warned_about_once,
      set_environment_is_not_warned_about,
@@ -47,6 +59,50 @@ listener_starts_after_the_processes_it_needs(_Config) ->
     ?assertEqual([], [nova_handlers, nova_plugin_manager, nova_session_ets] -- lists:droplast(Ids)),
     ?assertEqual([], nova_sup:listeners()).
 
+restarted_supervisor_serves_again(_Config) ->
+    Routes = [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}],
+    Port = nova_test_listener:start(#{host => [#{routes => Routes}]}),
+    Supervisor = running(nova_sup),
+    Monitor = monitor(process, Supervisor),
+    exit(Supervisor, kill),
+    receive {'DOWN', Monitor, process, Supervisor, killed} -> ok end,
+    ?assert(stopped(nova, 50)),
+    ?assertMatch({ok, _}, application:ensure_all_started(nova)),
+    ?assertEqual({200, ~"page"}, nova_test_listener:get(Port, "/")),
+    ?assertEqual([nova_listener], nova_sup:listeners()).
+
+listener_of_another_owner_fails_the_boot(_Config) ->
+    Port = nova_test_listener:free_port(),
+    {ok, _} = application:ensure_all_started(cowboy),
+    {ok, _} = cowboy:start_clear(nova_listener, [{port, Port}], #{env => #{dispatch => cowboy_router:compile([])}}),
+    try
+        ?assertMatch({error, _}, nova_test_listener:try_start(#{port => nova_test_listener:free_port()})),
+        ?assertEqual(Port, ranch:get_port(nova_listener))
+    after
+        cowboy:stop_listener(nova_listener)
+    end.
+
+invalid_security_fails_the_boot(_Config) ->
+    Routes = [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}],
+    ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener, {invalid_security, true}}}, _}}},
+                 nova_test_listener:try_start(#{host => [#{security => true, routes => Routes}]})),
+    ?assertEqual(undefined, whereis(nova_sup)).
+
+invalid_security_of_a_mounted_application_fails_the_boot(_Config) ->
+    Routes = [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}],
+    ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener, {invalid_security, yes}}}, _}}},
+                 nova_test_listener:try_start(#{mounted => [#{routes => Routes}],
+                                                mounted_options => #{prefix => "/mounted", secure => yes}})),
+    ?assertEqual(undefined, whereis(nova_sup)).
+
+invalid_security_of_a_mounted_application_fails_the_boot_next_to_a_group_callback(_Config) ->
+    Routes = [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}],
+    ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener, {invalid_security, yes}}}, _}}},
+                 nova_test_listener:try_start(#{mounted => [#{security => fun nova_boot_pages:allow/1,
+                                                              routes => Routes}],
+                                                mounted_options => #{prefix => "/mounted", secure => yes}})),
+    ?assertEqual(undefined, whereis(nova_sup)).
+
 pubsub_scope_is_restarted(_Config) ->
     _Port = nova_test_listener:start(#{}),
     Scope = pubsub_scope(),
@@ -57,6 +113,18 @@ pubsub_scope_is_restarted(_Config) ->
     ?assert(restarted(Scope, 50)),
     ok = nova_pubsub:join(restarted_channel),
     ?assertEqual([self()], nova_pubsub:get_members(restarted_channel)).
+
+restarted_pubsub_scope_has_no_members(_Config) ->
+    _Port = nova_test_listener:start(#{}),
+    ok = nova_pubsub:join(emptied_channel),
+    Scope = pubsub_scope(),
+    Monitor = monitor(process, nova_scope),
+    exit(Scope, kill),
+    receive {'DOWN', Monitor, process, {nova_scope, _Node}, killed} -> ok end,
+    ?assert(restarted(Scope, 50)),
+    ?assertEqual([], nova_pubsub:get_members(emptied_channel)),
+    ok = nova_pubsub:join(emptied_channel),
+    ?assertEqual([self()], nova_pubsub:get_members(emptied_channel)).
 
 pubsub_scope_started_elsewhere_is_left_alone(_Config) ->
     {ok, Scope} = pg:start(nova_scope),
@@ -101,9 +169,25 @@ plugins_of_an_earlier_run_are_forgotten(_Config) ->
 environment_warnings(Events) ->
     [Report || {warning, {report, #{environment := _} = Report}} <- Events].
 
+running(Name) ->
+    case whereis(Name) of
+        Pid when is_pid(Pid) -> Pid
+    end.
+
 pubsub_scope() ->
     {nova_pubsub_scope, Pid, worker, [pg]} = lists:keyfind(nova_pubsub_scope, 1, supervisor:which_children(nova_sup)),
     Pid.
+
+stopped(_Application, 0) ->
+    false;
+stopped(Application, Attempts) ->
+    case lists:keymember(Application, 1, application:which_applications()) of
+        false ->
+            true;
+        true ->
+            timer:sleep(100),
+            stopped(Application, Attempts - 1)
+    end.
 
 restarted(_Old, 0) ->
     false;

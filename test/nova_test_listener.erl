@@ -4,7 +4,8 @@
 -module(nova_test_listener).
 
 -export([start/1, try_start/1, configure/1, stop/0, get/2, get/3, request/4, response/4, response/5,
-         websocket_handshake/2, websocket_handshake/3, websocket_texts/4, send_and_close/2, free_port/0]).
+         websocket_handshake/2, websocket_handshake/3, websocket_texts/4, h2_websocket_connect/4,
+         send_and_close/2, free_port/0]).
 
 -spec start(map()) -> inet:port_number().
 start(Options) ->
@@ -21,6 +22,10 @@ try_start(Options) ->
     end.
 
 %% Sets the environment a boot reads, without starting anything.
+%% nova_test_nested_app and nova_test_deep_app are not applications on
+%% disk. Each is a router and the entry that mounts it: `mounted_nova_apps`
+%% is the nova_apps of nova_test_sub_app, `nested_nova_apps` the one of
+%% nova_test_nested_app.
 -spec configure(map()) -> ok.
 configure(Options) ->
     Port = maps:get(port, Options, free_port()),
@@ -29,6 +34,8 @@ configure(Options) ->
     application:load(nova_test_sub_app),
     nova_test_host_router:set_routes(maps:get(host, Options, [])),
     nova_test_mounted_router:set_routes(maps:get(mounted, Options, [])),
+    nova_test_nested_router:set_routes(maps:get(nested, Options, [])),
+    nova_test_deep_router:set_routes(maps:get(deep, Options, [])),
     application:set_env(nova, bootstrap_application, nova_test_app),
     application:set_env(nova, cowboy_configuration,
                         #{port => Port, options => maps:get(cowboy_options, Options, #{})}),
@@ -38,7 +45,11 @@ configure(Options) ->
     application:set_env(nova_test_app, nova_apps,
                         maps:get(nova_apps, Options,
                                  [{nova_test_sub_app, maps:get(mounted_options, Options, #{prefix => "/mounted"})}])),
-    application:set_env(nova_test_sub_app, router_module, nova_test_mounted_router).
+    application:set_env(nova_test_sub_app, router_module, nova_test_mounted_router),
+    application:set_env(nova_test_sub_app, nova_apps, maps:get(mounted_nova_apps, Options, [])),
+    application:set_env(nova_test_nested_app, router_module, nova_test_nested_router),
+    application:set_env(nova_test_nested_app, nova_apps, maps:get(nested_nova_apps, Options, [])),
+    application:set_env(nova_test_deep_app, router_module, nova_test_deep_router).
 
 %% Unloading puts the environment of both test applications back to what
 %% their .app files declare, for the suites that run after this one.
@@ -49,8 +60,13 @@ stop() ->
     application:unload(nova_test_app),
     application:unload(nova_test_sub_app),
     application:unset_env(nova, cowboy_configuration),
+    application:unset_env(nova_test_nested_app, router_module),
+    application:unset_env(nova_test_nested_app, nova_apps),
+    application:unset_env(nova_test_deep_app, router_module),
     nova_test_host_router:set_routes([]),
     nova_test_mounted_router:set_routes([]),
+    nova_test_nested_router:set_routes([]),
+    nova_test_deep_router:set_routes([]),
     ok.
 
 -spec get(inet:port_number(), iodata()) -> {100..599, binary()}.
@@ -128,6 +144,44 @@ websocket_texts(Port, Path, Text, Count) when byte_size(Text) < 126 ->
         receive_texts(Socket, Buffered, Count)
     after
         gen_tcp:close(Socket)
+    end.
+
+%% Opens a websocket the HTTP/2 way, with an extended CONNECT (RFC 8441) on
+%% a clear connection, and returns the status the stream is answered with.
+%% The listener needs `enable_connect_protocol` in its Cowboy options.
+-spec h2_websocket_connect(inet:port_number(), iodata(), binary(), [{binary(), binary()}]) -> 100..599.
+h2_websocket_connect(Port, Path, Authority, Headers) ->
+    {ok, Socket} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}, {packet, raw}]),
+    try
+        ok = gen_tcp:send(Socket, [~"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", cow_http2:settings(#{})]),
+        {HeaderBlock, _Encoder} = cow_hpack:encode([{~":method", ~"CONNECT"},
+                                                    {~":protocol", ~"websocket"},
+                                                    {~":scheme", ~"http"},
+                                                    {~":path", iolist_to_binary(Path)},
+                                                    {~":authority", Authority},
+                                                    {~"sec-websocket-version", ~"13"}
+                                                   | Headers]),
+        h2_status(Socket, <<>>, cow_http2:headers(1, nofin, HeaderBlock))
+    after
+        gen_tcp:close(Socket)
+    end.
+
+%% The request is sent once the settings of the server have arrived, since
+%% they are what allows an extended CONNECT.
+h2_status(Socket, Buffer, Request) ->
+    case cow_http2:parse(Buffer) of
+        {ok, {settings, _Settings}, Rest} ->
+            ok = gen_tcp:send(Socket, [cow_http2:settings_ack(), Request]),
+            h2_status(Socket, Rest, Request);
+        {ok, {headers, 1, _IsFin, head_fin, HeaderBlock}, _Rest} ->
+            {ResponseHeaders, _Decoder} = cow_hpack:decode(HeaderBlock),
+            {~":status", <<Status/binary>>} = lists:keyfind(~":status", 1, ResponseHeaders),
+            binary_to_integer(Status);
+        {ok, _OtherFrame, Rest} ->
+            h2_status(Socket, Rest, Request);
+        more ->
+            {ok, <<Data/binary>>} = gen_tcp:recv(Socket, 0, 5000),
+            h2_status(Socket, <<Buffer/binary, Data/binary>>, Request)
     end.
 
 after_handshake(Socket, Acc) ->

@@ -12,13 +12,16 @@ application names, or `{Name, Options}` two-tuples when you want to configure
 how it is mounted.
 
 Included applications are resolved depth-first, so an application that
-declares `nova_apps` of its own has those registered too.
+declares `nova_apps` of its own has those registered too. What they take over
+from the entry of their parent is listed
+[below](#applications-included-by-an-included-application).
 
 Your own application's routes are registered before those of the applications
 it includes. Where both declare the same path and method, or a page for the
 same status code, yours is served and the included application's is logged as
-a conflicting route and ignored. With `use_strict_routing` the clash stops the
-application from starting instead. Status code routes are not prefixed, so one
+a conflicting route and ignored. The warning names the application whose route
+was ignored, the path or status code, and the method. With
+`use_strict_routing` the clash stops the application from starting instead. Status code routes are not prefixed, so one
 declared by an included application applies to the whole listener when yours
 declares none for that code. Earlier releases registered included applications
 first, which let them replace a route of yours together with its security.
@@ -28,8 +31,8 @@ first, which let them replace a route of yours together with its security.
 | Key | Value | Description |
 |---|---|---|
 | `prefix` | `string()` | Mount the application's routes under this path, in front of the prefix each route group declares |
-| `secure` | `false` \| `fun/1` | Security callback for the application's route groups that declare none |
-| `override_secure` | `false` \| `fun/1` | Replace the security callback of every route group, including one the application declares for itself |
+| `secure` | `false` \| `fun/1` | Security callback that runs in front of every route group of the application, before the callback a group declares for itself |
+| `override_secure` | `false` \| `fun/1` | Replace the security callback of every route group, including one the application declares for itself, and of every route group of the applications it includes |
 | `plugin_strategy` | see the [routing guide](routing.md) | How the application's route-local plugins combine with the global ones |
 
 ### Example
@@ -72,14 +75,83 @@ An application mounted without a prefix is listed with `"/"`.
 
 ### Security of a mounted application
 
-A route group that declares a `security` callback keeps it when the
-application is mounted. `secure` only applies to the groups that declare none
-(or `false`), so mounting an application can put a callback in front of its
-routes but cannot take one away. `secure => false` leaves every group as the
-application declared it.
+`secure` puts a callback in front of every route group of the mounted
+application. A route group that declares a `security` callback keeps it, so
+such a group has two, and a request has to be allowed by both. Mounting an
+application can add a callback to its routes but cannot take one away, and
+the application cannot opt a group out of the callback it is mounted with.
+
+| `secure` of the entry | `security` of the route group | What runs |
+|---|---|---|
+| a callback | a callback | the callback of the entry, then the one of the group |
+| a callback | none, or `false` | the callback of the entry |
+| none, or `false` | a callback | the callback of the group |
+| none, or `false` | none, or `false` | nothing |
+
+The first callback that does not allow the request answers it, with `401`, a
+redirect, or the status, headers and body it returns. The other callback is
+not run then. A callback that raises is answered with `500`.
+
+When both allow the request, the controller gets the `auth_data` of the
+group's callback if that returns `{true, Data}`, and otherwise the data of
+the entry's callback. A group's callback that returns `true` leaves the data
+of the entry's callback in place.
+
+A callback that is both the `secure` of the entry and the `security` of the
+group runs once. Websocket routes follow the same rules.
 
 Replacing a callback the application declares takes `override_secure`, see
 the [routing guide](routing.md#overriding-security-for-an-included-application).
+With `override_secure`, neither `secure` nor the callback of a group runs.
+
+### Applications included by an included application
+
+An included application can declare `nova_apps` of its own. Those
+applications share the listener too. Each is mounted with the options of its
+own entry, not with the options of the entry that included its parent:
+
+| Option in the entry of the parent | Applies to the nested application |
+|---|---|
+| `prefix` | No. It answers under the `prefix` of its own entry, counted from the root of the listener, and at the root when it has none |
+| `secure` | No |
+| `plugin_strategy` | No. Its route groups use the plugins they declare or the global ones, as any route group does |
+| `override_secure` | Yes |
+
+With `{admin_app, #{prefix => "/admin", secure => fun my_auth:check/1}}`,
+where `admin_app` declares `{nova_apps, [dashboard_app]}`, the routes of
+`dashboard_app` answer at the root of the listener and without
+`my_auth:check/1`. Give `dashboard_app` an entry with its own `prefix` and
+`secure` in the `nova_apps` of `admin_app`, or use `override_secure`.
+
+`override_secure` is the option that covers everything an application brings
+in. When the entry of the nested application sets an `override_secure` too,
+both callbacks run, the outer one first. The request goes on when both allow
+it. The first that does not answers it, and the other one is not run. The
+controller gets the `auth_data` of the nested callback when that returns
+some, and otherwise that of the outer one.
+
+An application is mounted once. When it is listed more than once, the entry
+that comes first is used, going through `nova_apps` depth-first.
+
+A route group can include applications as well, with the `apps` key:
+
+```erlang
+#{prefix => "/tools",
+  security => fun my_auth:check/1,
+  apps => [tools_app, {reports_app, #{prefix => "/reports"}}]}
+```
+
+Those are compiled with the options the application of the group was mounted
+with, and the prefix of the group as their `prefix`. `tools_app` answers
+under `/tools`, with the `secure`, `override_secure` and `plugin_strategy` of
+that entry. Options given with an application replace the inherited ones, so
+`reports_app` answers under `/reports`, not `/tools/reports`. An
+`override_secure` is the exception: an inherited one stays in force and one
+given with the application is added to it, as above.
+
+The `security` and `plugins` of the group are not inherited. They apply to
+the `routes` of the group, and `my_auth:check/1` above does not run for
+`tools_app` or `reports_app`.
 
 ## Starting an application at runtime
 

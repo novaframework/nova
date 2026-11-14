@@ -13,7 +13,18 @@
          listed_origin_is_accepted/1,
          unlisted_origin_is_refused/1,
          origin_plugin_leaves_other_requests_alone/1,
-         route_without_the_plugin_accepts_any_origin/1]).
+         route_without_the_plugin_accepts_any_origin/1,
+         same_host_ignores_the_scheme/1,
+         same_origin_needs_the_same_scheme/1,
+         same_origin_needs_the_same_host_and_port/1,
+         same_origin_accepts_a_missing_origin/1,
+         same_origin_over_http2/1,
+         other_origin_is_refused_over_http2/1,
+         same_host_origin_is_accepted_over_http2/1,
+         same_host_needs_the_same_port_over_http2/1,
+         missing_origin_is_accepted_over_http2/1,
+         listed_origin_is_checked_over_http2/1,
+         route_without_the_plugin_accepts_any_origin_over_http2/1]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
@@ -30,7 +41,18 @@ all() ->
      listed_origin_is_accepted,
      unlisted_origin_is_refused,
      origin_plugin_leaves_other_requests_alone,
-     route_without_the_plugin_accepts_any_origin].
+     route_without_the_plugin_accepts_any_origin,
+     same_host_ignores_the_scheme,
+     same_origin_needs_the_same_scheme,
+     same_origin_needs_the_same_host_and_port,
+     same_origin_accepts_a_missing_origin,
+     same_origin_over_http2,
+     other_origin_is_refused_over_http2,
+     same_host_origin_is_accepted_over_http2,
+     same_host_needs_the_same_port_over_http2,
+     missing_origin_is_accepted_over_http2,
+     listed_origin_is_checked_over_http2,
+     route_without_the_plugin_accepts_any_origin_over_http2].
 
 init_per_suite(Config) ->
     Routes = [#{prefix => "/plain",
@@ -43,11 +65,15 @@ init_per_suite(Config) ->
                 plugins => [{pre_request, nova_ws_origin_plugin, #{}}],
                 routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}},
                            {"/page", fun nova_ws_upgrade_pages:page/1, #{methods => [get]}}]},
+              #{prefix => "/same-origin",
+                plugins => [{pre_request, nova_ws_origin_plugin, #{allowed_origins => same_origin}}],
+                routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]},
               #{prefix => "/listed",
                 plugins => [{pre_request, nova_ws_origin_plugin,
                              #{allowed_origins => [~"https://app.example.com", "https://other.example.com"]}}],
                 routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]}],
-    [{port, nova_test_listener:start(#{host => Routes})} | Config].
+    [{port, nova_test_listener:start(#{host => Routes, cowboy_options => #{enable_connect_protocol => true}})}
+     | Config].
 
 end_per_suite(_Config) ->
     nova_test_listener:stop().
@@ -93,6 +119,78 @@ origin_plugin_leaves_other_requests_alone(Config) ->
 
 route_without_the_plugin_accepts_any_origin(Config) ->
     ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/plain/ws", "https://evil.example")).
+
+%% The requests are sent with `host: localhost`, to a listener without TLS.
+same_host_ignores_the_scheme(Config) ->
+    ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/same-host/ws", "https://localhost")).
+
+same_origin_needs_the_same_scheme(Config) ->
+    ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/same-origin/ws", "http://localhost")),
+    ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/same-origin/ws", "HTTP://LocalHost")),
+    ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/same-origin/ws", "https://localhost")),
+    ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/same-origin/ws", "https://localhost:80")),
+    ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/same-origin/ws", "ws://localhost")).
+
+same_origin_needs_the_same_host_and_port(Config) ->
+    ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/same-origin/ws", "http://localhost:80")),
+    ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/same-origin/ws", "http://localhost:8080")),
+    ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/same-origin/ws", "http://localhost.evil.example")),
+    ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/same-origin/ws", "http://evil.example")),
+    ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/same-origin/ws", "http://local host")),
+    ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/same-origin/ws", "localhost")),
+    ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/same-origin/ws", "null")).
+
+same_origin_accepts_a_missing_origin(Config) ->
+    ?assertMatch(<<"HTTP/1.1 101", _/binary>>,
+                 nova_test_listener:websocket_handshake(?config(port, Config), "/same-origin/ws")).
+
+%% The connection is sent with the `http` scheme.
+same_origin_over_http2(Config) ->
+    Authority = authority(Config),
+    ?assertEqual(200, connect(Config, "/same-origin/ws", Authority, [{~"origin", <<"http://", Authority/binary>>}])),
+    ?assertEqual(200, connect(Config, "/same-origin/ws", ~"localhost", [{~"origin", ~"http://localhost"}])),
+    ?assertEqual(200, connect(Config, "/same-origin/ws", ~"localhost", [{~"origin", ~"http://localhost:80"}])),
+    ?assertEqual(200, connect(Config, "/same-origin/ws", Authority, [])),
+    ?assertEqual(403, connect(Config, "/same-origin/ws", Authority, [{~"origin", <<"https://", Authority/binary>>}])),
+    ?assertEqual(403, connect(Config, "/same-origin/ws", ~"localhost:443", [{~"origin", ~"https://localhost"}])),
+    ?assertEqual(403, connect(Config, "/same-origin/ws", Authority, [{~"origin", ~"http://localhost"}])),
+    ?assertEqual(403, connect(Config, "/same-origin/ws", Authority, [{~"origin", ~"https://evil.example"}])),
+    ?assertEqual(403, connect(Config, "/same-origin/ws", Authority, [{~"origin", ~"null"}])).
+
+other_origin_is_refused_over_http2(Config) ->
+    ?assertEqual(403, connect(Config, "/same-host/ws", authority(Config), [{~"origin", ~"https://evil.example"}])).
+
+same_host_origin_is_accepted_over_http2(Config) ->
+    Authority = authority(Config),
+    ?assertEqual(200, connect(Config, "/same-host/ws", Authority, [{~"origin", <<"http://", Authority/binary>>}])),
+    ?assertEqual(200, connect(Config, "/same-host/ws", Authority, [{~"origin", <<"HTTP://LocalHost:", (port(Config))/binary>>}])),
+    ?assertEqual(200, connect(Config, "/same-host/ws", ~"localhost", [{~"origin", ~"http://localhost"}])),
+    ?assertEqual(200, connect(Config, "/same-host/ws", ~"localhost:443", [{~"origin", ~"https://localhost"}])).
+
+same_host_needs_the_same_port_over_http2(Config) ->
+    ?assertEqual(403, connect(Config, "/same-host/ws", authority(Config), [{~"origin", ~"http://localhost"}])),
+    ?assertEqual(403, connect(Config, "/same-host/ws", authority(Config), [{~"origin", ~"http://localhost:1"}])),
+    ?assertEqual(403, connect(Config, "/same-host/ws", ~"localhost", [{~"origin", ~"https://localhost"}])),
+    ?assertEqual(403, connect(Config, "/same-host/ws", ~"localhost", [{~"origin", ~"null"}])).
+
+missing_origin_is_accepted_over_http2(Config) ->
+    ?assertEqual(200, connect(Config, "/same-host/ws", authority(Config), [])).
+
+listed_origin_is_checked_over_http2(Config) ->
+    ?assertEqual(200, connect(Config, "/listed/ws", authority(Config), [{~"origin", ~"https://app.example.com"}])),
+    ?assertEqual(403, connect(Config, "/listed/ws", authority(Config), [{~"origin", ~"https://evil.example"}])).
+
+route_without_the_plugin_accepts_any_origin_over_http2(Config) ->
+    ?assertEqual(200, connect(Config, "/plain/ws", authority(Config), [{~"origin", ~"https://evil.example"}])).
+
+connect(Config, Path, Authority, Headers) ->
+    nova_test_listener:h2_websocket_connect(?config(port, Config), Path, Authority, Headers).
+
+authority(Config) ->
+    <<"localhost:", (port(Config))/binary>>.
+
+port(Config) ->
+    integer_to_binary(?config(port, Config)).
 
 handshake(Config, Path, Origin) ->
     nova_test_listener:websocket_handshake(?config(port, Config), Path, [{"origin", Origin}]).

@@ -86,9 +86,9 @@ A route ending in `[...]` matches any number of trailing segments. They reach th
 
 A websocket route takes `extra_state` like an HTTP route does, and falls back to the `extra_state` of its route group. The controller finds it in the upgrade request, under `req` in its controller data.
 
-The `init/1` callback of a websocket controller returns `{ok, State}` to accept the connection. Any other return refuses the upgrade with a `500`. It can return `{ok, State, Options}` to also set the options of the connection, where `Options` is a `cowboy_websocket:opts()` map such as `#{max_frame_size => 65536, idle_timeout => 30000}`.
+The `init/1` callback of a websocket controller returns `{ok, State}` to accept the connection. Any other return refuses the upgrade with a `500`. It can return `{ok, State, Options}` to also set the options of the connection, where `Options` is a `nova_websocket:opts()` map such as `#{max_frame_size => 65536, idle_timeout => 30000}`. It takes the options of [cowboy_websocket](https://ninenines.eu/docs/en/cowboy/2.13/manual/cowboy_websocket/).
 
-A browser sends the cookies of your site with a websocket upgrade started by any page. When the connection relies on a session cookie, add `nova_ws_origin_plugin` as a `pre_request` plugin on the route to refuse upgrades from other origins. It is not on by default.
+A browser sends the cookies of your site with a websocket upgrade started by any page. When the connection relies on a session cookie, add `nova_ws_origin_plugin` as a `pre_request` plugin to refuse upgrades from other origins, in the global `plugins` or on the route group together with the other plugins the group needs. It is not on by default.
 
 > #### Important {: .tip}
 >
@@ -112,16 +112,16 @@ Example:
 {"/with-index/[...]", "assets/another-dir", #{index_files => ["index.html"]}}
 ```
 
-A directory route only serves what is inside that directory. A request whose trailing segments are empty, `.` or `..`, or contain `/`, `\` or a NUL byte, is answered with `404`, whatever the router in front of it let through. Symbolic links are resolved first: a link that points inside the directory is served, one that points out of it is a `404`. Set `follow_external_symlinks => true` in the options of the route to serve links that leave the directory.
+A directory route only serves what is inside that directory. A request whose trailing segments are empty, `.` or `..`, or contain `/`, `\` or a NUL byte, is answered with `404`, whatever the router in front of it let through. Symbolic links are resolved first: a link that points inside the directory is served, one that points out of it is a `404`. Set `follow_external_symlinks => true` in the options of the route to serve links that leave the directory. The directory itself is resolved once, when the routes are compiled, and files are checked against and served from where it was then. A relative path means the directory it named in the working directory the node had at that time, also after the working directory has changed. If a symbolic link on the way to the directory is changed while Nova runs, files are still served from where it pointed before, so restart Nova after such a change. With `follow_external_symlinks` no link is resolved, and such a change takes effect at once.
 
-A `Range` request for one byte range is answered with `206` and that part of the file, a suffix range such as `bytes=-500` included. A range that cannot be parsed or lies past the end of the file gets `416`. A range unit other than `bytes`, or a request for several ranges, gets the whole file with `200`. The local path of a static route may be relative to the working directory of the node.
+A `Range` request for one byte range is answered with `206` and that part of the file, a suffix range such as `bytes=-500` included. A range that starts past the end of the file, or a suffix of no bytes, gets `416`. A range that is not valid, such as `bytes= 0-1` or `bytes=5-2`, a range unit other than `bytes`, and a request for several ranges are ignored, so the whole file is sent with `200`. A range sent with `If-Range` is ignored too: static files carry no `ETag` or `Last-Modified` for it to match. The local path of a static route may be relative to the working directory of the node.
 
 ## How to create routes
 
 A route consists of three different components:
 
 * `Path` - This is the actual path to the endpoint. Eg `"/admin"`
-* `Method` - What method you want to support for this endpoint: `get`, `post`, `put`, `delete`, `options`, `head`, `connect`, `trace` or `patch`, as an atom, a binary or a string in either case. If you want to support all methods you can use the `'_'`-atom. Anything else, a misspelling included, stops the application from starting with `{invalid_method, Method}`. Earlier releases silently treated it as `'_'`, so the route answered every method.
+* `Method` - What method you want to support for this endpoint: `get`, `post`, `put`, `delete`, `options`, `head`, `connect`, `trace` or `patch`, as an atom in either case. Any other method, such as `PURGE` or `PROPFIND`, is written as a binary or a string. Those are matched as they are written, since a method is case-sensitive: write `<<"PURGE">>`, not `<<"purge">>`. If you want to support all methods you can use the `'_'`-atom. Any other atom, a misspelling included, or a binary or string that is not a method token ([RFC 9110](https://www.rfc-editor.org/rfc/rfc9110#section-9.1)), stops the application from starting with `{invalid_method, Method}`. Earlier releases silently treated it as `'_'`, so the route answered every method.
 * `ControllerCallback` - What erlang callback should be called on when the path gets called. This is defined as a function reference, eg `fun my_controller:main/1`.
 
 ## Using prefix
@@ -155,7 +155,9 @@ routes(_Environment) ->
     }].
 ```
 
-`security` takes `false`, a `fun/1` or the deprecated `{Module, Function}`. Any other value, `true` included, is logged as an error and every request to the group is answered with `401`.
+The callback runs after the `pre_request` plugins of the route and before the controller. The [request pipeline](plugins.md#request-pipeline) section of the plugins guide has the whole order.
+
+`security` takes `false`, a `fun/1` or the deprecated `{Module, Function}`. Any other value, `true` included, is logged as an error and stops the application from starting with `{invalid_security, Value}`. The same goes for `secure` and `override_secure` in `nova_apps`.
 
 The security function runs after the group's `pre_request` plugins, so a plugin that reads the body has read it before the request is checked. `plugins_after_security => [Module]` in the route group makes the listed plugins wait for the security function; see [Running a plugin after the security callback](plugins.md#running-a-plugin-after-the-security-callback).
 
@@ -196,6 +198,8 @@ get_user(Req) ->
 ```
 
 Once the security function has been called, the data will be available in the `Req` object under the `auth_data` key.
+
+A route group of an [included application](multi-app.md#security-of-a-mounted-application) can have two callbacks, the `secure` of the application that includes it and its own `security`. Both have to allow the request, and the controller gets the data of the group's callback when that returns some, otherwise the data of the other one.
 
 ```erlang
 -module(my_controller).
@@ -263,10 +267,21 @@ itself. Set `override_secure` in the options for that application:
 It takes the same values as `secure`: `false` for no override, a `fun/1`, or
 the deprecated `{Module, Function}`.
 
+It also covers the applications that the included application includes
+itself. One of those can have an `override_secure` of its own, and then both
+callbacks have to allow a request. The
+[multi-app guide](multi-app.md#applications-included-by-an-included-application)
+has the details.
+
 `override_secure` is the only option that replaces a callback a route group
-declares. `secure` in the same place is a default: it applies to the groups
-that declare no callback, and is ignored, with a warning in the log, by a
-group that has one. To open up a group that declares a callback, override it
+declares. `secure` in the same place adds one: its callback runs in front of
+every route group of the included application. A group that declares
+`security` keeps its callback, which runs second, and a request has to be
+allowed by both. The first of the two that does not allow it answers the
+request, with the redirect, status, headers and body it returns, and the
+other one is not run. The controller gets the `auth_data` of the group's
+callback when that returns `{true, Data}`, and otherwise the data of the
+`secure` callback. To open up a group that declares a callback, override it
 with a callback that returns `true`.
 
 

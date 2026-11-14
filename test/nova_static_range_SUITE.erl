@@ -16,8 +16,11 @@
          not_a_number/1,
          last_before_first/1,
          malformed/1,
+         whitespace/1,
+         long_numbers/1,
          other_unit/1,
          several_ranges/1,
+         if_range/1,
          relative_directory/1
         ]).
 
@@ -40,8 +43,11 @@ all() ->
      not_a_number,
      last_before_first,
      malformed,
+     whitespace,
+     long_numbers,
      other_unit,
      several_ranges,
+     if_range,
      relative_directory
     ].
 
@@ -89,20 +95,39 @@ empty_suffix(Config) ->
     unsatisfiable(Config, "bytes=-0").
 
 not_a_number(Config) ->
-    unsatisfiable(Config, "bytes=a-b"),
-    unsatisfiable(Config, "bytes=1-b"),
-    unsatisfiable(Config, "bytes=-b"),
-    unsatisfiable(Config, "bytes=+1-3").
+    whole(Config, "bytes=a-b"),
+    whole(Config, "bytes=1-b"),
+    whole(Config, "bytes=-b"),
+    whole(Config, "bytes=+1-3").
 
 last_before_first(Config) ->
-    unsatisfiable(Config, "bytes=5-2").
+    whole(Config, "bytes=5-2"),
+    whole(Config, "bytes=12-11").
 
 malformed(Config) ->
-    unsatisfiable(Config, "bytes="),
-    unsatisfiable(Config, "bytes=-"),
-    unsatisfiable(Config, "bytes=5"),
-    unsatisfiable(Config, "bytes=1-2-3"),
-    unsatisfiable(Config, "bytes=--1").
+    whole(Config, "bytes="),
+    whole(Config, "bytes=-"),
+    whole(Config, "bytes=5"),
+    whole(Config, "bytes=1-2-3"),
+    whole(Config, "bytes=--1").
+
+whitespace(Config) ->
+    whole(Config, "bytes= 0-1"),
+    whole(Config, "bytes=0 -1"),
+    whole(Config, "bytes=0- 1"),
+    whole(Config, "bytes=- 3").
+
+%% As many digits as fit in a header value of the default 4096 bytes.
+long_numbers(Config) ->
+    Many = lists:duplicate(4000, $1),
+    unsatisfiable(Config, "bytes=" ++ Many ++ "-"),
+    partial(Config, "bytes=0-" ++ Many, ?CONTENT, ~"bytes 0-9/10"),
+    partial(Config, "bytes=-" ++ Many, ?CONTENT, ~"bytes 0-9/10"),
+    partial(Config, "bytes=" ++ lists:duplicate(4000, $0) ++ "5-", ~"56789", ~"bytes 5-9/10"),
+    unsatisfiable(Config, "bytes=9999999999999999999-"),
+    unsatisfiable(Config, "bytes=10000000000000000000-"),
+    partial(Config, "bytes=0-9999999999999999999", ?CONTENT, ~"bytes 0-9/10"),
+    partial(Config, "bytes=0-10000000000000000000", ?CONTENT, ~"bytes 0-9/10").
 
 other_unit(Config) ->
     whole(Config, "items=0-1"),
@@ -110,6 +135,17 @@ other_unit(Config) ->
 
 several_ranges(Config) ->
     whole(Config, "bytes=0-1,3-4").
+
+%% The controller sends no ETag and no Last-Modified, so no If-Range can
+%% match and the range it guards is not used.
+if_range(Config) ->
+    {200, Headers, ?CONTENT} = nova_test_listener:response(?config(port, Config), "GET", "/files/ten.txt", []),
+    ?assertNot(is_map_key(~"etag", Headers)),
+    ?assertNot(is_map_key(~"last-modified", Headers)),
+    whole(Config, "bytes=0-3", [{"if-range", "\"an-entity-tag\""}]),
+    whole(Config, "bytes=0-3", [{"if-range", "W/\"a-weak-tag\""}]),
+    whole(Config, "bytes=0-3", [{"if-range", "Sat, 14 Nov 2026 12:00:00 GMT"}]),
+    whole(Config, "bytes=10-", [{"if-range", "\"an-entity-tag\""}]).
 
 relative_directory(Config) ->
     ?assertEqual({200, ?CONTENT}, nova_test_listener:get(?config(port, Config), "/relative/ten.txt")).
@@ -125,9 +161,15 @@ unsatisfiable(Config, Range) ->
     ?assertEqual(~"bytes */10", maps:get(~"content-range", Headers)).
 
 whole(Config, Range) ->
-    {Status, Headers, Body} = range_request(Config, Range),
+    whole(Config, Range, []).
+
+whole(Config, Range, Headers) ->
+    {Status, RespHeaders, Body} = range_request(Config, Range, Headers),
     ?assertEqual({Range, 200, ?CONTENT}, {Range, Status, Body}),
-    ?assertNot(is_map_key(~"content-range", Headers)).
+    ?assertNot(is_map_key(~"content-range", RespHeaders)).
 
 range_request(Config, Range) ->
-    nova_test_listener:response(?config(port, Config), "GET", "/files/ten.txt", [{"range", Range}]).
+    range_request(Config, Range, []).
+
+range_request(Config, Range, Headers) ->
+    nova_test_listener:response(?config(port, Config), "GET", "/files/ten.txt", [{"range", Range} | Headers]).

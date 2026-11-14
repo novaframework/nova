@@ -416,7 +416,31 @@ cowboy_options(Configuration, DispatchKey, Dispatch) ->
     end.
 
 %% Returns {ok, IsTls} so the caller can record how the listener was bound.
+%% ranch owns the listener, so it outlives a nova_sup that went down without
+%% nova_app:prep_stop/1 stopping it. Only a listener Nova started is replaced.
 bind(Ref, Host, Port, Configuration, CowboyOptions) ->
+    case bind_listener(Ref, Host, Port, Configuration, CowboyOptions) of
+        {error, {already_started, _Pid}} = AlreadyStarted ->
+            case stop_nova_listener(Ref) of
+                ok -> bind_listener(Ref, Host, Port, Configuration, CowboyOptions);
+                {error, _Reason} -> AlreadyStarted
+            end;
+        Result ->
+            Result
+    end.
+
+stop_nova_listener(Ref) ->
+    try ranch:get_protocol_options(Ref) of
+        #{env := #{nova_dispatch_key := _DispatchKey}} ->
+            ?LOG_NOTICE(#{msg => <<"Replacing the listener of an earlier nova_sup">>, listener => Ref}),
+            cowboy:stop_listener(Ref);
+        _OtherOwner ->
+            {error, not_nova}
+    catch
+        error:badarg -> {error, not_found}
+    end.
+
+bind_listener(Ref, Host, Port, Configuration, CowboyOptions) ->
     case maps:get(use_ssl, Configuration, false) of
         false ->
             case cowboy:start_clear(Ref, [{port, Port}, {ip, Host}], CowboyOptions) of
@@ -475,10 +499,40 @@ resolve_nova_apps([App | Rest], Acc, Seen) ->
         true ->
             resolve_nova_apps(Rest, Acc, Seen);
         false ->
-            Nested = application:get_env(Name, nova_apps, []),
-            {Acc0, Seen0} = resolve_nova_apps(Nested, [App | Acc], [Name | Seen]),
+            {Acc0, Seen0} = resolve_nova_apps(nested_nova_apps(App), [App | Acc], [Name | Seen]),
             resolve_nova_apps(Rest, Acc0, Seen0)
     end.
+
+%% The nova_apps of a mounted application. An override_secure covers every
+%% route the application brings in, so one that is in force for it is
+%% handed on to the applications it mounts. Nothing else is: they are
+%% mounted with the options of their own entry.
+-spec nested_nova_apps(nova_app()) -> [nova_app()].
+nested_nova_apps(App) ->
+    Nested = configured_nova_apps(nova_app_name(App)),
+    case nova_router:overrides_in_force(nova_app_options(App)) of
+        [] ->
+            Nested;
+        Overrides ->
+            [{nova_app_name(NestedApp), (nova_app_options(NestedApp))#{inherited_override_secure => Overrides}}
+             || NestedApp <- Nested]
+    end.
+
+%% The nova_apps of an application as they are configured, which nothing
+%% has looked at before this.
+-spec configured_nova_apps(atom()) -> [nova_app()].
+configured_nova_apps(Name) ->
+    case application:get_env(Name, nova_apps, []) of
+        Entries when is_list(Entries) -> [nova_app(Entry) || Entry <- Entries]
+    end.
+
+-spec nova_app(term()) -> nova_app().
+nova_app({Name, Options}) when is_atom(Name), is_map(Options) -> {Name, Options};
+nova_app(Name) when is_atom(Name)                             -> Name.
+
+-spec nova_app_options(nova_app()) -> map().
+nova_app_options({_App, Options}) -> Options;
+nova_app_options(_App)            -> #{}.
 
 %% A nova_app is either the application name or {Name, Options}.
 -spec nova_app_name(nova_app()) -> atom().

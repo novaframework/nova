@@ -26,6 +26,19 @@ setup() ->
     ok = file:make_symlink("loop-a", filename:join(Root, "loop-b")),
     ok = file:make_symlink("../../secret.txt", filename:join([Root, "linked-index", "index.html"])),
     ok = file:make_symlink("root", filename:join(Base, "root-link")),
+    ok = filelib:ensure_path(filename:join([Base, "cwd-compiled", "static"])),
+    ok = filelib:ensure_path(filename:join([Base, "cwd-later", "static"])),
+    ok = file:write_file(filename:join([Base, "cwd-compiled", "static", "file.txt"]), ~"inside"),
+    ok = file:write_file(filename:join([Base, "cwd-compiled", "static", "index.html"]), ~"index"),
+    ok = file:make_symlink("../../secret.txt", filename:join([Base, "cwd-later", "static", "file.txt"])),
+    ok = file:make_symlink("../../secret.txt", filename:join([Base, "cwd-later", "static", "index.html"])),
+    ok = filelib:ensure_path(filename:join(Base, "release-1")),
+    ok = filelib:ensure_path(filename:join(Base, "release-2")),
+    ok = file:write_file(filename:join([Base, "release-1", "file.txt"]), ~"inside"),
+    ok = file:write_file(filename:join([Base, "release-1", "index.html"]), ~"index"),
+    ok = file:make_symlink("../secret.txt", filename:join([Base, "release-2", "file.txt"])),
+    ok = file:make_symlink("../secret.txt", filename:join([Base, "release-2", "index.html"])),
+    ok = file:make_symlink("release-1", filename:join(Base, "current")),
     Base.
 
 cleanup(Base) ->
@@ -40,6 +53,62 @@ get_dir(Base, RootName, Pathinfo, Options) ->
                                    extra_state => #{pathinfo => Pathinfo,
                                                     static => {dir, filename:join(Base, RootName)},
                                                     options => Options}}).
+
+%% As the router calls the controller: with the state it compiled for the
+%% route, and the trailing segments of the request.
+get_compiled_dir(State, Pathinfo) ->
+    nova_file_controller:get_dir(#{path => ~"/files", headers => #{}, extra_state => State#{pathinfo => Pathinfo}}).
+
+%% The result of a request, and the paths it asked the file system about a
+%% link for. A process cannot trace itself, so the request gets its own.
+links_read(Request) ->
+    Parent = self(),
+    Pid = spawn_link(fun() -> receive go -> Parent ! {result, self(), Request()} end end),
+    erlang:trace_pattern({file, read_link_all, 1}, true, [global]),
+    erlang:trace(Pid, true, [call]),
+    Pid ! go,
+    Result = receive {result, Pid, Returned} -> Returned end,
+    Delivered = erlang:trace_delivered(Pid),
+    receive {trace_delivered, Pid, Delivered} -> ok end,
+    erlang:trace_pattern({file, read_link_all, 1}, false, [global]),
+    {Result, traced_links()}.
+
+traced_links() ->
+    receive
+        {trace, _Pid, call, {file, read_link_all, [Path]}} -> [Path | traced_links()]
+    after 0 ->
+        []
+    end.
+
+%% The state of a route compiled in one working directory, and what a
+%% request gets for it once the node has moved to another.
+compiled_then_moved(Base, Dir, Request) ->
+    {ok, Cwd} = file:get_cwd(),
+    try
+        ok = file:set_cwd(filename:join(Base, "cwd-compiled")),
+        State = nova_file_controller:static_state({dir, Dir}, #{}),
+        ok = file:set_cwd(filename:join(Base, "cwd-later")),
+        served(Request(State))
+    after
+        ok = file:set_cwd(Cwd)
+    end.
+
+%% As compiled_then_moved/3, for a root behind a link that is pointed
+%% somewhere else after the route was compiled.
+compiled_then_relinked(Base, Request) ->
+    Link = filename:join(Base, "current"),
+    State = nova_file_controller:static_state({dir, Link}, #{}),
+    try
+        ok = file:delete(Link),
+        ok = file:make_symlink("release-2", Link),
+        served(Request(State))
+    after
+        ok = file:delete(Link),
+        ok = file:make_symlink("release-1", Link)
+    end.
+
+index_of(State) ->
+    nova_file_controller:get_dir(#{path => ~"/files", headers => #{}, extra_state => State}).
 
 served(Result) ->
     case Result of
@@ -98,6 +167,68 @@ static_path_test_() ->
               Refused([~"loop-a"]),
               {"an index file linked out of the root is refused",
                ?_assertEqual({status, 404}, get_dir(Base, [~"linked-index"]))},
+
+              {"a root the router resolved is not resolved again for a request",
+               fun() ->
+                       Root = filename:join(Base, "root"),
+                       State = nova_file_controller:static_state({dir, Root}, #{}),
+                       {Result, Links} = links_read(fun() -> get_compiled_dir(State, [~"sub", ~"deep.txt"]) end),
+                       ?assertEqual(~"deep", served(Result)),
+                       ?assertEqual([filename:join(Root, "sub"), filename:join([Root, "sub", "deep.txt"])], Links)
+               end},
+              {"a root the router resolved through a link is not resolved again",
+               fun() ->
+                       State = nova_file_controller:static_state({dir, filename:join(Base, "root-link")}, #{}),
+                       {Result, Links} = links_read(fun() -> get_compiled_dir(State, [~"inside.txt"]) end),
+                       ?assertEqual(~"inside", served(Result)),
+                       ?assertEqual([filename:join([Base, "root", "inside.txt"])], Links)
+               end},
+              {"a root the router resolved still keeps links inside it",
+               fun() ->
+                       State = nova_file_controller:static_state({dir, filename:join(Base, "root-link")}, #{}),
+                       ?assertEqual(~"inside", served(get_compiled_dir(State, [~"link-inside"]))),
+                       ?assertEqual(~"deep", served(get_compiled_dir(State, [~"dir-inside", ~"deep.txt"]))),
+                       ?assertEqual(~"index", served(get_compiled_dir(State, [~"sub"]))),
+                       ?assertEqual({status, 404}, get_compiled_dir(State, [~"link-outside"])),
+                       ?assertEqual({status, 404}, get_compiled_dir(State, [~"link-absolute"])),
+                       ?assertEqual({status, 404}, get_compiled_dir(State, [~"dir-outside", ~"secret.txt"])),
+                       ?assertEqual({status, 404}, get_compiled_dir(State, [~"linked-index"])),
+                       ?assertEqual({status, 404}, get_compiled_dir(State, [~"loop-a"]))
+               end},
+              {"the index file of a root the router resolved is kept inside it",
+               fun() ->
+                       Inside = nova_file_controller:static_state({dir, filename:join([Base, "root", "sub"])}, #{}),
+                       ?assertEqual(~"index", served(nova_file_controller:get_dir(#{path => ~"/files", headers => #{},
+                                                                                     extra_state => Inside}))),
+                       Outside = nova_file_controller:static_state({dir, filename:join([Base, "root", "linked-index"])}, #{}),
+                       ?assertEqual({status, 404}, nova_file_controller:get_dir(#{path => ~"/files", headers => #{},
+                                                                                  extra_state => Outside}))
+               end},
+              {"a directory that has moved since the route was compiled is resolved for the request",
+               fun() ->
+                       Compiled = nova_file_controller:static_state({dir, filename:join([Base, "root", "sub"])}, #{}),
+                       Moved = Compiled#{static => {dir, filename:join(Base, "root")}},
+                       ?assertEqual(~"inside", served(get_compiled_dir(Moved, [~"inside.txt"]))),
+                       ?assertEqual({status, 404}, get_compiled_dir(Moved, [~"link-outside"]))
+               end},
+              {"a relative root is served from where it was when the route was compiled",
+               ?_assertEqual(~"inside",
+                             compiled_then_moved(Base, "static",
+                                                 fun(State) -> get_compiled_dir(State, [~"file.txt"]) end))},
+              {"the index file of a relative root is served from where it was when the route was compiled",
+               [?_assertEqual(~"index", compiled_then_moved(Base, "static", fun index_of/1)),
+                ?_assertEqual(~"index",
+                              compiled_then_moved(Base, "static", fun(State) -> get_compiled_dir(State, []) end))]},
+              {"a root behind a link is served from where the link pointed when the route was compiled",
+               ?_assertEqual(~"inside",
+                             compiled_then_relinked(Base, fun(State) -> get_compiled_dir(State, [~"file.txt"]) end))},
+              {"the index file of a root behind a link is served from where the link pointed",
+               [?_assertEqual(~"index", compiled_then_relinked(Base, fun index_of/1)),
+                ?_assertEqual(~"index",
+                              compiled_then_relinked(Base, fun(State) -> get_compiled_dir(State, []) end))]},
+              {"a static file has no root to resolve",
+               ?_assertEqual(#{static => {file, "a-file"}, options => #{mimetype => ~"text/plain"}},
+                             nova_file_controller:static_state({file, "a-file"}, #{mimetype => ~"text/plain"}))},
 
               {"follow_external_symlinks serves a link out of the root",
                ?_assertEqual(?SECRET, served(get_dir(Base, "root", [~"link-outside"],

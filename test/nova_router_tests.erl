@@ -99,11 +99,20 @@ method_to_binary_unknown_atom_test() ->
 
 method_to_binary_accepts_every_spelling_test_() ->
     [?_assertEqual(<<"POST">>, nova_router:method_to_binary(Method))
-     || Method <- ['POST', 'Post', <<"POST">>, <<"post">>, "POST", "post"]].
+     || Method <- ['POST', 'Post', <<"POST">>, "POST"]].
+
+method_to_binary_keeps_the_case_of_a_binary_or_string_test_() ->
+    [?_assertEqual(Expected, nova_router:method_to_binary(Method))
+     || {Method, Expected} <- [{~"post", ~"post"}, {"post", ~"post"}, {~"Purge", ~"Purge"}, {"pots", ~"pots"}]].
+
+method_to_binary_accepts_any_token_test_() ->
+    [?_assertEqual(iolist_to_binary(Method), nova_router:method_to_binary(Method))
+     || Method <- [~"PURGE", "PROPFIND", ~"QUERY", "M-SEARCH", ~"!#$%&'*+-.^_`|~09azAZ"]].
 
 method_to_binary_rejects_what_is_not_a_method_test_() ->
     [?_assertThrow({error, {invalid_method, Method}}, nova_router:method_to_binary(Method))
-     || Method <- [gett, update, <<"P O">>, <<>>, "", "pots", 1, {get}, [get]]].
+     || Method <- [gett, update, purge, 'PROPFIND', <<"P O">>, <<>>, "", "GET,POST", ~"GET\r\n", ~"G/T",
+                   <<"G", 233, "T">>, [$G, 233, $T], [$G, 16#D800], 1, {get}, [get]]].
 
 %%====================================================================
 %% concat_strings/2
@@ -198,6 +207,25 @@ execute_cowboy_handler_test_() ->
         ?assertEqual(false, maps:get(secure, Env1)),
         ?assert(is_list(maps:get(plugins, Req1)))
     end}.
+
+execute_keeps_the_dispatch_key_on_the_request_test_() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
+        Key = {nova_dispatch, test_app, 8081},
+        persistent_term:put(Key, persistent_term:get(nova_dispatch)),
+        try
+            [begin
+                 {ok, Req1, _Env1} = nova_router:execute(nova_test_helper:mock_req(Method, Path),
+                                                         #{nova_dispatch_key => Key}),
+                 ?assertEqual(Key, nova_router:dispatch_key(Req1), {Method, Path})
+             end || {Method, Path} <- [{~"GET", ~"/users"}, {~"GET", ~"/static/a/b"}, {~"GET", ~"/ws"},
+                                       {~"GET", ~"/nonexistent"}, {~"DELETE", ~"/users"}]]
+        after
+            persistent_term:erase(Key)
+        end
+    end}.
+
+dispatch_key_of_a_request_outside_the_router_test() ->
+    ?assertEqual(nova_dispatch, nova_router:dispatch_key(nova_test_helper:mock_req(~"GET", ~"/users"))).
 
 %%====================================================================
 %% lookup_url/1,2,3

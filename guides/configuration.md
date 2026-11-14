@@ -21,6 +21,8 @@ Nova uses Cowboy as the webserver. Cowboy is a very flexible webserver and Nova 
 
 The listener is started last, after everything a request needs is running. If it cannot be started, for instance because the port is in use or a certificate cannot be read, Nova logs `Cowboy could not start` and fails to start with `{listener_not_started, Reason}`. Earlier releases logged the error and kept running without a listener.
 
+The listener belongs to ranch, so it is still there when `nova_sup` goes down without the `nova` application being stopped, for instance when `nova_sup` runs under a supervisor of your own. When `nova_sup` starts again it stops that listener and binds a new one. A listener named `nova_listener` that Nova did not start is left alone and stops the boot.
+
 
 ## Nova specific configurations
 

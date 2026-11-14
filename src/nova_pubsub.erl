@@ -31,6 +31,8 @@ game_loop(Name, Expected, Smash) ->
             game_loop(Name, Expected, Smash)
     end.
 ```
+
+The subscriptions are kept by a `pg` scope registered as `nova_scope`, which Nova supervises. A scope that is restarted comes back empty: the processes on the node have left every channel and must join again. A process that has to stay subscribed can monitor `nova_scope` to find out.
 """.
 -export([
          start/0,

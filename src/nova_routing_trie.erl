@@ -65,7 +65,9 @@ Matching is deterministic: at each depth a literal segment is tried first, then 
 %% A path is either a URL or an HTTP status code.
 -type path() :: binary() | list() | integer().
 
-%% Stored comparator: '_' matches any, otherwise an uppercase method binary.
+%% Stored comparator: '_' matches any, otherwise the method as a binary. An
+%% atom is stored in upper case. A binary or a string is stored as it is,
+%% since a method is case-sensitive.
 -type comparator()    :: '_' | binary().
 -type comparator_in() :: comparator() | atom() | list().
 
@@ -115,7 +117,7 @@ new(Opts) when is_map(Opts) ->
 -doc """
 Insert a route. `Path` is a URL or an HTTP status code, `Comparator` is an HTTP method or \`_'' to match any method.
 
-Returns `{error, conflict, Conflict}` when the trie is in strict mode and the route clashes with an existing one. In non-strict mode a clash is logged and resolved according to the `on_duplicate` option.
+Returns `{error, conflict, Conflict}` when the trie is in strict mode and the route clashes with an existing one. In non-strict mode a clash is logged and resolved according to the `on_duplicate` option. The warning names the `app` given in the options of the insert as the owner of the route that came second.
 """.
 -spec insert(path(), comparator_in(), payload(), trie()) ->
           {ok, trie()} | {error, conflict, conflict()}.
@@ -176,7 +178,11 @@ find(HostIn, Path, ComparatorIn, Trie) ->
     end.
 
 %%--------------------------------------------------------------------
--doc "The segments `find/4` matches a request path on: the query string and fragment removed, empty segments dropped, and `.` and `..` resolved without leaving the root. Anything that decides by path has to use these, not the raw path, to agree with the route that is matched.".
+%% The segments find/4 matches a request path on: the query string and
+%% fragment removed, empty segments dropped, and `.' and `..' resolved
+%% without leaving the root. For nova_router:canonical_path/1, which is what
+%% anything that decides by path calls.
+-doc false.
 -spec canonical_segments(binary()) -> [binary()].
 canonical_segments(Path) when is_binary(Path) ->
     canonicalise(split(Path), []).
@@ -251,9 +257,9 @@ norm_host(Host) when is_atom(Host)   -> atom_to_binary(Host, utf8).
 
 -spec norm_comparator(comparator_in()) -> comparator().
 norm_comparator('_')                 -> '_';
-norm_comparator(C) when is_binary(C) -> upper(C);
+norm_comparator(C) when is_binary(C) -> C;
 norm_comparator(C) when is_atom(C)   -> upper(atom_to_binary(C, utf8));
-norm_comparator(C) when is_list(C)   -> upper(to_binary(C)).
+norm_comparator(C) when is_list(C)   -> to_binary(C).
 
 %% unicode:characters_to_binary/1 answers with an error tuple rather than
 %% raising, and silently treating that as a segment would put an unroutable
@@ -356,10 +362,10 @@ do_insert([], Comparator, Payload, Node = #{terminal := Terminal}, Options, Pref
                 #{strict := true} ->
                     {error, conflict, Conflict};
                 #{on_duplicate := overwrite} ->
-                    warn_conflict(Conflict),
+                    warn_conflict(Conflict, replaced_existing, Options),
                     {ok, Node#{terminal := Terminal#{Comparator => Payload}}};
                 _ ->
-                    warn_conflict(Conflict),
+                    warn_conflict(Conflict, ignored, Options),
                     {ok, Node}
             end
     end;
@@ -464,13 +470,18 @@ conflict(Reason, At, Existing, Incoming, ConflictsWith, IncomingPath, Comparator
       comparator       => Comparator,
       existing_methods => Methods}.
 
+%% `app' is the application the route being inserted belongs to, when the
+%% caller gave one in the insert options, and `outcome' what became of that
+%% route.
 warn_conflict(#{reason := Reason, comparator := Comparator, incoming_path := IncomingPath,
-                conflicts_with := ConflictsWith}) ->
+                conflicts_with := ConflictsWith}, Outcome, Options) ->
     ?LOG_WARNING(#{msg => <<"Conflicting route">>,
                    reason => Reason,
                    method => Comparator,
                    route => IncomingPath,
-                   conflicts_with => ConflictsWith}).
+                   conflicts_with => ConflictsWith,
+                   outcome => Outcome,
+                   app => maps:get(app, Options, undefined)}).
 
 insert_routes([], Trie) ->
     {ok, Trie};

@@ -1,5 +1,6 @@
 %%% The controllers of nova_ws_upgrade_SUITE.
 -module(nova_ws_upgrade_pages).
+-behaviour(nova_websocket).
 
 -export([page/1, init/1, websocket_handle/2, websocket_info/2]).
 
@@ -8,6 +9,7 @@
 page(_Req) ->
     {status, 200, #{}, ~"page"}.
 
+-spec init(map()) -> {ok, map()} | {ok, map(), nova_websocket:opts()}.
 init(ControllerData = #{req := #{path := ~"/small/ws"}}) ->
     {ok, ControllerData, #{max_frame_size => ?SMALL_FRAME}};
 init(ControllerData) ->

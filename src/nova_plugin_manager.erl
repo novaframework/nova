@@ -86,7 +86,12 @@ add_plugin(Module, Name, Version) ->
     end.
 
 %%--------------------------------------------------------------------
--doc "Adds a plugin as add_plugin/1 does, and returns once it is initialised. The router calls this for every plugin a route uses, so one that first appears in routes added at runtime has its state before the first request. Returns at once when the manager is not running, since it adds every plugin of the routing table when it starts.".
+%% Adds a plugin as add_plugin/1 does, and returns once it is initialised.
+%% For nova_router, which calls this for every plugin a route uses, so one
+%% that first appears in routes added at runtime has its state before the
+%% first request. Returns at once when the manager is not running, since it
+%% adds every plugin of the routing table when it starts.
+-doc false.
 -spec ensure_plugin(Module :: atom()) -> ok.
 ensure_plugin(Module) when is_atom(Module) ->
     case ets:whereis(?TABLE) =/= undefined andalso not ets:member(?TABLE, Module) of

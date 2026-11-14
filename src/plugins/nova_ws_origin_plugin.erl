@@ -8,15 +8,25 @@ A request without an `Origin` header is let through, since only browsers send it
 
 ## Options
 
-- `allowed_origins` - `same_host` (the default) accepts an origin whose host and port are the ones in the `Host` header. A list accepts exactly the origins in it, such as `[~"https://example.com"]`. Use a list when a proxy in front of Nova rewrites the `Host` header.
+- `allowed_origins` - `same_host` (the default) accepts an origin whose host and port are the ones in the `Host` header, or the ones the request was sent to when it has no `Host` header, as over HTTP/2. Only host and port are compared, not the scheme, apart from the port an origin leaves out being the one of its scheme. `same_origin` also compares the scheme: the origin must have the scheme, host and port of the request, where a port that is left out is the one of the scheme. A list accepts exactly the origins in it, such as `[~"https://example.com"]`. Use a list when a proxy in front of Nova rewrites the `Host` header or terminates TLS.
+
+With `same_host` a page loaded from `http://example.com` can open a websocket to `wss://example.com` over HTTP/1.1. `same_origin` refuses it.
+
+Neither `same_host` nor `same_origin` stops DNS rebinding, where another name is pointed at the address of the server: the origin and the host of such a request are the same name. A list of origins does, since the other name is not in it.
 
 ## Example configuration
 
+The plugin only acts on websocket upgrades, so it can go in the global `plugins` of the `nova` application:
+
 ```erlang
-#{prefix => "/live",
-  plugins => [{pre_request, nova_ws_origin_plugin, #{allowed_origins => [~"https://example.com"]}}],
-  routes => [{"/ws", my_ws_controller, #{protocol => ws}}]}
+{nova, [
+    {plugins, [
+        {pre_request, nova_ws_origin_plugin, #{allowed_origins => [~"https://example.com"]}}
+    ]}
+]}
 ```
+
+A route group that declares `plugins` uses only those and none of the global ones. When the plugin is put on a route group, list every other plugin the group needs with it.
 """.
 -behaviour(nova_plugin).
 
@@ -54,29 +64,55 @@ plugin_info() ->
       url => ~"https://github.com/novaframework/nova",
       authors => [~"Nova team <info@novaframework.org>"],
       description => ~"Refuses websocket upgrades from other origins",
-      options => [{allowed_origins, ~"same_host, or the list of origins that may open a websocket"}]}.
+      options => [{allowed_origins, ~"same_host, same_origin, or the list of origins that may open a websocket"}]}.
 
+%% The check Cowboy makes before it upgrades, which also knows the extended
+%% CONNECT of HTTP/2 and HTTP/3. A request it cannot parse is checked too.
 is_websocket_upgrade(Req) ->
-    binary:match(lowercase_header(~"upgrade", Req), ~"websocket") =/= nomatch.
+    try
+        cowboy_websocket:is_upgrade_request(Req)
+    catch
+        _Class:_Reason -> true
+    end.
 
 -spec is_allowed(Origin :: binary() | undefined, Req :: cowboy_req:req(),
-                 Allowed :: same_host | [iodata()]) -> boolean().
+                 Allowed :: same_host | same_origin | [iodata()]) -> boolean().
 is_allowed(undefined, _Req, _Allowed) ->
     true;
 is_allowed(Origin, Req, same_host) ->
     case binary:split(ascii_lowercase(Origin), ~"://") of
-        [_Scheme, Authority] -> Authority =:= lowercase_header(~"host", Req);
-        _NoAuthority -> false
+        [Scheme, Authority] ->
+            case cowboy_req:header(~"host", Req) of
+                undefined -> is_request_authority(Scheme, Authority, Req);
+                Host -> Authority =:= ascii_lowercase(Host)
+            end;
+        _NoAuthority ->
+            false
+    end;
+is_allowed(Origin, Req, same_origin) ->
+    case binary:split(ascii_lowercase(Origin), ~"://") of
+        [Scheme, Authority] ->
+            Scheme =:= cowboy_req:scheme(Req) andalso is_request_authority(Scheme, Authority, Req);
+        _NoAuthority ->
+            false
     end;
 is_allowed(Origin, _Req, Allowed) ->
     lists:member(ascii_lowercase(Origin),
                  [ascii_lowercase(iolist_to_binary(AllowedOrigin)) || AllowedOrigin <- Allowed]).
 
-lowercase_header(Name, Req) ->
-    case cowboy_req:header(Name, Req) of
-        Value when is_binary(Value) -> ascii_lowercase(Value);
-        undefined -> <<>>
+%% HTTP/2 and HTTP/3 send the authority outside the headers. Cowboy keeps it
+%% as host and port, with the port of the scheme where none was sent.
+is_request_authority(Scheme, Authority, Req) ->
+    try cow_http_hd:parse_host(Authority) of
+        {Host, Port} ->
+            Host =:= cowboy_req:host(Req) andalso origin_port(Scheme, Port) =:= cowboy_req:port(Req)
+    catch
+        _Class:_Reason -> false
     end.
+
+origin_port(~"http", undefined) -> 80;
+origin_port(~"https", undefined) -> 443;
+origin_port(_Scheme, Port) -> Port.
 
 %% Header values may hold any byte, so this folds ASCII only.
 ascii_lowercase(Value) ->

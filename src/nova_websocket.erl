@@ -81,8 +81,13 @@ websocket_info(_Msg, State) ->
                    {crash, error | exit | throw, any()}.
 -export_type([reason/0]).
 
+%% The options of the connection. They are Cowboy's today; the callback
+%% names Nova's type so that can change without changing the callback.
+-type opts() :: cowboy_websocket:opts().
+-export_type([opts/0]).
+
 -callback init(State :: map()) -> {ok, State0 :: map()} |
-                                  {ok, State0 :: map(), WebsocketOptions :: cowboy_websocket:opts()} |
+                                  {ok, State0 :: map(), WebsocketOptions :: opts()} |
                                   any().
 -callback websocket_init(State :: map()) -> Result :: call_result().
 -optional_callbacks([websocket_init/1]).

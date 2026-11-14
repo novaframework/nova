@@ -12,6 +12,10 @@
 
 execute(Req, Env = #{secure := false}) ->
     nova_plugin_handler:after_security(Req, Env);
+execute(Req, Env = #{secure := [_ | _] = Callbacks}) ->
+    all_allow(Callbacks, Req, Env);
+execute(Req, Env = #{secure := Invalid}) when not is_function(Invalid, 1) ->
+    execute(Req, Env#{secure => fun deny/1});
 execute(Req = #{host := Host}, Env = #{secure := Callback}) ->
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
     try Callback(Req) of
@@ -38,8 +42,21 @@ execute(Req = #{host := Host}, Env = #{secure := Callback}) ->
     end.
 
 
-%% Stands in for a security value the router could not use, so a
-%% misconfigured route group is closed rather than left open.
+%% A route with several callbacks: each has to allow the request, in order,
+%% and the first that does not answers it. The data a later callback returns
+%% replaces that of an earlier one, which a plain true leaves in place.
+all_allow([], Req, Env) ->
+    {ok, Req, Env};
+all_allow([Callback | Rest], Req, Env = #{secure := Callbacks}) ->
+    case execute(Req, Env#{secure => Callback}) of
+        {ok, Req1, Env1} -> all_allow(Rest, Req1, Env1#{secure => Callbacks});
+        Stop -> Stop
+    end.
+
+%% The router refuses a security value it cannot use when it compiles the
+%% routes. This stands in for one that reaches a request some other way, so
+%% the route is closed rather than left open.
+-doc false.
 -spec deny(Req :: cowboy_req:req()) -> false.
 deny(_Req) ->
     false.
