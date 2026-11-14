@@ -102,7 +102,7 @@ string_and_binary_path_name_one_file(Dir) ->
     fun() ->
         Path = filename:join(Dir, "upl\x{f6}ad"),
         spool(Path, ~"data"),
-        ok = nova_multipart_spool:keep(unicode:characters_to_binary(Path)),
+        ok = nova_multipart_spool:keep(iolist_to_binary([Dir, <<"/upl\x{f6}ad"/utf8>>])),
         ?assertEqual(#{files => 0, bytes => 0}, nova_multipart_spool:usage()),
         ?assertEqual({ok, ~"data"}, file:read_file(Path))
     end.
