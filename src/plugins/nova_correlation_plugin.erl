@@ -27,16 +27,14 @@ The plugin defines a field called `correlation_id` in the request object for con
 
 ### Example configuration
 
-```text
-       {plugins, [
-           {pre_request, nova_correlation_plugin, #{
-               request_correlation_header => <<"x-correlation-id">>,
-               logger_metadata_key => correlation_id
-           }}
-       ]}
-   
+```erlang
+{plugins, [
+    {pre_request, nova_correlation_plugin, #{
+        request_correlation_header => <<"x-correlation-id">>,
+        logger_metadata_key => correlation_id
+    }}
+]}
 ```
-{: lang=erlang }
 """.
 -behaviour(nova_plugin).
 
@@ -47,7 +45,12 @@ The plugin defines a field called `correlation_id` in the request object for con
 -define(MAX_CORRELATION_ID_SIZE, 255).
 
 %%--------------------------------------------------------------------
--doc "Pre-request callback to either pick up correlation id from request headers or generate a new uuid correlation id.".
+-doc """
+Takes the correlation id from the header named by
+`request_correlation_header`, or generates a v4 UUID. Puts it in the logger
+metadata of the process, in the `x-correlation-id` response header and in
+the request under `correlation_id`. Always returns `{ok, Req, State}`.
+""".
 pre_request(Req0, _Env, Opts, State) ->
     CorrId = get_correlation_id(Req0, Opts),
     %% Update the loggers metadata with correlation-id
@@ -56,9 +59,11 @@ pre_request(Req0, _Env, Opts, State) ->
     Req = Req1#{correlation_id => CorrId},
     {ok, Req, State}.
 
+-doc "Does nothing: the plugin works in `pre_request/4`.".
 post_request(Req, _Env, _, State) ->
     {ok, Req, State}.
 
+-doc "The title, version, description and options of the plugin.".
 plugin_info() ->
     #{
       title => <<"nova_correlation_plugin">>,

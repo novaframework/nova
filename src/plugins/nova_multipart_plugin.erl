@@ -24,6 +24,19 @@ Multipart fields win over `params` set by an earlier plugin, and a repeated fiel
 -define(CHUNK_PERIOD, 15000).
 -define(LABEL_MAX_LEN, 64).
 
+-doc """
+Reads the body of a `multipart/form-data` request. `Options` needs
+`handler => {Mod, InitArgs}`, a `nova_multipart_handler`, and takes the
+limits `max_parts`, `max_part_size`, `max_field_size`, `max_total_size` and
+`read_timeout`.
+
+Returns `{ok, Req, State}` with `params` and `files` set in the request. A
+request the plugin refuses is answered here and ends with
+`{stop, Req, State}`: `400` for a malformed body or a part the handler
+rejects, `408` when the body is not read within `read_timeout`, `413` past a
+limit, `503` when the handler reports `spool_full`, and `500` when the
+handler fails or the plugin has no handler.
+""".
 -spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
           {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
           {stop, Req0 :: cowboy_req:req(), NewState :: any()}.
@@ -50,11 +63,13 @@ pre_request(Req, _Env, Options, State) ->
                  options => nova_redact:term(Options)}),
     {stop, cowboy_req:reply(500, Req), State}.
 
+-doc "Does nothing: the plugin works in `pre_request/4`.".
 -spec post_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
           {ok, Req0 :: cowboy_req:req(), NewState :: any()}.
 post_request(Req, _Env, _Options, State) ->
     {ok, Req, State}.
 
+-doc "The title, version, description and options of the plugin.".
 -spec plugin_info() -> #{title := binary(),
                          version := binary(),
                          url := binary(),

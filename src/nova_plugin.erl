@@ -29,9 +29,15 @@ These callbacks run for HTTP requests. Websocket handlers run their plugins thro
 
 """.
 
+-doc "The two points of a request a plugin can run at.".
 -type request_type() :: pre_request | post_request.
 -export_type([request_type/0, reply/0]).
 
+-doc """
+A reply a plugin hands to Nova to send. `{reply, ...}` takes a body, with a
+status of `200` unless one is given. `{redirect, Url}` answers `302` with a
+`location` header. `{status, ...}` answers with that status and no body.
+""".
 -type reply() :: {reply, Body :: iodata()} |
                  {reply, Status :: integer(), Body :: iodata()} |
                  {reply, Status :: integer(), Headers :: cowboy:http_headers() | [{binary(), iodata()}],
@@ -41,23 +47,29 @@ These callbacks run for HTTP requests. Websocket handlers run their plugins thro
                  {status, Status :: integer(), Headers :: cowboy:http_headers() | [{binary(), iodata()}]}.
 
 -doc """
-Start function for the plugin. This function is called when the plugin is started
-and will return a state that will be passed to the other functions during
-the life cycle of the plugin. The state can be any term.
+Called when the plugin is first found in a routing table: at start for the
+routes compiled then, and later for a plugin that first appears in routes
+added at runtime. Returns the state of the plugin, any term, which
+`pre_request/4` and `post_request/4` get as `PluginState`. A plugin without
+`init/0` starts with `#{}`.
 """.
 -callback init() -> State :: nova:state().
 -optional_callbacks([init/0]).
 
 -doc """
-Stop function for the plugin. This function is called when the application is stopped.
-It takes the plugin's state as argument and should return ok.
+Called with the state of the plugin when the plugin manager terminates,
+which it does when `nova` stops. The return value is not used, and an
+exception is logged.
 """.
 -callback stop(State :: nova:state()) -> ok.
 -optional_callbacks([stop/1]).
 
 -doc """
-This function is called before the request is processed. It can modify the request
-and the nova-state. See the module documentation for what it can return.
+Called for every HTTP request on a route that lists the plugin under
+`pre_request`, before the controller. `Env` is the Cowboy middleware
+environment, `Options` the options the plugin is configured with and
+`PluginState` the state of the plugin. See the module documentation for the
+returns and what Nova does with each.
 """.
 -callback pre_request(Req :: cowboy_req:req(), Env :: any(),
                       Options :: map(), PluginState :: any()) ->
@@ -72,8 +84,9 @@ and the nova-state. See the module documentation for what it can return.
 -optional_callbacks([pre_request/4]).
 
 -doc """
-This function is called after the request is processed. It can modify the request.
-See the module documentation for what it can return.
+Called for every HTTP request on a route that lists the plugin under
+`post_request`, after the controller has returned. The arguments and the
+returns are those of `pre_request/4`.
 """.
 -callback post_request(Req :: cowboy_req:req(), Env :: any(),
                        Options :: map(), PluginState :: any()) ->
@@ -88,8 +101,9 @@ See the module documentation for what it can return.
 -optional_callbacks([post_request/4]).
 
 -doc """
-This function should return information about the plugin. The information is used
-in the documentation and in the plugin-listing.
+Called when the plugin is added, and has to return a map with at least
+`title` and `version`. The other keys describe the plugin and are not read by
+Nova.
 """.
 -callback plugin_info() -> #{title := binary(),
                             version := binary(),

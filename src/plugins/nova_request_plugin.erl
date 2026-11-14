@@ -1,5 +1,29 @@
 -module(nova_request_plugin).
--moduledoc false.
+-moduledoc """
+Reads and decodes the body and the query string of a request. Use it as a
+`pre_request` plugin with the options for what it should do:
+
+- `decode_json_body => true` - decodes the body of a request whose content
+  type is `application/json` or ends in `+json`, and puts it in the request
+  under `json`. `GET` and `DELETE` requests are left alone. An empty body or
+  one that is not JSON is answered with a `400`.
+- `read_urlencoded_body => true` - parses an
+  `application/x-www-form-urlencoded` body and puts its fields in the request
+  under `params`. A malformed body is answered with a `400`, one with too
+  many fields with a `413`.
+- `parse_qs => true | list` - parses the query string and puts it in the
+  request under `parsed_qs`, as a map or as a list of pairs. A malformed
+  query string is answered with a `400`.
+- `max_body_length` - a body longer than this many bytes is answered with a
+  `413`. Default `1000000`. Takes `infinity`.
+- `body_read_timeout` - a body that is not read within this many
+  milliseconds is answered with a `408`. Default `60000`. Takes `infinity`.
+
+The body is read only when `decode_json_body` or `read_urlencoded_body` is
+set, and is then also in the request under `body`. Otherwise `body` is
+`<<>>`. A `multipart/form-data` body is never read here, see
+`nova_multipart_plugin`.
+""".
 -behaviour(nova_plugin).
 
 -export([
@@ -20,7 +44,11 @@
 -define(CHUNK_PERIOD, 15000).
 
 %%--------------------------------------------------------------------
--doc "Pre-request callback".
+-doc """
+Reads the body when an option asks for it and applies the options. Returns
+`{ok, Req, State}` with the keys described above set in the request, or a
+`stop` with the `400`, `408` or `413` that refuses the request.
+""".
 -spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
                          {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
                          {stop, Req0 :: cowboy_req:req(), NewState :: any()} |
@@ -38,7 +66,7 @@ pre_request(Req, _Env, Options, State) ->
     end.
 
 %%--------------------------------------------------------------------
--doc "Post-request callback".
+-doc "Does nothing: the plugin works in `pre_request/4`.".
 -spec post_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
           {ok, Req0 :: cowboy_req:req(), NewState :: any()}.
 post_request(Req, _Env, _Options, State) ->
@@ -46,7 +74,7 @@ post_request(Req, _Env, _Options, State) ->
 
 
 %%--------------------------------------------------------------------
--doc "nova_plugin callback. Returns information about the plugin.".
+-doc "The title, version, description and options of the plugin.".
 -spec plugin_info() -> #{title := binary(),
                          version := binary(),
                          url := binary(),
