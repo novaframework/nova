@@ -54,3 +54,71 @@ of `{Module, Function}` in Nova.
 - **`nova_router:lookup_url/1,2,3`** keep their return shapes, including
   `{error, comparator_not_found, AllowedMethods}` for a path that exists but
   does not accept the method.
+
+- **CSRF `excluded_paths` cover whole segments.** They are matched against the
+  path the request is routed on, segment by segment, where earlier releases
+  compared the bytes of the raw path. `<<"/webhook">>` excludes `/webhook` and
+  `/webhook/stripe` but no longer `/webhooks/stripe`, whose `POST` now gets a
+  `403`. List every path that is to be excluded.
+
+- **A static directory serves only what is inside it.** A file reached through
+  a symbolic link that points out of the directory is answered with `404`.
+  Move the file into the directory, or set `follow_external_symlinks => true`
+  in the options of the route.
+
+- **An invalid `security` value stops the boot.** `security => true` was logged
+  and the group left open, and any other value that is not `false`, a `fun/1`
+  or `{Module, Function}` crashed on every request. Both now fail the start
+  with `{invalid_security, Value}`, and so do `secure` and `override_secure`
+  in `nova_apps`. Give the group a callback, or `false` for none.
+
+- **An invalid route method stops the boot.** Only the lowercase atoms `get`,
+  `post`, `put`, `delete`, `options`, `head`, `connect`, `trace` and `patch`
+  were recognised, and anything else was treated as `'_'`, so the route
+  answered every method. An atom that is none of those in either case, or a
+  binary or string that is not a method token, now fails the start with
+  `{invalid_method, Method}`. A route declared with `<<"GET">>`, `"GET"` or
+  `'GET'` answers only that method from now on, and `405` for the others. If
+  it was meant to answer every method, declare `'_'`.
+
+- **Methods are case-sensitive.** A method written as a binary or a string is
+  matched as it is written, and so is the method of a request: `get` does not
+  match a route declared for `GET` and gets a `405`. Write `<<"PURGE">>`, not
+  `<<"purge">>`.
+
+- **A correlation ID from the request is checked.** `nova_correlation_plugin`
+  takes it over only when it is 1 to 255 visible ASCII characters. Anything
+  else is replaced by a generated ID, so a caller that sends such a value no
+  longer finds it in the response or in the logs.
+
+- **`nova_jsonlogger` encodes strings as UTF-8.** A string with characters
+  above 255 was printed as a list of integers and is now text. A binary or
+  string that is not UTF-8 is printed as an Erlang term, `"<<255,0>>"`, where
+  the whole event used to be printed outside JSON. Adjust log queries that
+  match on the old output.
+
+- **A second listener renders its own status pages.** The page for a crashed
+  controller or a thrown `{Status, Reason}` is looked up in the routing table
+  of the listener the request came in on, and is Nova's default page when that
+  listener declares none. Earlier releases rendered the default listener's
+  page everywhere. Declare the status code routes in the application each
+  listener serves.
+
+- **Your own routes win a clash with an included application.** Where both
+  declare the same path and method, or a page for the same status code, the
+  included application's route is ignored and a warning names it. Earlier
+  releases registered included applications first, so theirs was served. Move
+  or remove one of the two; with `use_strict_routing` the clash stops the
+  boot.
+
+- **A listener that cannot be started stops the boot.** A port in use or an
+  unreadable certificate fails the start with `{listener_not_started, Reason}`.
+  Earlier releases logged the error and kept running without a listener, so a
+  node that used to come up without serving anything now does not come up.
+
+- **`secure` no longer replaces a callback a route group declares.** In a
+  `nova_apps` entry it applies to the groups of the included application that
+  declare no `security`, and is ignored, with a warning, by a group that
+  declares one. Earlier releases let it replace the group's callback,
+  `secure => false` included. Use `override_secure` to replace a callback the
+  application declares; see the [routing guide](routing.md#overriding-security-for-an-included-application).
