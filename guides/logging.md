@@ -134,6 +134,7 @@ for.
 | `The response had begun when the controller failed, so no error page is sent` | warning | A controller or a handler failed after it began to stream the response. The client keeps what was sent |
 | `Nova could not render template` | error | The template of a view does not exist. The request got a `404` |
 | `Template could not find application` | warning | A `url` tag names an application Nova has not compiled, or none. It rendered `#` |
+| `Static directory cannot be served` | error | The directory of a static route was requested and is gone, cannot be read or cannot be resolved. Logged once per directory. The request got a `404` |
 | `Invalid nova_request_plugin option, using the default` | warning | `max_body_length` or `body_read_timeout` has a value that is not valid |
 | `nova_multipart_plugin needs handler => {Mod, InitArgs}.` | error | The plugin is configured without a handler |
 | `Deprecation warning. Since version: ...` | warning | Something [deprecated](deprecations.md) is used |
