@@ -53,12 +53,21 @@
 -include("../include/nova_router.hrl").
 -include("../include/nova.hrl").
 
+-doc "The values of the bindings of a matched route, keyed by the name of the binding.".
 -type bindings() :: #{binary() => binary()}.
 
 %% A request the router has matched. Its bindings are keyed by binary, which
 %% cowboy_req:req() has no room for, so it is typed as a map.
+-doc "A request the router has matched.".
 -type routed_req() :: map().
 
+-doc """
+What a lookup in a routing table gives: the bindings and the value stored
+for the route, with the remaining path segments for a route that ends in a
+wildcard. `{error, not_found}` when no route matches, and
+`{error, comparator_not_found, AllowedMethods}` when the path matches for
+other methods only.
+""".
 -type lookup_result() :: {ok, bindings(), Value :: term()} |
                          {ok, bindings(), Value :: term(), PathInfo :: [binary()]} |
                          {error, not_found} |
@@ -66,8 +75,22 @@
 
 -export_type([bindings/0, lookup_result/0]).
 
-%% This module is also exposing callbacks for routers
+-doc """
+Called when the routes of the application are compiled: when the
+application starts on a listener, when it is mounted by another application
+and from `add_routes/1`. `Env` is what `nova:get_environment/0` returns.
+
+Returns the route groups of the application, each a map as described in the
+routing guide. A router without `routes/1` adds no routes of its own.
+""".
 -callback routes(Env :: atom()) -> Routes :: [map()].
+
+-doc """
+Called together with `routes/1`, with the same `Env`. Returns the controller
+modules to ask for routes, each as `Module` or `{Module, Options}`. Nova
+calls `c:nova_controller:routes/2` of every one that exports it and adds what
+it returns after the routes of `routes/1`.
+""".
 -callback controllers(Env :: atom()) -> Controllers :: [module() | {module(), map()}].
 
 -optional_callbacks([routes/1, controllers/1]).
@@ -82,13 +105,22 @@
 %% listeners on different ports do not serve each other's routes. The default
 %% listener uses nova_dispatch, which is also what every existing caller and
 %% every stored dispatch table already uses.
+-doc """
+The key of the routing table of a listener. `nova_dispatch` is the table of
+the listener of the bootstrap application.
+""".
 -type dispatch_key() :: term().
 -export_type([dispatch_key/0]).
 
+-doc """
+The applications compiled into the routing table of the default listener,
+each with the prefix it is mounted under.
+""".
 -spec compiled_apps() -> [{App :: atom(), Prefix :: list()}].
 compiled_apps() ->
     compiled_apps(?NOVA_DISPATCH).
 
+-doc "As `compiled_apps/0`, but for the routing table addressed by `DispatchKey`.".
 -spec compiled_apps(DispatchKey :: dispatch_key()) -> [{App :: atom(), Prefix :: list()}].
 compiled_apps(DispatchKey) ->
     StorageBackend = storage_backend(),
@@ -96,6 +128,7 @@ compiled_apps(DispatchKey) ->
 
 
 %% TODO! We need to implement a way to get and remove plugins for a path
+-doc false.
 plugins() ->
     StorageBackend = storage_backend(),
     StorageBackend:get(?NOVA_PLUGINS, []).
@@ -107,6 +140,7 @@ forget_plugins() ->
     StorageBackend:put(?NOVA_PLUGINS, []),
     ok.
 
+-doc "As `compile/2`, into the routing table of the default listener.".
 -spec compile(Apps :: [atom() | {atom(), map()}]) -> nova_routing_trie:trie().
 compile(Apps) ->
     compile(Apps, ?NOVA_DISPATCH).
@@ -143,6 +177,7 @@ compile_fresh(Apps, DispatchKey) ->
     StorageBackend:put(DispatchKey, Dispatch),
     Dispatch.
 
+-doc false.
 -spec execute(Req, Env :: cowboy_middleware:env()) -> {ok, Req, Env0} | {stop, Req}
                                                           when Req::cowboy_req:req(),
                                                                Env0::cowboy_middleware:env().
@@ -224,15 +259,28 @@ execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
     end.
 
 %%--------------------------------------------------------------------
--doc "Look up a path in the routing table of the default listener, for any host and method. Use lookup_url/4 for the table of another listener.".
+-doc """
+Look up a path in the routing table of the default listener, among the
+routes declared without a host, with `'_'` as the method. Use `lookup_url/4`
+for the table of another listener.
+""".
 -spec lookup_url(Path :: nova_routing_trie:path()) -> lookup_result().
 lookup_url(Path) ->
     lookup_url('_', Path).
 
+-doc """
+As `lookup_url/1`, among the routes of `Host`. `'_'`, and a host that has no
+routes of its own, give the routes declared without a host.
+""".
 -spec lookup_url(Host :: binary() | atom(), Path :: nova_routing_trie:path()) -> lookup_result().
 lookup_url(Host, Path) ->
     lookup_url(Host, Path, '_').
 
+-doc """
+As `lookup_url/2`, for `Method`, a binary such as `~"GET"`. With `'_'` only
+a route declared without `methods` is found. A route declared for some
+methods gives `{error, comparator_not_found, Methods}`.
+""".
 -spec lookup_url(Host :: binary() | atom(), Path :: nova_routing_trie:path(),
                  Method :: nova_routing_trie:comparator()) -> lookup_result().
 lookup_url(Host, Path, Method) ->
@@ -440,7 +488,9 @@ overrides_in_force(Options) ->
         [Override || Override <- [maps:get(override_secure, Options, false)], Override =/= false].
 
 %%--------------------------------------------------------------------
--doc "The router module for an application. Either configured explicitly with the `router_module` application environment key, or derived from the application name using the convention for the language in use.".
+%% The router module for an application. Either configured explicitly with
+%% the `router_module' application environment key, or derived from the
+%% application name using the convention for the language in use.
 router_module(App) ->
     case application:get_env(App, router_module) of
         {ok, RouterModule} ->
@@ -631,16 +681,31 @@ parse_url(Host,
     parse_url(Host, Tl, T, Value, CompiledPaths).
 
 
+-doc "As `render_status_page/3` with no data.".
 -spec render_status_page(StatusCode :: integer(), Req :: cowboy_req:req()) ->
                                 {ok, Req0 :: routed_req(), Env :: map()}.
 render_status_page(StatusCode, Req) ->
     render_status_page(StatusCode, #{}, Req).
 
+-doc """
+As `render_status_page/5`, for any host and the routing table that serves
+`Req`.
+""".
 -spec render_status_page(StatusCode :: integer(), Data :: map(), Req :: cowboy_req:req()) ->
                                 {ok, Req0 :: routed_req(), Env :: map()}.
 render_status_page(StatusCode, Data, Req) ->
     render_status_page('_', StatusCode, Data, Req, #{nova_dispatch_key => dispatch_key(Req)}).
 
+-doc """
+Points a request at the status page for `StatusCode`. For a Cowboy
+middleware: nothing is sent here, the page is rendered by the controller step
+that the returned `{ok, Req, Env}` is handed to.
+
+The page is the route registered for `StatusCode` on `Host`, or the page of
+Nova when there is none. Its controller is called with the request, which
+has `StatusCode` under `resp_status_code`. `Data` is put under
+`controller_data` in the returned environment.
+""".
 -spec render_status_page(Host :: binary() | atom(),
                          StatusCode :: integer(),
                          Data :: map(),
@@ -875,11 +940,13 @@ without_repeats([]) ->
     [].
 
 %%--------------------------------------------------------------------
--doc """
-Work out which plugins apply to a route entry.
-
-`local_or_global` is the default and is how Nova has always behaved: a route entry that declares `plugins` uses exactly those, otherwise it uses the globally configured ones. The merging strategies exist for the cases where you want both, and dedupe on `{Type, Module}` keeping the first occurrence, so ordering within a phase is preserved.
-""".
+%% Work out which plugins apply to a route entry.
+%%
+%% `local_or_global' is the default and is how Nova has always behaved: a
+%% route entry that declares `plugins' uses exactly those, otherwise it uses
+%% the globally configured ones. The merging strategies exist for the cases
+%% where you want both, and dedupe on `{Type, Module}' keeping the first
+%% occurrence, so ordering within a phase is preserved.
 resolve_plugins(local_or_global, RouteInfo, _RouterFile) ->
     maps:get(plugins, RouteInfo, global_plugins());
 resolve_plugins(local_first, RouteInfo, _RouterFile) ->
@@ -1041,6 +1108,7 @@ concat_strings(Path1, Path2) when is_list(Path1), is_list(Path2) ->
 %% ============================
 %% Callbacks for nova_router
 %% ===========================
+-doc false.
 -spec routes(Env :: atom()) -> [map()].
 routes(_) ->
  [#{

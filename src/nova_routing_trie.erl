@@ -8,7 +8,7 @@ Host-aware routing trie. This is Nova's dispatch table: a map from host to a tre
 Paths are declared with three kinds of segment:
 
 * `"/users"` \- a literal segment.
-* `"/users/:id"` \- a binding. Matches one segment and binds it under `&lt;&lt;"id"&gt;&gt;` in the returned bindings map.
+* `"/users/:id"` \- a binding. Matches one segment and binds it under `<<"id">>` in the returned bindings map.
 * `"/assets/[...]"` \- a catch-all. Matches zero or more trailing segments, which are returned as `PathInfo`. Only valid as the last segment of a path.
 
 A path may also be an integer, in which case it denotes an HTTP status code rather than a URL. Nova uses this to register error pages.
@@ -41,51 +41,77 @@ Matching is deterministic: at each depth a literal segment is tried first, then 
 
 -define(ROOT, <<"/">>).
 
+-doc "A routing table. Read it with `routes/1`, `to_list/1` and `find/4`.".
 -opaque trie() :: #{
                     options := options(),
                     hosts   := #{host_key() => trie_node()}
                    }.
 
+-doc "A node of the tree of one host.".
 -opaque trie_node() :: #{
                          children := #{child_key() => trie_node()},
                          terminal := #{comparator() => payload()}
                         }.
 
+-doc """
+The options of a trie. `strict` makes a clashing insert an error.
+`on_duplicate` says which of two clashing routes is kept otherwise. Other
+keys are carried along as they are.
+""".
 -type options() :: #{
                      strict       := boolean(),
                      on_duplicate := keep_first | overwrite,
                      atom()       => term()
                     }.
 
+-doc """
+One step down the tree: a literal segment, a binding, the catch-all or a
+status code.
+""".
 -type child_key() :: binary() | {binding, binary()} | '...' | integer().
 
+-doc "A host as it is stored. `'_'` is every host without a tree of its own.".
 -type host_key() :: '_' | binary().
+
+-doc "A host as it is given. A string or an atom is stored as a binary.".
 -type host_in()  :: '_' | binary() | list() | atom().
 
-%% A path is either a URL or an HTTP status code.
+-doc "A URL path or an HTTP status code.".
 -type path() :: binary() | list() | integer().
 
-%% Stored comparator: '_' matches any, otherwise the method as a binary. An
-%% atom is stored in upper case. A binary or a string is stored as it is,
-%% since a method is case-sensitive.
+-doc "A method as it is stored: a binary, or `'_'` for any method.".
 -type comparator()    :: '_' | binary().
+
+-doc """
+A method as it is given. An atom is stored in upper case. A binary or a
+string is stored as it is, since a method is case-sensitive.
+""".
 -type comparator_in() :: comparator() | atom() | list().
 
+-doc "What a route leads to. The trie does not look at it.".
 -type payload()  :: term().
+
+-doc "The segments the bindings of a route matched, keyed by the name of the binding.".
 -type bindings() :: #{binary() => binary()}.
 
-%% The canonical unit the trie can be rebuilt from. Note that the host form
-%% is unambiguous: a route is always a 4-tuple unless per-insert options are
-%% supplied, in which case it is a 5-tuple.
+-doc """
+A route as `from_list/1` takes it. Without a host it is for every host. The
+map of the five-element form holds the options of that insert.
+""".
 -type route() ::
         {path(), comparator_in(), payload()} |
         {host_in(), path(), comparator_in(), payload()} |
         {host_in(), path(), comparator_in(), payload(), map()}.
 
-%% A normalized route returned by routes/1 and passed to foldl/2 callbacks.
+-doc "A route as `routes/1` returns it and as the fun of `foldl/2` gets it.".
 -type route_out() ::
         {host_key(), binary() | integer(), comparator(), payload()}.
 
+-doc """
+Why a route was refused in strict mode: the `reason`, the position in the
+tree (`at`), the clashing keys, the two paths, the method and the methods
+the existing route answers.
+""".
 -type conflict() :: #{
                       reason           := atom(),
                       at               := [child_key()],
@@ -103,6 +129,7 @@ Matching is deterministic: at each depth a literal segment is tried first, then 
 %% API
 %%====================================================================
 
+-doc "Create an empty trie with the default options.".
 -spec new() -> trie().
 new() ->
     new(#{}).
@@ -115,7 +142,7 @@ new(Opts) when is_map(Opts) ->
 
 %%--------------------------------------------------------------------
 -doc """
-Insert a route. `Path` is a URL or an HTTP status code, `Comparator` is an HTTP method or \`_'' to match any method.
+Insert a route for every host. `Path` is a URL or an HTTP status code, `Comparator` is an HTTP method or `'_'` to match any method.
 
 Returns `{error, conflict, Conflict}` when the trie is in strict mode and the route clashes with an existing one. In non-strict mode a clash is logged and resolved according to the `on_duplicate` option. The warning names the `app` given in the options of the insert as the owner of the route that came second.
 """.
@@ -124,11 +151,17 @@ Returns `{error, conflict, Conflict}` when the trie is in strict mode and the ro
 insert(Path, Comparator, Payload, Trie) ->
     insert('_', Path, Comparator, Payload, Trie, #{}).
 
+-doc "As `insert/4`, for the routes of one host. `'_'` is every host.".
 -spec insert(host_in(), path(), comparator_in(), payload(), trie()) ->
           {ok, trie()} | {error, conflict, conflict()}.
 insert(HostIn, Path, Comparator, Payload, Trie) ->
     insert(HostIn, Path, Comparator, Payload, Trie, #{}).
 
+-doc """
+As `insert/5`, with options for this insert that go before those of the
+trie: `strict`, `on_duplicate`, and `app`, the application named in the
+warning about a clash.
+""".
 -spec insert(host_in(), path(), comparator_in(), payload(), trie(), map()) ->
           {ok, trie()} | {error, conflict, conflict()}.
 insert(HostIn, Path, ComparatorIn, Payload, Trie = #{options := RootOpts, hosts := Hosts}, Opts) ->
@@ -148,7 +181,7 @@ insert(HostIn, Path, ComparatorIn, Payload, Trie = #{options := RootOpts, hosts 
 -doc """
 Look up a route.
 
-A host-specific tree is consulted when one exists for `Host`, and the \`_'' tree otherwise. `PathInfo` is only returned when the match was made by a `[...]` catch-all and there were trailing segments to report.
+A host-specific tree is consulted when one exists for `Host`, and the `'_'` tree otherwise. `PathInfo` is only returned when the match was made by a `[...]` catch-all and there were trailing segments to report.
 
 `{error, comparator_not_found, AllowedMethods}` means the path matched but the method did not, which is what Nova turns into a 405.
 """.
@@ -187,10 +220,15 @@ find(HostIn, Path, ComparatorIn, Trie) ->
 canonical_segments(Path) when is_binary(Path) ->
     canonicalise(split(Path), []).
 
+-doc "As `member/4` with `'_'` as the method.".
 -spec member(host_in(), path(), trie()) -> boolean().
 member(HostIn, Path, Trie) ->
     member(HostIn, Path, '_', Trie).
 
+-doc """
+Whether `find/4` finds a route for the host, path and method. With `'_'` as
+the method that is a route inserted with `'_'`, not a route for any method.
+""".
 -spec member(host_in(), path(), comparator_in(), trie()) -> boolean().
 member(HostIn, Path, Comparator, Trie) ->
     case find(HostIn, Path, Comparator, Trie) of
@@ -211,10 +249,15 @@ routes(#{hosts := Hosts}) ->
 to_list(Trie) ->
     [render_route(Comparator, Path) || {_Host, Path, Comparator, _Payload} <- routes(Trie)].
 
+-doc "Build a trie with the default options from a list of routes.".
 -spec from_list([route()]) -> {ok, trie()} | {error, conflict, conflict()}.
 from_list(Routes) ->
     from_list(Routes, #{}).
 
+-doc """
+Build a trie from a list of routes, inserted in order. `RootOpts` are the
+options of `new/1`. Stops at the first route that is refused.
+""".
 -spec from_list([route()], map()) -> {ok, trie()} | {error, conflict, conflict()}.
 from_list(Routes, RootOpts) when is_list(Routes), is_map(RootOpts) ->
     insert_routes(Routes, new(RootOpts)).
