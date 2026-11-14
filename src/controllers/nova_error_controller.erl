@@ -8,10 +8,8 @@
         ]).
 
 -ifdef(TEST).
--export([format_arity/1, format_stacktrace/1, preferred_type/1, trim_ows/1]).
+-export([format_arity/1, format_stacktrace/1, response_type/1]).
 -endif.
-
--define(MAX_ACCEPT, 1024).
 
 
 status_code(Req) ->
@@ -75,13 +73,45 @@ html_page(StatusCode, Variables) ->
             {status, StatusCode}
     end.
 
-%% A client that sends no accept header gets JSON. One that sends a header
-%% naming neither JSON nor HTML gets no body.
+%% A client that sends no accept header gets JSON, as does one whose header
+%% cannot be read. One that accepts neither JSON nor HTML gets no body.
 response_type(Req) ->
-    case cowboy_req:header(~"accept", Req) of
+    try cowboy_req:parse_header(~"accept", Req) of
         undefined -> json;
-        Accept -> preferred_type(Accept)
+        Ranges when is_list(Ranges) -> preferred_type(lists:enumerate(Ranges))
+    catch
+        exit:{request_error, {header, ~"accept"}, _Message} -> json
     end.
+
+%% The type the client gives the higher quality wins, and of two it likes
+%% the same the one it names first. JSON wins when one range covers both, as
+%% "*/*" does.
+preferred_type(Ranges) ->
+    case {quality(json, Ranges), quality(html, Ranges)} of
+        {{0, _}, {0, _}} -> none;
+        {{JsonQuality, _}, {HtmlQuality, _}} when JsonQuality > HtmlQuality -> json;
+        {{Quality, JsonAt}, {Quality, HtmlAt}} when JsonAt =< HtmlAt -> json;
+        _ -> html
+    end.
+
+%% The quality of the most specific range that covers the type, and where
+%% in the header that range is (RFC 9110 12.5.1). A quality of 0 excludes
+%% the type.
+quality(Type, Ranges) ->
+    case [{Rank, At, Quality} || {At, {Range, Quality, _Extensions}} <- Ranges, Rank <- rank(Type, Range)] of
+        [] ->
+            {0, 0};
+        Covering ->
+            {_Rank, At, Quality} = lists:min(Covering),
+            {Quality, At}
+    end.
+
+rank(json, {~"application", ~"json", _Parameters}) -> [1];
+rank(json, {~"application", ~"*", _Parameters}) -> [2];
+rank(html, {~"text", ~"html", _Parameters}) -> [1];
+rank(html, {~"text", ~"*", _Parameters}) -> [2];
+rank(_Type, {~"*", ~"*", _Parameters}) -> [3];
+rank(_Type, _Range) -> [].
 
 %% Crash details can carry anything a controller or plugin returned, so they
 %% are only shown when the environment is explicitly set to dev; an unset
@@ -103,37 +133,6 @@ stacktrace(#{class := _Class}) ->
     not_enabled;
 stacktrace(_CrashInfo) ->
     [].
-
-%% Media ranges as browsers and HTTP clients send them, for example
-%% "text/html,application/xhtml+xml;q=0.9" or "application/json; charset=utf-8".
-%% Cowboy joins repeated accept headers, so only the first ?MAX_ACCEPT bytes
-%% are looked at, and every step is linear in them.
-preferred_type(Accept) ->
-    Head = binary:part(Accept, 0, min(byte_size(Accept), ?MAX_ACCEPT)),
-    Types = [media_type(Range) || Range <- binary:split(Head, ~",", [global])],
-    case {lists:member(~"application/json", Types), lists:member(~"text/html", Types)} of
-        {true, _} -> json;
-        {_, true} -> html;
-        _ -> none
-    end.
-
-%% Media types are case-insensitive (RFC 9110 8.3.1).
-media_type(Range) ->
-    [Type | _] = binary:split(Range, ~";"),
-    string:lowercase(trim_ows(Type)).
-
-trim_ows(<<C, Rest/binary>>) when C =:= $\s; C =:= $\t ->
-    trim_ows(Rest);
-trim_ows(Bin) ->
-    trim_trailing_ows(Bin, byte_size(Bin)).
-
-trim_trailing_ows(_Bin, 0) ->
-    <<>>;
-trim_trailing_ows(Bin, Size) ->
-    case binary:at(Bin, Size - 1) of
-        C when C =:= $\s; C =:= $\t -> trim_trailing_ows(Bin, Size - 1);
-        _ -> binary:part(Bin, 0, Size)
-    end.
 
 format_stacktrace(not_enabled) ->
     Key = {?MODULE, stacktrace_hint},

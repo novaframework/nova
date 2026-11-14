@@ -335,15 +335,60 @@ crash_without_a_stacktrace_names_the_setting_in_dev_test_() ->
          ?assertEqual([], Warnings(Crash))
      end}.
 
-accept_media_types_are_case_insensitive_test() ->
-    ?assertEqual(html, nova_error_controller:preferred_type(~" Text/HTML ;q=0.9")).
+%% The pages are negotiated as RFC 9110 12.5.1 has it: the most specific
+%% range that covers a type gives its quality, the type with the higher
+%% quality wins, and of two the client likes the same the one it names first.
+%% JSON wins when one range covers both.
+accept_header_chooses_the_body_test_() ->
+    Chosen = [{undefined, json},
+              {~"*/*", json},
+              {~"text/html", html},
+              {~"application/json", json},
+              {~"application/json; charset=utf-8", json},
+              {~"text/*", html},
+              {~"application/*", json},
+              {~"application/*;q=0.5, text/html", html},
+              {~"text/html;q=0, */*", json},
+              {~"application/json;q=0, */*", html},
+              {~"text/html, application/json", html},
+              {~"application/json, text/html", json},
+              {~"text/html;q=0.5, application/json;q=0.6", json},
+              {~"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", html},
+              {~" Text/HTML ;q=0.9", html},
+              {~"image/png", none},
+              {~"*/*;q=0", none},
+              {~"text/html;q=0", none},
+              {~" , \t", none},
+              {~"text/html;q=abc", json},
+              {~"/", json}],
+    [{iolist_to_binary(io_lib:format("~p", [Accept])),
+      ?_assertEqual(Type, nova_error_controller:response_type(accepting(Accept)))}
+     || {Accept, Type} <- Chosen].
 
-%% Cowboy joins repeated accept headers; parsing must stay linear.
-huge_accept_header_is_cheap_test() ->
-    Accept = binary:copy(~",", 400000),
-    {Micros, none} = timer:tc(fun() -> nova_error_controller:preferred_type(Accept) end),
-    ?assert(Micros < 100000).
+accept_header_chooses_the_body_of_both_pages_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Req = accepting(~"*/*"),
+         {status, 404, NotFound, _} = nova_error_controller:not_found(Req),
+         {status, 500, ServerError, _} = nova_error_controller:server_error(Req),
+         ?assertEqual(~"application/json", maps:get(~"content-type", NotFound)),
+         ?assertEqual(~"application/json", maps:get(~"content-type", ServerError))
+     end}.
 
-media_range_of_only_whitespace_is_empty_test() ->
-    ?assertEqual(<<>>, nova_error_controller:trim_ows(~" \t ")),
-    ?assertEqual(none, nova_error_controller:preferred_type(~" , \t")).
+%% Cowboy joins repeated accept headers, up to some hundred kilobytes, so
+%% reading them must stay linear.
+huge_accept_header_is_cheap_test_() ->
+    [?_test(begin
+                {Micros, Type} = timer:tc(fun() -> nova_error_controller:response_type(accepting(Accept)) end),
+                ?assertEqual(Expected, Type),
+                ?assert(Micros < Limit)
+            end)
+     || {Accept, Expected, Limit} <- [{binary:copy(~",", 400000), none, 100000},
+                                      {binary:copy(~"image/png;q=0.5, ", 25000), none, 1000000},
+                                      {<<(binary:copy(~"image/png;q=0.5, ", 25000))/binary, "text/html">>, html,
+                                       1000000}]].
+
+accepting(undefined) ->
+    nova_test_helper:mock_req(~"GET", ~"/");
+accepting(Accept) ->
+    nova_test_helper:with_header(~"accept", Accept, nova_test_helper:mock_req(~"GET", ~"/")).

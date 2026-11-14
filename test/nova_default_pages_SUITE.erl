@@ -9,7 +9,11 @@
          plugin_crash_is_json_without_an_accept_header/1,
          plugin_crash_is_html_for_a_browser/1,
          crash_is_json_with_error_pages_off/1,
-         crash_has_no_html_page_with_error_pages_off/1
+         crash_has_no_html_page_with_error_pages_off/1,
+         any_type_is_answered_with_json/1,
+         unreadable_accept_header_is_answered_with_json/1,
+         excluded_json_is_answered_with_html/1,
+         neither_json_nor_html_has_no_body/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -24,7 +28,11 @@ all() ->
      plugin_crash_is_json_without_an_accept_header,
      plugin_crash_is_html_for_a_browser,
      crash_is_json_with_error_pages_off,
-     crash_has_no_html_page_with_error_pages_off
+     crash_has_no_html_page_with_error_pages_off,
+     any_type_is_answered_with_json,
+     unreadable_accept_header_is_answered_with_json,
+     excluded_json_is_answered_with_html,
+     neither_json_nor_html_has_no_body
     ].
 
 init_per_suite(Config) ->
@@ -70,6 +78,22 @@ crash_is_json_with_error_pages_off(Config) ->
 crash_has_no_html_page_with_error_pages_off(Config) ->
     ?assertMatch({500, _, <<>>}, get(Config, "/plugin/page", ?BROWSER)),
     ?assertMatch({500, _, <<>>}, get(Config, "/guarded/page", ?BROWSER)).
+
+%% What curl and many HTTP clients send.
+any_type_is_answered_with_json(Config) ->
+    ?assertEqual(#{~"message" => ~"Resource not found"}, json_page(404, get(Config, "/missing", "*/*"))),
+    ?assertEqual(generic_500(), json_page(500, get(Config, "/plugin/page", "*/*"))).
+
+unreadable_accept_header_is_answered_with_json(Config) ->
+    ?assertEqual(#{~"message" => ~"Resource not found"}, json_page(404, get(Config, "/missing", "text/html;q=abc"))).
+
+excluded_json_is_answered_with_html(Config) ->
+    {404, #{~"content-type" := ~"text/html"}, Body} = get(Config, "/missing", "application/json;q=0, */*"),
+    ?assertNotEqual(nomatch, binary:match(Body, ~"404 Not found")).
+
+neither_json_nor_html_has_no_body(Config) ->
+    ?assertMatch({404, _, <<>>}, get(Config, "/missing", "image/png")),
+    ?assertMatch({500, _, <<>>}, get(Config, "/plugin/page", "image/png, */*;q=0")).
 
 get(Config, Path, Accept) ->
     nova_test_listener:response(?config(port, Config), "GET", Path, [{"accept", Accept}]).
