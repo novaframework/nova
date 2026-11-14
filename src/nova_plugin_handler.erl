@@ -58,6 +58,14 @@ run_plugins([{Callback, Options}|Tl], CallbackType, Req, Env) when is_function(C
             nova_telemetry:stop(Span, #{result => plugin_result(Result)}),
             handle_result(Result, Callback, State, Tl, CallbackType, Req, Env)
     catch
+        %% The client's doing, which Cowboy answers with a 4xx when nothing
+        %% catches it. After the controller the response is already out.
+        exit:{request_error, Kind, _Message} when CallbackType =:= pre_request ->
+            Status = nova_handler:request_error_status(Kind),
+            nova_telemetry:stop(Span, #{result => stop}),
+            ?LOG_WARNING(#{msg => ~"Request error in plugin", plugin => plugin_module(Callback),
+                           kind => nova_redact:term(Kind), status_code => Status}),
+            {stop, cowboy_req:reply(Status, Req)};
         Class:Reason0:Stacktrace0 ->
             nova_telemetry:exception(Span, Class, Reason0, Stacktrace0),
             Reason = nova_redact:term(Reason0),

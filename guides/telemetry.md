@@ -94,6 +94,9 @@ Plugins and the security callback are outside it.
 - A controller that raises `{Status, Reason}` with an integer `Status`, as a
   throw, error or exit, is asking Nova for a status page. That ends the span
   with `stop` and `status => Status`, not with `exception`.
+- A request error that `cowboy_req` exits with in a controller, such as a
+  query string it cannot parse, ends the span with `stop` and the `400`,
+  `408` or `413` it is answered with.
 - `status_page` is `true` for the span of an error page Nova renders after a
   controller failed, and `false` otherwise. Those spans have `app => nova`.
   - A crash emits `exception` for the controller, followed by a `stop` for
@@ -142,6 +145,9 @@ A span around each `pre_request` and `post_request` plugin call.
   stop, or end in a `500` page. The `nova_plugin` documentation has the
   contract.
 - A crashing plugin still renders a `500` page after the `exception` event.
+- A `pre_request` plugin in which `cowboy_req` exits with a request error
+  emits `stop` with `result => stop`, not `exception`: the request is
+  answered with a `400`, `408` or `413`.
 
 ## Websocket
 

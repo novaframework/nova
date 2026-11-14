@@ -95,6 +95,10 @@ The security callback of such a route cannot read what a listed plugin produces:
 A websocket route runs its `pre_request` plugins on the upgrade request. For the time after the upgrade it has the phases `pre_ws_request` and `post_ws_request`, which run around every callback of the controller, and `post_ws_connection`, which runs once when the connection goes away: after `terminate/3` if the controller exports it, and also when it does not or when it crashes. `post_ws_connection` does not run for an upgrade that was refused. See the `nova_websocket` documentation.
 
 
+## Request errors
+
+`cowboy_req` exits with `{request_error, Reason, Message}` when the client sent something it cannot parse, or did not send the body in time: `parse_qs/1`, `match_qs/2`, `parse_header/2`, `parse_cookies/1`, `read_urlencoded_body/2` and the multipart readers do. Nova does not treat that as a crash. In a `pre_request` plugin the request is answered with a bare `400`, `408` when the body timed out or `413` when it was too large, as Cowboy would answer it. In a controller the same status goes through the status-code route for it, if the application has one. Both are logged as a warning.
+
 ## Reading the matched route
 
 A plugin can read the template of the route that matched from `Req` under

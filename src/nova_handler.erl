@@ -5,7 +5,8 @@
 %% Callbacks
 -export([
          execute/2,
-         terminate/3
+         terminate/3,
+         request_error_status/1
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -34,6 +35,8 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
         {Mod, Req2, State, Opts} ->
             Mod:upgrade(Req2, Env, Handler, State, Opts)
     catch
+        exit:{request_error, Kind, _Message} ->
+            render_request_error(Kind, Req, maps:remove(cowboy_handler, Env));
         Class:Reason0:Stacktrace when UseStacktrace == true ->
             Reason = nova_redact:term(Reason0),
             FormattedStacktrace = nova:format_stacktrace(Stacktrace),
@@ -54,6 +57,12 @@ execute(Req, Env = #{callback := _Callback}) ->
 terminate(Reason, Req, Callback) ->
     {module, Module} = erlang:fun_info(Callback, module),
     call_terminate(Module, Reason, Req, #{}).
+
+-doc false.
+-spec request_error_status(Kind :: term()) -> 400 | 408 | 413.
+request_error_status(timeout)           -> 408;
+request_error_status(payload_too_large) -> 413;
+request_error_status(_Kind)             -> 400.
 
 call_terminate(Module, Reason, Req, State) ->
     case function_exported(Module, terminate, 3) of
@@ -76,6 +85,8 @@ execute_controller(Req, Env = #{callback := Callback}, StatusPage) ->
         HandlerReturn ->
             HandlerReturn
     catch
+        exit:{request_error, Kind, _Message} when StatusPage =:= false ->
+            render_request_error(Kind, Req, Env);
         Class:{Status, Reason} when is_integer(Status), StatusPage =:= false ->
             %% This makes it so that we don't need to fetch the stacktrace
             ?LOG_ERROR(#{msg => <<"Controller threw an exception">>,
@@ -102,6 +113,14 @@ execute_controller(Req, Env = #{callback := Callback}, StatusPage) ->
             Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 500}),
             render_crash(Req#{crash_info => Payload}, Env, StatusPage)
     end.
+
+%% cowboy_req exits with request_error when the client sent something it
+%% cannot parse or did not send the body in time. Cowboy answers that with a
+%% 4xx when nothing catches it, so it is not a crash here either.
+render_request_error(Kind, Req, Env) ->
+    Status = request_error_status(Kind),
+    ?LOG_WARNING(#{msg => ~"Request error in controller", kind => nova_redact:term(Kind), status_code => Status}),
+    render_response(Req, Env, Status).
 
 crash_report(false) ->
     #{msg => <<"Controller crashed">>};
@@ -141,6 +160,9 @@ run_controller(Callback, Req, Env, StatusPage) ->
         nova_telemetry:stop(Span, #{status => maps:get(resp_status_code, Req0, 200)}),
         HandlerReturn
     catch
+        exit:{request_error, Kind, _} = Reason:Stacktrace when not StatusPage ->
+            nova_telemetry:stop(Span, #{status => request_error_status(Kind)}),
+            erlang:raise(exit, Reason, Stacktrace);
         Class:{Status, _} = Reason:Stacktrace when is_integer(Status), not StatusPage ->
             nova_telemetry:stop(Span, #{status => Status}),
             erlang:raise(Class, Reason, Stacktrace);
