@@ -5,6 +5,7 @@
 
 -spec start() -> ok.
 start() ->
+    _ = logger:remove_handler(?MODULE),
     logger:add_handler(?MODULE, ?MODULE, #{level => all, config => #{collector => self()}}).
 
 %% The events logged since start/0, oldest first.

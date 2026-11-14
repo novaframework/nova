@@ -17,8 +17,9 @@ declares `nova_apps` of its own has those registered too.
 Your own application's routes are registered before those of the applications
 it includes. Where both declare the same path and method, or a page for the
 same status code, yours is served and the included application's is logged as
-a conflicting route and ignored. With `use_strict_routing` the clash stops the
-application from starting instead. Status code routes are not prefixed, so one
+a conflicting route and ignored. The warning names the application whose route
+was ignored, the path or status code, and the method. With
+`use_strict_routing` the clash stops the application from starting instead. Status code routes are not prefixed, so one
 declared by an included application applies to the whole listener when yours
 declares none for that code. Earlier releases registered included applications
 first, which let them replace a route of yours together with its security.

@@ -38,13 +38,10 @@ missing_static_path_is_named_test_() ->
 missing_static_path_is_logged_as_an_error_test_() ->
     {setup, fun setup/0, fun cleanup/1, fun() ->
         ok = nova_test_log:start(),
-        Events = try
-                     catch nova_router:add_routes(nova, [#{routes => [{"/assets", "no/such/directory"}]}]),
-                     nova_test_log:stop()
-                 after
-                     logger:remove_handler(nova_test_log)
-                 end,
-        ?assertMatch([error], [Level || #{level := Level, msg := {report, #{local_path := "no/such/directory"}}} <- Events])
+        ?assertThrow({error, {static_path_not_found, "no/such/directory"}},
+                     nova_router:add_routes(nova, [#{routes => [{"/assets", "no/such/directory"}]}])),
+        ?assertMatch([error], [Level || #{level := Level, msg := {report, #{local_path := "no/such/directory"}}}
+                                            <- nova_test_log:stop()])
     end}.
 
 static_directory_is_resolved_when_the_route_is_compiled_test_() ->

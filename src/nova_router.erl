@@ -639,7 +639,8 @@ insert_methods([Method|Tl], Host, Path, Value, Tree, Options, ToComparator) ->
     insert_methods(Tl, Host, Path, Value, Tree0, Options, ToComparator).
 
 insert(Host, Path, Combinator, Value, Tree, Options) ->
-    try nova_routing_trie:insert(Host, Path, Combinator, Value, Tree, Options) of
+    App = route_app({Host, Path, Combinator, Value}),
+    try nova_routing_trie:insert(Host, Path, Combinator, Value, Tree, Options#{app => App}) of
         {ok, Tree0} ->
             Tree0;
         {error, conflict, Conflict} ->
