@@ -108,6 +108,8 @@ Example:
 
 A directory route only serves what is inside that directory. A request whose trailing segments are empty, `.` or `..`, or contain `/`, `\` or a NUL byte, is answered with `404`, whatever the router in front of it let through. Symbolic links are resolved first: a link that points inside the directory is served, one that points out of it is a `404`. Set `follow_external_symlinks => true` in the options of the route to serve links that leave the directory.
 
+A `Range` request for one byte range is answered with `206` and that part of the file, a suffix range such as `bytes=-500` included. A range that cannot be parsed or lies past the end of the file gets `416`. A range unit other than `bytes`, or a request for several ranges, gets the whole file with `200`. The local path of a static route may be relative to the working directory of the node.
+
 ## How to create routes
 
 A route consists of three different components:

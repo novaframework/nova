@@ -9,7 +9,15 @@
 
 -define(MAX_SYMLINKS, 40).
 
-get_file(#{extra_state := #{static := File, options := Options}, headers := Headers}) ->
+get_file(#{headers := #{<<"range">> := Range} = Headers} = Req) ->
+    case ignored_range(Range) of
+        true -> serve_file(Req#{headers => maps:remove(<<"range">>, Headers)});
+        false -> serve_file(Req)
+    end;
+get_file(Req) ->
+    serve_file(Req).
+
+serve_file(#{extra_state := #{static := File, options := Options}, headers := Headers}) ->
     Filepath = get_filepath(File),
     MimeType =
         case maps:get(mimetype, Options, undefined) of
@@ -21,7 +29,7 @@ get_file(#{extra_state := #{static := File, options := Options}, headers := Head
         end,
 
     %% Fetch file size
-    #{size := Size} = file_info("", Filepath),
+    #{size := Size} = file_info(filename:dirname(Filepath), filename:basename(Filepath)),
 
     %% Check if Range header is present
     case maps:get(<<"range">>, Headers, undefined) of
@@ -45,7 +53,7 @@ get_file(#{extra_state := #{static := File, options := Options}, headers := Head
             end
     end;
 
-get_file(_Req) ->
+serve_file(_Req) ->
     {status, 404}.
 
 get_dir(#{extra_state := #{pathinfo := Pathinfo, static := Dir, options := Options}} = Req) ->
@@ -168,26 +176,51 @@ canonical_path([Segment | Rest], Resolved, true, LinksLeft) ->
             canonical_path(Rest, [Segment | Resolved], true, LinksLeft)
     end.
 
+%% RFC 9110 section 14.2: a range unit other than bytes must be ignored, and
+%% a set of several ranges may be. Either way the whole file is sent.
+ignored_range(<<"bytes=", RangeSpec/binary>>) ->
+    binary:match(RangeSpec, <<",">>) =/= nomatch;
+ignored_range(_OtherUnit) ->
+    true.
+
 parse_range(RangeSpec, FileSize) ->
-    %% Parse the "bytes=" range header value
     case binary:split(RangeSpec, <<"-">>, [global]) of
-        [StartBin, EndBin] when EndBin =/= <<>> ->
-            case {binary_to_integer(StartBin), binary_to_integer(EndBin)} of
-                {Start, End} when Start >= 0, End >= Start, End < FileSize ->
-                    {ok, {Start, End}};
+        [<<>>, SuffixLength] ->
+            case digits(SuffixLength) of
+                {ok, Length} when Length > 0 ->
+                    {ok, {max(FileSize - Length, 0), FileSize - 1}};
                 _ ->
                     error
             end;
-        [StartBin, <<>>] when StartBin =/= <<>> ->
-            case binary_to_integer(StartBin) of
-                Start when Start >= 0, Start < FileSize ->
+        [First, <<>>] ->
+            case digits(First) of
+                {ok, Start} ->
                     {ok, {Start, FileSize - 1}};
+                error ->
+                    error
+            end;
+        [First, Last] ->
+            case {digits(First), digits(Last)} of
+                {{ok, Start}, {ok, End}} when Start =< End ->
+                    {ok, {Start, min(End, FileSize - 1)}};
                 _ ->
                     error
             end;
         _ ->
             error
     end.
+
+digits(<<>>) ->
+    error;
+digits(Binary) ->
+    digits(Binary, 0).
+
+digits(<<Digit, Rest/binary>>, Number) when Digit >= $0, Digit =< $9 ->
+    digits(Rest, Number * 10 + Digit - $0);
+digits(<<>>, Number) ->
+    {ok, Number};
+digits(_NotADigit, _Number) ->
+    error.
 
 get_index_file([], _) -> false;
 get_index_file([File|Tl], IndexFiles) ->

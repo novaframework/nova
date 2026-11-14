@@ -3,7 +3,8 @@
 %%% listener untouched.
 -module(nova_test_listener).
 
--export([start/1, try_start/1, stop/0, get/2, get/3, request/4, websocket_handshake/2, free_port/0]).
+-export([start/1, try_start/1, stop/0, get/2, get/3, request/4, response/4, websocket_handshake/2,
+         free_port/0]).
 
 -spec start(map()) -> inet:port_number().
 start(Options) ->
@@ -55,6 +56,13 @@ get(Port, Path, Headers) ->
 
 -spec request(inet:port_number(), iodata(), iodata(), [{iodata(), iodata()}]) -> {100..599, binary()}.
 request(Port, Method, Path, Headers) ->
+    {Status, _RespHeaders, Body} = response(Port, Method, Path, Headers),
+    {Status, Body}.
+
+%% As request/4, with the response headers under lowercase names.
+-spec response(inet:port_number(), iodata(), iodata(), [{iodata(), iodata()}]) ->
+          {100..599, #{binary() => binary()}, binary()}.
+response(Port, Method, Path, Headers) ->
     Response = exchange(Port, [Method, " ", Path, " HTTP/1.1\r\n",
                                "host: localhost\r\n",
                                "connection: close\r\n",
@@ -63,11 +71,14 @@ request(Port, Method, Path, Headers) ->
                                "\r\n"],
                         until_closed),
     <<"HTTP/1.1 ", Status:3/binary, _/binary>> = Response,
-    Body = case binary:split(Response, ~"\r\n\r\n") of
-               [_Head, Rest] -> Rest;
-               [_Head] -> <<>>
-           end,
-    {binary_to_integer(Status), Body}.
+    {Head, Body} = case binary:split(Response, ~"\r\n\r\n") of
+                       [Head0, Rest] -> {Head0, Rest};
+                       [Head0] -> {Head0, <<>>}
+                   end,
+    [_StatusLine | Lines] = binary:split(Head, ~"\r\n", [global]),
+    RespHeaders = #{string:lowercase(Name) => string:trim(Value)
+                    || Line <- Lines, [Name, Value] <- [binary:split(Line, ~":")]},
+    {binary_to_integer(Status), RespHeaders, Body}.
 
 -spec websocket_handshake(inet:port_number(), iodata()) -> binary().
 websocket_handshake(Port, Path) ->
