@@ -30,7 +30,7 @@ not_found(Req) ->
             Variables = #{status => "Could not find the page you were looking for",
                           title => "404 Not found",
                           message => "We could not find the page you were looking for"},
-            {ok, Body} = nova_error_dtl:render(Variables),
+            {ok, Body} = nova_basic_handler:render_dtl(nova_error_dtl, Variables, []),
             {status, 404, #{<<"content-type">> => <<"text/html">>}, Body};
         none ->
             {status, 404, #{<<"content-type">> => <<"text/html">>}, <<>>}
@@ -70,7 +70,7 @@ render(StatusCode, Variables, Req) ->
             Json = nova_json:encode(Variables),
             {status, StatusCode, #{~"content-type" => ~"application/json"}, Json};
         html ->
-            {ok, Body} = nova_error_dtl:render(Variables),
+            {ok, Body} = nova_basic_handler:render_dtl(nova_error_dtl, Variables, []),
             {status, StatusCode, #{~"content-type" => ~"text/html"}, Body};
         none ->
             {status, StatusCode, #{~"content-type" => ~"text/html"}, <<>>}

@@ -10,7 +10,8 @@
          handle_websocket/3,
          handle_ws/2,
          location/1,
-         loggable_location/1
+         loggable_location/1,
+         render_dtl/3
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -371,6 +372,8 @@ handle_view(View, Variables, Options, Req) ->
     Req2 = Req1#{resp_status_code => StatusCode},
     {ok, Req2}.
 
+%% The one place that calls a compiled template. The module is made by
+%% erlydtl when the application is built, so it is only known by name.
 render_dtl(View, Variables, Options) ->
     case code:is_loaded(View) of
         false ->
