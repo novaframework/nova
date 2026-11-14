@@ -3,7 +3,7 @@
 %%% listener untouched.
 -module(nova_test_listener).
 
--export([start/1, try_start/1, configure/1, stop/0, get/2, get/3, request/4, response/4,
+-export([start/1, try_start/1, configure/1, stop/0, get/2, get/3, request/4, response/4, response/5,
          websocket_handshake/2, websocket_handshake/3, websocket_texts/4, free_port/0]).
 
 -spec start(map()) -> inet:port_number().
@@ -70,12 +70,19 @@ request(Port, Method, Path, Headers) ->
 -spec response(inet:port_number(), iodata(), iodata(), [{iodata(), iodata()}]) ->
           {100..599, #{binary() => binary()}, binary()}.
 response(Port, Method, Path, Headers) ->
+    response(Port, Method, Path, Headers, <<>>).
+
+%% As response/4, with a request body.
+-spec response(inet:port_number(), iodata(), iodata(), [{iodata(), iodata()}], iodata()) ->
+          {100..599, #{binary() => binary()}, binary()}.
+response(Port, Method, Path, Headers, RequestBody) ->
     Response = exchange(Port, [Method, " ", Path, " HTTP/1.1\r\n",
                                "host: localhost\r\n",
                                "connection: close\r\n",
-                               "content-length: 0\r\n",
+                               "content-length: ", integer_to_list(iolist_size(RequestBody)), "\r\n",
                                [[Name, ": ", Value, "\r\n"] || {Name, Value} <- Headers],
-                               "\r\n"],
+                               "\r\n",
+                               RequestBody],
                         until_closed),
     <<"HTTP/1.1 ", Status:3/binary, _/binary>> = Response,
     {Head, Body} = case binary:split(Response, ~"\r\n\r\n") of
