@@ -234,7 +234,7 @@ cookie_opts(Req) ->
     cookie_opts_for(maps:get(scheme, Req, ~"http")).
 
 cookie_opts_for(Scheme) ->
-    Secure = application:get_env(nova, environment) =/= {ok, dev} orelse Scheme =:= ~"https",
+    Secure = not nova:is_dev_environment() orelse Scheme =:= ~"https",
     Defaults = #{path => ~"/", http_only => true, same_site => lax, secure => Secure},
     Defaults0 = case max_age() of
                     infinity -> Defaults;

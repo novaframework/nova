@@ -14,6 +14,7 @@
 %%====================================================================
 
 start(_StartType, _StartArgs) ->
+    warn_about_unset_environment(),
     nova_sup:start_link().
 
 prep_stop(State) ->
@@ -26,6 +27,18 @@ stop(_State) ->
 %%====================================================================
 %% Internal functions
 %%====================================================================
+
+%% An unset environment is dev to nova:get_environment/0, so a release that
+%% left the key out serves what its routers return for dev.
+warn_about_unset_environment() ->
+    case application:get_env(nova, environment) of
+        undefined ->
+            ?LOG_WARNING(#{msg => ~"The nova environment is not set and is read as dev: every router is asked for routes(dev), so routes meant for development are served, and watcher output is printed. Set {nova, [{environment, prod}]} in a release",
+                           environment => undefined,
+                           read_as => dev});
+        {ok, _Environment} ->
+            ok
+    end.
 
 graceful_shutdown() ->
     Delay = application:get_env(nova, shutdown_delay, 0),

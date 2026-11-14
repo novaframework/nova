@@ -9,6 +9,7 @@
          get_main_app/0,
          get_apps/0,
          get_environment/0,
+         is_dev_environment/0,
          get_env/2,
          set_env/2,
          use_stacktrace/1,
@@ -37,6 +38,12 @@ get_apps() ->
 -spec get_environment() -> any().
 get_environment() ->
     application:get_env(nova, environment, dev).
+
+%%--------------------------------------------------------------------
+-doc "Whether `environment` is set to `dev`. An unset `environment` is not `dev` here, although `get_environment/0` returns `dev` for it. Nova asks this wherever `dev` relaxes a security default: the `Secure` flag of the session cookie and the crash details on error pages.".
+-spec is_dev_environment() -> boolean().
+is_dev_environment() ->
+    application:get_env(nova, environment) =:= {ok, dev}.
 
 %%--------------------------------------------------------------------
 -doc "Works as the regular application:get_env/3 but instead of giving a specific application we target the application that started nova.".

@@ -7,7 +7,9 @@
          port_in_use_fails_the_boot/1,
          listener_starts_after_the_processes_it_needs/1,
          pubsub_scope_is_restarted/1,
-         pubsub_scope_started_elsewhere_is_left_alone/1
+         pubsub_scope_started_elsewhere_is_left_alone/1,
+         unset_environment_is_warned_about_once/1,
+         set_environment_is_not_warned_about/1
         ]).
 
 -include_lib("stdlib/include/assert.hrl").
@@ -17,7 +19,9 @@ all() ->
      port_in_use_fails_the_boot,
      listener_starts_after_the_processes_it_needs,
      pubsub_scope_is_restarted,
-     pubsub_scope_started_elsewhere_is_left_alone
+     pubsub_scope_started_elsewhere_is_left_alone,
+     unset_environment_is_warned_about_once,
+     set_environment_is_not_warned_about
     ].
 
 end_per_testcase(_Case, _Config) ->
@@ -62,6 +66,26 @@ pubsub_scope_started_elsewhere_is_left_alone(_Config) ->
     after
         exit(Scope, kill)
     end.
+
+%% An unset environment is read as dev where routes are compiled, which a
+%% release that forgot the key should hear about.
+unset_environment_is_warned_about_once(_Config) ->
+    ok = nova_test_listener:configure(#{}),
+    application:unset_env(nova, environment),
+    {{ok, _Started}, Events} = nova_test_log:collect(fun() -> application:ensure_all_started(nova_test_app) end),
+    ?assertMatch([#{environment := undefined, read_as := dev}], environment_warnings(Events)).
+
+set_environment_is_not_warned_about(_Config) ->
+    [begin
+         ok = nova_test_listener:configure(#{}),
+         application:set_env(nova, environment, Environment),
+         {{ok, _Started}, Events} = nova_test_log:collect(fun() -> application:ensure_all_started(nova_test_app) end),
+         ?assertEqual([], environment_warnings(Events)),
+         ok = nova_test_listener:stop()
+     end || Environment <- [dev, prod]].
+
+environment_warnings(Events) ->
+    [Report || {warning, {report, #{environment := _} = Report}} <- Events].
 
 pubsub_scope() ->
     {nova_pubsub_scope, Pid, worker, [pg]} = lists:keyfind(nova_pubsub_scope, 1, supervisor:which_children(nova_sup)),

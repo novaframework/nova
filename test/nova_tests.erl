@@ -15,6 +15,7 @@ nova_test_() ->
      [
       fun get_main_app_returns_nova/0,
       fun get_environment_returns_dev/0,
+      fun is_dev_environment_needs_dev_to_be_set/0,
       fun get_env_returns_value/0,
       fun get_env_returns_default_when_missing/0,
       fun set_env_sets_value/0,
@@ -31,6 +32,23 @@ get_main_app_returns_nova() ->
 
 get_environment_returns_dev() ->
     ?assertEqual(dev, nova:get_environment()).
+
+is_dev_environment_needs_dev_to_be_set() ->
+    Before = application:get_env(nova, environment),
+    try
+        application:unset_env(nova, environment),
+        ?assertEqual(dev, nova:get_environment()),
+        ?assertNot(nova:is_dev_environment()),
+        application:set_env(nova, environment, prod),
+        ?assertNot(nova:is_dev_environment()),
+        application:set_env(nova, environment, dev),
+        ?assert(nova:is_dev_environment())
+    after
+        case Before of
+            {ok, Environment} -> application:set_env(nova, environment, Environment);
+            undefined -> application:unset_env(nova, environment)
+        end
+    end.
 
 get_env_returns_value() ->
     application:set_env(nova, test_param, <<"hello">>),

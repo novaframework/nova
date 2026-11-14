@@ -82,7 +82,7 @@ debug_details(Variables, ExtraMsg, Stacktrace) ->
     end.
 
 show_details() ->
-    application:get_env(nova, environment) =:= {ok, dev}.
+    nova:is_dev_environment().
 
 %% Media ranges as browsers and HTTP clients send them, for example
 %% "text/html,application/xhtml+xml;q=0.9" or "application/json; charset=utf-8".
