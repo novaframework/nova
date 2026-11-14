@@ -3,7 +3,8 @@
 -behaviour(cowboy_middleware).
 
 -export([
-         execute/2
+         execute/2,
+         after_security/2
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -18,6 +19,18 @@ execute(Req = #{plugins := Plugins}, Env) ->
     run_plugins(PrePlugins, pre_request, Req, Env);
 execute(Req, Env) ->
     %% The router could not find any match for us
+    {ok, Req, Env}.
+
+%% The pre_request plugins a route lists under plugins_after_security.
+%% nova_security_handler calls this once the request is let through.
+-spec after_security(Req, Env) -> {ok, Req, Env} | {stop, Req}
+              when Req :: cowboy_req:req(), Env :: cowboy_middleware:env().
+after_security(Req = #{plugins := Plugins}, Env) ->
+    case proplists:get_value(after_security, Plugins, []) of
+        [] -> {ok, Req, Env};
+        AfterSecurity -> run_plugins(AfterSecurity, pre_request, Req, Env)
+    end;
+after_security(Req, Env) ->
     {ok, Req, Env}.
 
 
@@ -136,10 +149,16 @@ loggable_reply(Reply) ->
 
 %% The status page runs through nova_handler and then the post_request phase.
 %% Marking the pre_request phase done keeps the pre plugins from running twice.
-%% The default 500 page needs crash_info.
+%% The default 500 page needs crash_info. The plugins waiting for the
+%% security callback are dropped: the request they were to prepare is over.
 render_500(Req, Env, CrashInfo) ->
     {ok, Req0, Env0} = nova_router:render_status_page('_', 500, #{}, Req#{crash_info => CrashInfo}, Env),
-    {ok, Req0, Env0#{plugin_state => pre_request}}.
+    {ok, without_after_security(Req0), Env0#{plugin_state => pre_request}}.
+
+without_after_security(Req = #{plugins := Plugins}) ->
+    Req#{plugins => proplists:delete(after_security, Plugins)};
+without_after_security(Req) ->
+    Req.
 
 %% Once per plugin module, so a plugin returning break on every request does
 %% not flood the log.

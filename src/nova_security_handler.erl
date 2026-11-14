@@ -11,7 +11,7 @@
 -include("../include/nova.hrl").
 
 execute(Req, Env = #{secure := false}) ->
-    {ok, Req, Env};
+    nova_plugin_handler:after_security(Req, Env);
 execute(Req = #{host := Host}, Env = #{secure := Callback}) ->
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
     try Callback(Req) of
@@ -51,12 +51,13 @@ handle_response({true, AuthData}, Req, Env) ->
     case maps:get(cowboy_handler, Env, undefined) of
         nova_ws_handler ->
             Args = maps:get(arguments, Env, #{}),
-            {ok, Req, Env#{arguments => Args#{controller_data => #{auth_data => AuthData}}}};
+            nova_plugin_handler:after_security(
+              Req, Env#{arguments => Args#{controller_data => #{auth_data => AuthData}}});
         _ ->
-            {ok, Req#{auth_data => AuthData}, Env}
+            nova_plugin_handler:after_security(Req#{auth_data => AuthData}, Env)
     end;
 handle_response(true, Req, Env) ->
-    {ok, Req, Env};
+    nova_plugin_handler:after_security(Req, Env);
 handle_response({false, Headers}, Req, Env) ->
     handle_response({false, 401, Headers, false}, Req, Env);
 handle_response({false, StatusCode, Headers}, Req, Env) ->

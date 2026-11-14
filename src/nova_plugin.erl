@@ -21,6 +21,8 @@ A plugin returns one of:
 
 When a pre_request plugin stops the request, or the security function refuses it, the controller and the post_request plugins do not run.
 
+A pre_request plugin runs before the route's security function, unless its module is listed under `plugins_after_security` in the route group or the `nova` environment. A listed plugin runs once the security function has let the request through, which keeps a body-reading plugin away from requests that are refused.
+
 The state a plugin returns is kept per plugin module and shared by every request. Nova writes it back only when it changed, and concurrent requests overwrite each other's writes (the last writer wins). Keep per-request data in `Req`, and use `ets` or `counters` for anything shared that has to add up, such as counters.
 
 These callbacks run for HTTP requests. Websocket handlers run their plugins through `nova_ws_handler`, which has its own contract; see `nova_websocket`.

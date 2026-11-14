@@ -69,6 +69,29 @@ Once a `pre_request` plugin stops the request or the security function refuses i
 
 The state a plugin returns is stored per plugin module, not per request, and is shared by every request. Nova only writes it when it changed, and concurrent requests overwrite each other's writes: the last writer wins. Keep per-request data in `Req`, and keep shared data that has to add up (counters, rate-limit buckets) in `ets` or `counters`.
 
+## Running a plugin after the security callback
+
+Every `pre_request` plugin runs before the route's security callback. A plugin that reads the request body, such as `nova_request_plugin` or `nova_multipart_plugin`, therefore reads, decodes and (for uploads) spools what an unauthenticated client sent. List the plugin modules that should wait for the security callback under `plugins_after_security`, in the route group:
+
+```erlang
+#{prefix => "/files",
+  security => fun my_auth:check/1,
+  plugins => [{pre_request, nova_cors_plugin, #{allow_origins => [<<"https://app.example.com">>]}},
+              {pre_request, nova_multipart_plugin, #{handler => {nova_multipart_file_handler, #{dir => <<"/var/uploads">>}}}}],
+  plugins_after_security => [nova_multipart_plugin],
+  routes => [{"/upload", fun upload_controller:upload/1, #{methods => [post]}}]}
+```
+
+or for every route group that does not set the key, in `sys.config`:
+
+```erlang
+{nova, [{plugins_after_security, [nova_request_plugin, nova_multipart_plugin]}]}
+```
+
+The default is `[]`, which is the order Nova has always had. A listed plugin keeps its options and its place among the other listed plugins, and runs once the security callback has let the request through. It does not run for a request the callback refuses, nor after an earlier plugin failed. Plugins that are not listed still run first, so CORS preflights are still answered before the security callback.
+
+The security callback of such a route cannot read what a listed plugin produces: `json`, `params`, `parsed_qs` and `files` are not in `Req` yet. A callback that needs the body, for instance to check a signature over it, has to keep the body-reading plugin out of the list. A plugin that depends on a listed one, such as `nova_csrf_plugin` reading the token from a multipart form, has to be listed too, after it.
+
 A websocket route runs its `pre_request` plugins on the upgrade request. The plugin phases `nova_ws_handler` has for the time after the upgrade cannot be used yet. See the `nova_websocket` documentation.
 
 
@@ -341,6 +364,10 @@ count. With the default part limits a request spools at most 32 files and
 64 MB, so the defaults leave room for at least 32 uploads at once; raise them
 together with `max_part_size` and `max_total_size` when single uploads are
 larger than the bound.
+
+By default the upload is read before the route's security callback runs. See
+[Running a plugin after the security callback](#running-a-plugin-after-the-security-callback)
+to read it only for requests that were let through.
 
 To read the parts yourself, leave `nova_multipart_plugin` off the route and use
 [cowboy_req:read_part/1](https://ninenines.eu/docs/en/cowboy/2.13/manual/cowboy_req.read_part/)

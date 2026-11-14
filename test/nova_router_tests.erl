@@ -303,17 +303,17 @@ plugins_empty_test_() ->
     end}.
 
 %%====================================================================
-%% normalize_plugins/1
+%% normalize_plugins/2
 %%====================================================================
 
 normalize_plugins_empty_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        ?assertEqual([], nova_router:normalize_plugins([]))
+        ?assertEqual([], nova_router:normalize_plugins([], []))
     end}.
 
 normalize_plugins_single_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        Result = nova_router:normalize_plugins([{pre_request, nova_request_plugin, #{}}]),
+        Result = nova_router:normalize_plugins([{pre_request, nova_request_plugin, #{}}], []),
         ?assertMatch([{pre_request, [{_, #{}}]}], Result),
         %% Verify the plugin was added to the global store
         Plugins = persistent_term:get(nova_plugins),
@@ -325,7 +325,7 @@ normalize_plugins_multiple_same_type_test_() ->
         Result = nova_router:normalize_plugins([
             {pre_request, nova_request_plugin, #{}},
             {pre_request, nova_cors_plugin, #{}}
-        ]),
+        ], []),
         ?assertMatch([{pre_request, [_, _]}], Result)
     end}.
 
@@ -334,10 +334,34 @@ normalize_plugins_different_types_test_() ->
         Result = nova_router:normalize_plugins([
             {pre_request, nova_request_plugin, #{}},
             {post_request, nova_cors_plugin, #{}}
-        ]),
+        ], []),
         ?assertEqual(2, length(Result)),
         ?assertMatch({pre_request, [_]}, lists:keyfind(pre_request, 1, Result)),
         ?assertMatch({post_request, [_]}, lists:keyfind(post_request, 1, Result))
+    end}.
+
+normalize_plugins_after_security_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Result = nova_router:normalize_plugins([
+            {pre_request, nova_cors_plugin, #{}},
+            {pre_request, nova_request_plugin, #{}},
+            {post_request, nova_request_plugin, #{}}
+        ], [nova_request_plugin]),
+        ?assertEqual({pre_request, [{fun nova_cors_plugin:pre_request/4, #{}}]},
+                     lists:keyfind(pre_request, 1, Result)),
+        ?assertEqual({after_security, [{fun nova_request_plugin:pre_request/4, #{}}]},
+                     lists:keyfind(after_security, 1, Result)),
+        ?assertEqual({post_request, [{fun nova_request_plugin:post_request/4, #{}}]},
+                     lists:keyfind(post_request, 1, Result))
+    end}.
+
+plugins_after_security_must_be_modules_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        ?assertEqual([nova_request_plugin],
+                     nova_router:plugins_after_security(#{plugins_after_security => [nova_request_plugin]}, undefined)),
+        ?assertEqual([], nova_router:plugins_after_security(#{}, undefined)),
+        ?assertThrow({error, {invalid_plugins_after_security, true}},
+                     nova_router:plugins_after_security(#{plugins_after_security => true}, undefined))
     end}.
 
 %%====================================================================

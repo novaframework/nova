@@ -420,7 +420,8 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
 
     Secure = resolve_secure(Options, RouteInfo, RouterFile),
 
-    Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins),
+    AfterSecurity = plugins_after_security(RouteInfo, RouterFile),
+    Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins, AfterSecurity),
                                 extra_state = maps:get(extra_state, RouteInfo, #{})},
 
     Prefix = concat_strings(maps:get(prefix, Options, ""),
@@ -784,15 +785,40 @@ dedupe_plugins([Plugin|Tl], Seen, Acc) ->
 plugin_key({Type, PluginName, _Options}) -> {Type, PluginName};
 plugin_key(Plugin)                       -> Plugin.
 
-normalize_plugins(Plugins) ->
-    NormalizedPlugins = normalize_plugins(Plugins, []),
-    [{Type, lists:reverse(TypePlugins)} || {Type, TypePlugins} <- NormalizedPlugins].
+normalize_plugins(Plugins, AfterSecurity) ->
+    NormalizedPlugins = normalize_plugins(Plugins, AfterSecurity, []),
+    [{Phase, lists:reverse(PhasePlugins)} || {Phase, PhasePlugins} <- NormalizedPlugins].
 
-normalize_plugins([], Ack) -> Ack;
-normalize_plugins([{Type, PluginName, Options}|Tl], Ack) ->
-    ExistingPlugins = proplists:get_value(Type, Ack, []),
+normalize_plugins([], _AfterSecurity, Ack) -> Ack;
+normalize_plugins([{Type, PluginName, Options}|Tl], AfterSecurity, Ack) ->
+    Phase = plugin_phase(Type, PluginName, AfterSecurity),
+    ExistingPlugins = proplists:get_value(Phase, Ack, []),
     add_plugin(PluginName),
-    normalize_plugins(Tl, [{Type, [{fun PluginName:Type/4, Options}|ExistingPlugins]}|proplists:delete(Type, Ack)]).
+    normalize_plugins(Tl, AfterSecurity,
+                      [{Phase, [{fun PluginName:Type/4, Options}|ExistingPlugins]}|proplists:delete(Phase, Ack)]).
+
+%% A pre_request plugin listed in plugins_after_security keeps its callback
+%% and its place among the listed ones, and runs once the security callback
+%% has let the request through.
+plugin_phase(pre_request, PluginName, AfterSecurity) ->
+    case lists:member(PluginName, AfterSecurity) of
+        true -> after_security;
+        false -> pre_request
+    end;
+plugin_phase(Type, _PluginName, _AfterSecurity) ->
+    Type.
+
+plugins_after_security(RouteInfo, RouterFile) ->
+    Modules = maps:get(plugins_after_security, RouteInfo,
+                       application:get_env(nova, plugins_after_security, [])),
+    case is_list(Modules) andalso lists:all(fun erlang:is_atom/1, Modules) of
+        true ->
+            Modules;
+        false ->
+            ?LOG_ERROR(#{reason => <<"plugins_after_security must be a list of plugin modules">>,
+                         value => Modules, router_file => RouterFile}),
+            throw({error, {invalid_plugins_after_security, Modules}})
+    end.
 
 %% A method that is not recognised stops the route table from compiling.
 %% It used to become the wildcard, which opened the route to every method.
