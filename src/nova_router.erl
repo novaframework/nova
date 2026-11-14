@@ -107,7 +107,10 @@ compile(Apps, DispatchKey) ->
 -spec execute(Req, Env :: cowboy_middleware:env()) -> {ok, Req, Env0} | {stop, Req}
                                                           when Req::cowboy_req:req(),
                                                                Env0::cowboy_middleware:env().
-execute(Req = #{host := Host, path := Path, method := Method}, Env) ->
+execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
+    %% nova_session only tells nova_stream_h about session changes made by the
+    %% process serving the request.
+    Req = Req0#{nova_session_owner => self()},
     StorageBackend = storage_backend(),
     Dispatch = StorageBackend:get(dispatch_key(Env)),
     case nova_routing_trie:find(Host, Path, Method, Dispatch) of

@@ -1,5 +1,6 @@
 -module(nova_error_controller).
 -moduledoc false.
+-include_lib("kernel/include/logger.hrl").
 -export([
          not_found/1,
          server_error/1,
@@ -94,34 +95,32 @@ format_stacktrace([]) -> [];
 format_stacktrace([{Mod, Func, Arity, TraceOpts}|Tl]) ->
     File = case proplists:get_value(file, TraceOpts) of
                 undefined -> undefined;
-                F -> list_to_binary(F)
+                F -> unicode:characters_to_binary(F)
            end,
     Line = proplists:get_value(line, TraceOpts),
     Formated = #{module => erlang:atom_to_binary(Mod, utf8),
                  function => erlang:atom_to_binary(Func, utf8),
-                 arity => format_arity(Arity, []),
+                 arity => format_arity(Arity),
                  file => File,
                  line => Line},
     [Formated|format_stacktrace(Tl)];
+format_stacktrace([#{module := Mod, function := Func, arity := Arity} = Frame|Tl]) ->
+    File = case maps:get(file, Frame, undefined) of
+               F when is_list(F) -> unicode:characters_to_binary(F);
+               F -> F
+           end,
+    Formated = #{module => erlang:atom_to_binary(Mod, utf8),
+                 function => erlang:atom_to_binary(Func, utf8),
+                 arity => format_arity(Arity),
+                 file => File,
+                 line => maps:get(line, Frame, undefined)},
+    [Formated|format_stacktrace(Tl)];
 format_stacktrace([Hd|Tl]) ->
-    logger:warning(<<"Could not format stacktrace line: ~p">>, [Hd]),
+    ?LOG_WARNING(#{msg => ~"Could not format stacktrace line", frame => nova_redact:term(Hd)}),
     format_stacktrace(Tl).
 
-
-
-format_arity(Arity) when is_pid(Arity) -> list_to_binary(pid_to_list(Arity));
-format_arity(Arity) when is_function(Arity) -> <<"fun">>;
+format_arity(Args) when is_list(Args) -> length(Args);
 format_arity(Arity) -> Arity.
-
-format_arity([], Acc) ->
-    Acc;
-format_arity([Head, Tail], Acc) ->
-    Formated = format_arity(Head),
-    format_arity(Tail, [Formated | Acc]);
-format_arity(Arity, _) when is_function(Arity)->
-    <<"fun">>;
-format_arity(Arity, _) ->
-    Arity.
 
 -ifdef(TEST).
 -compile(export_all).

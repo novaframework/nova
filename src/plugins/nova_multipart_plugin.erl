@@ -43,7 +43,7 @@ pre_request(Req, _Env, #{handler := {Mod, InitArgs}} = Options, State) when is_a
     end;
 pre_request(Req, _Env, Options, State) ->
     ?LOG_ERROR(#{msg => <<"nova_multipart_plugin needs handler => {Mod, InitArgs}.">>,
-                 options => Options}),
+                 options => nova_redact:term(Options)}),
     {stop, cowboy_req:reply(500, Req), State}.
 
 -spec post_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
@@ -291,7 +291,8 @@ safe_call(Mod, Fun, Args) ->
                  Class:Reason:Stacktrace ->
                      ?LOG_ERROR(#{msg => <<"nova_multipart_handler callback raised.">>,
                                   mod => Mod, fun_name => Fun, class => Class,
-                                  error => Reason, stacktrace => Stacktrace}),
+                                  error => nova_redact:term(Reason),
+                                  stacktrace => nova_redact:stacktrace(Stacktrace)}),
                      {error, handler_crashed}
              end,
     case Result of
@@ -300,7 +301,7 @@ safe_call(Mod, Fun, Args) ->
         {error, _} -> Result;
         Other ->
             ?LOG_ERROR(#{msg => <<"nova_multipart_handler callback returned an invalid value.">>,
-                         mod => Mod, fun_name => Fun, value => Other}),
+                         mod => Mod, fun_name => Fun, value => nova_redact:term(Other)}),
             {error, handler_crashed}
     end.
 
@@ -310,7 +311,7 @@ safe_abort(Mod, Reason, HandlerState) ->
     catch
         Class:AbortReason ->
             ?LOG_WARNING(#{msg => <<"nova_multipart_handler:handle_abort/2 raised.">>,
-                           class => Class, error => AbortReason})
+                           class => Class, error => nova_redact:term(AbortReason)})
     end,
     ok.
 
