@@ -18,7 +18,7 @@ depth, a presented id the backend does not know is ignored and replaced, so a
 client cannot simply choose its own session id.
 
 Session changes reach the cookie only when they are made from the process
-serving the request (where controllers, plugins and `nova_websocket:init/1`
+serving the request (where controllers, plugins and `c:nova_websocket:init/1`
 run). A process spawned with the request can read and write the session data,
 but the response will not carry a new cookie for it.
 
