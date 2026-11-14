@@ -4,6 +4,8 @@
 Behaviour for a `nova_multipart_plugin` file sink, configured as `{Mod, InitArgs}`. Chunks arrive straight off the socket, so a handler that writes each one away keeps memory flat regardless of upload size.
 
 Every field of `part_info()` is client controlled. Never build a filesystem path from `filename` and never trust `content_type`.
+
+A handler that writes files should hand them to `nova_multipart_spool`, as `nova_multipart_file_handler` does, so they are deleted with the request and count towards the spool limits. `{error, spool_full}` from `init/2` or `handle_data/2` is answered with a `503`, any other error with a `500`.
 """.
 
 -export_type([part_info/0]).

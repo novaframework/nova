@@ -272,8 +272,17 @@ route may take an upload.
 
 upload(#{params := #{<<"title">> := Title}, files := Files}) ->
     Paths = [Path || #{result := #{path := Path}} <- Files],
+    [ok = nova_multipart_spool:keep(Path) || Path <- Paths],
     {json, 200, #{}, #{title => Title, uploaded => Paths}}.
 ```
+
+A file spooled by `nova_multipart_file_handler` belongs to the request and is
+deleted when the request is over: after the response, when a plugin or the
+security callback refused the request, when the controller crashed, and when
+the client went away in the middle of a part. A controller that wants a file
+to stay calls `nova_multipart_spool:keep/1` with its path, as above, or moves
+it elsewhere with `file:rename/2`. Releases up to 0.18.3 left every file in
+`dir`, also those of refused requests.
 
 Regular form fields end up in `params`. Every part with a filename ends up in
 `files` as a map with `name`, `filename`, `content_type` and `result`, where
@@ -289,7 +298,9 @@ Two handlers ship with Nova:
 |`nova_multipart_memory_handler`|Keeps the part in memory and returns `#{body => Binary}`. Takes no init args: `{nova_multipart_memory_handler, #{}}`. For small attachments only.|
 
 Write your own by implementing the `nova_multipart_handler` behaviour
-(`init/2`, `handle_data/2`, `handle_end/1`, `handle_abort/2`). `filename`,
+(`init/2`, `handle_data/2`, `handle_end/1`, `handle_abort/2`). A handler that
+writes files should register them with `nova_multipart_spool`, so they are
+deleted with the request and count towards the spool bounds. `filename`,
 `content_type` and `name` are all client controlled: never build a filesystem
 path from `filename`, and never echo `content_type` back as a response header.
 The `extensions` allowlist exists because `dir` may be served by a web server,
@@ -311,6 +322,25 @@ bounded by `max_field_size`. When a form is protected by `nova_csrf_plugin`,
 
 A malformed part gets a 400 and a handler error a 500. In every case the
 controller is never called and the handler's `handle_abort/2` has run.
+
+The files and bytes spooled at one time, over all requests being served, are
+bounded as well. Set the bounds under `multipart_spool` in the `nova`
+environment:
+
+```erlang
+{nova, [{multipart_spool, #{max_files => 1024, max_bytes => 8000000000}}]}
+```
+
+|Key|Description|
+|---|-----------|
+|max_files|Files spooled at one time (default 1024), or `infinity`.|
+|max_bytes|Bytes spooled at one time (default 8 000 000 000), or `infinity`.|
+
+A part that would pass a bound gets a 503. Files a controller kept do not
+count. With the default part limits a request spools at most 32 files and
+64 MB, so the defaults leave room for at least 32 uploads at once; raise them
+together with `max_part_size` and `max_total_size` when single uploads are
+larger than the bound.
 
 To read the parts yourself, leave `nova_multipart_plugin` off the route and use
 [cowboy_req:read_part/1](https://ninenines.eu/docs/en/cowboy/2.13/manual/cowboy_req.read_part/)

@@ -1,7 +1,9 @@
 %%%-------------------------------------------------------------------
 -module(nova_multipart_file_handler).
 -moduledoc """
-`nova_multipart_handler` that streams a file part to disk under a random name in `InitArgs``dir`. The client filename is never used in the path. The part is written as `<name>.part` and renamed on handle_end/1, so a file at its final name is always complete. Sweep `dir` for stale `*.part` files left by a process crash.
+`nova_multipart_handler` that streams a file part to disk under a random name in `InitArgs``dir`. The client filename is never used in the path. The part is written as `<name>.part` and renamed on handle_end/1, so a file at its final name is always complete.
+
+The file belongs to the request. It is deleted when the request is over, whatever the outcome, unless the controller took it over with `nova_multipart_spool:keep/1` or moved it elsewhere. A part left behind by a client that went away is deleted the same way. `nova_multipart_spool` also bounds how many files and bytes are spooled at one time; a part past the bound gets `{error, spool_full}`.
 
 Only a client extension listed in `extensions` is kept on the stored name, lowercased. It is an allowlist because `dir` may be served by a web server, where a stored `.html` or `.svg` is stored XSS. Anything else is dropped, not rejected: the extension is client controlled and says nothing about the bytes.
 
@@ -23,19 +25,30 @@ init(#{filename := Filename}, #{dir := Dir} = InitArgs) ->
     Ext = extension(Filename, maps:get(extensions, InitArgs, [])),
     FinalPath = filename:join(Dir, <<Name/binary, Ext/binary>>),
     TmpPath = filename:join(Dir, <<Name/binary, Ext/binary, ".part">>),
-    case file:open(TmpPath, [write, exclusive, binary]) of
-        {ok, Fd} ->
-            {ok, #{fd => Fd, tmp_path => TmpPath, final_path => FinalPath}};
+    case nova_multipart_spool:track(TmpPath) of
+        ok ->
+            case file:open(TmpPath, [write, exclusive, binary]) of
+                {ok, Fd} ->
+                    {ok, #{fd => Fd, tmp_path => TmpPath, final_path => FinalPath}};
+                {error, _} = Error ->
+                    _ = nova_multipart_spool:discard(TmpPath),
+                    Error
+            end;
         {error, _} = Error ->
             Error
     end.
 
 -spec handle_data(Data :: binary(), HandlerState :: map()) ->
           {ok, NewHandlerState :: map()} | {error, Reason :: term()}.
-handle_data(Data, #{fd := Fd} = State) ->
-    case file:write(Fd, Data) of
-        ok -> {ok, State};
-        {error, _} = Error -> Error
+handle_data(Data, #{fd := Fd, tmp_path := TmpPath} = State) ->
+    case nova_multipart_spool:grow(TmpPath, byte_size(Data)) of
+        ok ->
+            case file:write(Fd, Data) of
+                ok -> {ok, State};
+                {error, _} = Error -> Error
+            end;
+        {error, _} = Error ->
+            Error
     end.
 
 -spec handle_end(HandlerState :: map()) ->
@@ -45,20 +58,21 @@ handle_end(#{fd := Fd, tmp_path := TmpPath, final_path := FinalPath}) ->
         ok ->
             case file:rename(TmpPath, FinalPath) of
                 ok ->
+                    _ = nova_multipart_spool:renamed(TmpPath, FinalPath),
                     {ok, #{path => FinalPath}};
                 {error, _} = Error ->
-                    _ = file:delete(TmpPath),
+                    _ = nova_multipart_spool:discard(TmpPath),
                     Error
             end;
         {error, _} = Error ->
-            _ = file:delete(TmpPath),
+            _ = nova_multipart_spool:discard(TmpPath),
             Error
     end.
 
 -spec handle_abort(Reason :: term(), HandlerState :: map()) -> ok.
 handle_abort(_Reason, #{fd := Fd, tmp_path := TmpPath}) ->
     _ = file:close(Fd),
-    _ = file:delete(TmpPath),
+    _ = nova_multipart_spool:discard(TmpPath),
     ok.
 
 %% Only the extension survives, and only via the allowlist: the filename is

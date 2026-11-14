@@ -4,7 +4,7 @@
 -module(nova_test_listener).
 
 -export([start/1, try_start/1, configure/1, stop/0, get/2, get/3, request/4, response/4, response/5,
-         websocket_handshake/2, websocket_handshake/3, websocket_texts/4, free_port/0]).
+         websocket_handshake/2, websocket_handshake/3, websocket_texts/4, send_and_close/2, free_port/0]).
 
 -spec start(map()) -> inet:port_number().
 start(Options) ->
@@ -172,6 +172,15 @@ receive_until_closed(Socket, Acc) ->
         {ok, Data} -> receive_until_closed(Socket, <<Acc/binary, Data/binary>>);
         {error, closed} -> Acc
     end.
+
+%% Sends what is given and hangs up without waiting for an answer, as a
+%% client that goes away in the middle of a request does.
+-spec send_and_close(inet:port_number(), iodata()) -> ok.
+send_and_close(Port, Data) ->
+    {ok, Socket} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}, {packet, raw}]),
+    ok = gen_tcp:send(Socket, Data),
+    timer:sleep(100),
+    gen_tcp:close(Socket).
 
 -spec free_port() -> inet:port_number().
 free_port() ->

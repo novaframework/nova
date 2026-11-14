@@ -142,6 +142,7 @@ init([]) ->
     Children0 = [
                  child(nova_handlers, nova_handlers),
                  child(nova_plugin_manager, nova_plugin_manager),
+                 child(nova_multipart_spool, nova_multipart_spool),
                  child(nova_watcher, nova_watcher)
                 ],
 
