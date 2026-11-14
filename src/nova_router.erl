@@ -170,8 +170,9 @@ execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
                                               plugins = RoutePlugins, secure = Secure}} ->
             {Route, Plugins} = take_route(RoutePlugins),
             {ok,
-             put_route(Route, Req#{plugins => Plugins,
-                                   bindings => Bindings}),
+             put_route(Route, put_extra_state(handler_extra_state(Args),
+                                              Req#{plugins => Plugins,
+                                                   bindings => Bindings})),
              Env#{app => App,
                   cowboy_handler => Handler,
                   arguments => Args,
@@ -179,11 +180,12 @@ execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
                  }
             };
         {ok, Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
-                                              plugins = Plugins, secure = Secure}, Pathinfo} ->
+                                              plugins = RoutePlugins, secure = Secure}, Pathinfo} ->
+            {Route, Plugins} = take_route(RoutePlugins),
             {ok,
-             Req#{plugins => Plugins,
-                  extra_state => #{pathinfo => Pathinfo},
-                  bindings => Bindings},
+             put_route(Route, Req#{plugins => Plugins,
+                                   extra_state => with_pathinfo(handler_extra_state(Args), Pathinfo),
+                                   bindings => Bindings}),
              Env#{app => App,
                   cowboy_handler => Handler,
                   arguments => Args,
@@ -531,14 +533,14 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
             parse_url(Host, Tl, T, Value, Tree)
     end;
 parse_url(Host,
-          [{Path, Mod, #{protocol := ws}} | Tl],
+          [{Path, Mod, #{protocol := ws} = Options} | Tl],
           T = #{prefix := Prefix}, #nova_handler_value{app = App, secure = Secure} = Value,
           Tree) when is_atom(Mod) ->
     RealPath = concat_strings(Prefix, Path),
     Value0 =  #cowboy_handler_value{
                   app = App,
                   handler = nova_ws_handler,
-                  arguments = #{module => Mod, app => App},
+                  arguments = websocket_arguments(Mod, App, Options, Value#nova_handler_value.extra_state),
                   plugins = with_route(RealPath, Value#nova_handler_value.plugins),
                   secure = Secure},
 
@@ -607,6 +609,23 @@ take_route(Plugins)                          -> {undefined, Plugins}.
 
 put_route(undefined, Req) -> Req;
 put_route(Route, Req)     -> Req#{nova_route => Route}.
+
+%% The routing record of a websocket route has no field for extra_state and
+%% has to keep its arity, so the state travels in the handler arguments: the
+%% one the route declares, or else the one its route group declares.
+websocket_arguments(Mod, App, #{extra_state := ExtraState}, _GroupExtraState) ->
+    #{module => Mod, app => App, extra_state => ExtraState};
+websocket_arguments(Mod, App, _Options, GroupExtraState)
+  when GroupExtraState =:= undefined; GroupExtraState =:= #{} ->
+    #{module => Mod, app => App};
+websocket_arguments(Mod, App, _Options, GroupExtraState) ->
+    #{module => Mod, app => App, extra_state => GroupExtraState}.
+
+handler_extra_state(#{extra_state := ExtraState}) -> ExtraState;
+handler_extra_state(_Arguments)                   -> undefined.
+
+put_extra_state(undefined, Req)  -> Req;
+put_extra_state(ExtraState, Req) -> Req#{extra_state => ExtraState}.
 
 %% A route declared without extra_state carries undefined, and one may carry
 %% any term. Only a map can take the catch-all's trailing segments.

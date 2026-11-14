@@ -84,7 +84,9 @@ A route ending in `[...]` matches any number of trailing segments. They reach th
 {Route :: list(), Controller :: atom(), Options :: map()}
 ```
 
-The `init/1` callback of a websocket controller returns `{ok, State}` to accept the connection. It can return `{ok, State, Options}` to also set the options of the connection, where `Options` is a `cowboy_websocket:opts()` map such as `#{max_frame_size => 65536, idle_timeout => 30000}`.
+A websocket route takes `extra_state` like an HTTP route does, and falls back to the `extra_state` of its route group. The controller finds it in the upgrade request, under `req` in its controller data.
+
+The `init/1` callback of a websocket controller returns `{ok, State}` to accept the connection. Any other return refuses the upgrade with a `500`. It can return `{ok, State, Options}` to also set the options of the connection, where `Options` is a `cowboy_websocket:opts()` map such as `#{max_frame_size => 65536, idle_timeout => 30000}`.
 
 A browser sends the cookies of your site with a websocket upgrade started by any page. When the connection relies on a session cookie, add `nova_ws_origin_plugin` as a `pre_request` plugin on the route to refuse upgrades from other origins. It is not on by default.
 

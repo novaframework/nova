@@ -20,16 +20,27 @@ After the upgrade, `websocket_init/1`, `websocket_handle/2` and
 - `{reply, Frame | [Frame], State}`, `{reply, Frame | [Frame], State, hibernate}`
 - `{stop, State}`, which closes the connection
 
-`terminate/3` is called with the reason, the partial request and the state
-when the connection goes away.
+`terminate/3` is optional. It is called with the reason, the partial request
+and the state when the connection goes away. A crash in it is logged and does
+not stop the `post_ws_connection` plugins from running.
+
+A route can hand the controller a term of its own with `extra_state`, set on
+the route or on its route group. It is found in the upgrade request, under
+`req` in the controller data:
+
+```erlang
+{"/ws", my_ws_controller, #{protocol => ws, extra_state => #{room => lobby}}}
+```
 
 The upgrade request runs the route's `pre_request` plugins like any HTTP
 request. `nova_ws_handler` has plugin phases of its own for the time after
-the upgrade (`pre_ws_request`, `post_ws_request` and `post_ws_connection`),
-but they cannot be used yet: the router stores every plugin as a
-`fun Module:Phase/4`, which `nova_ws_handler` cannot call. A plugin listed
-for one of these phases fails with a "Plugin crashed" error in the log the
-first time the phase runs, and the connection is closed.
+the upgrade: `pre_ws_request` and `post_ws_request` run around every
+`websocket_init/1`, `websocket_handle/2` and `websocket_info/2` call, and
+`post_ws_connection` runs once when the connection goes away, whether or not
+the controller exports `terminate/3`. A plugin exports the phase as a
+function of `(ControllerState, State, Options)` and returns
+`{ok, ControllerState, State}`, `{break, State}`, `{stop, State}` or
+`{error, Reason}`.
 
 ```erlang
 -module(my_ws_controller).
