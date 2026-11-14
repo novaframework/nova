@@ -72,7 +72,7 @@ A fragment in `redact_keys` matches everywhere it occurs: `pin` also redacts `sh
 
 A `{Key, Value}` tuple that is not an element of a list has the same shape as an error tuple, so its value is redacted only when the whole name is one of the fragments above, or is `password`, `session_id`, `set-cookie`, `_csrf_token`, `x-csrf-token`, `qs` or `otp`: `{token, T}` is redacted, `{invalid_token, Reason}` is not.
 
-Anything else is logged as is: a secret held under another key, or in a plain tuple or a binary, still reaches the log. Add such keys to `redact_keys`. Values your own code logs are not touched.
+Anything else is logged as is: a secret held under another key, or in a plain tuple or a binary, still reaches the log. Add such keys to `redact_keys`. Values your own code logs are not touched, unless the logger formats with `nova_jsonlogger` and its `redact` option is set: `{nova_jsonlogger, #{redact => true}}` applies the same rules to every report and its metadata. The option is off by default.
 
 ## Application parameters
 

@@ -5,7 +5,16 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 -module(nova_jsonlogger).
--moduledoc "Custom formatter for the Erlang OTP logger application which outputs single-line JSON formatted data".
+-moduledoc """
+Custom formatter for the Erlang OTP logger application which outputs single-line JSON formatted data.
+
+With `redact => true` in its configuration the formatter takes request data and secrets out of every report and its metadata before encoding them, the way Nova does for its own crash logs: a Cowboy request map is replaced by its method and path, and the value of a key whose name looks sensitive (`password`, `access_token`, `session_id` and the like, plus what `redact_keys` lists) by `redacted`. That also covers what your own code and other libraries log. It is off by default.
+
+```erlang
+{kernel, [{logger, [{handler, default, logger_std_h,
+                     #{formatter => {nova_jsonlogger, #{redact => true, new_line => true}}}}]}]}
+```
+""".
 %%%_* Exports ==========================================================
 -export([format/2,
          system_time_to_iso8601/1,
@@ -16,7 +25,8 @@
     new_line => boolean(),
     new_line_type => nl | crlf | cr | unix | windows | macos9,
     key_mapping => #{atom() => atom()},
-    format_funs => #{atom() => fun((_) -> _)}
+    format_funs => #{atom() => fun((_) -> _)},
+    redact => boolean()
 }.
 
 -export_type([config/0]).
@@ -34,7 +44,7 @@ format(
     Report = #{text => io_lib:format(Format, Args)},
     format(Map#{msg := {report, Report}}, Config);
 format(#{level := Level, msg := {report, Msg}, meta := Meta}, Config) when is_map(Msg) ->
-    Data0 = merge_meta(Msg, Meta#{level => Level}, Config),
+    Data0 = merge_meta(redact(Msg, Config), redact(Meta#{level => Level}, Config), Config),
     Data1 = apply_key_mapping(Data0, Config),
     Data2 = apply_format_funs(Data1, Config),
     encode(pre_encode(Data2, Config), Config);
@@ -74,6 +84,11 @@ pre_encode(Data, Config) ->
         maps:new(),
         Data
     ).
+
+redact(Data, #{redact := true}) ->
+    nova_redact:term(Data);
+redact(Data, _Config) ->
+    Data.
 
 merge_meta(Msg, Meta0, Config) ->
     Meta1 = meta_without(Meta0, Config),
@@ -315,6 +330,25 @@ meta_with_test() ->
         thoas:decode(format(Error, Config2))
     ),
     ok.
+
+redact_test() ->
+    Req = #{pid => self(), streamid => 1, method => ~"GET", path => ~"/login",
+            headers => #{~"cookie" => ~"session_id=abc"}},
+    Event = #{level => error,
+              msg => {report, #{req => Req, access_token => ~"t", user => ~"ada",
+                                params => #{~"password_confirmation" => ~"p", ~"name" => ~"ada"}}},
+              meta => #{client_secret => ~"s", time => 1}},
+    Redacted = json:decode(iolist_to_binary(format(Event, #{redact => true}))),
+    ?assertEqual(#{~"level" => ~"error", ~"time" => 1, ~"user" => ~"ada",
+                   ~"access_token" => ~"redacted", ~"client_secret" => ~"redacted",
+                   ~"params" => #{~"password_confirmation" => ~"redacted", ~"name" => ~"ada"},
+                   ~"req" => #{~"method" => ~"GET", ~"path" => ~"/login", ~"redacted" => ~"cowboy_req"}},
+                 Redacted),
+    [begin
+         #{~"access_token" := Token, ~"client_secret" := Secret, ~"req" := #{~"headers" := Headers}} =
+             json:decode(iolist_to_binary(format(Event, Config))),
+         ?assertEqual({~"t", ~"s", #{~"cookie" => ~"session_id=abc"}}, {Token, Secret, Headers})
+     end || Config <- [#{}, #{redact => false}]].
 
 newline_test() ->
     ConfigDefault = #{new_line => true},
