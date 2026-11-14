@@ -125,6 +125,19 @@ server_error_has_title_and_message_test_() ->
          ?assertNotEqual(~"undefined", Message)
      end}.
 
+%% A thrown {500, Reason} leaves the reason as crash_info, which need not be a
+%% map, and a 500 page can be asked for with no crash_info at all.
+server_error_without_a_crash_map_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Req = nova_test_helper:with_header(~"accept", ~"application/json",
+                                            nova_test_helper:mock_req(~"GET", ~"/")),
+         [begin
+              {status, 500, _Headers, Body} = nova_error_controller:server_error(Req0),
+              ?assertMatch(#{~"title" := ~"500 Internal Server Error"}, json:decode(iolist_to_binary(Body)))
+          end || Req0 <- [Req, Req#{crash_info => not_a_map}]]
+     end}.
+
 server_error_html_for_browsers_test_() ->
     {setup, ?SETUP, ?CLEANUP,
      fun() ->
