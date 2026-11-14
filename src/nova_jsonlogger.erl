@@ -72,19 +72,14 @@ system_time_to_iso8601(Epoch, Unit) ->
 
 %%%_* Private functions ================================================
 pre_encode(Data, Config) ->
-    maps:fold(
-        fun
-            (K, V, Acc) when is_map(V) ->
-                maps:put(jsonify(K), pre_encode(V, Config), Acc);
-            % assume list of maps
-            (K, Vs, Acc) when is_list(Vs), is_map(hd(Vs)) ->
-                maps:put(jsonify(K), [pre_encode(V, Config) || V <- Vs, is_map(V)], Acc);
-            (K, V, Acc) ->
-                maps:put(jsonify(K), jsonify(V), Acc)
-        end,
-        maps:new(),
-        Data
-    ).
+    #{jsonify(K) => pre_encode_value(V, Config) || K := V <- Data}.
+
+pre_encode_value(V, Config) when is_map(V) ->
+    pre_encode(V, Config);
+pre_encode_value([First | _] = Vs, Config) when is_map(First) ->
+    [pre_encode(V, Config) || V <- Vs, is_map(V)];
+pre_encode_value(V, _Config) ->
+    jsonify(V).
 
 redact(Data, #{redact := true}) ->
     nova_redact:term(Data);
@@ -418,7 +413,7 @@ jsonify_types_test() ->
     %% pid
     ?assert(is_binary(jsonify(self()))),
     %% function
-    ?assert(is_binary(jsonify(fun erlang:now/0))),
+    ?assert(is_binary(jsonify(fun erlang:monotonic_time/0))),
     %% list (string)
     ?assertEqual(<<"hello">>, jsonify("hello")),
     %% list (non-string, falls through to io_lib:format)
