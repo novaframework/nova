@@ -400,8 +400,9 @@ A status-code route that crashes, or throws `{Status, Reason}` itself, is not re
 ## The matched route
 
 When a request matches a route, Nova stores the route's template in the
-request map under `nova_route`. Controllers, plugins and websocket
-controllers (through `req` in their controller data) can all read it:
+request map under `nova_route`. Controllers, plugins, Cowboy handlers and
+websocket controllers (through `req` in their controller data) can all read
+it:
 
 ```erlang
 show(#{nova_route := Route}) ->
