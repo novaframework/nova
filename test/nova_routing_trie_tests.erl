@@ -315,6 +315,43 @@ member_test() ->
 %% routes/1, to_list/1, from_list/1, foldl/2
 %%====================================================================
 
+routes_normalizes_inputs_test() ->
+    {ok, T} = from_list([
+        {"example.com", "/atom", get, atom_payload},
+        {'example.com', "/string", "pOsT", string_payload},
+        {<<"example.com">>, <<"/binary">>, <<"pUt">>, binary_payload},
+        {"/any", '_', any_payload},
+        {404, '_', error_payload}
+    ]),
+    ?assertEqual(lists:sort([
+        {<<"example.com">>, <<"/atom">>, <<"GET">>, atom_payload},
+        {<<"example.com">>, <<"/string">>, <<"POST">>, string_payload},
+        {<<"example.com">>, <<"/binary">>, <<"PUT">>, binary_payload},
+        {'_', <<"/any">>, '_', any_payload},
+        {'_', 404, '_', error_payload}
+    ]), lists:sort(routes(T))),
+    ?assertEqual(['_', '_', <<"GET">>, <<"POST">>, <<"PUT">>],
+                 lists:sort(route_methods(T))).
+
+%% A consumer of the stored comparator form, without a narrowing guard.
+-spec route_methods(nova_routing_trie:trie()) ->
+    [nova_routing_trie:comparator()].
+route_methods(Trie) ->
+    [Method || {_Host, _Path, Method, _Payload} <- routes(Trie)].
+
+foldl_receives_normalized_routes_test() ->
+    {ok, T0} = from_list([{"example.com", "/a", get, payload}]),
+    {ok, T1} = foldl(T0, fun rewrite_normalized_routes/1),
+    ?assertEqual([{<<"example.com">>, <<"/a">>, <<"POST">>, payload}],
+                 routes(T1)).
+
+%% The callback receives stored routes but can return input-form methods.
+-spec rewrite_normalized_routes([nova_routing_trie:route_out()]) ->
+    [nova_routing_trie:route()].
+rewrite_normalized_routes(Routes) ->
+    ?assertEqual([{<<"example.com">>, <<"/a">>, <<"GET">>, payload}], Routes),
+    [{Host, Path, post, Payload} || {Host, Path, _Method, Payload} <- Routes].
+
 routes_round_trip_test() ->
     T0 = ins('_', "/a", "GET", payload_a, new()),
     T1 = ins('_', "/b/:id", "POST", payload_b, T0),
