@@ -25,6 +25,7 @@ Matching is deterministic: at each depth a literal segment is tried first, then 
          insert/6,
 
          find/4,
+         canonical_segments/1,
 
          member/3,
          member/4,
@@ -169,6 +170,12 @@ find(HostIn, Path, ComparatorIn, Trie) ->
                     end
             end
     end.
+
+%%--------------------------------------------------------------------
+-doc "The segments `find/4` matches a request path on: the query string and fragment removed, empty segments dropped, and `.` and `..` resolved without leaving the root. Anything that decides by path has to use these, not the raw path, to agree with the route that is matched.".
+-spec canonical_segments(binary()) -> [binary()].
+canonical_segments(Path) when is_binary(Path) ->
+    canonicalise(split(Path), []).
 
 -spec member(host_in(), path(), trie()) -> boolean().
 member(HostIn, Path, Trie) ->

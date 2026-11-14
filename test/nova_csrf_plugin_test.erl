@@ -79,6 +79,20 @@ is_excluded_path_empty_list_test() ->
 is_excluded_path_exact_match_test() ->
     ?assert(nova_csrf_plugin:is_excluded_path(<<"/api">>, [<<"/api">>])).
 
+is_excluded_path_ends_at_a_segment_test() ->
+    ?assertNot(nova_csrf_plugin:is_excluded_path(<<"/apikeys">>, [<<"/api">>])),
+    ?assertNot(nova_csrf_plugin:is_excluded_path(<<"/api-admin/users">>, [<<"/api">>])),
+    ?assert(nova_csrf_plugin:is_excluded_path(<<"/api/keys">>, [<<"/api/">>])).
+
+is_excluded_path_resolves_dot_segments_test() ->
+    ?assertNot(nova_csrf_plugin:is_excluded_path(<<"/api/../admin">>, [<<"/api">>])),
+    ?assertNot(nova_csrf_plugin:is_excluded_path(<<"/api/x/../../admin">>, [<<"/api">>])),
+    ?assert(nova_csrf_plugin:is_excluded_path(<<"//api/./hook">>, [<<"/api">>])),
+    ?assert(nova_csrf_plugin:is_excluded_path(<<"/admin/../api/hook">>, [<<"/api">>])).
+
+is_excluded_path_string_prefix_test() ->
+    ?assert(nova_csrf_plugin:is_excluded_path(<<"/api/hook">>, ["/api"])).
+
 is_excluded_path_multiple_prefixes_test() ->
     ?assert(nova_csrf_plugin:is_excluded_path(<<"/health">>, [<<"/api">>, <<"/health">>])).
 

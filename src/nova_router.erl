@@ -18,6 +18,7 @@
          lookup_url/1,
          lookup_url/2,
          lookup_url/3,
+         canonical_path/1,
          render_status_page/2,
          render_status_page/3,
          render_status_page/5,
@@ -208,6 +209,21 @@ lookup_url(Host, Path, Method) ->
 lookup_url(Host, Path, Method, Dispatch) ->
     nova_routing_trie:find(Host, Path, Method, Dispatch).
 
+
+%%--------------------------------------------------------------------
+-doc """
+The path a request is routed on, as opposed to the `path` of the request, which is what the client sent. Empty segments are dropped and `.` and `..` are resolved, so `/public/../admin//users` gives `/admin/users`.
+
+A plugin or security callback that decides by path must look at this one. Compare whole segments, not bytes: `/api` is not a prefix of `/apikeys`.
+""".
+-spec canonical_path(Req :: cowboy_req:req() | binary()) -> binary().
+canonical_path(#{path := Path}) ->
+    canonical_path(Path);
+canonical_path(Path) when is_binary(Path) ->
+    case nova_routing_trie:canonical_segments(Path) of
+        [] -> <<"/">>;
+        Segments -> iolist_to_binary([[$/, Segment] || Segment <- Segments])
+    end.
 
 %%--------------------------------------------------------------------
 -doc "Works the same way as add_routes/2 but with the exception that you don't need to provide the routes explicitly. When using this it's expected that there's a routing-module associated with the application. Eg. for the application 'test' the corresponding router would then be 'test_router'. Read more about routers in the official documentation.".

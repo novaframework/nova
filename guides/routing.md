@@ -267,6 +267,14 @@ Matching backtracks, so a route is only skipped if nothing below it can match.
 `/users/new` and `/users/:id` can therefore both be declared: `/users/new`
 serves the literal path and `/users/:id` serves everything else.
 
+A request path is matched after empty segments are dropped and `.` and `..`
+are resolved, so `/public/../admin//users` is routed as `/admin/users`. The
+`path` in the request map is still what the client sent. A plugin or security
+callback that decides by path must use `nova_router:canonical_path(Req)`, and
+compare whole segments: `/api` is not a prefix of `/apikeys`. The
+`excluded_paths` of `nova_csrf_plugin` are matched this way. Earlier releases
+matched them as a byte prefix of the raw path.
+
 Once a path matches, the method is resolved. An exact method wins over a route
 declared with `'_'`. If the path matches but the method does not, Nova answers
 `405` with an `allow` header listing the methods that path does accept.
