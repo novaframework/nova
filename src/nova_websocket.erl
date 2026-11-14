@@ -9,8 +9,9 @@ Behaviour for websocket controllers. Route to one with `protocol => ws`:
 `init/1` runs in the request process before the upgrade. It gets the
 controller data (with `req` set to the upgrade request, and `auth_data` when
 the route's security function returned `{true, AuthData}`) and returns
-`{ok, State}` to accept the connection. Anything else answers the upgrade
-request with a 500.
+`{ok, State}` to accept the connection. Any other return refuses the upgrade
+and is logged as an error; the client gets an empty `204 No Content`, not an
+error status.
 
 After the upgrade, `websocket_init/1`, `websocket_handle/2` and
 `websocket_info/2` return one of:
@@ -23,12 +24,12 @@ After the upgrade, `websocket_init/1`, `websocket_handle/2` and
 when the connection goes away.
 
 The upgrade request runs the route's `pre_request` plugins like any HTTP
-request. After the upgrade, plugins listed under `pre_ws_request`,
-`post_ws_request` and `post_ws_connection` are called as
-`Module:Phase(ControllerState, State, Options)` and return `{ok,
-ControllerState, State}`, `{break, State}` (skip the rest of the phase),
-`{stop, State}` (close the connection) or `{error, Reason}` (close it and log).
-This is not the `nova_plugin` contract.
+request. `nova_ws_handler` has plugin phases of its own for the time after
+the upgrade (`pre_ws_request`, `post_ws_request` and `post_ws_connection`),
+but they cannot be used yet: the router stores every plugin as a
+`fun Module:Phase/4`, which `nova_ws_handler` cannot call. A plugin listed
+for one of these phases fails with a "Plugin crashed" error in the log the
+first time the phase runs, and the connection is closed.
 
 ```erlang
 -module(my_ws_controller).

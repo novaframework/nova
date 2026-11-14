@@ -69,7 +69,7 @@ Once a `pre_request` plugin stops the request or the security function refuses i
 
 The state a plugin returns is stored per plugin module, not per request, and is shared by every request. Nova only writes it when it changed, and concurrent requests overwrite each other's writes: the last writer wins. Keep per-request data in `Req`, and keep shared data that has to add up (counters, rate-limit buckets) in `ets` or `counters`.
 
-Websocket handlers run their plugins through `nova_ws_handler`, which has its own contract. See the `nova_websocket` documentation.
+A websocket route runs its `pre_request` plugins on the upgrade request. The plugin phases `nova_ws_handler` has for the time after the upgrade cannot be used yet. See the `nova_websocket` documentation.
 
 
 ## Optional callbacks
