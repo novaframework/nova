@@ -13,6 +13,7 @@ change it.
 | A controller crashes | The `500` page | `Controller crashed` |
 | A controller returns something no handler knows | The fallback controller of the module if it has one, otherwise the `500` page | |
 | A controller or a handler fails after the response has begun | What was sent already. No page | The failure, and a warning that no page is sent |
+| A controller answers the request itself and returns without the request it answered with | The response the controller sent. What it returned is not sent | A warning that names the controller |
 | A `pre_request` plugin crashes or returns `{error, Reason}` | The `500` page | `Plugin crashed` |
 | The security callback crashes | The `500` page | `Security handler crashed` |
 | The security callback refuses the request | `401`, or what the callback returned. No page is rendered | |
@@ -43,26 +44,40 @@ request.
 
 ## The default pages
 
-The pages that come with Nova answer in the format the `accept` header of
-the request asks for:
+The pages that come with Nova answer in the form the `accept` header of the
+request asks for:
 
 | `accept` header | Response body |
 |---|---|
-| Not sent | A JSON object |
-| Names `application/json` | A JSON object |
-| Names `text/html` and not `application/json` | An HTML page |
-| Names neither | Empty |
+| Not sent, or cannot be parsed | A JSON object |
+| Prefers JSON | A JSON object |
+| Prefers HTML | An HTML page |
+| Admits neither | Empty |
 
-The header is searched for those two media types as they are written, so a
-wildcard such as `*/*` names neither.
+`application/json`, `application/*` and `*/*` stand for JSON, and
+`text/html`, `text/*` and `*/*` for HTML. The form with the higher quality
+value wins, and `q=0` rules a form out. Of two forms with the same quality
+the one the header names first wins, and JSON when one range covers both, as
+`*/*` does. A client that sends `*/*` gets JSON, and a browser, which names
+`text/html` first, gets the HTML page.
 
-The `500` page has a title and a generic message. The reason of the crash and
-the stacktrace are only added when `environment` is set to `dev` under
-`nova`. An environment that is not set does not count as `dev` here. The
-stacktrace also needs `{use_stacktrace, true}`.
+The `500` page has a title and a generic message, in every environment. The
+class and the reason of the crash and the stacktrace are only added when
+`environment` is set to `dev` under `nova`. An environment that is not set
+does not count as `dev` here. The stacktrace also needs
+`{use_stacktrace, true}`. Without it, Nova logs a hint about the setting
+with the first such page in `dev`, once per node.
 
-With `{render_error_pages, false}` under `nova`, a crash or a thrown status
-is answered with the bare status code and no page.
+`{render_error_pages, false}` under `nova` has two effects:
+
+* A controller that crashes or throws a status is answered with the bare
+  status code. No page is looked up, neither Nova's nor a status code route
+  of the application.
+* Nova's `500` page, which a crash in a plugin or in a security callback is
+  answered with, sends the bare status code where it would send the HTML
+  page. Its JSON form is sent as before.
+
+The `404` page for a request no route matches is not affected.
 
 ## Your own pages
 
