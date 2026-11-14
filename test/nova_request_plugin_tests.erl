@@ -199,7 +199,11 @@ modulate_state_json_suffix_test_() ->
 plugin_info_test() ->
     Info = nova_request_plugin:plugin_info(),
     ?assertEqual(<<"Nova body plugin">>, maps:get(title, Info)),
-    ?assert(is_list(maps:get(options, Info))).
+    Options = maps:get(options, Info),
+    ?assertEqual([decode_json_body, read_urlencoded_body, parse_qs, max_body_length, body_read_timeout],
+                 [Option || {Option, _Description} <- Options]),
+    [?assertNotEqual(nomatch, binary:match(proplists:get_value(Option, Options), [~"`", Key, ~"`"]))
+     || {Option, Key} <- [{decode_json_body, ~"json"}, {read_urlencoded_body, ~"params"}, {parse_qs, ~"parsed_qs"}]].
 
 %%====================================================================
 %% multipart/form-data is never buffered here
