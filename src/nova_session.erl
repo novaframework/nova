@@ -415,9 +415,8 @@ warn_ambiguous_cookie(Name) ->
 %% spawned with the request, or a websocket running in the connection
 %% process after the upgrade, would deliver the message to whatever handles
 %% the connection by then.
-notify(#{pid := Pid, streamid := StreamID, nova_session_owner := Owner}, Event) when Owner =:= self() ->
-    Pid ! {{Pid, StreamID}, {nova_session, Event}},
-    ok;
+notify(#{pid := _, streamid := _, nova_session_owner := Owner} = Req, Event) when Owner =:= self() ->
+    cowboy_req:cast({nova_session, Event}, Req);
 notify(_Req, _Event) ->
     ok.
 

@@ -32,6 +32,7 @@ setup() ->
                 fun(Name, Value, Req, Opts) ->
                     Req#{resp_cookie => #{name => Name, value => Value, opts => Opts}}
                 end),
+    meck:expect(cowboy_req, cast, fun(Event, Req) -> meck:passthrough([Event, Req]) end),
     Pid.
 
 cleanup(Pid) ->
