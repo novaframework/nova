@@ -59,7 +59,7 @@ logger_key(Options) ->
     Req = #{headers => #{}, resp_headers => #{}},
     try
         {ok, #{correlation_id := Id}, state} = nova_correlation_plugin:pre_request(Req, #{}, Options, state),
-        [Key || {Key, Value} <- maps:to_list(logger:get_process_metadata()), Value =:= Id]
+        [Key || Key := Value <- logger:get_process_metadata(), Value =:= Id]
     after
         logger:unset_process_metadata()
     end.
