@@ -129,6 +129,7 @@ init([]) ->
                                  {ok, fun nova_basic_handler:handle_ok/3},
                                  {status, fun nova_basic_handler:handle_status/3},
                                  {redirect, fun nova_basic_handler:handle_redirect/3},
+                                 {redirect_local, fun nova_basic_handler:handle_redirect/3},
                                  {sendfile, fun nova_basic_handler:handle_sendfile/3},
                                  {ws, fun nova_basic_handler:handle_ws/2},
                                  {view, fun nova_basic_handler:handle_view/3}]),

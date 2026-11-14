@@ -185,6 +185,26 @@ handle_redirect_invalid_location_test_() ->
           end || Route <- [~"/a\r\nb?t=TOKEN", <<"/x", 255, "?t=TOKEN">>, [$/, 16#110000], "/a\x{100}\r?t=TOKEN"]]
      end}.
 
+handle_redirect_local_test() ->
+    Req = nova_test_helper:mock_req(~"GET", ~"/"),
+    [begin
+         {ok, Req1} = nova_basic_handler:handle_redirect({redirect_local, Route}, ?CALLBACK, Req),
+         ?assertEqual({Route, 302}, {Route, maps:get(resp_status_code, Req1)}),
+         ?assertEqual(iolist_to_binary(Route), maps:get(~"location", maps:get(resp_headers, Req1)))
+     end || Route <- [~"/", ~"/dashboard?x=1", "/home", ~"/a\\b", ~"/a//b"]],
+    [begin
+         {ok, Req1} = nova_basic_handler:handle_redirect({redirect_local, Route}, ?CALLBACK, Req),
+         ?assertEqual({Route, 400}, {Route, maps:get(resp_status_code, Req1)}),
+         ?assertNot(is_map_key(~"location", maps:get(resp_headers, Req1, #{})))
+     end || Route <- [~"https://evil.example.com", ~"//evil.example.com", ~"/\\evil.example.com",
+                      ~"/\t/evil.example.com", "//evil.example.com", ~"evil.example.com", ~"", ~"/a\r\nb",
+                      [not_a_char]]].
+
+handle_redirect_local_req_passthrough_test() ->
+    Req = nova_test_helper:mock_req(~"GET", ~"/"),
+    {ok, Req1} = nova_basic_handler:handle_redirect({redirect_local, ~"/x", Req#{tagged => ok}}, ?CALLBACK, Req),
+    ?assertEqual(ok, maps:get(tagged, Req1)).
+
 loggable_location_test() ->
     ?assertEqual(~"https://host/a", nova_basic_handler:loggable_location(~"https://user:pass@host/a?t=1#f")),
     ?assertEqual(~"//host/x", nova_basic_handler:loggable_location(~"//user@host/x")),

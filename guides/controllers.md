@@ -113,7 +113,15 @@ Incoming files are handled by `nova_multipart_plugin` and not by a return keywor
 
 *Example*: `{redirect, "/my/other/path}`
 
-Sends a temporary redirect (HTTP status code 302) for the specified path to requester.
+Sends a temporary redirect (HTTP status code 302) for the specified path to requester. The target can be any URL, another site included, so do not pass it something the request supplied.
+
+*Keyword*: `redirect_local`
+
+*Spec*: `{redirect_local, Path :: list() | binary()}`
+
+*Example*: `{redirect_local, Next}`
+
+As `redirect`, for a target that comes from the request, such as the `next` parameter of a login form. It only redirects to a path on the site the request was made to: the target has to start with a single `/`. A full URL, `//host`, `/\host` and a path with a tab in it are answered with a `400` and logged as a warning.
 
 
 ## Fallback controllers

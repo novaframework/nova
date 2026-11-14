@@ -39,6 +39,12 @@ default_redirect_handler_test_() ->
         ?assert(is_function(Handler))
     end}.
 
+default_redirect_local_handler_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        {ok, Handler} = nova_handlers:get_handler(redirect_local),
+        ?assert(is_function(Handler))
+    end}.
+
 default_sendfile_handler_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         {ok, Handler} = nova_handlers:get_handler(sendfile),
