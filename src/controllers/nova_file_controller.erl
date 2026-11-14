@@ -17,8 +17,11 @@
 %% directory is resolved here, when the route is compiled, so a request only
 %% has to resolve the segments that come after it. The path of a file is
 %% made absolute, so it does not follow a change of the working directory.
+-type static() :: {file, file:name_all()} | {priv_file, atom(), file:name_all()} |
+                  {dir, file:name_all()} | {priv_dir, atom(), file:name_all()}.
+
 -doc false.
--spec static_state(Static :: tuple(), Options :: map()) -> map().
+-spec static_state(Static :: static(), Options :: map()) -> map().
 static_state({dir, _LocalPath} = Dir, Options) ->
     directory_state(Dir, Options);
 static_state({priv_dir, _App, _LocalPath} = Dir, Options) ->
