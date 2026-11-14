@@ -65,7 +65,7 @@ Rows are `{SessionId, Data, ExpiresAt}`. Older releases stored
 %%%===================================================================
 
 %%--------------------------------------------------------------------
--doc "Starts the server".
+-doc "Starts the process that owns the session table. `nova_sup` calls it.".
 -spec start_link() -> {ok, Pid :: pid()} |
                       {error, Error :: {already_started, pid()}} |
                       {error, Error :: term()} |
@@ -75,6 +75,10 @@ start_link() ->
 
 
 %% Read straight from the table, so reads do not queue behind the writes.
+-doc """
+Returns `{ok, Value}` for `Key` in the session, or `{error, not_found}` when
+the session or the key does not exist or the session has expired.
+""".
 -spec get_value(SessionId :: binary(), Key :: binary()) -> {ok, Value :: term()} | {error, not_found}.
 get_value(SessionId, Key) ->
     try live_session(SessionId) of
@@ -86,6 +90,11 @@ get_value(SessionId, Key) ->
 
 %% Every write waits for the local copy, so the next request on this node,
 %% which may arrive as soon as the response is out, already sees it.
+-doc """
+Stores `Value` under `Key` in the session, on every node, and creates the
+session when it does not exist. Returns `{error, session_store_full}` when
+that would take the table past `max_sessions`.
+""".
 -spec set_value(SessionId :: binary(), Key :: binary(), Value :: term()) -> ok | {error, session_store_full}.
 set_value(SessionId, Key, Value) ->
     case has_room(SessionId) of
@@ -96,11 +105,13 @@ set_value(SessionId, Key, Value) ->
             {error, session_store_full}
     end.
 
+-doc "Deletes the session on every node.".
 -spec delete_value(SessionId :: binary()) -> ok.
 delete_value(SessionId) ->
     nova_pubsub:broadcast(?CHANNEL, "delete_value", SessionId),
     sync().
 
+-doc "Deletes `Key` from the session on every node.".
 -spec delete_value(SessionId :: binary(), Key :: binary()) -> ok.
 delete_value(SessionId, Key) ->
     nova_pubsub:broadcast(?CHANNEL, "delete_value", {SessionId, Key}),
@@ -108,6 +119,7 @@ delete_value(SessionId, Key) ->
 
 %% Read straight from the table: nova_session calls this on every access by a
 %% request that carries a session cookie.
+-doc "Tells whether this node holds a session with this id that has not expired.".
 -spec session_exists(SessionId :: binary()) -> boolean().
 session_exists(SessionId) ->
     try ets:lookup(?TABLE, SessionId) of

@@ -56,14 +56,23 @@ above.
 %%% Callbacks
 %%%===================================================================
 
-%% Get a value from a given session_id
+-doc """
+Called by `get/2` for the value stored under `Key` in the session
+`SessionId`. What it returns is returned from `get/2` as it is. Return
+`{error, not_found}` for a session or a key the backend does not have.
+""".
 -callback get_value(SessionId, Key) ->
     {ok, Value :: any()} |
     {error, Reason :: atom()}
         when SessionId :: binary(),
              Key :: binary().
 
-%% Set a value
+-doc """
+Called by `set/3` to store `Value` under `Key` in the session `SessionId`,
+which the backend creates when it does not have it. What it returns is
+returned from `set/3` as it is. After `{error, Reason}` no session cookie is
+issued for the write. Any other return counts as a write.
+""".
 -callback set_value(SessionId, Key, Value) ->
     ok |
     {error, Reason :: atom()}
@@ -71,20 +80,30 @@ above.
              Key :: binary(),
              Value :: term().
 
-%% Deletes a whole session
+-doc """
+Called by `delete/1` and `renew/1` to drop the session `SessionId` and all
+its data. The return value is not used.
+""".
 -callback delete_value(SessionId) ->
     ok |
     {error, Reason :: atom()}
         when SessionId :: binary().
 
-%% Deletes a specific key of a session
+-doc """
+Called by `delete/2` to drop `Key` from the session `SessionId`. The return
+value is not used.
+""".
 -callback delete_value(SessionId, Key) ->
     ok |
     {error, Reason :: atom()}
         when SessionId :: binary(),
              Key :: binary().
 
-%% Start a server process for session backend, if necessary
+-doc """
+Starts the process of the backend, if it has one. When the backend exports
+it, `nova_sup` runs it as a permanent child that is started before the
+listener.
+""".
 -callback start_link() ->
     {ok, Pid :: pid()} |
     {error, Error :: {already_started, pid()}} |
@@ -193,6 +212,10 @@ renew(Req) ->
            end,
     {ok, with_session_id(NewSessionId, Req0)}.
 
+-doc """
+Deletes `Key` from the session of the request and returns `{ok, Req}` with
+the request as it was given, also when the request has no session.
+""".
 -spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} |
           {error, Reason :: atom()} | no_return().
 delete(Req, Key) ->
@@ -427,6 +450,7 @@ notify(#{pid := _, streamid := _, nova_session_owner := Owner} = Req, Event) whe
 notify(_Req, _Event) ->
     ok.
 
+-doc "Returns `{ok, Id}` with a new session id: 32 random bytes, base64 encoded.".
 -spec generate_session_id() -> {ok, binary()}.
 generate_session_id() ->
     {ok, base64:encode(crypto:strong_rand_bytes(32))}.
