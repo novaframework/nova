@@ -365,15 +365,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
 
     Plugins = resolve_plugins(maps:get(plugin_strategy, Options, local_or_global), RouteInfo, RouterFile),
 
-    Secure =
-        case maps:get(override_secure, Options, false) of
-            false ->
-                normalize_secure(maps:get(secure, Options, maps:get(security, RouteInfo, false)), RouterFile);
-            %% The including application overrides the security callback the
-            %% sub-application declared for itself.
-            Override ->
-                normalize_secure(Override, RouterFile)
-        end,
+    Secure = resolve_secure(Options, RouteInfo, RouterFile),
 
     Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins),
                                 extra_state = maps:get(extra_state, RouteInfo, #{})},
@@ -617,6 +609,28 @@ normalize_secure({SMod, SFun}, RouterFile) when is_atom(SMod), is_atom(SFun) ->
     fun SMod:SFun/1;
 normalize_secure(SCallback, _RouterFile) ->
     SCallback.
+
+%% The application-level `secure` only fills in for a route group that
+%% declares no callback, so mounting an application can add protection to
+%% its routes but never take away what the application declared for itself.
+%% Replacing a declared callback takes the explicit `override_secure`.
+resolve_secure(Options, RouteInfo, RouterFile) ->
+    case maps:get(override_secure, Options, false) of
+        false ->
+            AppDefault = maps:get(secure, Options, false),
+            case normalize_secure(maps:get(security, RouteInfo, false), RouterFile) of
+                false ->
+                    normalize_secure(AppDefault, RouterFile);
+                GroupCallback when is_map_key(secure, Options), AppDefault =/= GroupCallback ->
+                    ?LOG_WARNING(#{reason => <<"'secure' in nova_apps does not replace the security callback a route group declares. Use 'override_secure' to replace it.">>,
+                                   app => maps:get(app, Options), router_file => RouterFile}),
+                    GroupCallback;
+                GroupCallback ->
+                    GroupCallback
+            end;
+        Override ->
+            normalize_secure(Override, RouterFile)
+    end.
 
 resolve_plugins(local_or_global, RouteInfo, _RouterFile) ->
     maps:get(plugins, RouteInfo, global_plugins());

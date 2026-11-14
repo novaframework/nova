@@ -19,8 +19,8 @@ declares `nova_apps` of its own has those registered too.
 | Key | Value | Description |
 |---|---|---|
 | `prefix` | `string()` | Mount the application's routes under this path |
-| `secure` | `false` \| `fun/1` | Security callback for the application's routes |
-| `override_secure` | `false` \| `fun/1` | Replace the security callback the application declares for itself |
+| `secure` | `false` \| `fun/1` | Security callback for the application's route groups that declare none |
+| `override_secure` | `false` \| `fun/1` | Replace the security callback of every route group, including one the application declares for itself |
 | `plugin_strategy` | see the [routing guide](routing.md) | How the application's route-local plugins combine with the global ones |
 
 ### Example
@@ -43,6 +43,17 @@ declares `nova_apps` of its own has those registered too.
 
 `another_nova_app` now shares the listener, and the routing table, of
 `my_nova_app`. Its routes answer under `/another`.
+
+### Security of a mounted application
+
+A route group that declares a `security` callback keeps it when the
+application is mounted. `secure` only applies to the groups that declare none
+(or `false`), so mounting an application can put a callback in front of its
+routes but cannot take one away. `secure => false` leaves every group as the
+application declared it.
+
+Replacing a callback the application declares takes `override_secure`, see
+the [routing guide](routing.md#overriding-security-for-an-included-application).
 
 ## Starting an application at runtime
 

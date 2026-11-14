@@ -238,6 +238,12 @@ itself. Set `override_secure` in the options for that application:
 It takes the same values as `secure`: `false` for no override, a `fun/1`, or
 the deprecated `{Module, Function}`.
 
+`override_secure` is the only option that replaces a callback a route group
+declares. `secure` in the same place is a default: it applies to the groups
+that declare no callback, and is ignored, with a warning in the log, by a
+group that has one. To open up a group that declares a callback, override it
+with a callback that returns `true`.
+
 
 ## Route precedence
 
