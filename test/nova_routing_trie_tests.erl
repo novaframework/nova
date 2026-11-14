@@ -353,12 +353,12 @@ routes_normalizes_inputs_test() ->
     ]),
     ?assertEqual(lists:sort([
         {<<"example.com">>, <<"/atom">>, <<"GET">>, atom_payload},
-        {<<"example.com">>, <<"/string">>, <<"POST">>, string_payload},
-        {<<"example.com">>, <<"/binary">>, <<"PUT">>, binary_payload},
+        {<<"example.com">>, <<"/string">>, <<"pOsT">>, string_payload},
+        {<<"example.com">>, <<"/binary">>, <<"pUt">>, binary_payload},
         {'_', <<"/any">>, '_', any_payload},
         {'_', 404, '_', error_payload}
     ]), lists:sort(routes(T))),
-    ?assertEqual(['_', '_', <<"GET">>, <<"POST">>, <<"PUT">>],
+    ?assertEqual(['_', '_', <<"GET">>, <<"pOsT">>, <<"pUt">>],
                  lists:sort(route_methods(T))).
 
 %% A consumer of the stored comparator form, without a narrowing guard.
