@@ -81,8 +81,7 @@ merge_meta(Msg, Meta0, Config) ->
     maps:merge(Msg, Meta2).
 
 encode(Data, Config) ->
-    JsonLib = nova:get_env(json_lib, thoas),
-    Json = JsonLib:encode(Data),
+    Json = nova_json:encode(Data),
     case new_line(Config) of
         true -> [Json, new_line_type(Config)];
         false -> Json

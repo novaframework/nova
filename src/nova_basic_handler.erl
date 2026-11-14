@@ -8,7 +8,9 @@
          handle_redirect/3,
          handle_sendfile/3,
          handle_websocket/3,
-         handle_ws/2
+         handle_ws/2,
+         location/1,
+         loggable_location/1
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -18,6 +20,9 @@
 -endif.
 
 -type erlydtl_vars() :: map() | [{Key :: atom() | binary() | string(), Value :: any()}].
+
+%% A Cowboy request, told apart from a JSON object by the keys Cowboy sets.
+-define(IS_REQ(Term), (is_map(Term) andalso is_map_key(streamid, Term) andalso is_map_key(pid, Term))).
 
 
 
@@ -29,16 +34,19 @@ Handler for JSON. It can take one of three different return objects:
 
 \{json, StatusCode :: integer(), Headers :: map(), JSON :: map()\} Same operation as the above except you can set custom status code and custom headers.
 
-\{json, StatusCode :: integer(), Headers :: map(), Req0 :: cowboy_req:req(), JSON :: map()\} This is the same as the above but you can also return the request object. This is particularly useful if you want to set cookies or other headers that are not supported by the handler.
+\{json, StatusCode :: integer(), Headers :: map(), JSON :: map(), Req0 :: cowboy_req:req()\} This is the same as the above but you can also return the request object. This is particularly useful if you want to set cookies or other headers that are not supported by the handler. Older releases only accepted the request before the JSON, \{json, StatusCode, Headers, Req0, JSON\}; that order still works but is deprecated and logs a warning once per controller module.
 """.
 -spec handle_json({json, JSON :: map()} | {json, StatusCode :: integer(), Headers :: map(), JSON :: map()} |
-                  {json, StatusCode :: integer(), Headers :: map(), JSON :: map(), Req0 :: cowboy_req:req()},
+                  {json, StatusCode :: integer(), Headers :: map(), JSON :: map(), Req0 :: cowboy_req:req()} |
+                  {json, StatusCode :: integer(), Headers :: map(), Req0 :: cowboy_req:req(), JSON :: map()},
                   Callback :: function(), Req :: cowboy_req:req()) -> {ok, State :: cowboy_req:req()}.
-handle_json({json, StatusCode, Headers, Req0, JSON}, Callback, _Req) ->
+handle_json({json, StatusCode, Headers, Req0, JSON}, Callback, _Req) when ?IS_REQ(Req0), not ?IS_REQ(JSON) ->
+    deprecated_json_order(Callback),
+    handle_json({json, StatusCode, Headers, JSON}, Callback, Req0);
+handle_json({json, StatusCode, Headers, JSON, Req0}, Callback, _Req) ->
     handle_json({json, StatusCode, Headers, JSON}, Callback, Req0);
 handle_json({json, StatusCode, Headers, JSON}, _Callback, Req) ->
-    JsonLib = nova:get_env(json_lib, thoas),
-    EncodedJSON = JsonLib:encode(JSON),
+    EncodedJSON = nova_json:encode(JSON),
     Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, Headers),
     Req0 = cowboy_req:set_resp_headers(Headers0, Req),
     Req1 = cowboy_req:set_resp_body(EncodedJSON, Req0),
@@ -50,6 +58,18 @@ handle_json({json, JSON}, Callback, Req = #{method := Method}) ->
             handle_json({json, 201, #{}, JSON}, Callback, Req);
         _ ->
             handle_json({json, 200, #{}, JSON}, Callback, Req)
+    end.
+
+deprecated_json_order(Callback) ->
+    {module, Module} = erlang:fun_info(Callback, module),
+    Key = {?MODULE, json_order_warned, Module},
+    case persistent_term:get(Key, false) of
+        true ->
+            ok;
+        false ->
+            persistent_term:put(Key, true),
+            ?LOG_WARNING(#{msg => ~"{json, Status, Headers, Req, JSON} is deprecated, return {json, Status, Headers, JSON, Req}",
+                           controller => Module})
     end.
 
 
@@ -128,11 +148,10 @@ handle_status({status, Status, ExtraHeaders, JSON, Req0}, Callback, _Req) ->
     handle_status({status, Status, ExtraHeaders, JSON}, Callback, Req0);
 handle_status({status, Status, ExtraHeaders, JSON}, _Callback, Req) when is_map(JSON) ->
     %% We do not need to render a status page since we just return a JSON structure
-    JsonLib = nova:get_env(json_lib, thoas),
     Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, ExtraHeaders),
     Req0 = cowboy_req:set_resp_headers(Headers0, Req),
     Req1 = Req0#{resp_status_code => Status},
-    JSONStr = JsonLib:encode(JSON),
+    JSONStr = nova_json:encode(JSON),
     Req2 = cowboy_req:set_resp_body(JSONStr, Req1),
     {ok, Req2};
 handle_status({status, Status, ExtraHeaders, Body}, _Callback, Req) ->
@@ -160,13 +179,52 @@ Optionally you can attach the request object as the third argument. This is usef
                       Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()}.
 handle_redirect({redirect, Route, Req0}, Callback, _Req) ->
     handle_redirect({redirect, Route}, Callback, Req0);
-handle_redirect({redirect, Route}, Callback, Req) when is_list(Route) ->
-    handle_redirect({redirect, list_to_binary(Route)}, Callback, Req);
-handle_redirect({redirect, Route}, _Callback, Req) ->
-    Headers = #{<<"location">> => Route},
-    Req0 = cowboy_req:set_resp_headers(Headers, Req),
-    Req1 = Req0#{resp_status_code => 302},
-    {ok, Req1}.
+handle_redirect({redirect, Route}, Callback, Req) ->
+    case location(Route) of
+        error ->
+            {module, Module} = erlang:fun_info(Callback, module),
+            ?LOG_ERROR(#{msg => ~"Controller redirected to an invalid location", controller => Module,
+                         location => loggable_location(Route)}),
+            %% nova_handler renders the 500 status page for a thrown {Status, Reason}.
+            throw({500, #{status_code => 500, class => error, reason => invalid_redirect_location}});
+        Location ->
+            Req0 = cowboy_req:set_resp_headers(#{~"location" => Location}, Req),
+            {ok, Req0#{resp_status_code => 302}}
+    end.
+
+%% A location header value: valid UTF-8 without control characters, so a
+%% redirect target can neither split the response nor make Cowboy crash it.
+-doc false.
+-spec location(binary() | string()) -> binary() | error.
+location(Url) when is_binary(Url) ->
+    case valid_location(Url) of
+        true -> Url;
+        false -> error
+    end;
+location(Url) ->
+    try unicode:characters_to_binary(Url) of
+        Location when is_binary(Location) -> location(Location);
+        _ -> error
+    catch
+        error:badarg -> error
+    end.
+
+valid_location(<<C/utf8, Rest/binary>>) when C =:= $\t; C >= 16#20, C =/= 16#7F ->
+    valid_location(Rest);
+valid_location(<<>>) ->
+    true;
+valid_location(_) ->
+    false.
+
+%% A redirect target for a log line: the query string, fragment and userinfo
+%% can carry tokens, so only the scheme, host and path are kept.
+-doc false.
+-spec loggable_location(term()) -> binary() | redacted.
+loggable_location(Url) when is_binary(Url) ->
+    [Target | _] = binary:split(Url, [~"?", ~"#"]),
+    re:replace(Target, "^((?:[A-Za-z][A-Za-z0-9+.-]*:)?//)[^/]*@", "\\1", [{return, binary}]);
+loggable_location(_Url) ->
+    redacted.
 
 %%--------------------------------------------------------------------
 -doc """
