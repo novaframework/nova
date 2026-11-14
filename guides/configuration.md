@@ -28,7 +28,7 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 |-----|-------------|-------|---------|
 | `use_persistent_term` | Use `persistent_term` module to store routing tree | `boolean()` | `true` |
 | `use_stacktrace` | If Nova should include stacktrace in error-pages and crash logs. What is redacted from both is listed under *Redaction in logs and error pages*. | `boolean()` | `false` |
-| `redact_keys` | Extra keys whose values are redacted from crash logs and error pages, on top of the built-in list. Atoms, binaries or strings, matched case-insensitively. | `[atom() \| binary() \| string()]` | `[]` |
+| `redact_keys` | Extra key fragments whose values are redacted from crash logs and error pages, on top of the built-in list. Atoms, binaries or strings; a key matches when its name contains the fragment, see *Redaction in logs and error pages*. | `[atom() \| binary() \| string()]` | `[]` |
 | `render_error_pages` | If Nova should render error-pages for HTML-request | `boolean()` | `true` |
 | `use_sessions` | Turn off/on support for sessions | `boolean()` | `true` |
 | `session_manager` | Specify a module to use as the session manager. Defaults to `nova_session_ets`, which keeps sessions in memory: they do not survive a restart, and with several nodes and no sticky sessions users are signed out when they reach another node. Use a shared session store for those cases; see the [Sessions](sessions.md) guide. | `atom()` | `nova_session_ets` |
@@ -58,7 +58,13 @@ Crash reasons, plugin and controller results, and stacktraces can hold request d
 
 - replaces every Cowboy request map with its method and path, so headers, cookies, the query string and the body are left out;
 - replaces the argument list of every stacktrace frame with its arity;
-- replaces the value of these keys, in maps and in `{Key, Value}` pairs such as proplists and header or query string lists, with `redacted`: `authorization`, `cookie`, `set-cookie`, `password`, `token`, `secret`, `_csrf_token`, `x-csrf-token`, `session_id` and `qs` (so the query string of the partial request a websocket's `terminate/3` gets is redacted too), plus the keys in `redact_keys`. Keys match case-insensitively whether they are atoms, binaries or strings.
+- replaces the value of every sensitive key with `redacted`, in maps and in lists of `{Key, Value}` pairs such as proplists and header or query string lists.
+
+A key is sensitive when its name contains one of these fragments: `passw`, `secret`, `token`, `apikey`, `authorization`, `cookie`, `session`, `csrf`, `privatekey`, `credential`, or a fragment listed in `redact_keys`. Two more match as whole names only: `qs` (so the query string of the partial request a websocket's `terminate/3` gets is redacted too) and `otp`. Keys can be atoms, binaries or strings. Names are compared in lower case with `-` and `_` removed, so `access_token`, `X-Api-Key`, `clientSecret`, `password_confirmation` and `Set-Cookie` are all covered. Only the first 64 bytes of a name are looked at.
+
+A fragment in `redact_keys` matches everywhere it occurs: `pin` also redacts `shipping`. Prefer the longest fragment that still covers your keys.
+
+A `{Key, Value}` tuple that is not an element of a list has the same shape as an error tuple, so its value is redacted only when the whole name is one of the fragments above, or is `password`, `session_id`, `set-cookie`, `_csrf_token`, `x-csrf-token`, `qs` or `otp`: `{token, T}` is redacted, `{invalid_token, Reason}` is not.
 
 Anything else is logged as is: a secret held under another key, or in a plain tuple or a binary, still reaches the log. Add such keys to `redact_keys`. Values your own code logs are not touched.
 
