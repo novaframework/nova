@@ -65,6 +65,9 @@ stream_test_() ->
       fun delete_expires_cookie/0,
       fun write_after_delete_issues_new_cookie/0,
       fun stream_reply_carries_cookie/0,
+      fun response_after_a_response_is_dropped/0,
+      fun response_after_stream_headers_is_dropped/0,
+      fun body_of_a_stream_is_not_a_second_response/0,
       fun sessions_disabled/0
      ]}.
 
@@ -248,6 +251,23 @@ stream_reply_carries_cookie() ->
     [Other, Cookie] = set_cookies(Headers),
     ?assertEqual(~"other=1", Other),
     ?assertEqual(Id, cookie_value(Cookie)).
+
+response_after_a_response_is_dropped() ->
+    {_Req, State} = start(req()),
+    {[{response, 200, _Headers, ~"first"}], State1} = nova_stream_h:info(1, {response, 200, #{}, ~"first"}, State),
+    ?assertEqual({[], State1}, nova_stream_h:info(1, {response, 500, #{}, ~"second"}, State1)),
+    ?assertEqual({[], State1}, nova_stream_h:info(1, {headers, 200, #{}}, State1)).
+
+response_after_stream_headers_is_dropped() ->
+    {_Req, State} = start(req()),
+    {[{headers, 200, _Headers}], State1} = nova_stream_h:info(1, {headers, 200, #{}}, State),
+    ?assertEqual({[], State1}, nova_stream_h:info(1, {response, <<"500 Oops">>, #{}, ~"second"}, State1)).
+
+body_of_a_stream_is_not_a_second_response() ->
+    {_Req, State} = start(req()),
+    {[{headers, 200, _Headers}], State1} = nova_stream_h:info(1, {headers, 200, #{}}, State),
+    ?assertMatch({[{data, fin, ~"chunk"}], _}, nova_stream_h:info(1, {data, fin, ~"chunk"}, State1)),
+    ?assertMatch({[{trailers, #{}}], _}, nova_stream_h:info(1, {trailers, #{}}, State1)).
 
 sessions_disabled() ->
     application:set_env(nova, use_sessions, false),

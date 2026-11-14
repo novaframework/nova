@@ -23,7 +23,8 @@
 -record(state, {
                 next :: {module(), term()} | undefined,
                 req,
-                session :: #session{} | undefined
+                session :: #session{} | undefined,
+                responded = false :: boolean()
                }).
 
 -type state() :: #state{}.
@@ -47,18 +48,36 @@ data(StreamID, IsFin, Data, State = #state{next = Next}) ->
           -> {cowboy_stream:commands(), State} when State::state().
 info(_StreamID, {nova_session, Event}, State = #state{session = Session}) ->
     {[], State#state{session = session_event(Event, Session)}};
-info(StreamID, {response, Code, Headers, Body}, State) when is_integer(Code) ->
+info(StreamID, Info, State = #state{responded = Responded}) ->
+    case response_status(Info) of
+        {ok, StatusCode} when Responded ->
+            %% Cowboy stops the whole connection when it is handed a second
+            %% response for a request, so it never gets to see this one.
+            ?LOG_WARNING(#{msg => ~"A response was dropped: the response to this request had already begun",
+                           status_code => StatusCode}),
+            {[], State};
+        {ok, _StatusCode} ->
+            respond(StreamID, Info, State#state{responded = true});
+        none ->
+            respond(StreamID, Info, State)
+    end.
+
+response_status({response, StatusCode, _Headers, _Body}) -> {ok, StatusCode};
+response_status({headers, StatusCode, _Headers})         -> {ok, StatusCode};
+response_status(_Info)                                   -> none.
+
+respond(StreamID, {response, Code, Headers, Body}, State) when is_integer(Code) ->
     {Headers0, State0} = session_cookie(Headers, State),
     forward(StreamID, {response, Code, Headers0, Body}, State0);
-info(StreamID, {headers, Code, Headers}, State) when is_integer(Code) ->
+respond(StreamID, {headers, Code, Headers}, State) when is_integer(Code) ->
     {Headers0, State0} = session_cookie(Headers, State),
     forward(StreamID, {headers, Code, Headers0}, State0);
 %% A websocket upgrade: a session written in nova_websocket:init/1 gets its
 %% cookie on the 101.
-info(StreamID, {switch_protocol, Headers, Module, ModState}, State) when is_map(Headers) ->
+respond(StreamID, {switch_protocol, Headers, Module, ModState}, State) when is_map(Headers) ->
     {Headers0, State0} = session_cookie(Headers, State),
     forward(StreamID, {switch_protocol, Headers0, Module, ModState}, State0);
-info(StreamID, Info, State) ->
+respond(StreamID, Info, State) ->
     forward(StreamID, Info, State).
 
 forward(StreamID, Info, State = #state{next = Next}) ->

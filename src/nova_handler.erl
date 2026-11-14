@@ -134,7 +134,7 @@ crash_report(StatusPage) ->
 render_crash(Req, Env = #{callback := Callback}, 500) ->
     case Callback =:= fun nova_error_controller:server_error/1 of
         true ->
-            {ok, cowboy_req:reply(500, maps:without([resp_body], Req)), Env};
+            {ok, reply(500, maps:without([resp_body], Req)), Env};
         false ->
             execute_controller(Req, Env#{app => nova, callback => fun nova_error_controller:server_error/1}, 500)
     end;
@@ -250,11 +250,19 @@ get_handler(_RetObj) ->
 
 -spec render_response(Req :: cowboy_req:req(), Env :: map()) -> {ok, Req :: cowboy_req:req(), State :: map()}.
 render_response(Req = #{resp_status_code := StatusCode}, Env) when is_integer(StatusCode); is_binary(StatusCode) ->
-    Req0 = cowboy_req:reply(StatusCode, without_refused_body(StatusCode, Req)),
+    Req0 = reply(StatusCode, without_refused_body(StatusCode, Req)),
     {ok, Req0, Env};
 render_response(Req, Env) when not is_map_key(resp_status_code, Req) ->
-    Req0 = cowboy_req:reply(200, Req),
+    Req0 = reply(200, Req),
     {ok, Req0, Env}.
+
+%% A handler or a controller that streamed its response, or replied itself,
+%% hands back a request Cowboy has marked as answered, and exits when asked
+%% to answer it again.
+reply(_StatusCode, Req) when is_map_key(has_sent_resp, Req) ->
+    Req;
+reply(StatusCode, Req) ->
+    cowboy_req:reply(StatusCode, Req).
 
 
 %% A 204 and a 304 have no body, and Cowboy exits when given one.
