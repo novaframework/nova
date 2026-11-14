@@ -65,9 +65,9 @@ stream_test_() ->
       fun delete_expires_cookie/0,
       fun write_after_delete_issues_new_cookie/0,
       fun stream_reply_carries_cookie/0,
-      fun response_after_a_response_is_dropped/0,
-      fun response_after_stream_headers_is_dropped/0,
-      fun body_of_a_stream_is_not_a_second_response/0,
+      fun request_is_marked_for_nova_handler/0,
+      fun tells_whether_the_response_has_begun/0,
+      fun second_response_is_left_to_cowboy/0,
       fun sessions_disabled/0
      ]}.
 
@@ -252,22 +252,37 @@ stream_reply_carries_cookie() ->
     ?assertEqual(~"other=1", Other),
     ?assertEqual(Id, cookie_value(Cookie)).
 
-response_after_a_response_is_dropped() ->
-    {_Req, State} = start(req()),
-    {[{response, 200, _Headers, ~"first"}], State1} = nova_stream_h:info(1, {response, 200, #{}, ~"first"}, State),
-    ?assertEqual({[], State1}, nova_stream_h:info(1, {response, 500, #{}, ~"second"}, State1)),
-    ?assertEqual({[], State1}, nova_stream_h:info(1, {headers, 200, #{}}, State1)).
+request_is_marked_for_nova_handler() ->
+    {Req, _State} = start(req()),
+    ?assertEqual(true, maps:get(nova_stream_h, Req)).
 
-response_after_stream_headers_is_dropped() ->
+tells_whether_the_response_has_begun() ->
     {_Req, State} = start(req()),
-    {[{headers, 200, _Headers}], State1} = nova_stream_h:info(1, {headers, 200, #{}}, State),
-    ?assertEqual({[], State1}, nova_stream_h:info(1, {response, <<"500 Oops">>, #{}, ~"second"}, State1)).
+    ?assertEqual(false, response_begun(State)),
+    {[{headers, 200, _}], Streaming} = nova_stream_h:info(1, {headers, 200, #{}}, State),
+    ?assertEqual(headers, response_begun(Streaming)),
+    {[{data, fin, ~"chunk"}], Streamed} = nova_stream_h:info(1, {data, fin, ~"chunk"}, Streaming),
+    ?assertEqual(headers, response_begun(Streamed)),
+    {[{response, <<"200 OK">>, _, ~"whole"}], Answered} =
+        nova_stream_h:info(1, {response, <<"200 OK">>, #{}, ~"whole"}, State),
+    ?assertEqual(true, response_begun(Answered)).
 
-body_of_a_stream_is_not_a_second_response() ->
+%% Cowboy answers 500 itself when it refuses the headers of a response, and
+%% that answer comes through here after the response it replaces.
+second_response_is_left_to_cowboy() ->
     {_Req, State} = start(req()),
-    {[{headers, 200, _Headers}], State1} = nova_stream_h:info(1, {headers, 200, #{}}, State),
-    ?assertMatch({[{data, fin, ~"chunk"}], _}, nova_stream_h:info(1, {data, fin, ~"chunk"}, State1)),
-    ?assertMatch({[{trailers, #{}}], _}, nova_stream_h:info(1, {trailers, #{}}, State1)).
+    {[{response, 200, _, ~"refused"}], State1} = nova_stream_h:info(1, {response, 200, #{}, ~"refused"}, State),
+    ?assertMatch({[{response, 500, #{~"content-length" := ~"0"}, <<>>}], _},
+                 nova_stream_h:info(1, {response, 500, #{~"content-length" => ~"0"}, <<>>}, State1)).
+
+response_begun(State) ->
+    Ref = make_ref(),
+    {[], State} = nova_stream_h:info(1, {nova_response_begun, self(), Ref}, State),
+    receive
+        {Ref, Sent} -> Sent
+    after 0 ->
+            error(no_answer)
+    end.
 
 sessions_disabled() ->
     application:set_env(nova, use_sessions, false),

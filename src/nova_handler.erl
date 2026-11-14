@@ -92,7 +92,10 @@ execute_controller(Req, Env = #{callback := Callback}, StatusPage) ->
             ?LOG_ERROR(#{msg => <<"Controller threw an exception">>,
                          class => Class,
                          reason => nova_redact:term(Reason)}),
-            render_response(Req#{crash_info => nova_redact:term(Reason)}, Env, Status);
+            case response_begun(Req) of
+                false -> render_response(Req#{crash_info => nova_redact:term(Reason)}, Env, Status);
+                Sent -> without_error_page(Req, Env, Sent)
+            end;
         Class:Reason0:Stacktrace when UseStacktrace == true ->
             Reason = nova_redact:term(Reason0),
             FormattedStacktrace = nova:format_stacktrace(Stacktrace),
@@ -131,15 +134,45 @@ crash_report(StatusPage) ->
 %% fails would be rendered without end. The page of another status hands
 %% over to the 500 page, the 500 page of the application to Nova's own, and
 %% Nova's own to a bare 500.
-render_crash(Req, Env = #{callback := Callback}, 500) ->
+render_crash(Req, Env, StatusPage) ->
+    case response_begun(Req) of
+        false -> render_crash_page(Req, Env, StatusPage);
+        Sent -> without_error_page(Req, Env, Sent)
+    end.
+
+render_crash_page(Req, Env = #{callback := Callback}, 500) ->
     case Callback =:= fun nova_error_controller:server_error/1 of
         true ->
             {ok, reply(500, maps:without([resp_body], Req)), Env};
         false ->
             execute_controller(Req, Env#{app => nova, callback => fun nova_error_controller:server_error/1}, 500)
     end;
-render_crash(Req, Env, _StatusPage) ->
+render_crash_page(Req, Env, _StatusPage) ->
     render_response(Req, Env, 500).
+
+%% Whether the response to the request has begun, and how far it got. A
+%% controller or handler that fails after cowboy_req:stream_reply/3 leaves
+%% Nova with the request as it was before the call, so nova_stream_h, which
+%% saw the response go by in the connection process, is asked.
+response_begun(#{has_sent_resp := Sent}) ->
+    Sent;
+response_begun(#{nova_stream_h := true} = Req) ->
+    Ref = make_ref(),
+    cowboy_req:cast({nova_response_begun, self(), Ref}, Req),
+    receive
+        {Ref, Sent} -> Sent
+    after 5000 ->
+            false
+    end;
+response_begun(_Req) ->
+    false.
+
+%% An error page sent into a response that is under way stops the connection
+%% process, and every other request on the connection with it. The request
+%% goes on marked as answered, so nothing after this replies either.
+without_error_page(Req, Env, Sent) ->
+    ?LOG_WARNING(#{msg => ~"The response had begun when the controller failed, so no error page is sent"}),
+    {ok, Req#{has_sent_resp => Sent}, Env}.
 
 %% {Status, Reason} raised in any class is how a controller asks execute/2 for
 %% a status page, so it ends the span as a stop with that status. A status

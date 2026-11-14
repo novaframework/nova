@@ -24,7 +24,9 @@
                 next :: {module(), term()} | undefined,
                 req,
                 session :: #session{} | undefined,
-                responded = false :: boolean()
+                %% Whether the response has begun: with its headers alone, when
+                %% it is streamed, or in full
+                sent = false :: false | headers | true
                }).
 
 -type state() :: #state{}.
@@ -33,8 +35,9 @@
           -> {cowboy_stream:commands(), state()}.
 init(StreamID, Req, Opts) ->
     {Req0, Session} = init_session(Req),
-    %% Set the correct server-header information
-    Req1 = cowboy_req:set_resp_header(<<"server">>, <<"Cowboy/Nova">>, Req0),
+    %% Set the correct server-header information. The marker tells
+    %% nova_handler that this handler can be asked whether a response began.
+    Req1 = cowboy_req:set_resp_header(<<"server">>, <<"Cowboy/Nova">>, Req0#{nova_stream_h => true}),
     {Commands, Next} = cowboy_stream:init(StreamID, Req1, Opts),
     {Commands, #state{req = Req0, next = Next, session = Session}}.
 
@@ -48,23 +51,17 @@ data(StreamID, IsFin, Data, State = #state{next = Next}) ->
           -> {cowboy_stream:commands(), State} when State::state().
 info(_StreamID, {nova_session, Event}, State = #state{session = Session}) ->
     {[], State#state{session = session_event(Event, Session)}};
-info(StreamID, Info, State = #state{responded = Responded}) ->
-    case response_status(Info) of
-        {ok, StatusCode} when Responded ->
-            %% Cowboy stops the whole connection when it is handed a second
-            %% response for a request, so it never gets to see this one.
-            ?LOG_WARNING(#{msg => ~"A response was dropped: the response to this request had already begun",
-                           status_code => StatusCode}),
-            {[], State};
-        {ok, _StatusCode} ->
-            respond(StreamID, Info, State#state{responded = true});
-        none ->
-            respond(StreamID, Info, State)
-    end.
-
-response_status({response, StatusCode, _Headers, _Body}) -> {ok, StatusCode};
-response_status({headers, StatusCode, _Headers})         -> {ok, StatusCode};
-response_status(_Info)                                   -> none.
+%% nova_handler asks before it sends an error page: a controller that fails
+%% after it began to stream leaves it with the request as it was before.
+info(_StreamID, {nova_response_begun, From, Ref}, State = #state{sent = Sent}) when is_pid(From) ->
+    From ! {Ref, Sent},
+    {[], State};
+info(StreamID, {response, _Code, _Headers, _Body} = Info, State) ->
+    respond(StreamID, Info, State#state{sent = true});
+info(StreamID, {headers, _Code, _Headers} = Info, State = #state{sent = false}) ->
+    respond(StreamID, Info, State#state{sent = headers});
+info(StreamID, Info, State) ->
+    respond(StreamID, Info, State).
 
 respond(StreamID, {response, Code, Headers, Body}, State) when is_integer(Code) ->
     {Headers0, State0} = session_cookie(Headers, State),
