@@ -15,6 +15,8 @@ player1() -> spawn(fun() -> nova_pubsub:join(game_of_pong), game_loop(1, "pong",
 player2() -> spawn(fun() -> nova_pubsub:join(game_of_pong), game_loop(2, "ping", "pong").
 
 game_loop(Player, ExpectedMessage, Smash) -> receive ExpectedMessage -> io:format("Player ~d received ~s and returning ~s~n", \[Player, ExpectedMessage, Smash]), nova_pubsub:broadcast(game_of_pong, "match1", Smash), game_loop(Player, ExpectedMessage, Smash); _ -> game_loop(Player, ExpectedMessage, Smash) end.
+
+The subscriptions are kept by a `pg` scope registered as `nova_scope`, which Nova supervises. A scope that is restarted comes back empty: the processes on the node have left every channel and must join again. A process that has to stay subscribed can monitor `nova_scope` to find out.
 """.
 -export([
          start/0,

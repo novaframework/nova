@@ -11,6 +11,7 @@
          invalid_security_fails_the_boot/1,
          invalid_security_of_a_mounted_application_fails_the_boot/1,
          pubsub_scope_is_restarted/1,
+         restarted_pubsub_scope_has_no_members/1,
          pubsub_scope_started_elsewhere_is_left_alone/1
         ]).
 
@@ -25,6 +26,7 @@ all() ->
      invalid_security_fails_the_boot,
      invalid_security_of_a_mounted_application_fails_the_boot,
      pubsub_scope_is_restarted,
+     restarted_pubsub_scope_has_no_members,
      pubsub_scope_started_elsewhere_is_left_alone
     ].
 
@@ -95,6 +97,18 @@ pubsub_scope_is_restarted(_Config) ->
     ?assert(restarted(Scope, 50)),
     ok = nova_pubsub:join(restarted_channel),
     ?assertEqual([self()], nova_pubsub:get_members(restarted_channel)).
+
+restarted_pubsub_scope_has_no_members(_Config) ->
+    _Port = nova_test_listener:start(#{}),
+    ok = nova_pubsub:join(emptied_channel),
+    Scope = pubsub_scope(),
+    Monitor = monitor(process, nova_scope),
+    exit(Scope, kill),
+    receive {'DOWN', Monitor, process, {nova_scope, _Node}, killed} -> ok end,
+    ?assert(restarted(Scope, 50)),
+    ?assertEqual([], nova_pubsub:get_members(emptied_channel)),
+    ok = nova_pubsub:join(emptied_channel),
+    ?assertEqual([self()], nova_pubsub:get_members(emptied_channel)).
 
 pubsub_scope_started_elsewhere_is_left_alone(_Config) ->
     {ok, Scope} = pg:start(nova_scope),

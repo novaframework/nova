@@ -46,3 +46,9 @@ This can ofcourse be extended to do so much more, but this is a taste of what on
 ## Configuration
 
 It does not require any specific parameters set in order to work. Just remember to enable *distributed erlang*.
+
+## When the scope is restarted
+
+The subscriptions are kept by a `pg` scope, a process registered as `nova_scope` that Nova supervises. If it dies it is started again, empty: every process on the node has left every channel and receives nothing until it calls `nova_pubsub:join/1,2` again. Processes on other nodes stay subscribed.
+
+A process that has to stay subscribed monitors the scope with `monitor(process, nova_scope)` and joins again once the scope is back. `nova_pubsub:join/1,2` fails with `noproc` until then.
