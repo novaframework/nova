@@ -14,7 +14,9 @@
          absolute_segment/1,
          symlink_inside_root/1,
          symlink_escaping_root/1,
-         symlink_escaping_root_when_allowed/1
+         symlink_escaping_root_when_allowed/1,
+         root_that_is_a_symlink/1,
+         index_file/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -33,7 +35,9 @@ all() ->
      absolute_segment,
      symlink_inside_root,
      symlink_escaping_root,
-     symlink_escaping_root_when_allowed
+     symlink_escaping_root_when_allowed,
+     root_that_is_a_symlink,
+     index_file
     ].
 
 init_per_suite(Config) ->
@@ -46,10 +50,18 @@ init_per_suite(Config) ->
     ok = file:make_symlink("inside.txt", filename:join(Root, "link-inside")),
     ok = file:make_symlink("../secret.txt", filename:join(Root, "link-outside")),
     ok = file:make_symlink("..", filename:join(Root, "dir-outside")),
+    ok = file:make_symlink("root", filename:join(Base, "root-link")),
+    ok = filelib:ensure_path(filename:join(Root, "indexed")),
+    ok = file:write_file(filename:join([Root, "indexed", "index.html"]), ~"index"),
+    ok = filelib:ensure_path(filename:join(Root, "linked-index")),
+    ok = file:make_symlink("../../secret.txt", filename:join([Root, "linked-index", "index.html"])),
     Host = [#{prefix => "",
               routes => [
                          {"/files/[...]", Root},
-                         {"/linked/[...]", Root, #{follow_external_symlinks => true}}
+                         {"/linked/[...]", Root, #{follow_external_symlinks => true}},
+                         {"/via-link/[...]", filename:join(Base, "root-link")},
+                         {"/indexed/[...]", filename:join(Root, "indexed")},
+                         {"/linked-index/[...]", filename:join(Root, "linked-index")}
                         ]}],
     [{port, nova_test_listener:start(#{host => Host})}, {secret, filename:join(Base, "secret.txt")} | Config].
 
@@ -104,6 +116,21 @@ symlink_escaping_root(Config) ->
 symlink_escaping_root_when_allowed(Config) ->
     ?assertEqual({200, ?SECRET}, nova_test_listener:get(?config(port, Config), "/linked/link-outside")),
     refused(Config, "/linked/../secret.txt").
+
+root_that_is_a_symlink(Config) ->
+    Port = ?config(port, Config),
+    ?assertEqual({200, ~"inside"}, nova_test_listener:get(Port, "/via-link/inside.txt")),
+    ?assertEqual({200, ~"deep"}, nova_test_listener:get(Port, "/via-link/sub/deep.txt")),
+    ?assertEqual({200, ~"inside"}, nova_test_listener:get(Port, "/via-link/link-inside")),
+    refused(Config, "/via-link/link-outside"),
+    refused(Config, "/via-link/dir-outside/secret.txt").
+
+index_file(Config) ->
+    Port = ?config(port, Config),
+    ?assertEqual({200, ~"index"}, nova_test_listener:get(Port, "/files/indexed")),
+    ?assertEqual({200, ~"index"}, nova_test_listener:get(Port, "/indexed")),
+    refused(Config, "/files/linked-index"),
+    refused(Config, "/linked-index").
 
 refused(Config, Path) ->
     {Status, Body} = nova_test_listener:get(?config(port, Config), Path),
