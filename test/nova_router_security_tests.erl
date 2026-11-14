@@ -60,3 +60,21 @@ precedence_test_() ->
        ?_assertEqual(false, secure_of(unset, #{}))},
       {"the deprecated {Mod, Fun} form is still accepted on a group",
        ?_assertEqual(Group, secure_of({?MODULE, group_callback}, #{secure => false}))}]}.
+
+invalid_value_stops_the_compile_test_() ->
+    Host = fun ?MODULE:host_callback/1,
+    {setup, fun setup/0, fun cleanup/1,
+     [{"on a route group",
+       ?_assertThrow({error, {invalid_security, true}}, secure_of(true, #{}))},
+      {"on a route group, with a callback on the mounting application",
+       ?_assertThrow({error, {invalid_security, enabled}}, secure_of(enabled, #{secure => Host}))},
+      {"as secure on the mounting application",
+       ?_assertThrow({error, {invalid_security, true}}, secure_of(unset, #{secure => true}))},
+      {"as override_secure on the mounting application",
+       ?_assertThrow({error, {invalid_security, "my_auth:check"}},
+                     secure_of(unset, #{override_secure => "my_auth:check"}))},
+      {"and leaves the routing table as it was",
+       fun() ->
+               ?assertThrow({error, {invalid_security, true}}, secure_of(true, #{})),
+               ?assertEqual([], nova_router:compiled_apps(?KEY))
+       end}]}.

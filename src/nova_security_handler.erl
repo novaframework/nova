@@ -12,6 +12,8 @@
 
 execute(Req, Env = #{secure := false}) ->
     {ok, Req, Env};
+execute(Req, Env = #{secure := Invalid}) when not is_function(Invalid, 1) ->
+    execute(Req, Env#{secure => fun deny/1});
 execute(Req = #{host := Host}, Env = #{secure := Callback}) ->
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
     try Callback(Req) of
@@ -43,8 +45,10 @@ execute(Req = #{host := Host}, Env = #{secure := Callback}) ->
     end.
 
 
-%% Stands in for a security value the router could not use, so a
-%% misconfigured route group is closed rather than left open.
+%% The router refuses a security value it cannot use when it compiles the
+%% routes. This stands in for one that reaches a request some other way, so
+%% the route is closed rather than left open.
+-doc false.
 -spec deny(Req :: cowboy_req:req()) -> false.
 deny(_Req) ->
     false.

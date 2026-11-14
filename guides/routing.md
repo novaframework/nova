@@ -153,7 +153,7 @@ routes(_Environment) ->
     }].
 ```
 
-`security` takes `false`, a `fun/1` or the deprecated `{Module, Function}`. Any other value, `true` included, is logged as an error and every request to the group is answered with `401`.
+`security` takes `false`, a `fun/1` or the deprecated `{Module, Function}`. Any other value, `true` included, is logged as an error and stops the application from starting with `{invalid_security, Value}`. The same goes for `secure` and `override_secure` in `nova_apps`.
 
 ### The security-function callback
 

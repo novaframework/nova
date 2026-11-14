@@ -169,6 +169,17 @@ callback_unexpected_value_test_() ->
     end}.
 
 %%====================================================================
+%% A value that is not a callback -> 401 stop
+%%====================================================================
+
+invalid_secure_value_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     [fun() ->
+              {stop, Req1} = nova_security_handler:execute(req(), (env())#{secure => Invalid}),
+              ?assertEqual(401, maps:get(resp_status_code, Req1))
+      end || Invalid <- [true, enabled, {my_auth, check}, fun() -> true end]]}.
+
+%%====================================================================
 %% Callback crashes -> 500 stop (stacktrace disabled)
 %%====================================================================
 

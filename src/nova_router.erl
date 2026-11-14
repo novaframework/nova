@@ -672,9 +672,9 @@ normalize_secure({SMod, SFun}, RouterFile) when is_atom(SMod), is_atom(SFun) ->
 normalize_secure(SCallback, _RouterFile) when is_function(SCallback, 1) ->
     SCallback;
 normalize_secure(Invalid, RouterFile) ->
-    ?LOG_ERROR(#{reason => <<"A security value must be false, a fun/1 or {Mod, Fun}. Every request to these routes is denied.">>,
+    ?LOG_ERROR(#{reason => <<"A security value must be false, a fun/1 or {Mod, Fun}.">>,
                  value => Invalid, router_file => RouterFile}),
-    fun nova_security_handler:deny/1.
+    throw({error, {invalid_security, Invalid}}).
 
 %% The application-level `secure` only fills in for a route group that
 %% declares no callback, so mounting an application can add protection to
