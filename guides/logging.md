@@ -110,6 +110,7 @@ for.
 | `Could not start cowboy with SSL` | error | The TLS listener could not be started, for instance because a certificate cannot be read. Nova does not start |
 | `A security value must be false, a fun/1 or {Mod, Fun}.` | error | A `security`, `secure` or `override_secure` has another value. Nova does not start |
 | `This key is not read here, so it protects nothing. ...` | warning | A route group has a `secure` key, or the options of a route have `security` or `secure`. The report has the `app`, the `path` and the `key`. Declare the callback as `security` on the route group |
+| `Could not find the router module of the application` | error | An application has no `router_module` set and its `<app>_router` module is not in the code path. Nova does not start |
 | `Conflicting route` | warning | Two routes have the same path and method. The first is kept. With `use_strict_routing` it is an error and Nova does not start |
 | `Unknown plugin_strategy, falling back to local_or_global` | error | The `plugin_strategy` of a `nova_apps` entry is not one Nova knows |
 | `plugin_strategy on a route entry is ignored ...` | warning | `plugin_strategy` belongs in the `nova_apps` entry of the application |

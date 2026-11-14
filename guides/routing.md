@@ -1,6 +1,6 @@
 # Routing
 
-Each Nova application has a router module. Its `routes/1` callback returns the routes of the application as a list of *route groups*. The module is named after the application with `_router` appended, such as `my_app_router`; `router_module` in the application environment names another one.
+Each Nova application has a router module. Its `routes/1` callback returns the routes of the application as a list of *route groups*. The module is named after the application with `_router` appended, such as `my_app_router`; `router_module` in the application environment names another one. When `router_module` is not set and no module of that name is found, Nova does not start, with `{router_module_not_found, App}`.
 
 ## Basic components
 
