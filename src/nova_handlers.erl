@@ -20,7 +20,9 @@ handle_console({console, Format, Args}, _Callback, Req) ->
     {ok, Req#{resp_status_code => 204}}.
 ```
 
-The init/0 should be invoked from your applications *supervisor* and will register handle_console/3 as handler of the return type `{console, Format, Args}`. This means that you can return this tuple in a controller which invokes `my_handler:handle_console/3`. `{my_handler, handle_console}` registers the same function.
+The init/0 should be invoked from your applications *supervisor* and will register handle_console/3 as handler of the return type `{console, Format, Args}`. This means that you can return this tuple in a controller which invokes `my_handler:handle_console/3`.
+
+Register a fun. The `{Module, Function}` form is deprecated like every other `{Module, Function}` in Nova and is removed in 1.0; until then it registers `fun Module:Function/3`.
 
 A handler returns `{ok, Req}`; Nova replies with `resp_status_code` (200 if unset) and whatever body and headers the handler set on `Req`.
 """.

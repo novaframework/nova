@@ -108,7 +108,9 @@ of `{Module, Function}` in Nova.
 
 - **A handler registered as `{Module, Function}` is called with arity 3.**
   `nova_handlers:register_handler/2` used to build `fun Module:Function/4`,
-  but handlers are called with three arguments. Export `Function/3`.
+  but handlers are called with three arguments. The form itself stays
+  deprecated (see 0.9.24) and is removed in 1.0: register
+  `fun Module:Function/3` instead.
 
 - **`decode_json_body` decodes `application/json` and `application/*+json`.**
   The type is matched in any case, with any parameters, and `+json` types
