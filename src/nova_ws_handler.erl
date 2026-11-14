@@ -15,7 +15,7 @@
 
 -type nova_ws_state() :: #{controller_data := map(),
                            mod := atom(),
-                           _ := _}.
+                           _ => _}.
 
 -export_type([nova_ws_state/0]).
 

@@ -60,8 +60,9 @@ A handler returns `{ok, Req}`; Nova replies with `resp_status_code` (200 if unse
 
 -export_type([handler_return/0]).
 
--type handler_callback() :: {Module :: atom(), Function :: atom()} |
-                            fun((...) -> handler_return()).
+-type handler() :: fun((...) -> handler_return()).
+-type handler_callback() :: {Module :: atom(), Function :: atom()} | handler().
+-export_type([handler/0, handler_callback/0]).
 
 -define(REGISTERED, {?MODULE, registered}).
 
@@ -99,13 +100,13 @@ unregister_handler(Handle) ->
 
 %%--------------------------------------------------------------------
 -doc "Fetches the handler identified with 'Handle' and returns the callback function for it.".
--spec get_handler(Handle :: atom()) -> {ok, Callback :: handler_callback()} |
+-spec get_handler(Handle :: atom()) -> {ok, Callback :: handler()} |
                                        {error, not_found}.
 get_handler(Handle) ->
     case ets:lookup(?HANDLERS_TABLE, Handle) of
         [] ->
             {error, not_found};
-        [{Handle, Callback}] ->
+        [{Handle, Callback}] when is_function(Callback) ->
             {ok, Callback}
     end.
 
@@ -172,7 +173,7 @@ handle_cast({register_handler, Handle, Callback}, State) ->
     Callback0 =
         case Callback of
             Callback when is_function(Callback) -> Callback;
-            {Module, Function} -> fun Module:Function/3
+            {Module, Function} when is_atom(Module), is_atom(Function) -> fun Module:Function/3
         end,
     case ets:lookup(?HANDLERS_TABLE, Handle) of
         [] ->

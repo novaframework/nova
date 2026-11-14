@@ -21,7 +21,7 @@
 
 -spec execute(Req, Env) -> {ok, Req, Env}
                                when Req::cowboy_req:req(), Env::cowboy_middleware:env().
-execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
+execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) when is_atom(Handler) ->
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
     try Handler:init(Req, Arguments) of
         %% nova_ws_handler refusing the upgrade

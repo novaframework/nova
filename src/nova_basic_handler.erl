@@ -97,7 +97,8 @@ The tuple can have three different forms:
 
 \{ok, Variables, Options, Req0\} - This will render the default view with the given variables and options but also takes a request object. This is useful if you want to set cookies or other headers that are not supported by the handler.
 """.
--spec handle_ok({ok, Variables :: erlydtl_vars()} | {ok, Variables :: erlydtl_vars(), Options :: map()},
+-spec handle_ok({ok, Variables :: erlydtl_vars()} | {ok, Variables :: erlydtl_vars(), Options :: map()} |
+                {ok, Variables :: erlydtl_vars(), Options :: map(), Req0 :: cowboy_req:req()},
                 Callback :: function(), Req :: cowboy_req:req()) -> {ok, cowboy_req:req()}.
 handle_ok({ok, Variables}, Callback, Req) ->
     %% Derive the view from module
@@ -142,7 +143,9 @@ And if you want to modulate the request object you can send it in as the fifth a
 """.
 -spec handle_status({status, StatusCode :: integer()} |
                     {status, StatusCode :: integer(), ExtraHeaders :: map()} |
-                    {status, StatusCode :: integer(), ExtraHeaders :: map(), Body :: binary() | map()},
+                    {status, StatusCode :: integer(), ExtraHeaders :: map(), Body :: binary() | map()} |
+                    {status, StatusCode :: integer(), ExtraHeaders :: map(), Body :: binary() | map(),
+                     Req0 :: cowboy_req:req()},
                     Callback :: function(), Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()}.
 handle_status({status, Status, ExtraHeaders, JSON, Req0}, Callback, _Req) ->
     handle_status({status, Status, ExtraHeaders, JSON}, Callback, Req0);
@@ -278,7 +281,11 @@ Optionally a sixth element can be added to the tuple. This is the request object
 """.
 -spec handle_sendfile({sendfile, StatusCode :: integer(), Headers :: map(), {Offset :: integer(),
                                                                              Length :: integer(),
-                                                                             Path :: list()}, Mime :: binary()},
+                                                                             Path :: list()}, Mime :: binary()} |
+                      {sendfile, StatusCode :: integer(), Headers :: map(), {Offset :: integer(),
+                                                                             Length :: integer(),
+                                                                             Path :: list()}, Mime :: binary(),
+                       Req0 :: cowboy_req:req()},
                   Callback :: function(), Req) -> {ok, Req} when Req :: cowboy_req:req().
 handle_sendfile({sendfile, StatusCode, Headers, FileInfo, Mime, Req0}, Callback, _Req) ->
     handle_sendfile({sendfile, StatusCode, Headers, FileInfo, Mime}, Callback, Req0);
@@ -292,8 +299,12 @@ handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _
 
 %%--------------------------------------------------------------------
 -doc "Handles upgrading to websocket. This is a special handler in regards to arguments. The tuple-object for websocket only takes two arguments; What the initial state of the websocket handler should be and the request object.".
--spec handle_websocket({websocket, ControllerData :: any()}, Callback :: function(), Req :: cowboy_req:req()) ->
-                              {ok, Req :: cowboy_req:req()}.
+-spec handle_websocket({websocket, ControllerData :: any()} |
+                       {websocket, ControllerData :: any(), Req0 :: cowboy_req:req()},
+                       Callback :: function(), Req :: cowboy_req:req()) ->
+                              {ok, Req :: cowboy_req:req()} |
+                              {cowboy_websocket, Req :: cowboy_req:req(), Options :: map()} |
+                              nova_handlers:handler_return().
 handle_websocket({websocket, ControllerData, Req0}, Callback, _Req) ->
     handle_websocket({websocket, ControllerData}, Callback, Req0);
 handle_websocket({websocket, ControllerData}, Callback, Req) ->
