@@ -57,7 +57,7 @@ websocket_info(_Msg, State) ->
 
 | Key | Value |
 |---|---|
-| `req` | The upgrade request. The `extra_state` of the route, or of its route group, is in it |
+| `req` | The upgrade request. The `extra_state` of the route, or of its route group, is in it, and so is `auth_data` |
 | `auth_data` | What the security callback returned in `{true, AuthData}`. Not there when the callback returned `true` or the route has no callback |
 
 It returns `{ok, State}` to accept the connection, or `{ok, State, Options}`
