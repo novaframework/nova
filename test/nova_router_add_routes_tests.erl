@@ -88,6 +88,31 @@ route_entry_plugin_strategy_is_warned_about_once_test_() ->
         end
     end}.
 
+%% A security callback is declared with `security` on a route group.
+%% Written on a single route, or as `secure` on the group, it is not read:
+%% the routes are added as before, and each misplaced key is named.
+misplaced_security_key_is_warned_about_test_() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
+        Callback = fun(_) -> {json, #{}} end,
+        Check = fun(_) -> false end,
+        Routes = [#{prefix => "/admin", secure => Check,
+                    routes => [{"/users", Callback, #{methods => [get], security => Check}},
+                               {"/roles", Callback, #{methods => [get], secure => Check}},
+                               {"/socket", nova_router_add_routes_tests_ws, #{protocol => ws, security => Check}},
+                               {404, Callback, #{secure => Check}},
+                               {"/open", Callback, #{methods => [get]}}]},
+                  #{prefix => "/guarded", security => Check,
+                    routes => [{"/page", Callback, #{methods => [get]}}]}],
+        {ok, Events} = nova_test_log:collect(fun() -> nova_router:add_routes(misplaced_app, Routes) end),
+        ?assertEqual([{secure, "/admin"}, {security, "/admin/users"}, {secure, "/admin/roles"},
+                      {security, "/admin/socket"}, {secure, 404}],
+                     [{Key, Path} || {warning, {report, #{app := misplaced_app, key := Key, path := Path}}} <- Events]),
+        ?assertMatch({ok, _, #nova_handler_value{secure = false}},
+                     nova_router:lookup_url('_', ~"/admin/users", ~"GET")),
+        ?assertMatch({ok, _, #nova_handler_value{secure = Check}},
+                     nova_router:lookup_url('_', ~"/guarded/page", ~"GET"))
+    end}.
+
 log(#{msg := {report, #{msg := <<"plugin_strategy on a route entry", _/binary>>} = Report}},
     #{config := #{test_pid := Pid}}) ->
     Pid ! {?MODULE, Report},

@@ -482,6 +482,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
                             maps:get(prefix, RouteInfo, "")),
     Host = maps:get(host, RouteInfo, '_'),
     SubApps = maps:get(apps, RouteInfo, []),
+    ok = warn_misplaced_security(App, Prefix, RouteInfo, RouterFile),
 
     %% We need to add this app info to nova-env
     nova:set_env(apps, lists:keystore(App, 1, mounted_apps(), {App, #{prefix => Prefix}})),
@@ -874,6 +875,19 @@ warn_route_plugin_strategy(App, #{plugin_strategy := Strategy}, RouterFile) ->
                            app => App, plugin_strategy => Strategy, router_file => RouterFile})
     end;
 warn_route_plugin_strategy(_App, _RouteInfo, _RouterFile) ->
+    ok.
+
+%% A route group is protected by its `security`. The same wish written as
+%% `secure` on the group, or as either key in the options of one route, is
+%% never read, and the route its author believes protected is public.
+warn_misplaced_security(App, Prefix, RouteInfo, RouterFile) ->
+    Misplaced = [{secure, Prefix} || is_map_key(secure, RouteInfo)] ++
+        [{Key, concat_strings(Prefix, Path)}
+         || {Path, _Target, RouteOptions} <- maps:get(routes, RouteInfo, []), is_map(RouteOptions),
+            Key <- [security, secure], is_map_key(Key, RouteOptions)],
+    _ = [?LOG_WARNING(#{msg => ~"This key is not read here, so it protects nothing. Declare the callback as security on the route group",
+                        app => App, path => Path, key => Key, router_file => RouterFile})
+         || {Key, Path} <- Misplaced],
     ok.
 
 local_plugins(RouteInfo) ->
