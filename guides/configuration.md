@@ -19,6 +19,8 @@ Nova uses Cowboy as the webserver. Cowboy is a very flexible webserver and Nova 
 | `ca_cert` | Path to CA-cert *Deprecated since 0.10.3 - Read with `ssl_options`*| `string()` | `undefined` |
 | `cert` | Path to cert *Deprecated since 0.10.3 - Replaced with `ssl_options`*| `string()` | `undefined` |
 
+The listener is started last, after everything a request needs is running. If it cannot be started, for instance because the port is in use or a certificate cannot be read, Nova logs `Cowboy could not start` and fails to start with `{listener_not_started, Reason}`. Earlier releases logged the error and kept running without a listener.
+
 
 ## Nova specific configurations
 

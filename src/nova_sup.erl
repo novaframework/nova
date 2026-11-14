@@ -23,6 +23,9 @@ Each listener owns its own routing table, so an application started on a second 
 %% Supervisor callbacks
 -export([init/1]).
 
+%% Started by the supervisor as its last child
+-export([start_bootstrap_listener/1]).
+
 -include_lib("kernel/include/logger.hrl").
 -include("../include/nova.hrl").
 
@@ -146,10 +149,13 @@ init([]) ->
             _ -> Children0
         end,
 
-    setup_cowboy(Configuration),
+    {ok, {SupFlags, Children ++ [listener_child(Configuration)]}}.
 
-
-    {ok, {SupFlags, Children}}.
+%%--------------------------------------------------------------------
+-doc false.
+-spec start_bootstrap_listener(Configuration :: map()) -> ignore | {error, Reason :: any()}.
+start_bootstrap_listener(Configuration) ->
+    setup_cowboy(Configuration).
 
 %%%===================================================================
 %%% Internal functions
@@ -167,6 +173,16 @@ child(Id, Type, Mod) ->
 
 child(Id, Mod) ->
     child(Id, worker, Mod).
+
+%% The listener is owned by ranch, so this child only binds it and leaves no
+%% process behind. It is last, so no request arrives before the processes a
+%% request needs are running, and a listener that cannot be bound stops the
+%% supervisor from starting.
+listener_child(Configuration) ->
+    #{id => ?NOVA_LISTENER,
+      start => {?MODULE, start_bootstrap_listener, [Configuration]},
+      restart => temporary,
+      type => worker}.
 
 %% The table survives a nova_sup restart, so creating it has to be idempotent.
 %% It is public because add_application/2 and remove_application/1 are called
@@ -207,9 +223,11 @@ setup_cowboy(Configuration) ->
             persistent_term:put(nova_use_stacktrace, UseStacktrace),
             ?LOG_NOTICE(#{msg => <<"Nova is running">>,
                           url => unicode:characters_to_binary(io_lib:format("http://~s:~B", [Host0, Port])),
-                          cowboy_version => CowboyVersion, nova_version => NovaVersion, app => App});
+                          cowboy_version => CowboyVersion, nova_version => NovaVersion, app => App}),
+            ignore;
         {error, Error} ->
-            ?LOG_ERROR(#{msg => <<"Cowboy could not start">>, reason => Error})
+            ?LOG_ERROR(#{msg => <<"Cowboy could not start">>, reason => Error}),
+            {error, {listener_not_started, Error}}
     end.
 
 -spec start_cowboy(Configuration :: map()) ->
