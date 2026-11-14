@@ -7,12 +7,23 @@
 -export([
          crashed_plugin_does_not_upgrade_websocket/1,
          crashed_plugin_does_not_reach_controller/1,
+         crashed_plugin_does_not_upgrade_protected_websocket/1,
+         failed_plugin_does_not_upgrade_protected_websocket/1,
+         failed_plugin_does_not_reach_controller/1,
+         crashed_plugin_does_not_reach_cowboy_handler/1,
+         failed_plugin_does_not_reach_cowboy_handler/1,
+         denied_request_does_not_reach_cowboy_handler/1,
+         allowed_request_reaches_cowboy_handler/1,
          invalid_security_value_denies/1,
          crashing_security_callback_denies/1,
          unexpected_security_return_denies/1
         ]).
 
--export([page/1, crash/1, unexpected/1, pre_request/4, plugin_info/0]).
+-export([page/1, crash/1, unexpected/1, deny/1, pre_request/4, plugin_info/0]).
+
+-export([init/2]).
+
+-include_lib("nova/include/nova_router.hrl").
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
@@ -21,6 +32,13 @@ all() ->
     [
      crashed_plugin_does_not_upgrade_websocket,
      crashed_plugin_does_not_reach_controller,
+     crashed_plugin_does_not_upgrade_protected_websocket,
+     failed_plugin_does_not_upgrade_protected_websocket,
+     failed_plugin_does_not_reach_controller,
+     crashed_plugin_does_not_reach_cowboy_handler,
+     failed_plugin_does_not_reach_cowboy_handler,
+     denied_request_does_not_reach_cowboy_handler,
+     allowed_request_reaches_cowboy_handler,
      invalid_security_value_denies,
      crashing_security_callback_denies,
      unexpected_security_return_denies
@@ -32,14 +50,47 @@ init_per_suite(Config) ->
             #{prefix => "/crashing-plugin",
               plugins => [{pre_request, ?MODULE, #{}}],
               routes => [{"/ws", nova_test_app_ws_controller, #{protocol => ws}} | Routes]},
+            #{prefix => "/protected-crashing-plugin",
+              security => fun ?MODULE:deny/1,
+              plugins => [{pre_request, ?MODULE, #{}}],
+              routes => [{"/ws", nova_test_app_ws_controller, #{protocol => ws}}]},
+            #{prefix => "/protected-failing-plugin",
+              security => fun ?MODULE:deny/1,
+              plugins => [{pre_request, ?MODULE, #{return => {error, refused}}}],
+              routes => [{"/ws", nova_test_app_ws_controller, #{protocol => ws}} | Routes]},
             #{prefix => "/invalid", security => true, routes => Routes},
             #{prefix => "/crashing", security => fun ?MODULE:crash/1, routes => Routes},
             #{prefix => "/unexpected", security => fun ?MODULE:unexpected/1, routes => Routes}
            ],
-    [{port, nova_test_listener:start(#{host => Host})} | Config].
+    Port = nova_test_listener:start(#{host => Host}),
+    persistent_term:put(?MODULE, counters:new(1, [])),
+    ok = add_cowboy_handler_route("/cowboy/crashing-plugin", fun ?MODULE:deny/1, #{}),
+    ok = add_cowboy_handler_route("/cowboy/failing-plugin", fun ?MODULE:deny/1, #{return => {error, refused}}),
+    ok = add_cowboy_handler_route("/cowboy/denied", fun ?MODULE:deny/1, #{return => ok}),
+    ok = add_cowboy_handler_route("/cowboy/open", false, #{return => ok}),
+    [{port, Port} | Config].
 
 end_per_suite(_Config) ->
+    persistent_term:erase(?MODULE),
     nova_test_listener:stop().
+
+%% The router has no route syntax for a plain Cowboy handler yet, so the
+%% value such a route compiles to is put in the routing table directly.
+add_cowboy_handler_route(Path, Secure, PluginOptions) ->
+    Value = #cowboy_handler_value{app = nova_test_app,
+                                  handler = ?MODULE,
+                                  arguments = #{},
+                                  plugins = [{pre_request, [{fun ?MODULE:pre_request/4, PluginOptions}]}],
+                                  secure = Secure},
+    {ok, Dispatch} = nova_routing_trie:insert('_', Path, '_', Value, persistent_term:get(nova_dispatch), #{}),
+    persistent_term:put(nova_dispatch, Dispatch).
+
+init(Req, State) ->
+    counters:add(persistent_term:get(?MODULE), 1, 1),
+    {ok, cowboy_req:reply(200, #{}, ~"handler", Req), State}.
+
+handler_calls() ->
+    counters:get(persistent_term:get(?MODULE), 1).
 
 page(_Req) ->
     {status, 200, #{}, ~"page"}.
@@ -50,6 +101,13 @@ crash(_Req) ->
 unexpected(_Req) ->
     {ok, allowed}.
 
+deny(_Req) ->
+    false.
+
+pre_request(Req, _Env, #{return := ok}, State) ->
+    {ok, Req, State};
+pre_request(_Req, _Env, #{return := Return}, _State) ->
+    Return;
 pre_request(_Req, _Env, _Options, _State) ->
     error(plugin_crashed).
 
@@ -69,6 +127,45 @@ crashed_plugin_does_not_reach_controller(Config) ->
     {Status, Body} = nova_test_listener:get(?config(port, Config), "/crashing-plugin/"),
     ?assertEqual(500, Status),
     ?assertNotEqual(~"page", Body).
+
+crashed_plugin_does_not_upgrade_protected_websocket(Config) ->
+    ?assertMatch(<<"HTTP/1.1 500", _/binary>>,
+                 nova_test_listener:websocket_handshake(?config(port, Config),
+                                                        "/protected-crashing-plugin/ws")).
+
+failed_plugin_does_not_upgrade_protected_websocket(Config) ->
+    ?assertMatch(<<"HTTP/1.1 500", _/binary>>,
+                 nova_test_listener:websocket_handshake(?config(port, Config),
+                                                        "/protected-failing-plugin/ws")).
+
+failed_plugin_does_not_reach_controller(Config) ->
+    {Status, Body} = nova_test_listener:get(?config(port, Config), "/protected-failing-plugin/"),
+    ?assertEqual(500, Status),
+    ?assertNotEqual(~"page", Body).
+
+crashed_plugin_does_not_reach_cowboy_handler(Config) ->
+    Before = handler_calls(),
+    {Status, Body} = nova_test_listener:get(?config(port, Config), "/cowboy/crashing-plugin"),
+    ?assertEqual(500, Status),
+    ?assertNotEqual(~"handler", Body),
+    ?assertEqual(Before, handler_calls()).
+
+failed_plugin_does_not_reach_cowboy_handler(Config) ->
+    Before = handler_calls(),
+    {Status, Body} = nova_test_listener:get(?config(port, Config), "/cowboy/failing-plugin"),
+    ?assertEqual(500, Status),
+    ?assertNotEqual(~"handler", Body),
+    ?assertEqual(Before, handler_calls()).
+
+denied_request_does_not_reach_cowboy_handler(Config) ->
+    Before = handler_calls(),
+    ?assertMatch({401, _}, nova_test_listener:get(?config(port, Config), "/cowboy/denied")),
+    ?assertEqual(Before, handler_calls()).
+
+allowed_request_reaches_cowboy_handler(Config) ->
+    Before = handler_calls(),
+    ?assertEqual({200, ~"handler"}, nova_test_listener:get(?config(port, Config), "/cowboy/open")),
+    ?assertEqual(Before + 1, handler_calls()).
 
 invalid_security_value_denies(Config) ->
     ?assertMatch({401, _}, nova_test_listener:get(?config(port, Config), "/invalid/")).
