@@ -300,7 +300,7 @@ body_length_test_() ->
        end},
       {"an invalid limit is warned about once and the default used",
        fun() ->
-           persistent_term:erase({nova_request_plugin, invalid_limit, max_body_length, -1}),
+           nova_once:forget({nova_request_plugin, invalid_limit, max_body_length, -1}),
            ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
            try
                [?assertMatch({stop, {status, 413, #{~"connection" := ~"close"}}, _, state},
@@ -311,7 +311,7 @@ body_length_test_() ->
                ?assertMatch([#{option := max_body_length, value := -1}], logged())
            after
                logger:remove_handler(?MODULE),
-               persistent_term:erase({nova_request_plugin, invalid_limit, max_body_length, -1})
+               nova_once:forget({nova_request_plugin, invalid_limit, max_body_length, -1})
            end
        end},
       {"infinity reads the whole body",
@@ -379,7 +379,7 @@ body_read_timeout_test_() ->
        end},
       {"a body_read_timeout of 0 is warned about and the default used",
        fun() ->
-           persistent_term:erase({nova_request_plugin, invalid_limit, body_read_timeout, 0}),
+           nova_once:forget({nova_request_plugin, invalid_limit, body_read_timeout, 0}),
            ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
            try
                {ok, _, state} = nova_request_plugin:pre_request(
@@ -389,7 +389,7 @@ body_read_timeout_test_() ->
                ?assert(lists:all(fun(Period) -> Period > 0 end, read_periods()))
            after
                logger:remove_handler(?MODULE),
-               persistent_term:erase({nova_request_plugin, invalid_limit, body_read_timeout, 0})
+               nova_once:forget({nova_request_plugin, invalid_limit, body_read_timeout, 0})
            end
        end}]}.
 

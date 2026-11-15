@@ -620,7 +620,7 @@ plugin_failures_are_redacted_test_() ->
 
 break_is_warned_about_once_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        persistent_term:erase({nova_plugin_handler, break_warned, ?MODULE}),
+        nova_once:forget({nova_plugin_handler, break_warned, ?MODULE}),
         P = fun(R, _Env, _Opts, _State) -> {break, R, #{}} end,
         ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
         try
@@ -635,7 +635,7 @@ break_is_warned_about_once_test_() ->
 
 stop_req_is_warned_about_once_test_() ->
     {setup, fun setup/0, fun cleanup/1, fun() ->
-        persistent_term:erase({nova_plugin_handler, stop_req_warned, ?MODULE}),
+        nova_once:forget({nova_plugin_handler, stop_req_warned, ?MODULE}),
         P = fun(R, _Env, _Opts, _State) -> {stop, R} end,
         ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
         try

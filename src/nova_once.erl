@@ -1,7 +1,7 @@
 -module(nova_once).
 -moduledoc false.
 
--export([first/1, per_interval/2]).
+-export([first/1, per_interval/2, forget/1]).
 
 -doc """
 Whether this is the first call with `Key` since the node started. A caller
@@ -10,11 +10,11 @@ processes that ask at the same moment may both be told `true`.
 """.
 -spec first(Key :: term()) -> boolean().
 first(Key) ->
-    case persistent_term:get(Key, false) of
+    case persistent_term:get({?MODULE, first, Key}, false) of
         true ->
             false;
         false ->
-            persistent_term:put(Key, true),
+            persistent_term:put({?MODULE, first, Key}, true),
             true
     end.
 
@@ -38,14 +38,25 @@ per_interval(Key, Interval) ->
             false
     end.
 
+-doc """
+Forgets every call with `Key`, so that the next one is the first again. For
+the tests of what is logged once.
+""".
+-spec forget(Key :: term()) -> ok.
+forget(Key) ->
+    _ = persistent_term:erase({?MODULE, first, Key}),
+    _ = persistent_term:erase({?MODULE, interval, Key}),
+    ok.
+
 %% The time of the last line and the calls skipped since. Two processes that
 %% come first at the same moment each make a cell, and one of them stays.
+-spec cell(term(), integer()) -> atomics:atomics_ref().
 cell(Key, Last) ->
-    case persistent_term:get(Key, undefined) of
+    case persistent_term:get({?MODULE, interval, Key}, undefined) of
         undefined ->
             Cell = atomics:new(2, [{signed, true}]),
             atomics:put(Cell, 1, Last),
-            persistent_term:put(Key, Cell),
+            persistent_term:put({?MODULE, interval, Key}, Cell),
             Cell;
         Cell ->
             Cell

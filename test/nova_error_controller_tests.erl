@@ -45,7 +45,7 @@ format_stacktrace_multiple_entries_test() ->
     ?assertEqual(2, length(Result)).
 
 format_stacktrace_not_enabled_test() ->
-    persistent_term:erase({nova_error_controller, stacktrace_hint}),
+    nova_once:forget({nova_error_controller, stacktrace_hint}),
     {Frames, Events} = nova_test_log:collect(fun() -> nova_error_controller:format_stacktrace(not_enabled) end),
     ?assertEqual([], Frames),
     [{warning, {report, #{msg := <<Message/binary>>}}}] = Events,
@@ -319,7 +319,7 @@ crash_without_a_stacktrace_names_the_setting_in_dev_test_() ->
                             [Message || {warning, {report, #{msg := Message}}} <- Events]
                     end,
          Crash = #{status_code => 500, class => error, reason => boom},
-         persistent_term:erase({nova_error_controller, stacktrace_hint}),
+         nova_once:forget({nova_error_controller, stacktrace_hint}),
          ?assertEqual([], Warnings(Crash#{stacktrace => []})),
          ?assertEqual([], Warnings(#{status_code => 500})),
          application:set_env(nova, environment, prod),

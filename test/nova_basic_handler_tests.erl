@@ -93,12 +93,12 @@ handle_json_documented_order_without_pid_test_() ->
 handle_json_old_order_warns_once_test_() ->
     {setup,
      fun() ->
-         persistent_term:erase({nova_basic_handler, json_order_warned, dummy_mod}),
+         nova_once:forget({nova_basic_handler, json_order_warned, dummy_mod}),
          nova_test_helper:setup_nova_env()
      end,
      fun(Prev) ->
          logger:remove_handler(?MODULE),
-         persistent_term:erase({nova_basic_handler, json_order_warned, dummy_mod}),
+         nova_once:forget({nova_basic_handler, json_order_warned, dummy_mod}),
          nova_test_helper:cleanup_nova_env(Prev)
      end,
      fun() ->

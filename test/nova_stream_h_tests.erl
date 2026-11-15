@@ -27,7 +27,7 @@ setup() ->
     application:set_env(nova, use_sessions, true),
     application:set_env(nova, session_manager, nova_session_ets),
     {ok, Pid} = nova_session_ets:start_link(),
-    persistent_term:erase({nova_stream_h, dropped}),
+    nova_once:forget({nova_stream_h, dropped}),
     Pid.
 
 cleanup(Pid) ->
@@ -172,7 +172,7 @@ two_session_cookies_mean_no_session() ->
     {Req, _} = start(req(~"session_id=one; session_id=two")),
     ?assertNot(maps:is_key(nova_session_presented, Req)),
     ?assert(is_binary(maps:get(nova_session_id, Req))),
-    ?assert(persistent_term:get({nova_session, ambiguous_cookie_warned}, false)).
+    ?assertNot(nova_once:first({nova_session, ambiguous_cookie_warned})).
 
 repeated_identical_cookie_is_one_session() ->
     {Req, _} = start(req(~"session_id=same; session_id=same")),

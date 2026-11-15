@@ -71,7 +71,7 @@ add_routes_registers_app_test_() ->
 %% entry, where it is ignored; that is warned about once per application.
 route_entry_plugin_strategy_is_warned_about_once_test_() ->
     {setup, fun setup/0, fun cleanup/1, fun() ->
-        persistent_term:erase({nova_router, route_plugin_strategy_warned, strategy_app}),
+        nova_once:forget({nova_router, route_plugin_strategy_warned, strategy_app}),
         Callback = fun(_) -> {json, #{}} end,
         Routes = [#{plugin_strategy => global_first, routes => [{"/a", Callback, #{methods => [get]}}]},
                   #{plugin_strategy => local_only, routes => [{"/b", Callback, #{methods => [get]}}]}],
@@ -84,7 +84,7 @@ route_entry_plugin_strategy_is_warned_about_once_test_() ->
             ?assertEqual([], logged())
         after
             logger:remove_handler(?MODULE),
-            persistent_term:erase({nova_router, route_plugin_strategy_warned, strategy_app})
+            nova_once:forget({nova_router, route_plugin_strategy_warned, strategy_app})
         end
     end}.
 

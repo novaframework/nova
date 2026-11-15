@@ -161,7 +161,7 @@ delete_expires_cookie_without_stream_h(Config) ->
 %% cow_cookie raises on a name that is not a token. That used to loop on
 %% Cowboy's 500 path in nova_stream_h, logging the request on every pass.
 invalid_cookie_name_at_runtime_drops_the_cookie(Config) ->
-    persistent_term:erase({nova_stream_h, invalid_cookie_logged, ~"app:sid"}),
+    nova_once:forget({nova_stream_h, invalid_cookie_logged, ~"app:sid"}),
     ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
     application:set_env(nova, session_cookie_name, ~"app:sid"),
     try
@@ -183,7 +183,7 @@ invalid_cookie_name_at_runtime_drops_the_cookie(Config) ->
     after
         application:unset_env(nova, session_cookie_name),
         logger:remove_handler(?MODULE),
-        persistent_term:erase({nova_stream_h, invalid_cookie_logged, ~"app:sid"})
+        nova_once:forget({nova_stream_h, invalid_cookie_logged, ~"app:sid"})
     end.
 
 %% Leaves Nova stopped; the next group starts it again.
