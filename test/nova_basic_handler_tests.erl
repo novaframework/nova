@@ -93,12 +93,12 @@ handle_json_documented_order_without_pid_test_() ->
 handle_json_old_order_warns_once_test_() ->
     {setup,
      fun() ->
-         persistent_term:erase({nova_basic_handler, json_order_warned, dummy_mod}),
+         nova_once:forget({nova_basic_handler, json_order_warned, dummy_mod}),
          nova_test_helper:setup_nova_env()
      end,
      fun(Prev) ->
          logger:remove_handler(?MODULE),
-         persistent_term:erase({nova_basic_handler, json_order_warned, dummy_mod}),
+         nova_once:forget({nova_basic_handler, json_order_warned, dummy_mod}),
          nova_test_helper:cleanup_nova_env(Prev)
      end,
      fun() ->
@@ -382,6 +382,23 @@ handle_websocket_success_test_() ->
         meck:unload(test_ws_ctrl)
     end}.
 
+%% The request a controller hands back with {websocket, ControllerData, Req}
+%% is the one that is upgraded. Called by name, since a call to a deprecated
+%% function is a lint finding.
+handle_websocket_req_passthrough_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        meck:new(test_ws_ctrl3, [non_strict, no_link]),
+        meck:expect(test_ws_ctrl3, init, fun(CD) -> {ok, CD} end),
+        Req = nova_test_helper:mock_req(~"GET", ~"/ws"),
+        Own = Req#{custom => true},
+        Return = {websocket, #{data => test}, Own},
+        {cowboy_websocket, Req1, _State} =
+            apply(nova_basic_handler, handle_websocket, [Return, fun test_ws_ctrl3:handle/1, Req]),
+        ?assertEqual(true, maps:get(custom, Req1)),
+        ?assertEqual(#{data => test}, maps:get(controller_data, Req1)),
+        meck:unload(test_ws_ctrl3)
+    end}.
+
 handle_websocket_error_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         meck:new(test_ws_ctrl2, [non_strict, no_link]),
@@ -433,8 +450,8 @@ handle_status_with_headers_test_() ->
         ?assertEqual(301, maps:get(resp_status_code, Req1))
     end}.
 
-decoded_body(#{resp_body := Body}) when is_binary(Body) ->
-    json:decode(Body).
+decoded_body(#{resp_body := Body}) ->
+    json:decode(iolist_to_binary(Body)).
 
 %% io_lib:format/2 prints a binary with a control byte as a list of integers,
 %% so a text search of its output would miss a leak.

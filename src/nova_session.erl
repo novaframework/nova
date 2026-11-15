@@ -35,6 +35,7 @@ above.
          delete/1,
          delete/2,
          renew/1,
+         client_id/1,
          generate_session_id/0
         ]).
 
@@ -134,10 +135,10 @@ listener.
 -doc """
 Tells whether the backend holds a session with this id. Nova calls it for the
 id a client presents and replaces ids that return `false`. It runs in the
-process calling `nova_session`, which keeps the answer for a second: a
-request that presented a cookie asks once however often it reads and writes
-its session, and again after it deleted or renewed it. A backend without it
-accepts every presented id.
+process calling `nova_session`, which keeps the answer for a second for
+reads: a request that presented a cookie asks once however often it reads
+its session, and again for every write and after it deleted or renewed it.
+A backend without it accepts every presented id.
 """.
 -callback session_exists(SessionId :: binary()) -> boolean().
 
@@ -189,7 +190,7 @@ set_provisional(Req, Key, Value) ->
     end.
 
 write(Function, Req, Key, Value) ->
-    case get_session_id(Req) of
+    case get_session_id(Req, write) of
         {ok, SessionId} ->
             Mod = get_session_module(),
             case Mod:Function(SessionId, Key, Value) of
@@ -258,12 +259,51 @@ renew(Req) ->
     {ok, with_session_id(NewSessionId, Req0)}.
 
 -doc """
+The session id the client of the request holds: the one in the session
+cookie it sent, whether or not there is a session for it, or, when it sent
+none, the id of the request, which the response then hands out in the session
+cookie. Nothing is stored, and the id is not the one `set/3` writes under
+when the backend has no session for it.
+
+It is for what is tied to the browser and not to what a session holds, as the
+signed token of `nova_csrf_plugin` is.
+
+A request whose `Cookie` header does not parse gets the id of the request as
+well, but no cookie is handed out for it, since the client may hold a session
+cookie Nova could not read. That id is not seen again, so what was tied to it
+is refused when it comes back.
+
+`{error, not_found}` means there is no id to give: the request has no session
+cookie Nova can read and `nova_stream_h` is not there to hand one out.
+""".
+-spec client_id(Req :: cowboy_req:req()) -> {ok, SessionId :: binary()} | {error, not_found} | no_return().
+client_id(Req) ->
+    case enabled() of
+        true ->
+            held_id(Req);
+        _ ->
+            ?LOG_ERROR(#{msg => ~"Session called but the 'use_sessions' option is set to false"}),
+            throw({nova_session, unsupported_session_used})
+    end.
+
+held_id(#{nova_session_presented := Presented}) ->
+    {ok, Presented};
+held_id(#{nova_session_id := SessionId} = Req) ->
+    notify(Req, {issued, SessionId}),
+    {ok, SessionId};
+held_id(Req) ->
+    case presented_session_id(Req) of
+        SessionId when is_binary(SessionId) -> {ok, SessionId};
+        _ -> {error, not_found}
+    end.
+
+-doc """
 Deletes `Key` from the session of the request and returns `{ok, Req}` with
 the request as it was given, also when the request has no session.
 """.
 -spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} | no_return().
 delete(Req, Key) ->
-    case get_session_id(Req) of
+    case get_session_id(Req, write) of
         {ok, SessionId} ->
             Mod = get_session_module(),
             Mod:delete_value(SessionId, Key),
@@ -299,7 +339,7 @@ max_age() ->
         _ -> ?DEFAULT_MAX_AGE
     end.
 
-%% Secure unless the environment is explicitly dev: behind a proxy that
+%% Secure unless the environment is set to dev: behind a proxy that
 %% terminates TLS the request itself looks like plain http. A __Host- cookie
 %% is only stored by browsers when it is Secure, has Path=/ and no Domain.
 -doc false.
@@ -411,18 +451,22 @@ presented_session_id(Req) ->
 %%% Private functions
 %%%===================================================================
 %% What the backend said about a presented id is kept by the calling process,
-%% so a request asks once. For a second and no longer: the process of a
-%% websocket goes on with the request of its upgrade for as long as it lives.
-known(SessionId) ->
+%% so a request that reads its session asks once. For a second and no longer:
+%% the process of a websocket goes on with the request of its upgrade for as
+%% long as it lives. A write always asks, or it would bring back a session
+%% that another process deleted in the meantime.
+known(SessionId, read) ->
     Now = erlang:monotonic_time(millisecond),
     case get(?KNOWN) of
         {SessionId, Known, At} when Now - At < ?KNOWN_FOR ->
             Known;
         _ ->
-            Known = backend_knows(SessionId),
-            put(?KNOWN, {SessionId, Known, Now}),
-            Known
-    end.
+            known(SessionId, write)
+    end;
+known(SessionId, write) ->
+    Known = backend_knows(SessionId),
+    put(?KNOWN, {SessionId, Known, erlang:monotonic_time(millisecond)}),
+    Known.
 
 backend_knows(SessionId) ->
     Mod = get_session_module(),
@@ -444,9 +488,12 @@ get_session_module() ->
     application:get_env(nova, session_manager, nova_session_ets).
 
 get_session_id(Req) ->
+    get_session_id(Req, read).
+
+get_session_id(Req, Access) ->
     case enabled() of
         true ->
-            session_id(Req);
+            session_id(Req, Access);
         _ ->
             ?LOG_ERROR(#{msg => ~"Session called but the 'use_sessions' option is set to false"}),
             throw({nova_session, unsupported_session_used})
@@ -457,14 +504,14 @@ get_session_id(Req) ->
 %% and the presented one is used only while the backend knows it, so a client
 %% cannot choose its own id. The check runs here, in the process calling
 %% nova_session, and not in the connection process.
-session_id(#{nova_session_id := SessionId}) ->
+session_id(#{nova_session_id := SessionId}, _Access) ->
     {ok, SessionId};
-session_id(#{nova_session_presented := Presented, nova_session_pending := Pending}) ->
-    case known(Presented) of
+session_id(#{nova_session_presented := Presented, nova_session_pending := Pending}, Access) ->
+    case known(Presented, Access) of
         true -> {ok, Presented};
         false -> {ok, Pending}
     end;
-session_id(Req) ->
+session_id(Req, _Access) ->
     %% Without nova_stream_h there is only the cookie.
     case presented_session_id(Req) of
         SessionId when is_binary(SessionId) -> {ok, SessionId};

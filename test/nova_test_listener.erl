@@ -4,7 +4,7 @@
 -module(nova_test_listener).
 
 -export([start/1, try_start/1, configure/1, stop/0, get/2, get/3, request/4, response/4, response/5,
-         websocket_handshake/2, websocket_handshake/3, websocket_texts/4, h2_websocket_connect/4,
+         websocket_handshake/2, websocket_handshake/3, websocket_texts/4, h2_websocket_connect/4, h2_get/2,
          send_and_close/2, free_port/0]).
 
 -spec start(map()) -> inet:port_number().
@@ -12,9 +12,26 @@ start(Options) ->
     {ok, Port} = try_start(Options),
     Port.
 
+%% A port that free_port/0 found free can be taken before the listener binds
+%% it, by another suite on the machine. A boot that fails for that is tried
+%% again on another port, unless the test asked for the port.
 -spec try_start(map()) -> {ok, inet:port_number()} | {error, term()}.
+try_start(Options = #{port := Port}) ->
+    boot(Options, Port);
 try_start(Options) ->
-    Port = maps:get(port, Options, free_port()),
+    try_start(Options, 3).
+
+try_start(Options, Attempts) ->
+    case boot(Options, free_port()) of
+        {error, {nova, {{shutdown, {failed_to_start_child, nova_listener, {listener_not_started, eaddrinuse}}},
+                        _Start}}} when Attempts > 1 ->
+            ok = stop(),
+            try_start(Options, Attempts - 1);
+        Result ->
+            Result
+    end.
+
+boot(Options, Port) ->
     ok = configure(Options#{port => Port}),
     case application:ensure_all_started(nova_test_app) of
         {ok, _Started} -> {ok, Port};
@@ -151,17 +168,27 @@ websocket_texts(Port, Path, Text, Count) when byte_size(Text) < 126 ->
 %% The listener needs `enable_connect_protocol` in its Cowboy options.
 -spec h2_websocket_connect(inet:port_number(), iodata(), binary(), [{binary(), binary()}]) -> 100..599.
 h2_websocket_connect(Port, Path, Authority, Headers) ->
+    h2_request(Port, nofin, [{~":method", ~"CONNECT"},
+                             {~":protocol", ~"websocket"},
+                             {~":scheme", ~"http"},
+                             {~":path", iolist_to_binary(Path)},
+                             {~":authority", Authority},
+                             {~"sec-websocket-version", ~"13"}
+                            | Headers]).
+
+%% The status of a GET over HTTP/2, whose `:path` is sent as it is given:
+%% HTTP/1.1 cannot ask for a path that does not start with a slash.
+-spec h2_get(inet:port_number(), binary()) -> 100..599.
+h2_get(Port, Path) ->
+    h2_request(Port, fin, [{~":method", ~"GET"}, {~":scheme", ~"http"}, {~":path", Path},
+                           {~":authority", ~"localhost"}]).
+
+h2_request(Port, IsFin, Headers) ->
     {ok, Socket} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}, {packet, raw}]),
     try
         ok = gen_tcp:send(Socket, [~"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", cow_http2:settings(#{})]),
-        {HeaderBlock, _Encoder} = cow_hpack:encode([{~":method", ~"CONNECT"},
-                                                    {~":protocol", ~"websocket"},
-                                                    {~":scheme", ~"http"},
-                                                    {~":path", iolist_to_binary(Path)},
-                                                    {~":authority", Authority},
-                                                    {~"sec-websocket-version", ~"13"}
-                                                   | Headers]),
-        h2_status(Socket, <<>>, cow_http2:headers(1, nofin, HeaderBlock))
+        {HeaderBlock, _Encoder} = cow_hpack:encode(Headers),
+        h2_status(Socket, <<>>, cow_http2:headers(1, IsFin, HeaderBlock))
     after
         gen_tcp:close(Socket)
     end.
@@ -236,9 +263,20 @@ send_and_close(Port, Data) ->
     timer:sleep(100),
     gen_tcp:close(Socket).
 
+%% A port nothing listens on, from below the range the kernel takes the
+%% ports of outgoing connections and of a listen on port 0 from. A port out
+%% of that range is given to another process between this call and the
+%% listener that binds it, when several suites run on the machine.
 -spec free_port() -> inet:port_number().
 free_port() ->
-    {ok, Socket} = gen_tcp:listen(0, [{reuseaddr, true}]),
-    {ok, Port} = inet:port(Socket),
-    ok = gen_tcp:close(Socket),
-    Port.
+    free_port(50).
+
+free_port(Attempts) when Attempts > 0 ->
+    Port = 20000 + rand:uniform(9999),
+    case gen_tcp:listen(Port, [{reuseaddr, true}]) of
+        {ok, Socket} ->
+            ok = gen_tcp:close(Socket),
+            Port;
+        {error, eaddrinuse} ->
+            free_port(Attempts - 1)
+    end.

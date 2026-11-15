@@ -13,7 +13,12 @@
          listed_origin_is_accepted/1,
          unlisted_origin_is_refused/1,
          origin_plugin_leaves_other_requests_alone/1,
-         route_without_the_plugin_accepts_any_origin/1,
+         route_without_the_plugin_checks_the_host/1,
+         route_without_the_plugin_checks_a_request_that_is_no_upgrade/1,
+         refused_upgrade_runs_nothing_of_the_route/1,
+         configured_origins_replace_the_default/1,
+         any_origin_when_the_check_is_off/1,
+         plugin_of_the_route_decides_alone/1,
          same_host_ignores_the_scheme/1,
          same_origin_needs_the_same_scheme/1,
          same_origin_needs_the_same_host_and_port/1,
@@ -24,7 +29,7 @@
          same_host_needs_the_same_port_over_http2/1,
          missing_origin_is_accepted_over_http2/1,
          listed_origin_is_checked_over_http2/1,
-         route_without_the_plugin_accepts_any_origin_over_http2/1]).
+         route_without_the_plugin_checks_the_host_over_http2/1]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
@@ -41,7 +46,12 @@ all() ->
      listed_origin_is_accepted,
      unlisted_origin_is_refused,
      origin_plugin_leaves_other_requests_alone,
-     route_without_the_plugin_accepts_any_origin,
+     route_without_the_plugin_checks_the_host,
+     route_without_the_plugin_checks_a_request_that_is_no_upgrade,
+     refused_upgrade_runs_nothing_of_the_route,
+     configured_origins_replace_the_default,
+     any_origin_when_the_check_is_off,
+     plugin_of_the_route_decides_alone,
      same_host_ignores_the_scheme,
      same_origin_needs_the_same_scheme,
      same_origin_needs_the_same_host_and_port,
@@ -52,7 +62,7 @@ all() ->
      same_host_needs_the_same_port_over_http2,
      missing_origin_is_accepted_over_http2,
      listed_origin_is_checked_over_http2,
-     route_without_the_plugin_accepts_any_origin_over_http2].
+     route_without_the_plugin_checks_the_host_over_http2].
 
 init_per_suite(Config) ->
     Routes = [#{prefix => "/plain",
@@ -71,7 +81,20 @@ init_per_suite(Config) ->
               #{prefix => "/listed",
                 plugins => [{pre_request, nova_ws_origin_plugin,
                              #{allowed_origins => [~"https://app.example.com", "https://other.example.com"]}}],
+                routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]},
+              #{prefix => "/open",
+                plugins => [{pre_request, nova_ws_origin_plugin, #{allowed_origins => any}}],
+                routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]},
+              #{prefix => "/guarded",
+                security => fun nova_ws_upgrade_pages:allow/1,
+                plugins => [{pre_request, nova_ws_upgrade_pages, #{}}, {pre_request, nova_csrf_plugin, #{}}],
+                routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]},
+              #{prefix => "/guarded-by-plugin",
+                security => fun nova_ws_upgrade_pages:allow/1,
+                plugins => [{pre_request, nova_ws_upgrade_pages, #{}}, {pre_request, nova_csrf_plugin, #{}},
+                            {pre_request, nova_ws_origin_plugin, #{allowed_origins => same_origin}}],
                 routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]}],
+    nova_ws_upgrade_pages:count(),
     [{port, nova_test_listener:start(#{host => Routes, cowboy_options => #{enable_connect_protocol => true}})}
      | Config].
 
@@ -117,8 +140,71 @@ origin_plugin_leaves_other_requests_alone(Config) ->
                  nova_test_listener:get(?config(port, Config), "/same-host/page",
                                         [{"origin", "https://evil.example"}])).
 
-route_without_the_plugin_accepts_any_origin(Config) ->
-    ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/plain/ws", "https://evil.example")).
+route_without_the_plugin_checks_the_host(Config) ->
+    ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/plain/ws", "https://evil.example")),
+    ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/plain/ws", "null")),
+    ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/plain/ws", "http://localhost")),
+    ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/plain/ws", "https://localhost")),
+    ?assertMatch(<<"HTTP/1.1 101", _/binary>>,
+                 nova_test_listener:websocket_handshake(?config(port, Config), "/plain/ws")).
+
+route_without_the_plugin_checks_a_request_that_is_no_upgrade(Config) ->
+    ?assertMatch({403, _}, nova_test_listener:get(?config(port, Config), "/plain/ws",
+                                                  [{"origin", "https://evil.example"}])).
+
+%% The check is the first thing a websocket route does, whether its route
+%% group lists the plugin or not, and wherever in its plugins it does. A
+%% page of another site gets nothing done with the cookies of a visitor: no
+%% security callback, no plugin and no session started for it.
+refused_upgrade_runs_nothing_of_the_route(Config) ->
+    [begin
+         Before = nova_ws_upgrade_pages:ran(),
+         Refused = handshake(Config, Path, "https://evil.example"),
+         ?assertMatch(<<"HTTP/1.1 403", _/binary>>, Refused),
+         ?assertEqual({Path, nomatch}, {Path, binary:match(string:lowercase(Refused), ~"set-cookie")}),
+         ?assertEqual({Path, Before}, {Path, nova_ws_upgrade_pages:ran()}),
+         ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, Path, "http://localhost")),
+         ?assertEqual({Path, #{Key => Count + 1 || Key := Count <- Before}}, {Path, nova_ws_upgrade_pages:ran()})
+     end || Path <- ["/guarded/ws", "/guarded-by-plugin/ws"]].
+
+configured_origins_replace_the_default(Config) ->
+    nova_test_settings:set(allowed_origins, [~"https://app.example.com"]),
+    try
+        ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/plain/ws", "https://app.example.com")),
+        ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/plain/ws", "http://localhost")),
+        ?assertMatch(<<"HTTP/1.1 101", _/binary>>,
+                     nova_test_listener:websocket_handshake(?config(port, Config), "/plain/ws")),
+        nova_test_settings:set(allowed_origins, same_origin),
+        ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/plain/ws", "http://localhost")),
+        ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/plain/ws", "https://localhost"))
+    after
+        nova_test_settings:unset(allowed_origins)
+    end.
+
+any_origin_when_the_check_is_off(Config) ->
+    nova_test_settings:set(allowed_origins, any),
+    try
+        ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/plain/ws", "https://evil.example")),
+        ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/same-host/ws", "https://evil.example")),
+        ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/same-origin/ws", "https://evil.example"))
+    after
+        nova_test_settings:unset(allowed_origins)
+    end.
+
+%% What the plugin of a route group accepts is not checked again against
+%% the origins of the nova environment, which the plugin goes by itself
+%% when it was given none of its own.
+plugin_of_the_route_decides_alone(Config) ->
+    ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/open/ws", "https://evil.example")),
+    ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/listed/ws", "https://app.example.com")),
+    nova_test_settings:set(allowed_origins, [~"https://only.example.com"]),
+    try
+        ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/same-origin/ws", "http://localhost")),
+        ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/same-host/ws", "http://localhost")),
+        ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/same-host/ws", "https://only.example.com"))
+    after
+        nova_test_settings:unset(allowed_origins)
+    end.
 
 %% The requests are sent with `host: localhost`, to a listener without TLS.
 same_host_ignores_the_scheme(Config) ->
@@ -180,8 +266,11 @@ listed_origin_is_checked_over_http2(Config) ->
     ?assertEqual(200, connect(Config, "/listed/ws", authority(Config), [{~"origin", ~"https://app.example.com"}])),
     ?assertEqual(403, connect(Config, "/listed/ws", authority(Config), [{~"origin", ~"https://evil.example"}])).
 
-route_without_the_plugin_accepts_any_origin_over_http2(Config) ->
-    ?assertEqual(200, connect(Config, "/plain/ws", authority(Config), [{~"origin", ~"https://evil.example"}])).
+route_without_the_plugin_checks_the_host_over_http2(Config) ->
+    Authority = authority(Config),
+    ?assertEqual(403, connect(Config, "/plain/ws", Authority, [{~"origin", ~"https://evil.example"}])),
+    ?assertEqual(200, connect(Config, "/plain/ws", Authority, [{~"origin", <<"http://", Authority/binary>>}])),
+    ?assertEqual(200, connect(Config, "/plain/ws", Authority, [])).
 
 connect(Config, Path, Authority, Headers) ->
     nova_test_listener:h2_websocket_connect(?config(port, Config), Path, Authority, Headers).

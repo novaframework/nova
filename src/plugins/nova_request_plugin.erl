@@ -27,6 +27,7 @@ set, and is then also in the request under `body`. Otherwise `body` is
 -behaviour(nova_plugin).
 
 -export([
+         pre_security/4,
          pre_request/4,
          post_request/4,
          plugin_info/0
@@ -45,7 +46,24 @@ set, and is then also in the request under `body`. Otherwise `body` is
 
 %%--------------------------------------------------------------------
 -doc """
-Reads the body when an option asks for it and applies the options. Returns
+Parses the query string when `parse_qs` is set, ahead of the security
+callback. It reads nothing from the client. Returns `{ok, Req, State}` with
+`parsed_qs` set in the request, or a `stop` with a `400` for a malformed
+query string.
+""".
+-spec pre_security(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
+                          {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
+                          {stop, {status, 400}, Req0 :: cowboy_req:req(), NewState :: any()}.
+pre_security(Req, _Env, Options, State) ->
+    case [Option || {parse_qs, _Type} = Option <- maps:to_list(Options)] of
+        [] -> {ok, Req, State};
+        ParseQs -> modulate_state(Req, ParseQs, State)
+    end.
+
+%%--------------------------------------------------------------------
+-doc """
+Reads the body when an option asks for it and applies every option but
+`parse_qs`, once the security callback has let the request through. Returns
 `{ok, Req, State}` with the keys described above set in the request, or a
 `stop` with the `400`, `408` or `413` that refuses the request.
 """.
@@ -55,7 +73,7 @@ Reads the body when an option asks for it and applies the options. Returns
                          {stop, {status, 400 | 413} | {status, 408 | 413, #{binary() => binary()}},
                           Req0 :: cowboy_req:req(), NewState :: any()}.
 pre_request(Req, _Env, Options, State) ->
-    ListOptions = maps:to_list(Options),
+    ListOptions = [Option || {Key, _Value} = Option <- maps:to_list(Options), Key =/= parse_qs],
     MaxLength = limit(max_body_length, Options, ?DEFAULT_MAX_BODY_LENGTH, 0),
     Timeout = limit(body_read_timeout, Options, ?DEFAULT_BODY_READ_TIMEOUT, 1),
     %% The rest of the body is still on the connection, so it is closed.
@@ -66,7 +84,7 @@ pre_request(Req, _Env, Options, State) ->
     end.
 
 %%--------------------------------------------------------------------
--doc "Does nothing: the plugin works in `pre_request/4`.".
+-doc "Does nothing: the plugin works in `pre_security/4` and `pre_request/4`.".
 -spec post_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
           {ok, Req0 :: cowboy_req:req(), NewState :: any()}.
 post_request(Req, _Env, _Options, State) ->

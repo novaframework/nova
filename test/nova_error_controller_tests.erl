@@ -45,7 +45,7 @@ format_stacktrace_multiple_entries_test() ->
     ?assertEqual(2, length(Result)).
 
 format_stacktrace_not_enabled_test() ->
-    persistent_term:erase({nova_error_controller, stacktrace_hint}),
+    nova_once:forget({nova_error_controller, stacktrace_hint}),
     {Frames, Events} = nova_test_log:collect(fun() -> nova_error_controller:format_stacktrace(not_enabled) end),
     ?assertEqual([], Frames),
     [{warning, {report, #{msg := <<Message/binary>>}}}] = Events,
@@ -85,7 +85,7 @@ not_found_json_accept_test_() ->
          Req1 = nova_test_helper:with_header(<<"accept">>, <<"application/json">>, Req),
          {status, 404, Headers, Body} = nova_error_controller:not_found(Req1),
          ?assertEqual(<<"application/json">>, maps:get(<<"content-type">>, Headers)),
-         ?assert(is_binary(Body))
+         ?assertMatch(#{~"message" := _}, json:decode(iolist_to_binary(Body)))
      end}.
 
 %% When no accept header, defaults to JSON
@@ -161,8 +161,8 @@ unknown_accept_has_no_body_test_() ->
     {setup, ?SETUP, ?CLEANUP,
      fun() ->
          Req = nova_test_helper:with_header(~"accept", ~"image/png", nova_test_helper:mock_req(~"GET", ~"/")),
-         ?assertMatch({status, 404, _, <<>>}, nova_error_controller:not_found(Req)),
-         ?assertMatch({status, 500, _, <<>>}, nova_error_controller:server_error(Req))
+         ?assertEqual({status, 404}, nova_error_controller:not_found(Req)),
+         ?assertEqual({status, 500}, nova_error_controller:server_error(Req))
      end}.
 
 server_error_html_for_browsers_test_() ->
@@ -238,8 +238,7 @@ crash_details_are_strings_in_dev_test_() ->
          ?assertEqual(~"Class: error\nReason: boom", ExtraMsg)
      end}.
 
-%% nova:get_environment/0 reads an unset environment as dev, but crash details
-%% must not reach clients unless dev was chosen explicitly.
+%% Crash details must not reach clients unless dev was chosen.
 extra_msg_is_hidden_when_environment_is_unset_test_() ->
     {setup, ?SETUP, ?CLEANUP,
      fun() ->
@@ -283,7 +282,7 @@ crash_page_outside_dev_follows_the_accept_header_test_() ->
              ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Html), ~"500 Internal Server Error")),
              ?assertEqual(nomatch, binary:match(iolist_to_binary(Html), ~"secret")),
              Png = nova_test_helper:with_header(~"accept", ~"image/png", nova_test_helper:mock_req(~"GET", ~"/")),
-             ?assertMatch({status, 500, _, <<>>}, nova_error_controller:server_error(Png#{crash_info => CrashInfo}))
+             ?assertEqual({status, 500}, nova_error_controller:server_error(Png#{crash_info => CrashInfo}))
          after
              application:set_env(nova, environment, dev)
          end
@@ -320,7 +319,7 @@ crash_without_a_stacktrace_names_the_setting_in_dev_test_() ->
                             [Message || {warning, {report, #{msg := Message}}} <- Events]
                     end,
          Crash = #{status_code => 500, class => error, reason => boom},
-         persistent_term:erase({nova_error_controller, stacktrace_hint}),
+         nova_once:forget({nova_error_controller, stacktrace_hint}),
          ?assertEqual([], Warnings(Crash#{stacktrace => []})),
          ?assertEqual([], Warnings(#{status_code => 500})),
          application:set_env(nova, environment, prod),

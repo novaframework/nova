@@ -101,11 +101,15 @@ Nova writes a key `apps` to the environment of the bootstrap application for its
 
 ### Configure json_lib
 
-One can configure which json library to use for encoding/decoding json structures. The default is `thoas`. Set `json_lib` in your bootstrap application's environment; Nova also reads it from the `nova` environment when the bootstrap application does not set it.
+Nova encodes and decodes JSON with the `json` module that ships with Erlang/OTP 27 and later, so it needs no JSON dependency. With this default a non-empty list whose first element is a pair is encoded as an object: `[{a, 1}]` becomes `{"a":1}`.
+
+To use another library, add it to your application's dependencies and set `json_lib` in your bootstrap application's environment; Nova also reads it from the `nova` environment when the bootstrap application does not set it.
 
 ```erlang
-{my_app, [{json_lib, json}]}
+{my_app, [{json_lib, thoas}]}
 ```
+
+Nova used `thoas` by default up to 0.18 and no longer depends on it. An application that calls `thoas` itself, or wants to keep it as `json_lib`, has to list it in its own `deps`.
 
 The module defined for this should expose two different functions:
 
@@ -113,7 +117,7 @@ The module defined for this should expose two different functions:
 
 `decode(JsonString) -> {ok, Structure} | {error, Reason} | Structure`
 
-`decode/1` may return `{ok, Structure}` (like `thoas`) or the structure itself and raise on bad input (like OTP's `json` module), so `{json_lib, json}` works without an adapter.
+`decode/1` may return `{ok, Structure}` (like `thoas`) or the structure itself and raise on bad input (like OTP's `json` module), so either kind of library works without an adapter.
 
 
 ## Handling errors in Nova

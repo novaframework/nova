@@ -15,6 +15,8 @@
          detect_language/0
         ]).
 
+-define(DEFAULT_ENVIRONMENT, prod).
+
 -doc "The state a plugin keeps between calls. Any term.".
 -type state() :: any().
 -export_type([state/0]).
@@ -36,16 +38,21 @@ get_apps() ->
                                  is_atom(App), is_list(Prefix), not lists:keymember(App, 1, Default)].
 
 %%--------------------------------------------------------------------
--doc "Returns which environment nova is started in. This fetches the environment-variable in sys.config for Nova and returns the value found. Defaults to: dev".
+-doc """
+The environment Nova runs in: the `environment` key of the `nova`
+application, and `prod` when the key is not set. Routers are asked for
+`routes(Environment)`. Only `dev` turns on what is meant for development, so
+it has to be written out: `{nova, [{environment, dev}]}`.
+""".
 -spec get_environment() -> any().
 get_environment() ->
-    application:get_env(nova, environment, dev).
+    application:get_env(nova, environment, ?DEFAULT_ENVIRONMENT).
 
 %%--------------------------------------------------------------------
--doc "Whether `environment` is set to `dev`. An unset `environment` is not `dev` here, although `get_environment/0` returns `dev` for it. Nova asks this wherever `dev` relaxes a security default: the `Secure` flag of the session cookie and the crash details on error pages.".
+-doc "Whether `get_environment/0` is `dev`, which an unset `environment` is not. Nova asks this wherever `dev` relaxes a security default: the `Secure` flag of the session cookie and the crash details on error pages.".
 -spec is_dev_environment() -> boolean().
 is_dev_environment() ->
-    application:get_env(nova, environment) =:= {ok, dev}.
+    get_environment() =:= dev.
 
 %%--------------------------------------------------------------------
 -doc "Works as the regular application:get_env/3 but instead of giving a specific application we target the application that started nova.".

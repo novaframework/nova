@@ -62,8 +62,8 @@ of the same name.
 -spec format(logger:log_event(), config()) -> unicode:chardata().
 format(
     #{msg := {report, #{format := Format, args := Args, label := {error_logger, _}}}} = Map, Config
-) ->
-    Report = #{text => text(rendered(Format, Args, Config))},
+) when is_list(Args) ->
+    Report = #{text => rendered(Format, Args, Config)},
     format(Map#{msg := {report, Report}}, Config);
 format(#{level := Level, msg := {report, Msg}, meta := Meta}, Config) when is_map(Msg) ->
     Data0 = merge_meta(redact(Msg, Config), redact(Meta#{level => Level}, Config), Config),
@@ -73,7 +73,7 @@ format(#{level := Level, msg := {report, Msg}, meta := Meta}, Config) when is_ma
 format(Map = #{msg := {report, KeyVal}}, Config) when is_list(KeyVal) ->
     format(Map#{msg := {report, maps:from_list([Pair || {_Key, _Value} = Pair <- KeyVal])}}, Config);
 format(Map = #{msg := {string, String}}, Config) ->
-    format(Map#{msg := {report, #{text => text(String)}}}, Config);
+    format(Map#{msg := {report, #{text => String}}}, Config);
 format(Map = #{msg := {Format, Terms}}, Config) ->
     format(Map#{msg := {string, rendered(Format, Terms, Config)}}, Config).
 
@@ -99,18 +99,12 @@ system_time_to_iso8601(Epoch, Unit) ->
     iolist_to_binary(calendar:system_time_to_rfc3339(Epoch, [{unit, Unit}, {offset, "Z"}])).
 
 %%%_* Private functions ================================================
-%% The string of a {string, String} message is whatever the caller of
-%% logger passed in, which the type of a log event does not narrow down.
--spec text(dynamic()) -> dynamic().
-text(String) ->
-    unicode:characters_to_binary(String).
-
 %% The arguments are redacted before they are rendered: once they are text
 %% there is no key left to tell a secret by. A redacted argument may no
 %% longer be what its control sequence takes, and is then printed as a term.
--spec rendered(io:format(), dynamic(), config()) -> io_lib:chars().
+-spec rendered(io:format(), [term()], config()) -> io_lib:chars().
 rendered(Format, Args, Config) ->
-    Redacted = redact(Args, Config),
+    Redacted = redacted_args(Args, Config),
     try
         io_lib:format(Format, Redacted)
     catch
@@ -127,6 +121,15 @@ pre_encode_value([First | _] = Vs, Config) when is_map(First) ->
     [pre_encode(V, Config) || V <- Vs, is_map(V)];
 pre_encode_value(V, _Config) ->
     jsonify(V).
+
+%% The arguments are redacted as one list, so that a list of pairs is taken
+%% for the proplist it is.
+-spec redacted_args([term()], config()) -> [term()].
+redacted_args(Args, Config) ->
+    case redact(Args, Config) of
+        Redacted when is_list(Redacted) -> Redacted;
+        Other -> [Other]
+    end.
 
 redact(Data, #{redact := true}) ->
     nova_redact:term(Data);
@@ -222,8 +225,11 @@ meta_with(Meta, _ConfigNotPresent) ->
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
+decoded(Json) ->
+    json:decode(iolist_to_binary(Json)).
+
 -define(assertJSONEqual(Expected, Actual),
-    ?assertEqual(thoas:decode(Expected), thoas:decode(Actual))
+    ?assertEqual(decoded(Expected), decoded(Actual))
 ).
 
 format_test() ->
@@ -320,8 +326,8 @@ invalid_utf8_test() ->
         parts => [<<"ok ">>, <<255>>],
         name => [114, 228, 107, 97]
     },
-    {ok, #{<<"id">> := Id, <<"name">> := Name, <<"parts">> := Parts}} =
-        thoas:decode(format(#{level => info, msg => {report, Report}, meta => #{}}, #{})),
+    #{<<"id">> := Id, <<"name">> := Name, <<"parts">> := Parts} =
+        decoded(format(#{level => info, msg => {report, Report}, meta => #{}}, #{})),
     ?assertEqual(<<"<<255,0>>">>, Id),
     ?assertEqual(<<"r", 195, 164, "ka">>, Name),
     ?assert(is_binary(Parts)).
@@ -353,7 +359,7 @@ meta_without_test() ->
             <<"level">> => <<"info">>,
             <<"secret">> => <<"xyz">>
         }},
-        thoas:decode(format(Error, #{}))
+        {ok, decoded(format(Error, #{}))}
     ),
     Config2 = #{meta_without => [secret]},
     ?assertEqual(
@@ -361,7 +367,7 @@ meta_without_test() ->
             <<"answer">> => 42,
             <<"level">> => <<"info">>
         }},
-        thoas:decode(format(Error, Config2))
+        {ok, decoded(format(Error, Config2))}
     ),
     ok.
 
@@ -377,7 +383,7 @@ meta_with_test() ->
             <<"level">> => <<"info">>,
             <<"secret">> => <<"xyz">>
         }},
-        thoas:decode(format(Error, #{}))
+        {ok, decoded(format(Error, #{}))}
     ),
     Config2 = #{meta_with => [level]},
     ?assertEqual(
@@ -385,7 +391,7 @@ meta_with_test() ->
             <<"answer">> => 42,
             <<"level">> => <<"info">>
         }},
-        thoas:decode(format(Error, Config2))
+        {ok, decoded(format(Error, Config2))}
     ),
     ok.
 
@@ -411,16 +417,16 @@ redact_test() ->
 newline_test() ->
     ConfigDefault = #{new_line => true},
     ?assertEqual(
-        [<<"{\"level\":\"alert\",\"text\":\"derp\"}">>, <<"\n">>],
-        format(#{level => alert, msg => {string, "derp"}, meta => #{}}, ConfigDefault)
+        <<"{\"level\":\"alert\",\"text\":\"derp\"}\n">>,
+        iolist_to_binary(format(#{level => alert, msg => {string, "derp"}, meta => #{}}, ConfigDefault))
     ),
     ConfigCRLF = #{
         new_line_type => crlf,
         new_line => true
     },
     ?assertEqual(
-        [<<"{\"level\":\"alert\",\"text\":\"derp\"}">>, <<"\r\n">>],
-        format(#{level => alert, msg => {string, "derp"}, meta => #{}}, ConfigCRLF)
+        <<"{\"level\":\"alert\",\"text\":\"derp\"}\r\n">>,
+        iolist_to_binary(format(#{level => alert, msg => {string, "derp"}, meta => #{}}, ConfigCRLF))
     ).
 
 newline_types_test() ->
@@ -442,8 +448,8 @@ newline_types_test() ->
 
 no_newline_test() ->
     Base = #{level => alert, msg => {string, "x"}, meta => #{}},
-    Result = format(Base, #{}),
-    ?assert(is_binary(Result)).
+    Result = iolist_to_binary(format(Base, #{})),
+    ?assertEqual(<<"{\"level\":\"alert\",\"text\":\"x\"}">>, Result).
 
 jsonify_types_test() ->
     %% atom
@@ -472,29 +478,30 @@ jsonify_types_test() ->
 
 format_keyval_list_test() ->
     Event = #{level => info, msg => {report, [{key, <<"val">>}]}, meta => #{}},
-    {ok, #{<<"key">> := Value}} = thoas:decode(format(Event, #{})),
-    ?assertEqual(<<"val">>, Value).
+    Decoded = decoded(format(Event, #{})),
+    ?assertEqual(<<"val">>, maps:get(<<"key">>, Decoded)).
 
 format_format_terms_test() ->
     Event = #{level => info, msg => {"hello ~s", ["world"]}, meta => #{}},
-    {ok, #{<<"text">> := Text}} = thoas:decode(format(Event, #{})),
-    ?assertEqual(<<"hello world">>, Text).
+    Decoded = decoded(format(Event, #{})),
+    ?assertEqual(<<"hello world">>, maps:get(<<"text">>, Decoded)).
 
 format_error_logger_test() ->
     Event = #{level => error,
               msg => {report, #{format => "error: ~p", args => [bad], label => {error_logger, error}}},
               meta => #{}},
-    ?assertMatch({ok, #{<<"text">> := _}}, thoas:decode(format(Event, #{}))).
+    Decoded = decoded(format(Event, #{})),
+    ?assert(maps:is_key(<<"text">>, Decoded)).
 
 nested_map_test() ->
     Event = #{level => info, msg => {report, #{outer => #{inner => value}}}, meta => #{}},
-    {ok, #{<<"outer">> := Outer}} = thoas:decode(format(Event, #{})),
-    ?assertEqual(#{<<"inner">> => <<"value">>}, Outer).
+    Decoded = decoded(format(Event, #{})),
+    ?assertEqual(#{<<"inner">> => <<"value">>}, maps:get(<<"outer">>, Decoded)).
 
 list_of_maps_test() ->
     Event = #{level => info, msg => {report, #{items => [#{a => 1}, #{b => 2}]}}, meta => #{}},
-    {ok, #{<<"items">> := Items}} = thoas:decode(format(Event, #{})),
-    ?assertEqual([#{<<"a">> => 1}, #{<<"b">> => 2}], Items).
+    Decoded = decoded(format(Event, #{})),
+    ?assertEqual([#{<<"a">> => 1}, #{<<"b">> => 2}], maps:get(<<"items">>, Decoded)).
 
 system_time_to_iso8601_test() ->
     Epoch = erlang:system_time(microsecond),

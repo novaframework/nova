@@ -6,8 +6,7 @@
 -export([
          execute/2,
          terminate/3,
-         request_error_status/1,
-         answered/1
+         request_error_status/1
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -52,7 +51,9 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) when is
             render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 500)
     end;
 execute(Req, Env = #{callback := _Callback}) ->
-    execute_controller(Req, Env, false).
+    %% nova_router:render_status_page/5 says which status the page it put in
+    %% place of the controller is for.
+    execute_controller(Req, Env, maps:get(status_page, Env, false)).
 
 -spec terminate(any(), Req :: cowboy_req:req() | undefined, function()) -> ok.
 terminate(Reason, Req, Callback) ->
@@ -146,7 +147,8 @@ render_crash_page(Req, Env = #{callback := Callback}, 500) ->
         true ->
             reply(500, maps:without([resp_body], Req), Env);
         false ->
-            execute_controller(Req, Env#{app => nova, callback => fun nova_error_controller:server_error/1}, 500)
+            execute_controller(nova_router:status_page_request(500, #{}, Req),
+                               Env#{app => nova, callback => fun nova_error_controller:server_error/1}, 500)
     end;
 render_crash_page(Req, Env, _StatusPage) ->
     render_response(Req, Env, 500).
@@ -155,7 +157,6 @@ render_crash_page(Req, Env, _StatusPage) ->
 %% is rendered for a controller that failed: the page would run for nothing,
 %% and nova_stream_h would drop it. The request that comes back is marked as
 %% answered.
--doc false.
 -spec answered(Req) -> false | {true, Req} when Req :: cowboy_req:req().
 answered(Req) ->
     case response_begun(Req) of
@@ -328,7 +329,8 @@ render_response(Req, Env, StatusCode) ->
             {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, fun erlang:date/0, Req),
             send_response(Req0, Env);
         {ok, _Bindings, #nova_handler_value{callback = Callback}} ->
-            execute_controller(Req, Env#{app => nova, callback => Callback}, StatusCode)
+            execute_controller(nova_router:status_page_request(StatusCode, #{}, Req),
+                               Env#{app => nova, callback => Callback}, StatusCode)
     end.
 
 

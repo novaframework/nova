@@ -329,6 +329,17 @@ query_string_is_ignored_test() ->
     ?assertEqual({ok, #{}, "ONE"}, find('_', <<"/search?q=erlang">>, "GET", T)),
     ?assertEqual({ok, #{}, "ONE"}, find('_', <<"/search#frag">>, "GET", T)).
 
+canonical_paths_test_() ->
+    [?_assert(nova_routing_trie:is_canonical(Path))
+     || Path <- [~"/", ~"/a", ~"/a/b", ~"/a/b/", ~"*", ~"/.well-known/x", ~"/a/...", ~"/a/..b", ~"/a/b.",
+                 ~"/a%2Fb", ~"/a/%2e%2e%2e", ~"/a/%2ex"]].
+
+non_canonical_paths_test_() ->
+    [?_assertNot(nova_routing_trie:is_canonical(Path))
+     || Path <- [~"", ~"a", ~"//", ~"//a", ~"/a//b", ~"/a//", ~"/.", ~"/..", ~"/a/.", ~"/a/..", ~"/a/./b",
+                 ~"/a/../b", ~"/./a", ~"/../a", ~"/a/%2e/b", ~"/a/%2E/b", ~"/a/%2e%2e/b", ~"/a/%2E%2e/b",
+                 ~"/a/.%2e/b", ~"/a/%2e./b", ~"/a/%2e", ~"**"]].
+
 %%====================================================================
 %% member/3,4
 %%====================================================================

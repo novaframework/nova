@@ -17,7 +17,9 @@ internal_exports_are_hidden_test_() ->
      || {Module, Function, Arity} <- [{nova_router, compile_fresh, 2},
                                       {nova_router, overrides_in_force, 1},
                                       {nova_router, secures_in_force, 1},
+                                      {nova_router, status_page_request, 3},
                                       {nova_routing_trie, canonical_segments, 1},
+                                      {nova_routing_trie, is_canonical, 1},
                                       {nova_plugin_manager, ensure_plugin, 1},
                                       {nova_security_handler, deny, 1}]].
 

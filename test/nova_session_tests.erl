@@ -110,6 +110,7 @@ nova_session_ets_test_() ->
       fun renew_tells_stream_handler/0,
       fun backend_is_asked_once_about_a_presented_id/0,
       fun deleted_session_is_asked_about_again/0,
+      fun session_deleted_by_another_process_is_not_written_again/0,
       fun renew_without_session/0,
       fun renew_sets_cookie_without_stream_handler/0,
       fun delete_expires_cookie_without_stream_handler/0,
@@ -118,6 +119,9 @@ nova_session_ets_test_() ->
       fun renew_with_stream_handler_sets_no_cookie/0,
       fun use_sessions_bootstrap_app_wins/0,
       fun known_presented_id_is_used/0,
+      fun client_id_is_the_presented_one_known_or_not/0,
+      fun client_id_of_a_request_without_a_cookie_is_handed_out/0,
+      fun client_id_without_stream_handler_is_the_cookie/0,
       fun unknown_presented_id_is_replaced/0,
       fun renew_drops_presented_id/0,
       fun spawned_process_does_not_notify/0,
@@ -337,6 +341,26 @@ known_presented_id_is_used() ->
     ok = nova_session:set(Req, ~"k2", ~"v2"),
     ?assertEqual({written, ~"known"}, stream_event()).
 
+%% What is tied to the browser goes by the cookie it holds. No session is
+%% started for it, and the id is not one a write would use.
+client_id_is_the_presented_one_known_or_not() ->
+    ok = nova_session_ets:set_value(~"known", ~"k", ~"v"),
+    ?assertEqual({ok, ~"known"}, nova_session:client_id(presented_req(~"known", ~"pending"))),
+    ?assertEqual({ok, ~"never-stored"}, nova_session:client_id(presented_req(~"never-stored", ~"pending"))),
+    ok = no_stream_event(),
+    ?assertNot(nova_session_ets:session_exists(~"never-stored")),
+    ?assertNot(nova_session_ets:session_exists(~"pending")).
+
+client_id_of_a_request_without_a_cookie_is_handed_out() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    ?assertEqual({ok, SId}, nova_session:client_id(stream_req(SId))),
+    ?assertEqual({issued, SId}, stream_event()),
+    ?assertNot(nova_session_ets:session_exists(SId)).
+
+client_id_without_stream_handler_is_the_cookie() ->
+    ?assertEqual({ok, ~"held"}, nova_session:client_id(req_with_cookie(~"held"))),
+    ?assertEqual({error, not_found}, nova_session:client_id(nova_test_helper:mock_req(~"GET", ~"/"))).
+
 %% A client must not be able to pick its own session id.
 unknown_presented_id_is_replaced() ->
     Req = presented_req(~"attacker-chosen", ~"pending"),
@@ -352,12 +376,26 @@ backend_is_asked_once_about_a_presented_id() ->
     try
         ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")),
         ?assertEqual({error, not_found}, nova_session:get(Req, ~"other")),
-        ok = nova_session:set(Req, ~"k2", ~"v2"),
-        {ok, _Req} = nova_session:delete(Req, ~"k2"),
         ?assertEqual(1, meck:num_calls(nova_session_ets, session_exists, [~"asked-once"]))
     after
         meck:unload(nova_session_ets)
     end.
+
+%% The process of a websocket, or a request that takes its time, may have
+%% read the session before another request signed the client out.
+session_deleted_by_another_process_is_not_written_again() ->
+    ok = nova_session_ets:set_value(~"signed-out-elsewhere", ~"user", ~"alice"),
+    Req = presented_req(~"signed-out-elsewhere", ~"pending"),
+    ?assertEqual({ok, ~"alice"}, nova_session:get(Req, ~"user")),
+    {Pid, Ref} = spawn_monitor(fun() ->
+                                       {ok, _} = nova_session:delete(req_with_session(~"signed-out-elsewhere"))
+                               end),
+    receive {'DOWN', Ref, process, Pid, Reason} -> ?assertEqual(normal, Reason) after 1000 -> error(timeout) end,
+    ok = nova_session:set(Req, ~"k", ~"v"),
+    ?assertEqual({written, ~"pending"}, stream_event()),
+    ?assertNot(nova_session_ets:session_exists(~"signed-out-elsewhere")),
+    {ok, _Req} = nova_session:delete(Req, ~"k"),
+    ?assertNot(nova_session_ets:session_exists(~"signed-out-elsewhere")).
 
 %% A controller that goes on with the request it had before the delete must
 %% not bring the deleted session back under the id the client still holds.

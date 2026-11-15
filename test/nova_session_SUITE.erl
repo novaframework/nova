@@ -61,7 +61,7 @@ end_per_group(_Group, _Config) ->
     ok.
 
 start(Configuration, Config) ->
-    Port = free_port(),
+    Port = nova_test_listener:free_port(),
     application:set_env(nova, cowboy_configuration, Configuration#{port => Port}),
     {ok, _} = application:ensure_all_started(nova_test_app),
     [{base, "http://localhost:" ++ integer_to_list(Port)} | Config].
@@ -161,7 +161,7 @@ delete_expires_cookie_without_stream_h(Config) ->
 %% cow_cookie raises on a name that is not a token. That used to loop on
 %% Cowboy's 500 path in nova_stream_h, logging the request on every pass.
 invalid_cookie_name_at_runtime_drops_the_cookie(Config) ->
-    persistent_term:erase({nova_stream_h, invalid_cookie_logged, ~"app:sid"}),
+    nova_once:forget({nova_stream_h, invalid_cookie_logged, ~"app:sid"}),
     ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
     application:set_env(nova, session_cookie_name, ~"app:sid"),
     try
@@ -183,7 +183,7 @@ invalid_cookie_name_at_runtime_drops_the_cookie(Config) ->
     after
         application:unset_env(nova, session_cookie_name),
         logger:remove_handler(?MODULE),
-        persistent_term:erase({nova_stream_h, invalid_cookie_logged, ~"app:sid"})
+        nova_once:forget({nova_stream_h, invalid_cookie_logged, ~"app:sid"})
     end.
 
 %% Leaves Nova stopped; the next group starts it again.
@@ -222,12 +222,6 @@ session_id(Headers) ->
     [Cookie] = session_cookies(Headers),
     "session_id=" ++ Rest = hd(string:split(Cookie, ";")),
     Rest.
-
-free_port() ->
-    {ok, Socket} = gen_tcp:listen(0, [{reuseaddr, true}]),
-    {ok, Port} = inet:port(Socket),
-    ok = gen_tcp:close(Socket),
-    Port.
 
 log(#{msg := Msg}, #{config := #{test_pid := Pid}}) ->
     Pid ! {logged, Msg},

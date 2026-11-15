@@ -132,7 +132,7 @@ modulate_state_decode_json_post_test_() ->
 modulate_state_decode_json_with_otp_json_test_() ->
     {setup,
      fun() -> Prev = nova_test_helper:setup_nova_env(), application:set_env(nova, json_lib, json), Prev end,
-     fun(Prev) -> application:set_env(nova, json_lib, thoas), nova_test_helper:cleanup_nova_env(Prev) end,
+     fun(Prev) -> application:unset_env(nova, json_lib), nova_test_helper:cleanup_nova_env(Prev) end,
      fun() ->
          Req = nova_test_helper:with_json_body(~"{\"name\":\"test\"}",
                                                nova_test_helper:mock_req(~"POST", ~"/")),
@@ -300,7 +300,7 @@ body_length_test_() ->
        end},
       {"an invalid limit is warned about once and the default used",
        fun() ->
-           persistent_term:erase({nova_request_plugin, invalid_limit, max_body_length, -1}),
+           nova_once:forget({nova_request_plugin, invalid_limit, max_body_length, -1}),
            ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
            try
                [?assertMatch({stop, {status, 413, #{~"connection" := ~"close"}}, _, state},
@@ -311,7 +311,7 @@ body_length_test_() ->
                ?assertMatch([#{option := max_body_length, value := -1}], logged())
            after
                logger:remove_handler(?MODULE),
-               persistent_term:erase({nova_request_plugin, invalid_limit, max_body_length, -1})
+               nova_once:forget({nova_request_plugin, invalid_limit, max_body_length, -1})
            end
        end},
       {"infinity reads the whole body",
@@ -379,7 +379,7 @@ body_read_timeout_test_() ->
        end},
       {"a body_read_timeout of 0 is warned about and the default used",
        fun() ->
-           persistent_term:erase({nova_request_plugin, invalid_limit, body_read_timeout, 0}),
+           nova_once:forget({nova_request_plugin, invalid_limit, body_read_timeout, 0}),
            ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
            try
                {ok, _, state} = nova_request_plugin:pre_request(
@@ -389,7 +389,7 @@ body_read_timeout_test_() ->
                ?assert(lists:all(fun(Period) -> Period > 0 end, read_periods()))
            after
                logger:remove_handler(?MODULE),
-               persistent_term:erase({nova_request_plugin, invalid_limit, body_read_timeout, 0})
+               nova_once:forget({nova_request_plugin, invalid_limit, body_read_timeout, 0})
            end
        end}]}.
 
@@ -405,3 +405,23 @@ logged() ->
     after 50 ->
             []
     end.
+
+%%====================================================================
+%% Ahead of the security callback and behind it
+%%====================================================================
+
+query_string_is_parsed_ahead_of_security_test() ->
+    Req = (nova_test_helper:mock_req(~"POST", ~"/"))#{qs => ~"a=1"},
+    Options = #{parse_qs => true, decode_json_body => true, read_urlencoded_body => true},
+    {ok, Early, state} = nova_request_plugin:pre_security(Req, #{}, Options, state),
+    ?assertEqual(#{~"a" => ~"1"}, maps:get(parsed_qs, Early)),
+    ?assertNot(is_map_key(body, Early)),
+    ?assertEqual({ok, Req, state}, nova_request_plugin:pre_security(Req, #{}, maps:remove(parse_qs, Options), state)),
+    ?assertMatch({stop, {status, 400}, _, state},
+                 nova_request_plugin:pre_security(Req#{qs => ~"a=%zz"}, #{}, Options, state)).
+
+body_is_left_for_after_security_test() ->
+    Req = (nova_test_helper:mock_req(~"GET", ~"/"))#{qs => ~"a=1", has_body => false},
+    {ok, Late, state} = nova_request_plugin:pre_request(Req, #{}, #{parse_qs => true, decode_json_body => true}, state),
+    ?assertEqual(<<>>, maps:get(body, Late)),
+    ?assertNot(is_map_key(parsed_qs, Late)).

@@ -9,8 +9,26 @@
          with_qs/2,
          with_content_type/2,
          setup_nova_env/0,
-         cleanup_nova_env/1
+         cleanup_nova_env/1,
+         make_tmp_dir/1,
+         improper_list/2
         ]).
+
+%% `[a, b | Tail]` for a tail that is no list, which is what a setting holds
+%% when somebody writes a cons where a list was meant.
+-spec improper_list(Elements :: [term()], Tail :: term()) -> term().
+improper_list(Elements, Tail) ->
+    apply(erlang, '++', [Elements, Tail]).
+
+%% A new directory for the files of a test. Its name is one no other run
+%% makes: several of them share /tmp, and every one of them counts its
+%% unique integers from the same start.
+-spec make_tmp_dir(Name :: string()) -> file:filename().
+make_tmp_dir(Name) ->
+    Unique = binary_to_list(binary:encode_hex(crypto:strong_rand_bytes(6))),
+    Dir = filename:join("/tmp", lists:flatten([Name, $_, os:getpid(), $_, Unique])),
+    ok = file:make_dir(Dir),
+    Dir.
 
 %% Build a minimal cowboy_req-like map for testing pure handler logic.
 %% We avoid depending on nova_test (circular dep) and cowboy internals.
@@ -33,7 +51,7 @@ with_header(Name, Value, Req = #{headers := Headers}) ->
 
 -spec with_json_body(map() | binary(), map()) -> map().
 with_json_body(JSON, Req) when is_map(JSON) ->
-    Body = thoas:encode(JSON),
+    Body = iolist_to_binary(json:encode(JSON)),
     with_json_body(Body, Req);
 with_json_body(Body, Req) when is_binary(Body) ->
     Req1 = with_content_type(<<"application/json">>, Req),
@@ -62,7 +80,7 @@ setup_nova_env() ->
     Prev = application:get_env(nova, bootstrap_application),
     application:set_env(nova, bootstrap_application, nova),
     application:set_env(nova, environment, dev),
-    application:set_env(nova, json_lib, thoas),
+    application:unset_env(nova, json_lib),
     Prev.
 
 -spec cleanup_nova_env(undefined | {ok, atom()}) -> ok.

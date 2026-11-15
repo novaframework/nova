@@ -50,8 +50,9 @@ render(StatusCode, Variables, Req) ->
 
 %% Every page of Nova leaves from here, and this is the one place that reads
 %% render_error_pages: with it off the status is sent bare to every client,
-%% whatever form it accepts. The status routes of an application are not
-%% pages of Nova and run either way.
+%% whatever form it accepts, as it is to a client that accepts neither form.
+%% The status routes of an application are not pages of Nova and run either
+%% way.
 page(StatusCode, Json, Variables, Req) ->
     case application:get_env(nova, render_error_pages, true) =:= true andalso response_type(Req) of
         false ->
@@ -62,7 +63,7 @@ page(StatusCode, Json, Variables, Req) ->
             {ok, Body} = nova_basic_handler:render_dtl(nova_error_dtl, Variables, []),
             {status, StatusCode, #{~"content-type" => ~"text/html"}, Body};
         none ->
-            {status, StatusCode, #{~"content-type" => ~"text/html"}, <<>>}
+            {status, StatusCode}
     end.
 
 %% A client that sends no accept header gets JSON, as does one whose header
@@ -106,8 +107,8 @@ rank(_Type, {~"*", ~"*", _Parameters}) -> [3];
 rank(_Type, _Range) -> [].
 
 %% Crash details can carry anything a controller or plugin returned, so they
-%% are only shown when the environment is explicitly set to dev; an unset
-%% environment shows none.
+%% are only shown when the environment is set to dev; an unset environment
+%% shows none.
 debug_details(Variables, ExtraMsg, Stacktrace) ->
     case show_details() of
         true -> Variables#{extra_msg => ExtraMsg, stacktrace => format_stacktrace(Stacktrace)};

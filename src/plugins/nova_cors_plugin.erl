@@ -21,7 +21,7 @@ no further. Any other `OPTIONS` request goes on to the application.
 -behaviour(nova_plugin).
 
 -export([
-         pre_request/4,
+         pre_security/4,
          post_request/4,
          plugin_info/0
         ]).
@@ -31,16 +31,19 @@ no further. Any other `OPTIONS` request goes on to the application.
 Sets the CORS headers on the response. Returns `{stop, Req, State}` after
 answering a preflight with a `204`, and `{ok, Req, State}` for every other
 request. `Options` without `allow_origins` matches no clause.
+
+Runs ahead of the security callback: a preflight carries no credentials, and
+a browser only shows a refusal to the page when it has the headers.
 """.
--spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
-                         {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
-                         {stop, Req0 :: cowboy_req:req(), NewState :: any()}.
-pre_request(Req, _Env, #{allow_origins := Origins} = Options, State) ->
+-spec pre_security(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
+                          {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
+                          {stop, Req0 :: cowboy_req:req(), NewState :: any()}.
+pre_security(Req, _Env, #{allow_origins := Origins} = Options, State) ->
     ReqWithOptions = add_cors_headers(Req, Origins, Options),
     continue(ReqWithOptions, State).
 
 %%--------------------------------------------------------------------
--doc "Does nothing: the plugin works in `pre_request/4`.".
+-doc "Does nothing: the plugin works in `pre_security/4`.".
 -spec post_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
                                {ok, Req0 :: cowboy_req:req(), NewState :: any()}.
 post_request(Req, _Env, _Opts, State) ->

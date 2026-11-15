@@ -32,6 +32,11 @@
                 dropped = false :: boolean()
                }).
 
+%% What is wrong with one request is wrong with every request to its route,
+%% and this is logged from the connection process: one line a second on the
+%% node, with the number of responses dropped since the line before.
+-define(DROPPED_INTERVAL, 1000).
+
 -type state() :: #state{}.
 
 -spec init(cowboy_stream:streamid(), cowboy_req:req(), cowboy:opts())
@@ -98,8 +103,14 @@ begun(Sent, Headers, State = #state{invalid_headers = Mode}) ->
 dropped(_Code, State = #state{dropped = true}) ->
     State;
 dropped(Code, State = #state{req = Req}) ->
-    ?LOG_WARNING(#{msg => ~"The request was answered already, so this response is not sent. A controller, plugin or security callback that answers with cowboy_req has to hand back the request it got from it",
-                   status => Code, method => maps:get(method, Req, undefined)}),
+    case nova_once:per_interval({?MODULE, dropped}, ?DROPPED_INTERVAL) of
+        {true, NotLogged} ->
+            ?LOG_WARNING(#{msg => ~"The request was answered already, so this response is not sent. A controller, plugin or security callback that answers with cowboy_req has to hand back the request it got from it",
+                           status => Code, method => maps:get(method, Req, undefined),
+                           path => maps:get(path, Req, undefined), not_logged => NotLogged});
+        false ->
+            ok
+    end,
     State#state{dropped = true}.
 
 forward(StreamID, Info, State = #state{next = Next}) ->
@@ -148,6 +159,10 @@ session_event(_Event, undefined) ->
     undefined;
 session_event({written, SessionId}, Session = #session{presented = Presented}) ->
     Session#session{current = SessionId, issue = SessionId =/= Presented, expire = false};
+%% nova_session:client_id/1 for a client that sent no cookie. A request
+%% whose Cookie header did not parse has no session here and gets none.
+session_event({issued, SessionId}, Session = #session{presented = undefined, current = SessionId}) ->
+    Session#session{issue = true};
 session_event({renewed, SessionId}, Session) ->
     Session#session{current = SessionId, issue = true, expire = false};
 session_event({deleted, SessionId}, Session = #session{presented = Presented}) ->

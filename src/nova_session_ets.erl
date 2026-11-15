@@ -17,7 +17,9 @@ The table holds at most `max_sessions` sessions, 1 000 000 by default. Once
 it is full, a write that starts a new session drops another one to make room:
 an expired session first, then a provisional one, then the session nearest its
 expiry. Sessions that exist are still written. Set
-`{nova, [{max_sessions, infinity}]}` to turn the limit off.
+`{nova, [{max_sessions, infinity}]}` to turn the limit off. Nova does not
+start with a value that is neither `infinity` nor an integer above 0. The
+setting is read from the `nova` environment when Nova starts.
 
 A provisional session is one that only holds what was written with
 `nova_session:set_provisional/3`, which is how `nova_csrf_plugin` stores the
@@ -36,7 +38,8 @@ so it is signed out. Use a shared backend, such as a database, when sessions
 have to outlive a node.
 
 Rows are `{SessionId, Data, ExpiresAt, Class}`. Older releases stored
-`{SessionId, Data}`; `code_change/3` converts them on a hot upgrade.
+`{SessionId, Data}` or `{SessionId, Data, ExpiresAt}`; `code_change/3`
+converts both on a hot upgrade, to ordinary sessions.
 """.
 
 -behaviour(gen_server).
@@ -64,7 +67,6 @@ Rows are `{SessionId, Data, ExpiresAt, Class}`. Older releases stored
 -define(EXPIRY, nova_session_ets_expiry).
 -define(CHANNEL, '__sessions').
 -define(SWEEP_INTERVAL, 60000).
--define(DEFAULT_MAX_SESSIONS, 1000000).
 -define(PROVISIONAL_MAX_AGE, 86400).
 
 -include_lib("kernel/include/logger.hrl").
@@ -178,11 +180,11 @@ has_room(SessionId, Class) ->
                 orelse gen_server:call(?SERVER, {make_room, Class, Max})
     end.
 
+-spec max_sessions() -> pos_integer() | infinity.
 max_sessions() ->
-    case nova_config:get_env(max_sessions, ?DEFAULT_MAX_SESSIONS) of
-        infinity -> infinity;
-        Max when is_integer(Max), Max >= 0 -> Max;
-        _ -> ?DEFAULT_MAX_SESSIONS
+    case nova_settings:value(max_sessions) of
+        Max when is_integer(Max), Max > 0 -> Max;
+        _Infinity -> infinity
     end.
 
 %%%===================================================================
@@ -285,10 +287,18 @@ terminate(_Reason, _State) ->
                   State :: term(),
                   Extra :: term()) -> {ok, NewState :: term()} |
                                       {error, Reason :: term()}.
+%% An older release had one kind of session, and nothing in a row tells one
+%% that signs somebody in from one that only holds a CSRF token, under a key
+%% the application chooses. Every row is converted to a kept session: taken
+%% for a provisional one, the session of somebody signed in could be dropped
+%% for a request without a session, which is what the classes are there to
+%% prevent. The price is that the token sessions of the old release are not
+%% the first to go until they expire.
 code_change(_OldVsn, _State, _Extra) ->
     _ = ets:whereis(?EXPIRY) =:= undefined andalso ets:new(?EXPIRY, [ordered_set, named_table]),
-    Old = ets:select(?TABLE, [{{'$1', '$2'}, [], [{{'$1', '$2'}}]}]),
-    _ = [insert(SessionId, Session, infinity, kept) || {SessionId, Session} <- Old],
+    Old = ets:select(?TABLE, [{{'$1', '$2'}, [], [{{'$1', '$2', infinity}}]},
+                              {{'$1', '$2', '$3'}, [], ['$_']}]),
+    _ = [insert(SessionId, Session, ExpiresAt, kept) || {SessionId, Session, ExpiresAt} <- Old],
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------

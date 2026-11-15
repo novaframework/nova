@@ -180,7 +180,7 @@ groups() ->
 %%====================================================================
 
 init_per_suite(Config) ->
-    Port = free_port(),
+    Port = nova_test_listener:free_port(),
     application:load(nova),
     application:set_env(nova, bootstrap_application, nova_test_app),
     application:set_env(nova, cowboy_configuration, #{port => Port}),
@@ -340,7 +340,8 @@ static_dot_segments_stay_inside_the_root(Config) ->
              "http://localhost/assets/../outside_assets.txt"],
     [?assertEqual(nomatch, binary:match(raw_get(Config, Path), ~"outside-assets-sentinel"), Path)
      || Path <- Paths],
-    ?assertMatch(<<"HTTP/1.1 200", _/binary>>, raw_get(Config, "/assets/../../assets/hello.txt")).
+    ?assertMatch(<<"HTTP/1.1 400", _/binary>>, raw_get(Config, "/assets/../../assets/hello.txt")),
+    ?assertMatch(<<"HTTP/1.1 400", _/binary>>, raw_get(Config, "/assets/nested/../hello.txt")).
 
 raw_get(Config, Path) ->
     Port = ?config(port, Config),
@@ -812,14 +813,7 @@ header(Name, Headers) ->
     end.
 
 json(Body) ->
-    {ok, Decoded} = thoas:decode(Body),
-    Decoded.
-
-free_port() ->
-    {ok, Socket} = gen_tcp:listen(0, [{reuseaddr, true}]),
-    {ok, Port} = inet:port(Socket),
-    ok = gen_tcp:close(Socket),
-    Port.
+    json:decode(Body).
 
 %%====================================================================
 %% Minimal WebSocket client

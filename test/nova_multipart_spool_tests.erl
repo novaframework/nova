@@ -6,8 +6,12 @@ spool_test_() ->
      [fun file_is_deleted_when_its_owner_ends/1,
       fun kept_file_outlives_its_owner/1,
       fun renamed_file_is_deleted_at_its_new_path/1,
+      fun file_renamed_by_the_spool_is_deleted_at_its_new_path/1,
       fun discarded_file_is_deleted_at_once/1,
       fun owner_crash_deletes_its_files_only/1,
+      fun owner_with_a_kept_file_loses_the_others/1,
+      fun owner_without_files_is_no_longer_watched/1,
+      fun path_tracked_again_starts_over/1,
       fun kept_file_no_longer_counts/1,
       fun unknown_path_is_not_tracked/1,
       fun string_and_binary_path_name_one_file/1,
@@ -15,18 +19,26 @@ spool_test_() ->
       fun stopping_the_spool_deletes_what_it_tracks/1]}.
 
 setup() ->
-    Dir = filename:join("/tmp", "nova_spool_test_" ++ integer_to_list(erlang:unique_integer([positive]))),
-    ok = file:make_dir(Dir),
-    {ok, Spool} = nova_multipart_spool:start_link(),
-    unlink(Spool),
-    Dir.
+    Dir = nova_test_helper:make_tmp_dir("nova_spool_test"),
+    try
+        {ok, Spool} = nova_multipart_spool:start_link(),
+        unlink(Spool),
+        Dir
+    catch
+        Class:Reason:Stacktrace ->
+            ok = file:del_dir_r(Dir),
+            erlang:raise(Class, Reason, Stacktrace)
+    end.
 
 teardown(Dir) ->
-    case whereis(nova_multipart_spool) of
-        undefined -> ok;
-        _Pid -> gen_server:stop(nova_multipart_spool)
-    end,
-    ok = file:del_dir_r(Dir).
+    try
+        case whereis(nova_multipart_spool) of
+            undefined -> ok;
+            _Pid -> gen_server:stop(nova_multipart_spool)
+        end
+    after
+        ok = file:del_dir_r(Dir)
+    end.
 
 file_is_deleted_when_its_owner_ends(Dir) ->
     fun() ->
@@ -58,6 +70,20 @@ renamed_file_is_deleted_at_its_new_path(Dir) ->
         ?assertEqual({ok, []}, file:list_dir(Dir))
     end.
 
+file_renamed_by_the_spool_is_deleted_at_its_new_path(Dir) ->
+    fun() ->
+        Path = filename:join(Dir, "upload.part"),
+        NewPath = filename:join(Dir, "upload"),
+        spool(Path, ~"data"),
+        ok = nova_multipart_spool:rename(Path, NewPath),
+        ?assertEqual({ok, ["upload"]}, file:list_dir(Dir)),
+        ?assertEqual(#{files => 1, bytes => 4}, nova_multipart_spool:usage()),
+        ?assertEqual({error, not_tracked}, nova_multipart_spool:rename(Path, NewPath)),
+        ?assertEqual({error, enoent}, nova_multipart_spool:rename(NewPath, filename:join([Dir, "missing", "upload"]))),
+        ok = nova_multipart_spool:discard(NewPath),
+        ?assertEqual({ok, []}, file:list_dir(Dir))
+    end.
+
 discarded_file_is_deleted_at_once(Dir) ->
     fun() ->
         Path = filename:join(Dir, "upload"),
@@ -78,6 +104,41 @@ owner_crash_deletes_its_files_only(Dir) ->
               end),
         ?assertEqual({ok, ["mine"]}, file:list_dir(Dir)),
         ?assertEqual(#{files => 1, bytes => 4}, nova_multipart_spool:usage())
+    end.
+
+owner_with_a_kept_file_loses_the_others(Dir) ->
+    fun() ->
+        Kept = filename:join(Dir, "kept"),
+        Moved = filename:join(Dir, "moved"),
+        owner(fun() ->
+                      spool(Kept, ~"kept"),
+                      spool(filename:join(Dir, "left"), ~"left"),
+                      spool(filename:join(Dir, "moved.part"), ~"moved"),
+                      ok = file:rename(filename:join(Dir, "moved.part"), Moved),
+                      ok = nova_multipart_spool:renamed(filename:join(Dir, "moved.part"), Moved),
+                      ok = nova_multipart_spool:keep(Kept)
+              end),
+        ?assertEqual({ok, ["kept"]}, file:list_dir(Dir)),
+        ?assertEqual(#{files => 0, bytes => 0}, nova_multipart_spool:usage())
+    end.
+
+owner_without_files_is_no_longer_watched(Dir) ->
+    fun() ->
+        Path = filename:join(Dir, "upload"),
+        spool(Path, ~"data"),
+        ?assertEqual([{process, self()}], watched()),
+        ok = nova_multipart_spool:discard(Path),
+        ?assertEqual([], watched())
+    end.
+
+path_tracked_again_starts_over(Dir) ->
+    fun() ->
+        Path = filename:join(Dir, "upload"),
+        spool(Path, ~"first"),
+        spool(Path, ~"data"),
+        ?assertEqual(#{files => 1, bytes => 4}, nova_multipart_spool:usage()),
+        ok = nova_multipart_spool:discard(Path),
+        ?assertEqual(#{files => 0, bytes => 0}, nova_multipart_spool:usage())
     end.
 
 kept_file_no_longer_counts(Dir) ->
@@ -120,6 +181,13 @@ stopping_the_spool_deletes_what_it_tracks(Dir) ->
         ok = gen_server:stop(nova_multipart_spool),
         ?assertEqual({error, enoent}, file:read_file(Path)),
         ?assertEqual({error, spool_not_running}, nova_multipart_spool:track(Path))
+    end.
+
+watched() ->
+    case whereis(nova_multipart_spool) of
+        Spool when is_pid(Spool) ->
+            {monitors, Monitors} = process_info(Spool, monitors),
+            Monitors
     end.
 
 spool(Path, Data) ->

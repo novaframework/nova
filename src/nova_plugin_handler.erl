@@ -14,15 +14,16 @@ execute(Req = #{plugins := Plugins}, Env = #{plugin_state := pre_request}) ->
     PostPlugins = proplists:get_value(post_request, Plugins, []),
     run_plugins(PostPlugins, post_request, Req, Env);
 execute(Req = #{plugins := Plugins}, Env) ->
-    %% Determine which pre-plugin this is
+    %% What runs ahead of the security callback: pre_security/4 of the
+    %% plugins, and pre_request/4 of those listed under plugins_before_security.
     PrePlugins = proplists:get_value(pre_request, Plugins, []),
     run_plugins(PrePlugins, pre_request, Req, Env);
 execute(Req, Env) ->
     %% The router could not find any match for us
     {ok, Req, Env}.
 
-%% The pre_request plugins a route lists under plugins_after_security.
-%% nova_security_handler calls this once the request is let through.
+%% pre_request/4 of the plugins, which waits for the request to be let
+%% through. nova_security_handler calls this once it is.
 -spec after_security(Req, Env) -> {ok, Req, Env} | {stop, Req}
               when Req :: cowboy_req:req(), Env :: cowboy_middleware:env().
 after_security(Req = #{plugins := Plugins}, Env) when is_list(Plugins) ->
@@ -50,7 +51,7 @@ run_plugins([{Callback, Options}|Tl], CallbackType, Req, Env) when is_function(C
 
     Span = nova_telemetry:start([nova, plugin],
                                 #{plugin => plugin_module(Callback),
-                                  callback => CallbackType,
+                                  callback => callback_name(Callback, CallbackType),
                                   app => maps:get(app, Env, undefined),
                                   route => maps:get(nova_route, Req, undefined)}),
     try Callback(Req, Env, Options, State) of
@@ -214,6 +215,14 @@ warn_once(Callback, Tag, Msg) ->
 plugin_module(Callback) ->
     {module, Module} = erlang:fun_info(Callback, module),
     Module.
+
+%% CallbackType is the phase, and pre_security/4 runs in the one of the
+%% pre_request plugins: telemetry would name it pre_request.
+callback_name(Callback, CallbackType) ->
+    case erlang:fun_info(Callback, name) of
+        {name, pre_security} -> pre_security;
+        _ -> CallbackType
+    end.
 
 %% Names the return, whatever Nova goes on to do with it. {ok, Reply, Req,
 %% State} is part of the plugin contract only with a {reply, ...} reply.

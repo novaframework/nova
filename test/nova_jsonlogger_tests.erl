@@ -54,3 +54,12 @@ arguments_that_no_longer_fit_the_format_are_printed_test() ->
     Line = formatted({"~s", [request()]}, #{redact => true}),
     ?assertEqual(nomatch, binary:match(Line, ~"CANARYTOKEN")),
     ?assertMatch({_, _}, binary:match(Line, ~"/account")).
+
+text_is_encoded_whatever_it_holds_test_() ->
+    [?_assertEqual(#{~"level" => ~"error", ~"text" => Text}, json:decode(formatted(Msg, #{})))
+     || {Msg, Text} <- [{{string, "plain"}, ~"plain"},
+                        {{string, [~"deep ", ["chars ", 228]]}, <<"deep chars ä"/utf8>>},
+                        {{"~s and ~p", ["one", two]}, ~"one and two"}]].
+
+text_that_is_not_unicode_is_printed_as_a_term_test() ->
+    ?assertMatch(#{~"text" := <<"<<", _/binary>>}, json:decode(formatted({string, <<255>>}, #{}))).

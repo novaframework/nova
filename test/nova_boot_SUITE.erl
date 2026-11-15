@@ -17,8 +17,18 @@
          pubsub_scope_is_restarted/1,
          restarted_pubsub_scope_has_no_members/1,
          pubsub_scope_started_elsewhere_is_left_alone/1,
-         unset_environment_is_warned_about_once/1,
-         set_environment_is_not_warned_about/1,
+         unset_environment_is_prod_and_said_once/1,
+         set_environment_is_not_mentioned/1,
+         unknown_non_canonical_paths_fails_the_boot/1,
+         unknown_allowed_origins_fails_the_boot/1,
+         unknown_allowed_origins_of_a_plugin_fails_the_boot/1,
+         session_store_for_no_session_fails_the_boot/1,
+         plugins_before_security_that_names_no_plugin_fails_the_boot/1,
+         plugins_before_security_of_a_route_group_that_names_none_of_its_plugins_fails_the_boot/1,
+         csrf_settings_nothing_can_go_by_fail_the_boot/1,
+         csrf_secret_that_fails_the_boot_is_not_told/1,
+         csrf_tokens_kept_in_the_session_store_are_said_once/1,
+         body_decoded_behind_a_security_callback_is_warned_about/1,
          plugins_of_an_earlier_run_are_forgotten/1
         ]).
 
@@ -39,8 +49,18 @@ all() ->
      pubsub_scope_is_restarted,
      restarted_pubsub_scope_has_no_members,
      pubsub_scope_started_elsewhere_is_left_alone,
-     unset_environment_is_warned_about_once,
-     set_environment_is_not_warned_about,
+     unset_environment_is_prod_and_said_once,
+     set_environment_is_not_mentioned,
+     unknown_non_canonical_paths_fails_the_boot,
+     unknown_allowed_origins_fails_the_boot,
+     unknown_allowed_origins_of_a_plugin_fails_the_boot,
+     session_store_for_no_session_fails_the_boot,
+     plugins_before_security_that_names_no_plugin_fails_the_boot,
+     plugins_before_security_of_a_route_group_that_names_none_of_its_plugins_fails_the_boot,
+     csrf_settings_nothing_can_go_by_fail_the_boot,
+     csrf_secret_that_fails_the_boot_is_not_told,
+     csrf_tokens_kept_in_the_session_store_are_said_once,
+     body_decoded_behind_a_security_callback_is_warned_about,
      plugins_of_an_earlier_run_are_forgotten
     ].
 
@@ -197,22 +217,148 @@ pubsub_scope_started_elsewhere_is_left_alone(_Config) ->
         exit(Scope, kill)
     end.
 
-%% An unset environment is read as dev where routes are compiled, which a
-%% release that forgot the key should hear about.
-unset_environment_is_warned_about_once(_Config) ->
+%% An unset environment is prod wherever it is read: the routers are asked
+%% for routes(prod), and nothing meant for development is on. A boot says so
+%% once, for the developer who expected dev.
+unset_environment_is_prod_and_said_once(_Config) ->
     ok = nova_test_listener:configure(#{}),
+    application:set_env(nova_test_app, router_module, nova_boot_pages),
     application:unset_env(nova, environment),
     {{ok, _Started}, Events} = nova_test_log:collect(fun() -> application:ensure_all_started(nova_test_app) end),
-    ?assertMatch([#{environment := undefined, read_as := dev}], environment_warnings(Events)).
+    ?assertMatch([#{key := environment, read_as := prod}], environment_notices(Events)),
+    ?assertEqual(prod, nova:get_environment()),
+    ?assertNot(nova:is_dev_environment()),
+    Port = maps:get(port, application:get_env(nova, cowboy_configuration, #{})),
+    ?assertMatch({200, _}, nova_test_listener:get(Port, "/environment/prod")),
+    ?assertMatch({404, _}, nova_test_listener:get(Port, "/environment/dev")).
 
-set_environment_is_not_warned_about(_Config) ->
+set_environment_is_not_mentioned(_Config) ->
     [begin
          ok = nova_test_listener:configure(#{}),
+         application:set_env(nova_test_app, router_module, nova_boot_pages),
          application:set_env(nova, environment, Environment),
          {{ok, _Started}, Events} = nova_test_log:collect(fun() -> application:ensure_all_started(nova_test_app) end),
-         ?assertEqual([], environment_warnings(Events)),
+         ?assertEqual([], environment_notices(Events)),
+         Port = maps:get(port, application:get_env(nova, cowboy_configuration, #{})),
+         ?assertMatch({200, _}, nova_test_listener:get(Port, ["/environment/", atom_to_list(Environment)])),
          ok = nova_test_listener:stop()
      end || Environment <- [dev, prod]].
+
+unknown_non_canonical_paths_fails_the_boot(_Config) ->
+    ?assertEqual({invalid_setting, non_canonical_paths, allow}, stopped_by([{non_canonical_paths, allow}])).
+
+unknown_allowed_origins_fails_the_boot(_Config) ->
+    [?assertEqual({invalid_setting, allowed_origins, Value}, stopped_by([{allowed_origins, Value}]))
+     || Value <- [none, ~"https://example.com", [same_host]]].
+
+unknown_allowed_origins_of_a_plugin_fails_the_boot(_Config) ->
+    Routes = [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}],
+    [begin
+         Group = #{prefix => "/forms", plugins => [{pre_request, Plugin, #{allowed_origins => same_hosts}}],
+                   routes => Routes},
+         {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => [Group]}) end),
+         ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
+                                                  {invalid_setting, allowed_origins, same_hosts}}}, _}}},
+                      Result),
+         ?assertMatch([#{setting := allowed_origins, value := same_hosts, plugin := Plugin, app := nova_test_app,
+                         prefix := "/forms"} | _],
+                      nova_test_log:errors(Events)),
+         ?assertEqual(undefined, whereis(nova_sup))
+     end || Plugin <- [nova_csrf_plugin, nova_ws_origin_plugin]].
+
+session_store_for_no_session_fails_the_boot(_Config) ->
+    ?assertEqual({invalid_setting, max_sessions, 0}, stopped_by([{max_sessions, 0}])).
+
+%% A name that is not a plugin would leave the order as it is, and the
+%% security callback without the body its author listed the plugin for.
+plugins_before_security_that_names_no_plugin_fails_the_boot(_Config) ->
+    [?assertEqual({invalid_setting, plugins_before_security, Value}, stopped_by([{plugins_before_security, Value}]))
+     || Value <- [[nova_reqeust_plugin], [all], nova_request_plugin]].
+
+plugins_before_security_of_a_route_group_that_names_none_of_its_plugins_fails_the_boot(_Config) ->
+    Routes = [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}],
+    Request = {pre_request, nova_request_plugin, #{decode_json_body => true}},
+    [begin
+         Group = #{prefix => "/admin", plugins => [Request], plugins_before_security => Value, routes => Routes},
+         {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => [Group]}) end),
+         ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
+                                                  {invalid_setting, plugins_before_security, Value}}}, _}}},
+                      Result),
+         ?assertMatch([#{setting := plugins_before_security, value := Value, app := nova_test_app,
+                         prefix := "/admin"} | _],
+                      nova_test_log:errors(Events)),
+         ?assertEqual(undefined, whereis(nova_sup))
+     end || Value <- [[nova_reqeust_plugin], [all], [nova_csrf_plugin], nova_request_plugin]].
+
+csrf_settings_nothing_can_go_by_fail_the_boot(_Config) ->
+    [?assertEqual({Settings, Reason}, {Settings, stopped_by(Settings)})
+     || {Settings, Reason} <- [{[{csrf_token, stateless}], {invalid_setting, csrf_secret, not_set}},
+                               {[{csrf_token, signed}], {invalid_setting, csrf_token, signed}},
+                               {[{csrf_secret, ~"short"}], {invalid_setting, csrf_secret, redacted}},
+                               {[{csrf_token, session}, {csrf_secret, [~"short"]}],
+                                {invalid_setting, csrf_secret, redacted}}]].
+
+%% `[New | Old]` is what "put the new secret in front of the old one" looks
+%% like to somebody who writes it as a cons. Neither that nor any other value
+%% that is refused ends up in what the boot returns, logs or reports.
+csrf_secret_that_fails_the_boot_is_not_told(_Config) ->
+    Old = ~"the-secret-in-use-of-32-bytes-or-more",
+    New = ~"the-secret-to-come-of-32-bytes-or-more",
+    [begin
+         application:set_env(nova, csrf_secret, Value),
+         try
+             {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{}) end),
+             ?assertMatch({error, {nova, {{{invalid_setting, csrf_secret, redacted}, _Stacktrace}, _}}}, Result),
+             ?assertEqual(undefined, whereis(nova_sup)),
+             Told = iolist_to_binary(io_lib:format("~0p", [{Result, Events}])),
+             [?assertEqual({Secret, nomatch}, {Secret, binary:match(Told, Secret)}) || Secret <- [Old, New]]
+         after
+             application:unset_env(nova, csrf_secret),
+             nova_test_listener:stop()
+         end
+     end || Value <- [nova_test_helper:improper_list([New], Old), nova_test_helper:improper_list([New, Old], New),
+                      {New, Old}, [[New, Old]], binary:part(Old, 0, 31)]].
+
+%% Without a secret the tokens of nova_csrf_plugin are kept in the session
+%% store, as before there were signed ones. An application that has the
+%% plugin is told once, unless it has said that this is what it wants.
+csrf_tokens_kept_in_the_session_store_are_said_once(_Config) ->
+    Csrf = [#{plugins => [{pre_request, nova_csrf_plugin, #{}}],
+              routes => [{"/", fun nova_boot_pages:page/1, #{methods => [get]}},
+                         {"/other", fun nova_boot_pages:page/1, #{methods => [get]}}]}],
+    Secret = binary:copy(~"s", 32),
+    [begin
+         [application:set_env(nova, Key, Value) || {Key, Value} <- Settings],
+         try
+             {{ok, _Port}, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => Routes}) end),
+             ?assertEqual({Settings, Notices},
+                          {Settings, length([Report || {notice, {report, #{key := csrf_secret} = Report}} <- Events])})
+         after
+             application:unset_env(nova, csrf_token),
+             application:unset_env(nova, csrf_secret),
+             nova_test_listener:stop()
+         end
+     end || {Routes, Settings, Notices} <- [{Csrf, [], 1},
+                                            {Csrf, [{csrf_token, session}], 0},
+                                            {Csrf, [{csrf_secret, Secret}], 0},
+                                            {Csrf, [{csrf_token, stateless}, {csrf_secret, Secret}], 0},
+                                            {[], [], 0}]].
+
+body_decoded_behind_a_security_callback_is_warned_about(_Config) ->
+    Group = fun(Prefix, More) ->
+                    More#{prefix => Prefix, security => fun nova_boot_pages:allow/1,
+                          plugins => [{pre_request, nova_request_plugin, #{decode_json_body => true}}],
+                          routes => [{"/", fun nova_boot_pages:page/1, #{methods => [post]}}]}
+            end,
+    Routes = [Group("/reads", #{}), Group("/listed", #{plugins_before_security => [nova_request_plugin]})],
+    try
+        {{ok, _Port}, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => Routes}) end),
+        ?assertMatch([#{app := nova_test_app, prefix := "/reads", plugins := [nova_request_plugin],
+                        router_file := _}],
+                     [Report || {warning, {report, #{plugins := _} = Report}} <- Events])
+    after
+        nova_once:forget({nova_router, body_behind_security, nova_test_app, "/reads", [nova_request_plugin]})
+    end.
 
 %% nova_plugin_manager starts every plugin the router has listed, also after
 %% a restart, so the list must not carry over from a run with other routes.
@@ -226,8 +372,21 @@ plugins_of_an_earlier_run_are_forgotten(_Config) ->
     _ = nova_test_listener:start(#{}),
     ?assertNot(lists:member(nova_plugin_once_pages, nova_router:plugins())).
 
-environment_warnings(Events) ->
-    [Report || {warning, {report, #{environment := _} = Report}} <- Events].
+%% What a boot with Settings in the nova environment is stopped with, which
+%% is before anything is started.
+stopped_by(Settings) ->
+    [application:set_env(nova, Key, Value) || {Key, Value} <- Settings],
+    try
+        {error, {nova, {{Reason, _Stacktrace}, _Start}}} = nova_test_listener:try_start(#{}),
+        undefined = whereis(nova_sup),
+        Reason
+    after
+        [application:unset_env(nova, Key) || {Key, _Value} <- Settings],
+        nova_test_listener:stop()
+    end.
+
+environment_notices(Events) ->
+    [Report || {_Level, {report, #{read_as := _} = Report}} <- Events].
 
 running(Name) ->
     case whereis(Name) of
