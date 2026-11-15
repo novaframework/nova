@@ -123,6 +123,14 @@ nova_session_ets_test_() ->
       fun client_id_of_a_request_without_a_cookie_is_handed_out/0,
       fun client_id_without_stream_handler_is_the_cookie/0,
       fun unknown_presented_id_is_replaced/0,
+      fun id_that_was_handed_out_is_kept_by_the_first_write/0,
+      fun id_that_was_handed_out_without_a_secret_is_replaced/0,
+      fun id_nobody_handed_out_is_replaced_with_a_secret_set/0,
+      fun id_of_a_secret_that_is_gone_is_replaced/0,
+      fun handed_out_id_is_not_kept_for_another_process/0,
+      fun handed_out_id_that_was_deleted_is_not_written_again/0,
+      fun handed_out_id_another_process_deleted_is_not_written_again/0,
+      fun session_ids_have_one_length/0,
       fun renew_drops_presented_id/0,
       fun spawned_process_does_not_notify/0,
       fun request_without_owner_does_not_notify/0,
@@ -368,6 +376,116 @@ unknown_presented_id_is_replaced() ->
     ?assertEqual({written, ~"pending"}, stream_event()),
     ?assertNot(nova_session_ets:session_exists(~"attacker-chosen")),
     ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")).
+
+-define(SECRET, ~"a secret of thirty-two bytes or more, for the tests").
+-define(OTHER_SECRET, ~"another secret of thirty-two bytes or more, for them").
+
+with_secret(Secret, Fun) ->
+    ok = nova_test_settings:set(secret_key_base, Secret),
+    try Fun()
+    after nova_test_settings:unset(secret_key_base)
+    end.
+
+%% With a secret set, an id says by itself that Nova handed it out. A
+%% visitor who got one with a page, and no session, keeps it when the
+%% session is first written.
+id_that_was_handed_out_is_kept_by_the_first_write() ->
+    with_secret(?SECRET,
+                fun() ->
+                        {ok, Id} = nova_session:generate_session_id(),
+                        Req = presented_req(Id, ~"pending"),
+                        ?assertEqual({error, not_found}, nova_session:get(Req, ~"k")),
+                        ok = nova_session:set(Req, ~"k", ~"v"),
+                        ?assertEqual({written, Id}, stream_event()),
+                        ?assertEqual({ok, ~"v"}, nova_session_ets:get_value(Id, ~"k")),
+                        ?assertNot(nova_session_ets:session_exists(~"pending"))
+                end).
+
+id_that_was_handed_out_without_a_secret_is_replaced() ->
+    {ok, Id} = nova_session:generate_session_id(),
+    ok = nova_session:set(presented_req(Id, ~"pending"), ~"k", ~"v"),
+    ?assertEqual({written, ~"pending"}, stream_event()),
+    ?assertNot(nova_session_ets:session_exists(Id)).
+
+id_nobody_handed_out_is_replaced_with_a_secret_set() ->
+    with_secret(?SECRET,
+                fun() ->
+                        {ok, <<First, Rest/binary>>} = nova_session:generate_session_id(),
+                        Changed = <<(case First of $A -> $B; _ -> $A end), Rest/binary>>,
+                        [begin
+                             ok = nova_session:set(presented_req(Chosen, ~"pending"), ~"k", ~"v"),
+                             ?assertEqual({Chosen, {written, ~"pending"}}, {Chosen, stream_event()}),
+                             ?assertNot(nova_session_ets:session_exists(Chosen))
+                         end || Chosen <- [~"attacker-chosen", Changed, base64:encode(crypto:strong_rand_bytes(32)),
+                                           base64:encode(crypto:strong_rand_bytes(16)), ~"", ~"!!!!"]]
+                end).
+
+id_of_a_secret_that_is_gone_is_replaced() ->
+    Id = with_secret(?SECRET, fun() -> {ok, Id} = nova_session:generate_session_id(), Id end),
+    with_secret([?OTHER_SECRET, ?SECRET],
+                fun() ->
+                        ok = nova_session:set(presented_req(Id, ~"pending"), ~"k", ~"v"),
+                        ?assertEqual({written, Id}, stream_event())
+                end),
+    ok = nova_session_ets:delete_value(Id),
+    with_secret(?OTHER_SECRET,
+                fun() ->
+                        ok = nova_session:set(presented_req(Id, ~"other-pending"), ~"k", ~"v"),
+                        ?assertEqual({written, ~"other-pending"}, stream_event())
+                end).
+
+%% A process that is not serving the request cannot move the cookie, and
+%% has no say in which id a session starts under.
+handed_out_id_is_not_kept_for_another_process() ->
+    with_secret(?SECRET,
+                fun() ->
+                        {ok, Id} = nova_session:generate_session_id(),
+                        Req = presented_req(Id, ~"pending"),
+                        {Pid, Ref} = spawn_monitor(fun() -> ok = nova_session:set(Req, ~"k", ~"v") end),
+                        receive {'DOWN', Ref, process, Pid, Reason} -> ?assertEqual(normal, Reason)
+                        after 1000 -> error(timeout)
+                        end,
+                        ?assertNot(nova_session_ets:session_exists(Id)),
+                        ?assert(nova_session_ets:session_exists(~"pending"))
+                end).
+
+%% An id that says Nova handed it out says nothing about the session being
+%% there still. What deleted_session_is_asked_about_again and
+%% session_deleted_by_another_process_is_not_written_again hold goes for it.
+handed_out_id_that_was_deleted_is_not_written_again() ->
+    with_secret(?SECRET,
+                fun() ->
+                        [begin
+                             {ok, Id} = nova_session:generate_session_id(),
+                             ok = nova_session_ets:set_value(Id, ~"k", ~"v"),
+                             Req = presented_req(Id, ~"pending"),
+                             {ok, _Req} = Drop(Req),
+                             ok = nova_session:set(Req, ~"k", ~"again"),
+                             ?assertNot(nova_session_ets:session_exists(Id))
+                         end || Drop <- [fun nova_session:delete/1, fun nova_session:renew/1]]
+                end).
+
+handed_out_id_another_process_deleted_is_not_written_again() ->
+    with_secret(?SECRET,
+                fun() ->
+                        {ok, Id} = nova_session:generate_session_id(),
+                        ok = nova_session_ets:set_value(Id, ~"user", ~"alice"),
+                        Req = presented_req(Id, ~"pending"),
+                        ?assertEqual({ok, ~"alice"}, nova_session:get(Req, ~"user")),
+                        {Pid, Ref} = spawn_monitor(fun() -> {ok, _} = nova_session:delete(req_with_session(Id)) end),
+                        receive {'DOWN', Ref, process, Pid, Reason} -> ?assertEqual(normal, Reason)
+                        after 1000 -> error(timeout)
+                        end,
+                        ok = nova_session:set(Req, ~"k", ~"v"),
+                        ?assertEqual({written, ~"pending"}, stream_event()),
+                        ?assertNot(nova_session_ets:session_exists(Id))
+                end).
+
+session_ids_have_one_length() ->
+    {ok, Plain} = nova_session:generate_session_id(),
+    {ok, Signed} = with_secret(?SECRET, fun nova_session:generate_session_id/0),
+    ?assertEqual({44, 44}, {byte_size(Plain), byte_size(Signed)}),
+    ?assertNotEqual(with_secret(?SECRET, fun nova_session:generate_session_id/0), {ok, Signed}).
 
 backend_is_asked_once_about_a_presented_id() ->
     ok = nova_session_ets:set_value(~"asked-once", ~"k", ~"v"),

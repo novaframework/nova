@@ -17,6 +17,16 @@ session id planted or observed before that point stops working. As defence in
 depth, a presented id the backend does not know is ignored and replaced, so a
 client cannot simply choose its own session id.
 
+With `secret_key_base` set in the `nova` environment, the ids Nova makes are
+signed with a key of that secret. A client can then hold an id that no
+session is stored under yet, which is what a visitor of a page with a token
+of `nova_csrf_plugin` gets, and the first `set/3` of its request stores the
+session under that id and leaves the cookie as it is. The id of a client
+changes with `renew/1` and `delete/1` and with nothing else. An id that is
+not signed by a secret in use is replaced as above. So is one whose session
+the request has read, deleted or renewed before it writes: what brought a
+session back that another request ended would not be a new one.
+
 Session changes reach the cookie only when they are made from the process
 serving the request (where controllers, plugins and `c:nova_websocket:init/1`
 run). A process spawned with the request can read and write the session data,
@@ -55,6 +65,9 @@ above.
 -define(DEFAULT_MAX_AGE, 1209600).
 -define(KNOWN, {?MODULE, known}).
 -define(KNOWN_FOR, 1000).
+-define(HAD_A_SESSION, {?MODULE, had_a_session}).
+-define(ID_RANDOM_BYTES, 16).
+-define(ID_SIGNATURE_BYTES, 16).
 
 %%%===================================================================
 %%% Callbacks
@@ -196,7 +209,7 @@ delete(Req) ->
         {ok, SessionId} ->
             Mod = get_session_module(),
             Mod:delete_value(SessionId),
-            erase(?KNOWN),
+            ended(SessionId),
             {ok, NewSessionId} = generate_session_id(),
             notify(Req, {deleted, NewSessionId}),
             Req0 = case stream_handled(Req) of
@@ -227,7 +240,7 @@ renew(Req) ->
         {ok, SessionId} ->
             Mod = get_session_module(),
             Mod:delete_value(SessionId),
-            erase(?KNOWN);
+            ended(SessionId);
         _ ->
             ok
     end,
@@ -239,24 +252,19 @@ renew(Req) ->
            end,
     {ok, with_session_id(NewSessionId, Req0)}.
 
--doc """
-The session id the client of the request holds: the one in the session
-cookie it sent, whether or not there is a session for it, or, when it sent
-none, the id of the request, which the response then hands out in the session
-cookie. Nothing is stored, and the id is not the one `set/3` writes under
-when the backend has no session for it.
-
-It is for what is tied to the browser and not to what a session holds, as the
-signed token of `nova_csrf_plugin` is.
-
-A request whose `Cookie` header does not parse gets the id of the request as
-well, but no cookie is handed out for it, since the client may hold a session
-cookie Nova could not read. That id is not seen again, so what was tied to it
-is refused when it comes back.
-
-`{error, not_found}` means there is no id to give: the request has no session
-cookie Nova can read and `nova_stream_h` is not there to hand one out.
-""".
+%% The session id the client of the request holds: the one in the session
+%% cookie it sent, whether or not there is a session for it, or, when it sent
+%% none, the id of the request, which the response then hands out in the
+%% session cookie. Nothing is stored. For nova_csrf_plugin, whose signed
+%% token is tied to the browser and not to what a session holds.
+%%
+%% A request whose Cookie header does not parse gets the id of the request
+%% as well, but no cookie is handed out for it, since the client may hold a
+%% session cookie Nova could not read. That id is not seen again, so what
+%% was tied to it is refused when it comes back. {error, not_found} means
+%% there is no id to give: the request has no session cookie Nova can read
+%% and nova_stream_h is not there to hand one out.
+-doc false.
 -spec client_id(Req :: cowboy_req:req()) -> {ok, SessionId :: binary()} | {error, not_found} | no_return().
 client_id(Req) ->
     case enabled() of
@@ -443,7 +451,15 @@ known(SessionId, read) ->
 known(SessionId, write) ->
     Known = backend_knows(SessionId),
     put(?KNOWN, {SessionId, Known, erlang:monotonic_time(millisecond)}),
+    _ = Known andalso put(?HAD_A_SESSION, SessionId),
     Known.
+
+%% The session of this id is over as far as this process goes, whatever the
+%% id says about who handed it out.
+ended(SessionId) ->
+    erase(?KNOWN),
+    put(?HAD_A_SESSION, SessionId),
+    ok.
 
 backend_knows(SessionId) ->
     Mod = get_session_module(),
@@ -483,8 +499,8 @@ get_session_id(Req, Access) ->
 %% nova_session, and not in the connection process.
 session_id(#{nova_session_id := SessionId}, _Access) ->
     {ok, SessionId};
-session_id(#{nova_session_presented := Presented, nova_session_pending := Pending}, Access) ->
-    case known(Presented, Access) of
+session_id(Req = #{nova_session_presented := Presented, nova_session_pending := Pending}, Access) ->
+    case known(Presented, Access) orelse may_start_under(Presented, Req) of
         true -> {ok, Presented};
         false -> {ok, Pending}
     end;
@@ -494,6 +510,36 @@ session_id(Req, _Access) ->
         SessionId when is_binary(SessionId) -> {ok, SessionId};
         _ -> {error, not_found}
     end.
+
+%% Whether a session may be started under an id the backend has no session
+%% for. Nova handed the id out, as its signature says, and no session was
+%% stored then: a visitor got it with a page. The process serving the
+%% request is the one that can keep the cookie as it is, and it must not
+%% have seen a session under the id, which then was ended by somebody.
+may_start_under(SessionId, #{nova_session_owner := Owner}) when Owner =:= self() ->
+    get(?HAD_A_SESSION) =/= SessionId andalso is_signed(SessionId);
+may_start_under(_SessionId, _Req) ->
+    false.
+
+-spec is_signed(SessionId :: binary()) -> boolean().
+is_signed(SessionId) ->
+    case nova_secret:keys(session_id) of
+        [] ->
+            false;
+        Keys ->
+            try base64:decode(SessionId) of
+                <<Random:?ID_RANDOM_BYTES/binary, Signature:?ID_SIGNATURE_BYTES/binary>> ->
+                    [] =/= [Key || Key <- Keys, crypto:hash_equals(Signature, id_signature(Key, Random))];
+                _AnotherLength ->
+                    false
+            catch
+                error:_NotBase64 -> false
+            end
+    end.
+
+-spec id_signature(Key :: binary(), Random :: binary()) -> binary().
+id_signature(Key, Random) ->
+    crypto:macN(hmac, sha256, Key, Random, ?ID_SIGNATURE_BYTES).
 
 with_session_id(SessionId, Req) ->
     (maps:without([nova_session_presented, nova_session_pending], Req))#{nova_session_id => SessionId}.
@@ -531,6 +577,17 @@ notify(#{pid := _, streamid := _, nova_session_owner := Owner} = Req, Event) whe
 notify(_Req, _Event) ->
     ok.
 
+-doc """
+A new session id: 32 random bytes in base64, or, with `secret_key_base` set,
+16 random bytes and 16 of their HMAC-SHA-256 under the key Nova has from the
+secret for session ids, in base64.
+""".
 -spec generate_session_id() -> {ok, binary()}.
 generate_session_id() ->
-    {ok, base64:encode(crypto:strong_rand_bytes(32))}.
+    case nova_secret:keys(session_id) of
+        [Key | _] ->
+            Random = crypto:strong_rand_bytes(?ID_RANDOM_BYTES),
+            {ok, base64:encode(<<Random/binary, (id_signature(Key, Random))/binary>>)};
+        [] ->
+            {ok, base64:encode(crypto:strong_rand_bytes(?ID_RANDOM_BYTES + ?ID_SIGNATURE_BYTES))}
+    end.

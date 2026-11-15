@@ -8,7 +8,7 @@
 
 -export([keys/1, derived/1, derive/2]).
 
--type purpose() :: csrf_token.
+-type purpose() :: csrf_token | session_id.
 -export_type([purpose/0]).
 
 -define(KEY_BYTES, 32).
@@ -42,9 +42,10 @@ derive(Secret, Label) ->
 
 -spec purposes() -> [purpose()].
 purposes() ->
-    [csrf_token].
+    [csrf_token, session_id].
 
 %% Part of what a key is: one that changes makes every key of its purpose
 %% another one, on every node.
 -spec label(purpose()) -> binary().
-label(csrf_token) -> ~"nova csrf token".
+label(csrf_token) -> ~"nova csrf token";
+label(session_id) -> ~"nova session id".

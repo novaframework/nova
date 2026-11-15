@@ -10,7 +10,7 @@ The plugin needs sessions: the token is kept in the session of a client or signe
 
 ## Where the token comes from
 
-With `secret_key_base` set in the `nova` environment the token is signed and nothing is stored for it. It is an HMAC-SHA256 over the id in the session cookie of the client and 16 random bytes, under a key made from the secret for this plugin alone, so every response carries another token and each of them is good for as long as the client holds that cookie and the secret is in use. A visitor without a session cookie is handed one by the response; no session is started. A request that changes state is refused when it does not send the cookie the token was signed for. `nova_session:renew/1`, which signing in calls, moves a visitor to another session id, and the pages rendered after that carry tokens for the new one.
+With `secret_key_base` set in the `nova` environment the token is signed and nothing is stored for it. It is an HMAC-SHA256 over the id in the session cookie of the client and 16 random bytes, under a key made from the secret for this plugin alone, so every response carries another token and each of them is good for as long as the client holds that cookie and the secret is in use. A visitor without a session cookie is handed one by the response; no session is started, and what the visitor first writes to the session is stored under the id of that cookie, so the tokens of the pages that are open stay good. A request that changes state is refused when it does not send the cookie the token was signed for. `nova_session:renew/1`, which signing in calls, moves a visitor to another session id, and the pages rendered after that carry tokens for the new one.
 
 ```erlang
 {nova, [
