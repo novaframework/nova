@@ -177,8 +177,7 @@ handle_result(Mod, Func, RetObj, State) ->
                     {stop, State}
             end;
         {error, not_found} ->
-            ?LOG_ERROR(#{msg => <<"Websocket handler not found. Check that a handler is
-                                   registered on handle 'ws'">>,
+            ?LOG_ERROR(#{msg => ~"Websocket handler not found. Check that a handler is registered on handle 'ws'",
                            controller => Mod, function => Func, return => nova_redact:term(RetObj)}),
             {stop, State}
     end.
