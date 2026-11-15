@@ -11,18 +11,24 @@ is treated as having no session. A request whose Cookie header does not parse
 gets a session for that request only and no cookie, so a session cookie the
 client already holds is not overwritten.
 
-Call `renew/1` whenever the privilege level of the client changes (sign-in,
-sign-out, password change). That is the defence against session fixation: a
-session id planted or observed before that point stops working. As defence in
-depth, a presented id the backend does not know is ignored and replaced, so a
-client cannot simply choose its own session id.
+Sign a user in with `sign_in/3` and out with `delete/1`. `sign_in/3` moves
+the client to a new session id, stores who signed in under it and returns the
+request that carries the new id. That is the defence against session
+fixation: a session id planted or observed before that point stops working,
+and so does everything stored under it. `renew/1` is the piece of it that
+changes the id, for any other change of what a client may do (a second
+factor, a password change, a higher role). As defence in depth, a presented
+id the backend does not know is ignored and replaced, so a client cannot
+simply choose its own session id.
 
 With `secret_key_base` set in the `nova` environment, the ids Nova makes are
 signed with a key of that secret. A client can then hold an id that no
 session is stored under yet, which is what a visitor of a page with a token
 of `nova_csrf_plugin` gets, and the first `set/3` of its request stores the
 session under that id and leaves the cookie as it is. The id of a client
-changes with `renew/1` and `delete/1` and with nothing else. An id that is
+changes with `sign_in/3`, `renew/1` and `delete/1` and with nothing else, so
+an application that writes who is signed in with `set/3` alone signs in
+whoever holds the id, also somebody who put it in the browser of the user. An id that is
 not signed by a secret in use is replaced as above. So is one whose session
 the request has read, deleted or renewed before it writes: what brought a
 session back that another request ended would not be a new one.
@@ -44,6 +50,7 @@ above.
          set_provisional/3,
          delete/1,
          delete/2,
+         sign_in/3,
          renew/1,
          client_id/1,
          generate_session_id/0
@@ -199,9 +206,15 @@ write(Function, Req, Key, Value) ->
     end.
 
 -doc """
-Deletes the whole session and clears the session cookie. The returned
-request carries a fresh session id, so a `set/3` on it later in the same
-request starts a new session instead of reviving the deleted one.
+Signs a user out: deletes the whole session and clears the session cookie.
+The returned request carries a fresh session id, so a `set/3` on it later in
+the same request starts a new session instead of reviving the deleted one.
+
+```erlang
+logout(Req) ->
+    {ok, _SignedOut} = nova_session:delete(Req),
+    {redirect, "/"}.
+```
 """.
 -spec delete(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} | no_return().
 delete(Req) ->
@@ -223,14 +236,51 @@ delete(Req) ->
     end.
 
 -doc """
-Moves the client to a new, empty session: the current session's data is
-deleted and the response carries a new session cookie. Use the returned
-request for the `set/3` calls that follow, for example:
+Signs a user in. The client is moved to a new session id as `renew/1` moves
+it, `Value` is stored under `Key` in the new session, and the request that
+comes back is the one that carries the new id. This is the call for the
+place where a user signs in, in an application or in a library that signs in
+for it:
 
 ```erlang
 login(Req) ->
-    {ok, Req1} = nova_session:renew(Req),
-    ok = nova_session:set(Req1, ~"user_id", UserId),
+    {ok, SignedIn} = nova_session:sign_in(Req, ~"user_id", UserId),
+    ok = nova_session:set(SignedIn, ~"signed_in_at", erlang:system_time(second)),
+    {redirect, "/"}.
+```
+
+The session the client had is deleted with all it held, so an id that
+somebody else knows, because they planted it in the browser or saw it, is not
+the id of the user who signed in. Go on with the returned request: the one
+that was passed in names the session that is gone. A token of
+`nova_csrf_plugin` that was made for the old id is refused from then on, and
+the next page the client loads carries one for the new id.
+
+`{error, Reason}` is what the session backend answered when it did not store
+the value. The id has changed by then and nobody is signed in.
+""".
+-spec sign_in(Req, Key :: binary(), Value :: term()) -> {ok, Req} | {error, Reason :: atom()} | no_return()
+              when Req :: cowboy_req:req().
+sign_in(Req, Key, Value) ->
+    {ok, SignedIn} = renew(Req),
+    case set(SignedIn, Key, Value) of
+        {error, _Reason} = Error -> Error;
+        _Stored -> {ok, SignedIn}
+    end.
+
+-doc """
+Moves the client to a new, empty session: the current session's data is
+deleted and the response carries a new session cookie. It is the lower-level
+piece of `sign_in/3`, which is what to call where a user signs in. Call
+`renew/1` itself for another change of what the client may do, such as a
+second factor or a new password, and use the returned request for the
+`set/3` calls that follow:
+
+```erlang
+second_factor_passed(Req, UserId) ->
+    {ok, Renewed} = nova_session:renew(Req),
+    ok = nova_session:set(Renewed, ~"user_id", UserId),
+    ok = nova_session:set(Renewed, ~"second_factor", true),
     {redirect, "/"}.
 ```
 """.

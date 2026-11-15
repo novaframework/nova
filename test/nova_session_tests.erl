@@ -108,6 +108,9 @@ nova_session_ets_test_() ->
       fun set_tells_stream_handler/0,
       fun renew_drops_old_session/0,
       fun renew_tells_stream_handler/0,
+      fun sign_in_stores_under_a_new_id/0,
+      fun sign_in_moves_a_visitor_off_an_id_that_was_handed_out/0,
+      fun sign_in_says_when_the_backend_stores_nothing/0,
       fun backend_is_asked_once_about_a_presented_id/0,
       fun deleted_session_is_asked_about_again/0,
       fun session_deleted_by_another_process_is_not_written_again/0,
@@ -433,6 +436,43 @@ id_of_a_secret_that_is_gone_is_replaced() ->
                         ok = nova_session:set(presented_req(Id, ~"other-pending"), ~"k", ~"v"),
                         ?assertEqual({written, ~"other-pending"}, stream_event())
                 end).
+
+%% Signing in is one call: the id changes and the value is stored under the
+%% new one, which the request that comes back carries.
+sign_in_stores_under_a_new_id() ->
+    ok = nova_session_ets:set_value(~"before-sign-in", ~"basket", ~"1"),
+    Req = presented_req(~"before-sign-in", ~"pending"),
+    {ok, SignedIn} = nova_session:sign_in(Req, ~"user", ~"alice"),
+    #{nova_session_id := <<NewId/binary>>} = SignedIn,
+    ?assertEqual({renewed, NewId}, stream_event()),
+    ?assertNot(lists:member(NewId, [~"before-sign-in", ~"pending"])),
+    ?assertEqual({ok, ~"alice"}, nova_session:get(SignedIn, ~"user")),
+    ?assertEqual({ok, ~"alice"}, nova_session_ets:get_value(NewId, ~"user")),
+    ?assertEqual({error, not_found}, nova_session:get(SignedIn, ~"basket")),
+    ?assertNot(nova_session_ets:session_exists(~"before-sign-in")),
+    ?assertEqual({error, not_found}, nova_session:get(Req, ~"user")).
+
+sign_in_moves_a_visitor_off_an_id_that_was_handed_out() ->
+    with_secret(?SECRET,
+                fun() ->
+                        {ok, HandedOut} = nova_session:generate_session_id(),
+                        {ok, SignedIn} = nova_session:sign_in(presented_req(HandedOut, ~"pending"), ~"user", ~"alice"),
+                        #{nova_session_id := <<NewId/binary>>} = SignedIn,
+                        ?assertEqual({renewed, NewId}, stream_event()),
+                        ?assertNot(lists:member(NewId, [HandedOut, ~"pending"])),
+                        ?assertEqual({ok, ~"alice"}, nova_session_ets:get_value(NewId, ~"user")),
+                        ?assertNot(nova_session_ets:session_exists(HandedOut))
+                end).
+
+sign_in_says_when_the_backend_stores_nothing() ->
+    meck:new(nova_session_ets, [passthrough]),
+    try
+        meck:expect(nova_session_ets, set_value, fun(_SessionId, _Key, _Value) -> {error, session_store_full} end),
+        ?assertEqual({error, session_store_full},
+                     nova_session:sign_in(presented_req(~"refused", ~"pending"), ~"user", ~"alice"))
+    after
+        meck:unload(nova_session_ets)
+    end.
 
 %% A process that is not serving the request cannot move the cookie, and
 %% has no say in which id a session starts under.

@@ -28,6 +28,7 @@
          token_of_another_secret_is_refused/1,
          token_of_the_previous_secret_is_accepted_while_it_is_listed/1,
          signing_in_moves_the_token_to_the_new_session/1,
+         planted_id_is_not_signed_in_after_sign_in/1,
          first_write_of_a_visitor_keeps_the_cookie_and_the_token/1,
          id_nobody_handed_out_is_replaced_by_the_first_write/1,
          token_stays_good_while_the_session_is_written/1,
@@ -86,6 +87,7 @@ groups() ->
                       token_of_another_secret_is_refused,
                       token_of_the_previous_secret_is_accepted_while_it_is_listed,
                       signing_in_moves_the_token_to_the_new_session,
+                      planted_id_is_not_signed_in_after_sign_in,
                       first_write_of_a_visitor_keeps_the_cookie_and_the_token,
                       id_nobody_handed_out_is_replaced_by_the_first_write,
                       token_stays_good_while_the_session_is_written,
@@ -103,6 +105,8 @@ init_per_suite(Config) ->
                            {"/form", fun nova_csrf_pages:form/1, #{methods => [get]}},
                            {"/submit", fun nova_csrf_pages:submit/1, #{methods => [post, put, patch, delete]}},
                            {"/sign-in", fun nova_csrf_pages:sign_in/1, #{methods => [post]}},
+                           {"/sign-in-in-one-call", fun nova_csrf_pages:sign_in_in_one_call/1, #{methods => [post]}},
+                           {"/who", fun nova_csrf_pages:who/1, #{methods => [get]}},
                            {"/write", fun nova_csrf_pages:write/1, #{methods => [post]}},
                            {"/hooks/incoming", fun nova_csrf_pages:submit/1, #{methods => [post]}},
                            {"/hooks-admin", fun nova_csrf_pages:submit/1, #{methods => [post]}},
@@ -318,6 +322,30 @@ signing_in_moves_the_token_to_the_new_session(Config) ->
     ?assertEqual({200, ~"submitted"}, request(Config, "POST", "/csrf/submit", [SignedIn, {"x-csrf-token", New}], <<>>)),
     {"cookie", <<"session_id=", Before/binary>>} = Cookie,
     ?assertNot(nova_session_ets:session_exists(Before)).
+
+%% Session fixation with an id Nova signed. Somebody gets one with a page,
+%% as every visitor does, stores something under it or not, and plants it in
+%% the browser of another, who signs in. The one who planted it still holds
+%% it, and must not be the one who signed in.
+planted_id_is_not_signed_in_after_sign_in(Config) ->
+    [begin
+         {{"cookie", <<"session_id=", Planted/binary>>} = Cookie, OfThePlanter} = session(Config),
+         [{200, ~"written"} = request(Config, "POST", "/csrf/write", [Cookie, {"x-csrf-token", OfThePlanter}], <<>>)
+          || Stored],
+         ?assertEqual({Stored, Stored}, {Stored, nova_session_ets:session_exists(Planted)}),
+         {200, Token} = request(Config, "GET", "/csrf/token", [Cookie], <<>>),
+         {200, Headers, ~"signed in"} =
+             nova_test_listener:response(?config(port, Config), "POST", "/csrf/sign-in-in-one-call",
+                                         [Cookie, {"x-csrf-token", Token}], <<>>),
+         {"cookie", <<"session_id=", Issued/binary>>} = SignedIn = cookie(Headers),
+         ?assertNotEqual(Planted, Issued),
+         ?assertEqual({200, ~"anonymous"}, request(Config, "GET", "/csrf/who", [Cookie], <<>>)),
+         ?assertEqual({200, ~"alice"}, request(Config, "GET", "/csrf/who", [SignedIn], <<>>)),
+         ?assertNot(nova_session_ets:session_exists(Planted)),
+         ?assertEqual({ok, ~"alice"}, nova_session_ets:get_value(Issued, ~"user")),
+         ?assertEqual({error, not_found}, nova_session_ets:get_value(Issued, ~"basket")),
+         ?assertMatch({403, _}, request(Config, "POST", "/csrf/submit", [SignedIn, {"x-csrf-token", Token}], <<>>))
+     end || Stored <- [false, true]].
 
 %% The id a visitor was handed with the first page is the one the session is
 %% stored under when something is first written to it, so the pages that are
