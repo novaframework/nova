@@ -283,6 +283,17 @@ render_status_page_custom_handler_test_() ->
         ?assertEqual(#{error => <<"test">>}, maps:get(data, ControllerData))
     end}.
 
+%% A controller is called with the request and nothing else, so what a
+%% caller hands to the status page has to be in it.
+render_status_page_data_reaches_the_controller_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Req = nova_test_helper:mock_req(~"GET", ~"/"),
+        {ok, Custom, _} = nova_router:render_status_page('_', 404, #{error => ~"test"}, Req, #{}),
+        ?assertEqual(#{status => 404, data => #{error => ~"test"}}, maps:get(controller_data, Custom)),
+        {ok, Fallback, _} = nova_router:render_status_page(500, #{reason => test}, Req),
+        ?assertEqual(#{status => 500, data => #{reason => test}}, maps:get(controller_data, Fallback))
+    end}.
+
 render_status_page_fallback_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         Req = nova_test_helper:mock_req(<<"GET">>, <<"/">>),

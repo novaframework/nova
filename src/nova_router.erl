@@ -684,6 +684,9 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
     %% A status page is rendered by a controller. Left in place, the handler
     %% of a websocket route would run instead and upgrade the connection.
     Env1 = maps:without([cowboy_handler, arguments], Env),
+    %% The controller of the page is called with the request alone, so what
+    %% it was given goes there too.
+    ControllerData = #{status => StatusCode, data => Data},
     {Req0, Env0} =
         case nova_routing_trie:find(Host, StatusCode, '_', Dispatch) of
             {error, _} ->
@@ -691,7 +694,7 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
                 {Req, Env1#{app => nova,
                            callback => fun nova_error_controller:status_code/1,
                            secure => false,
-                           controller_data => #{status => StatusCode, data => Data}}};
+                           controller_data => ControllerData}};
             {ok, Bindings, #nova_handler_value{app = App,
                                                callback = Callback,
                                                secure = Secure,
@@ -701,11 +704,11 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
                  Env1#{app => App,
                       callback => Callback,
                       secure => Secure,
-                      controller_data => #{status => StatusCode, data => Data},
+                      controller_data => ControllerData,
                       bindings => Bindings}
                 }
         end,
-    {ok, Req0#{resp_status_code => StatusCode}, Env0}.
+    {ok, Req0#{resp_status_code => StatusCode, controller_data => ControllerData}, Env0}.
 
 
 insert_opts(T) ->
