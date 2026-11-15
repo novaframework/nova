@@ -457,6 +457,42 @@ plugins_before_security_that_is_refused_names_the_route_group_test() ->
 order(Before, After) ->
     #{before => Before, 'after' => After, secured => false}.
 
+%% allowed_origins is an option of two plugins as well as a setting. The
+%% option is checked as the setting is, when the routes are compiled.
+allowed_origins_of_a_plugin_is_checked_with_the_routes_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Routes = fun(Plugin, Value) ->
+                         #{prefix => "/origins", plugins => [{pre_request, Plugin, #{allowed_origins => Value}}],
+                           routes => [{"/page", fun(_) -> {json, #{}} end, #{methods => [post]}}]}
+                 end,
+        [begin
+             {_, Events} = nova_test_log:collect(
+                             fun() ->
+                                     ?assertThrow({error, {invalid_setting, allowed_origins, Value}},
+                                                  nova_router:add_routes(route_app, Routes(Plugin, Value)))
+                             end),
+             ?assertMatch([#{setting := allowed_origins, value := Value, plugin := Plugin, app := route_app,
+                             prefix := "/origins"}],
+                          nova_test_log:errors(Events))
+         end || Plugin <- [nova_csrf_plugin, nova_ws_origin_plugin],
+                Value <- [same_hosts, ~"https://example.com", [same_host], #{}]],
+
+        [begin
+             ok = nova_router:add_routes(route_app, Routes(Plugin, Value)),
+             {ok, #{plugins := Plugins}, _} =
+                 nova_router:execute(nova_test_helper:mock_req(~"POST", ~"/origins/page"), #{}),
+             ?assertEqual({Plugin, Value, [Kept]},
+                          {Plugin, Value,
+                           lists:usort([Origins || {_Phase, Callbacks} <- Plugins,
+                                                   {_Callback, #{allowed_origins := Origins}} <- Callbacks])})
+         end || {Plugin, Value, Kept} <- [{nova_csrf_plugin, same_origin, same_origin},
+                                          {nova_csrf_plugin, ["https://example.com", ~"https://other.example"],
+                                           [~"https://example.com", ~"https://other.example"]},
+                                          {nova_ws_origin_plugin, any, any},
+                                          {nova_ws_origin_plugin, [], []},
+                                          {nova_request_plugin, same_hosts, same_hosts}]]
+    end}.
+
 
 %%====================================================================
 %% Route template

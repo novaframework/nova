@@ -36,7 +36,7 @@ A request with neither header is let through: it is not from a browser, or from 
 * `field_name` - form field name (default `<<"_csrf_token">>`)
 * `header_name` - header name (default `<<"x-csrf-token">>`)
 * `session_key` - session storage key (default `<<"_csrf_token">>`)
-* `allowed_origins` - the origins a request that changes state may come from, when not those of the `nova` environment
+* `allowed_origins` - the origins a request that changes state may come from, when not those of the `nova` environment. A value that is none of the above stops the boot with `{invalid_setting, allowed_origins, Value}`
 * `excluded_paths` - list of path prefixes to skip (default `[]`). A prefix covers whole segments of the path the request is routed on: `<<"/api">>` skips `/api` and `/api/hooks`, not `/apikeys`, and `/api/../admin` is checked as `/admin`
 """.
 -behaviour(nova_plugin).

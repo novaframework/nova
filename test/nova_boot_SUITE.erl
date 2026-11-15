@@ -21,6 +21,7 @@
          set_environment_is_not_mentioned/1,
          unknown_non_canonical_paths_fails_the_boot/1,
          unknown_allowed_origins_fails_the_boot/1,
+         unknown_allowed_origins_of_a_plugin_fails_the_boot/1,
          session_store_for_no_session_fails_the_boot/1,
          plugins_before_security_that_names_no_plugin_fails_the_boot/1,
          plugins_before_security_of_a_route_group_that_names_none_of_its_plugins_fails_the_boot/1,
@@ -51,6 +52,7 @@ all() ->
      set_environment_is_not_mentioned,
      unknown_non_canonical_paths_fails_the_boot,
      unknown_allowed_origins_fails_the_boot,
+     unknown_allowed_origins_of_a_plugin_fails_the_boot,
      session_store_for_no_session_fails_the_boot,
      plugins_before_security_that_names_no_plugin_fails_the_boot,
      plugins_before_security_of_a_route_group_that_names_none_of_its_plugins_fails_the_boot,
@@ -246,6 +248,21 @@ unknown_non_canonical_paths_fails_the_boot(_Config) ->
 unknown_allowed_origins_fails_the_boot(_Config) ->
     [?assertEqual({invalid_setting, allowed_origins, Value}, stopped_by([{allowed_origins, Value}]))
      || Value <- [none, ~"https://example.com", [same_host]]].
+
+unknown_allowed_origins_of_a_plugin_fails_the_boot(_Config) ->
+    Routes = [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}],
+    [begin
+         Group = #{prefix => "/forms", plugins => [{pre_request, Plugin, #{allowed_origins => same_hosts}}],
+                   routes => Routes},
+         {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => [Group]}) end),
+         ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
+                                                  {invalid_setting, allowed_origins, same_hosts}}}, _}}},
+                      Result),
+         ?assertMatch([#{setting := allowed_origins, value := same_hosts, plugin := Plugin, app := nova_test_app,
+                         prefix := "/forms"} | _],
+                      nova_test_log:errors(Events)),
+         ?assertEqual(undefined, whereis(nova_sup))
+     end || Plugin <- [nova_csrf_plugin, nova_ws_origin_plugin]].
 
 session_store_for_no_session_fails_the_boot(_Config) ->
     ?assertEqual({invalid_setting, max_sessions, 0}, stopped_by([{max_sessions, 0}])).

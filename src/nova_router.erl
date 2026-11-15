@@ -538,15 +538,18 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     App = maps:get(app, Options),
     RouterFile = maps:get(router_file, Options),
 
+    Prefix = concat_strings(maps:get(prefix, Options, ""),
+                            maps:get(prefix, RouteInfo, "")),
+    Named = #{app => App, prefix => Prefix, router_file => RouterFile},
+
     ok = warn_route_plugin_strategy(App, RouteInfo, RouterFile),
-    Plugins = resolve_plugins(maps:get(plugin_strategy, Options, local_or_global), RouteInfo, RouterFile),
+    Plugins = [with_checked_options(Plugin, Named)
+               || Plugin <- resolve_plugins(maps:get(plugin_strategy, Options, local_or_global), RouteInfo,
+                                            RouterFile)],
 
     Secure = resolve_secure(Options, RouteInfo, RouterFile),
 
-    Prefix = concat_strings(maps:get(prefix, Options, ""),
-                            maps:get(prefix, RouteInfo, "")),
-    Order = #{before => plugins_before_security(RouteInfo, Plugins,
-                                                #{app => App, prefix => Prefix, router_file => RouterFile}),
+    Order = #{before => plugins_before_security(RouteInfo, Plugins, Named),
               'after' => plugins_after_security(RouteInfo, RouterFile),
               secured => Secure =/= false},
     Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins, Order),
@@ -1012,6 +1015,22 @@ dedupe_plugins([Plugin|Tl], Seen, Acc) ->
 
 plugin_key({Type, PluginName, _Options}) -> {Type, PluginName};
 plugin_key(Plugin)                       -> Plugin.
+
+%% allowed_origins is an option of these two plugins as well as a setting.
+%% It is checked by the rule of the setting, when the routes are compiled
+%% and not by the first request that goes by it, and kept as that keeps it.
+with_checked_options({Type, Plugin, Options = #{allowed_origins := Value}}, Named)
+  when Plugin =:= nova_csrf_plugin; Plugin =:= nova_ws_origin_plugin ->
+    case nova_settings:checked(allowed_origins, Value) of
+        {ok, Origins} ->
+            {Type, Plugin, Options#{allowed_origins := Origins}};
+        {error, Reason} ->
+            ?LOG_ERROR(Named#{msg => nova_settings:expected(allowed_origins), setting => allowed_origins,
+                              value => Reason, plugin => Plugin}),
+            throw({error, {invalid_setting, allowed_origins, Reason}})
+    end;
+with_checked_options(Plugin, _Named) ->
+    Plugin.
 
 %% The plugins of a route by the phase they run in, each phase in the order
 %% the plugins are listed. `pre_request` is the phase ahead of the security
