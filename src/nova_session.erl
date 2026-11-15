@@ -276,7 +276,7 @@ max_age() ->
         _ -> ?DEFAULT_MAX_AGE
     end.
 
-%% Secure unless the environment is explicitly dev: behind a proxy that
+%% Secure unless the environment is set to dev: behind a proxy that
 %% terminates TLS the request itself looks like plain http. A __Host- cookie
 %% is only stored by browsers when it is Secure, has Path=/ and no Domain.
 -doc false.

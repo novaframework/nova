@@ -17,8 +17,8 @@
          pubsub_scope_is_restarted/1,
          restarted_pubsub_scope_has_no_members/1,
          pubsub_scope_started_elsewhere_is_left_alone/1,
-         unset_environment_is_warned_about_once/1,
-         set_environment_is_not_warned_about/1,
+         unset_environment_is_prod_and_said_once/1,
+         set_environment_is_not_mentioned/1,
          plugins_of_an_earlier_run_are_forgotten/1
         ]).
 
@@ -39,8 +39,8 @@ all() ->
      pubsub_scope_is_restarted,
      restarted_pubsub_scope_has_no_members,
      pubsub_scope_started_elsewhere_is_left_alone,
-     unset_environment_is_warned_about_once,
-     set_environment_is_not_warned_about,
+     unset_environment_is_prod_and_said_once,
+     set_environment_is_not_mentioned,
      plugins_of_an_earlier_run_are_forgotten
     ].
 
@@ -197,20 +197,30 @@ pubsub_scope_started_elsewhere_is_left_alone(_Config) ->
         exit(Scope, kill)
     end.
 
-%% An unset environment is read as dev where routes are compiled, which a
-%% release that forgot the key should hear about.
-unset_environment_is_warned_about_once(_Config) ->
+%% An unset environment is prod wherever it is read: the routers are asked
+%% for routes(prod), and nothing meant for development is on. A boot says so
+%% once, for the developer who expected dev.
+unset_environment_is_prod_and_said_once(_Config) ->
     ok = nova_test_listener:configure(#{}),
+    application:set_env(nova_test_app, router_module, nova_boot_pages),
     application:unset_env(nova, environment),
     {{ok, _Started}, Events} = nova_test_log:collect(fun() -> application:ensure_all_started(nova_test_app) end),
-    ?assertMatch([#{environment := undefined, read_as := dev}], environment_warnings(Events)).
+    ?assertMatch([#{key := environment, read_as := prod}], environment_notices(Events)),
+    ?assertEqual(prod, nova:get_environment()),
+    ?assertNot(nova:is_dev_environment()),
+    Port = maps:get(port, application:get_env(nova, cowboy_configuration, #{})),
+    ?assertMatch({200, _}, nova_test_listener:get(Port, "/environment/prod")),
+    ?assertMatch({404, _}, nova_test_listener:get(Port, "/environment/dev")).
 
-set_environment_is_not_warned_about(_Config) ->
+set_environment_is_not_mentioned(_Config) ->
     [begin
          ok = nova_test_listener:configure(#{}),
+         application:set_env(nova_test_app, router_module, nova_boot_pages),
          application:set_env(nova, environment, Environment),
          {{ok, _Started}, Events} = nova_test_log:collect(fun() -> application:ensure_all_started(nova_test_app) end),
-         ?assertEqual([], environment_warnings(Events)),
+         ?assertEqual([], environment_notices(Events)),
+         Port = maps:get(port, application:get_env(nova, cowboy_configuration, #{})),
+         ?assertMatch({200, _}, nova_test_listener:get(Port, ["/environment/", atom_to_list(Environment)])),
          ok = nova_test_listener:stop()
      end || Environment <- [dev, prod]].
 
@@ -226,8 +236,8 @@ plugins_of_an_earlier_run_are_forgotten(_Config) ->
     _ = nova_test_listener:start(#{}),
     ?assertNot(lists:member(nova_plugin_once_pages, nova_router:plugins())).
 
-environment_warnings(Events) ->
-    [Report || {warning, {report, #{environment := _} = Report}} <- Events].
+environment_notices(Events) ->
+    [Report || {_Level, {report, #{read_as := _} = Report}} <- Events].
 
 running(Name) ->
     case whereis(Name) of

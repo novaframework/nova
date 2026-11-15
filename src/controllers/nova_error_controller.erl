@@ -106,8 +106,8 @@ rank(_Type, {~"*", ~"*", _Parameters}) -> [3];
 rank(_Type, _Range) -> [].
 
 %% Crash details can carry anything a controller or plugin returned, so they
-%% are only shown when the environment is explicitly set to dev; an unset
-%% environment shows none.
+%% are only shown when the environment is set to dev; an unset environment
+%% shows none.
 debug_details(Variables, ExtraMsg, Stacktrace) ->
     case show_details() of
         true -> Variables#{extra_msg => ExtraMsg, stacktrace => format_stacktrace(Stacktrace)};

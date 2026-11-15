@@ -238,8 +238,7 @@ crash_details_are_strings_in_dev_test_() ->
          ?assertEqual(~"Class: error\nReason: boom", ExtraMsg)
      end}.
 
-%% nova:get_environment/0 reads an unset environment as dev, but crash details
-%% must not reach clients unless dev was chosen explicitly.
+%% Crash details must not reach clients unless dev was chosen.
 extra_msg_is_hidden_when_environment_is_unset_test_() ->
     {setup, ?SETUP, ?CLEANUP,
      fun() ->

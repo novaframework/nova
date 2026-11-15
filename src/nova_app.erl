@@ -14,7 +14,7 @@
 %%====================================================================
 
 start(_StartType, _StartArgs) ->
-    warn_about_unset_environment(),
+    note_unset_environment(),
     %% The plugins the router lists are those of the routes compiled from
     %% here on. The list is stored outside the supervision tree and would
     %% otherwise still hold those of an earlier run in this VM.
@@ -32,14 +32,14 @@ stop(_State) ->
 %% Internal functions
 %%====================================================================
 
-%% An unset environment is dev to nova:get_environment/0, so a release that
-%% left the key out serves what its routers return for dev.
-warn_about_unset_environment() ->
+%% An unset environment is prod. A developer who left the key out expects
+%% dev, and finds the routes of routes(dev) missing.
+note_unset_environment() ->
     case application:get_env(nova, environment) of
         undefined ->
-            ?LOG_WARNING(#{msg => ~"The nova environment is not set and is read as dev: every router is asked for routes(dev), so routes meant for development are served, and watcher output is printed. Set {nova, [{environment, prod}]} in a release",
-                           environment => undefined,
-                           read_as => dev});
+            ?LOG_NOTICE(#{msg => ~"The environment key of the nova application is not set and is read as prod: routers are asked for routes(prod), and nothing meant for development is on. Set {nova, [{environment, dev}]} for development",
+                          key => environment,
+                          read_as => nova:get_environment()});
         {ok, _Environment} ->
             ok
     end.
