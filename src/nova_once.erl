@@ -42,11 +42,11 @@ per_interval(Key, Interval) ->
 %% come first at the same moment each make a cell, and one of them stays.
 cell(Key, Last) ->
     case persistent_term:get(Key, undefined) of
-        Cell when is_reference(Cell) ->
-            Cell;
-        _ ->
+        undefined ->
             Cell = atomics:new(2, [{signed, true}]),
             atomics:put(Cell, 1, Last),
             persistent_term:put(Key, Cell),
+            Cell;
+        Cell ->
             Cell
     end.
