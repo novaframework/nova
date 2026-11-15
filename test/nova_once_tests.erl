@@ -19,18 +19,24 @@ first_is_true_once_for_a_key_test() ->
 per_interval_test() ->
     Key = {?MODULE, make_ref()},
     Other = {?MODULE, make_ref()},
+    Interval = 60000,
     try
-        ?assertEqual({true, 0}, nova_once:per_interval(Key, 40)),
-        ?assertEqual(false, nova_once:per_interval(Key, 40)),
-        ?assertEqual(false, nova_once:per_interval(Key, 40)),
-        ?assertEqual({true, 0}, nova_once:per_interval(Other, 40)),
-        timer:sleep(50),
-        ?assertEqual({true, 2}, nova_once:per_interval(Key, 40)),
-        ?assertEqual(false, nova_once:per_interval(Key, 40))
+        ?assertEqual({true, 0}, nova_once:per_interval(Key, Interval)),
+        ?assertEqual(false, nova_once:per_interval(Key, Interval)),
+        ?assertEqual(false, nova_once:per_interval(Key, Interval)),
+        ?assertEqual({true, 0}, nova_once:per_interval(Other, Interval)),
+        ok = an_interval_passes(Key, Interval),
+        ?assertEqual({true, 2}, nova_once:per_interval(Key, Interval)),
+        ?assertEqual(false, nova_once:per_interval(Key, Interval))
     after
         nova_once:forget(Key),
         nova_once:forget(Other)
     end.
+
+%% Puts the last true for Key an interval back, which is what waiting for
+%% one does, without a sleep that a busy machine makes longer than it says.
+an_interval_passes(Key, Interval) ->
+    atomics:sub(persistent_term:get({nova_once, interval, Key}), 1, Interval).
 
 %% A key is free to be asked about both ways.
 first_and_per_interval_keep_apart_what_they_store_test() ->
