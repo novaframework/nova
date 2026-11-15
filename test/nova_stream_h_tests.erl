@@ -266,7 +266,7 @@ status_with_a_reason_phrase_carries_cookie() ->
 
 request_is_marked_for_nova_handler() ->
     {Req, _State} = start(req()),
-    ?assertEqual(true, maps:get(nova_stream_h, Req)).
+    ?assertEqual(true, maps:get(nova_stream, Req)).
 
 tells_whether_the_response_has_begun() ->
     {_Req, State} = start(req()),

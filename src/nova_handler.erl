@@ -171,7 +171,7 @@ answered(Req) ->
 %% asked.
 response_begun(#{has_sent_resp := Sent}) ->
     Sent;
-response_begun(#{nova_stream_h := true} = Req) ->
+response_begun(#{nova_stream := true} = Req) ->
     Ref = make_ref(),
     cowboy_req:cast({nova_response_begun, self(), Ref}, Req),
     receive
