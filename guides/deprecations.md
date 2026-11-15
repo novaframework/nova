@@ -166,10 +166,6 @@ these affects and how to get the earlier behaviour back.
 - **`json_lib` defaults to `json` of Erlang/OTP.** It was `thoas`, which
   Nova no longer depends on.
 
-- **`nova_session:client_id/1` is new.** It returns the session id the
-  client holds, and hands one out in the session cookie to a client without
-  one, without starting a session.
-
 - **Telemetry.** Plugin spans have `callback => pre_security` for
   `pre_security/4`. The controller span of a status page that the router or
   a failing plugin or security callback asked for has `status_page => true`.
@@ -541,7 +537,8 @@ these affects and how to get the earlier behaviour back.
 - **The session cookie is issued lazily.** Nova used to set a `session_id`
   cookie on every response to a client without one. It is now only sent with
   the response of a request that writes to the session (or calls `sign_in/3`,
-  `renew/1`, `delete/1` or `client_id/1`), and carries `Path=/; HttpOnly; SameSite=Lax`. As before, `nova_session_id` is only in the request for a client that
+  `renew/1` or `delete/1`), and of a request to a route where
+  `nova_csrf_plugin` signs its tokens. It carries `Path=/; HttpOnly; SameSite=Lax`. As before, `nova_session_id` is only in the request for a client that
   sent no cookie; use `nova_session` rather than reading it, since that id only
   reaches the client once the session is written.
 

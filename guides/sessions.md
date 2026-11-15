@@ -111,27 +111,6 @@ second_factor_passed(Req, UserId) ->
     {redirect, "/"}.
 ```
 
-### `nova_session:client_id/1`
-
-```erlang
--spec client_id(Req :: cowboy_req:req()) -> {ok, SessionId :: binary()} | {error, not_found} | no_return().
-```
-
-Returns the session id the client of the request holds. It stores nothing and starts no session.
-
-```erlang
-{ok, ClientId} = nova_session:client_id(Req).
-```
-
-| The request | Returns | The response |
-|---|---|---|
-| Has a session cookie | `{ok, Id}` with the id in the cookie, whether or not there is a session for it | Sets no cookie |
-| Has no session cookie | `{ok, Id}` with the id of the request | Hands that id out in the session cookie |
-| Has a `Cookie` header that does not parse | `{ok, Id}` with the id of the request | Sets no cookie, since the client may hold one Nova could not read. The id is not seen again |
-| Has no session cookie, and `nova_stream_h` is not a stream handler | `{error, not_found}` | Sets no cookie |
-
-It is for what is tied to the browser and not to what a session holds. `nova_csrf_plugin` signs its tokens for this id, see [CSRF token modes](plugins.md#csrf-token-modes). With `secret_key_base` set the id is signed, and the first `set/3` stores the session under it, so the cookie stays as it is. Without a secret the id is not the one `set/3` writes under when the backend has no session for it: the first `set/3` then moves the client to a new id, and the response replaces the cookie.
-
 ### The cookie and the request that is returned
 
 The cookie is written by `nova_stream_h`, so it reaches the client even when the controller does not return the request that `sign_in/3`, `renew/1` or `delete/1` gave it. This works for changes made by the process serving the request, which is where controllers, plugins, security functions and `c:nova_websocket:init/1` run (a session written in `init/1` gets its cookie on the `101` response). A process spawned with the request can still read and write session data, but no cookie is sent for what it does.
