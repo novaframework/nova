@@ -1,0 +1,59 @@
+# Configuration of git-cliff, which writes CHANGELOG.md from the commit
+# history. CHANGELOG.md is generated, not edited by hand:
+#
+#   git-cliff --output CHANGELOG.md
+#
+# Commits after the latest tag are listed under "unreleased". Pass
+# --tag vX.Y.Z to list them under the release that is being made.
+
+[changelog]
+header = """
+# Changelog\n
+All notable changes to this project will be documented in this file.\n
+"""
+body = """
+{% if commits | length > 0 %}\
+{% if version %}\
+    ## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+    ## [unreleased]
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+    ### {{ group | striptags | trim | upper_first }}
+    {% for commit in commits %}
+        - {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
+            {{ commit.message | upper_first }}\
+    {% endfor %}
+{% endfor %}\n
+{% endif %}\
+"""
+trim = true
+# A release without a listed commit renders as nothing but blank lines.
+postprocessors = [
+    { pattern = "\\n{3,}", replace = "\n\n" },
+]
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+commit_parsers = [
+    { message = "^feat", group = "Features" },
+    { message = "^fix", group = "Bug Fixes" },
+    { message = "^bug", group = "Bug Fixes" },
+    { message = "^docs", group = "Documentation" },
+    { message = "^refactor", group = "Refactor" },
+    { message = "^test", group = "Testing" },
+    { message = "^perf", group = "Performance" },
+    { message = "^deps", group = "Dependencies" },
+    { message = "^chore\\(release\\)", skip = true },
+    { message = "^chore", group = "Miscellaneous" },
+    { message = "^build", group = "Miscellaneous" },
+    { message = "^ci", skip = true },
+    # Older commits were written as "module: what changed", which reads as a
+    # conventional commit of a type nobody chose. They are left out.
+    { message = ".*", skip = true },
+]
+protect_breaking_commits = false
+tag_pattern = "v[0-9]+\\.[0-9]+\\.[0-9]+"
+sort_commits = "oldest"
