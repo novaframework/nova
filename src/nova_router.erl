@@ -145,6 +145,7 @@ compile(Apps, DispatchKey) ->
 compile_fresh(Apps, DispatchKey) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
     StorageBackend = storage_backend(),
+    _ = non_canonical_paths(),
     StorageBackend:put(apps_key(DispatchKey), []),
     Dispatch = compile(Apps, nova_routing_trie:new(#{strict => UseStrict}),
                        #{dispatch_key => DispatchKey}),
@@ -154,13 +155,22 @@ compile_fresh(Apps, DispatchKey) ->
 -spec execute(Req, Env :: cowboy_middleware:env()) -> {ok, Req, Env0} | {stop, Req}
                                                           when Req::cowboy_req:req(),
                                                                Env0::cowboy_middleware:env().
-execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
+execute(Req0 = #{path := Path}, Env) ->
     StorageBackend = storage_backend(),
     DispatchKey = dispatch_key(Env),
     %% nova_session only tells nova_stream_h about session changes made by the
     %% process serving the request.
     Req = Req0#{nova_dispatch_key => DispatchKey, nova_session_owner => self()},
-    Dispatch = StorageBackend:get(DispatchKey),
+    case application:get_env(nova, non_canonical_paths, reject) =:= resolve
+        orelse nova_routing_trie:is_canonical(Path) of
+        true ->
+            route(Req, Env, StorageBackend:get(DispatchKey));
+        false ->
+            ?LOG_DEBUG(#{msg => ~"Request path is not canonical", path => Path}),
+            render_status_page('_', 400, #{error => "Path is not canonical"}, Req, Env)
+    end.
+
+route(Req = #{host := Host, path := Path, method := Method}, Env, Dispatch) ->
     case nova_routing_trie:find(Host, Path, Method, Dispatch) of
         {error, not_found} ->
             logger:debug(<<"Path ~p not found for ~p in ~p">>, [Path, Method, Host]),
@@ -260,6 +270,8 @@ lookup_url(Host, Path, Method, DispatchKey) ->
 The path a request is routed on, as opposed to the `path` of the request, which is what the client sent. Empty segments are dropped and `.` and `..` are resolved, so `/public/../admin//users` gives `/admin/users`.
 
 A plugin or security callback that decides by path must look at this one. Compare whole segments, not bytes: `/api` is not a prefix of `/apikeys`.
+
+A request whose path is written another way is answered `400` before a route is looked up, so before any plugin and before the security callback, unless the `nova` environment sets `non_canonical_paths` to `resolve`. What is refused is a path with an empty segment ahead of its last one (`//a`, `/a//b`), or with a `.` or `..` segment, the dots written out or percent-encoded (`/a/../b`, `/a/%2e%2e/b`). One trailing slash is not refused, so `path` and this function still differ by it: `/users/` gives `/users`. The answer is the `400` status route of the application when it has one.
 """.
 -spec canonical_path(Req :: cowboy_req:req() | binary()) -> binary().
 canonical_path(#{path := Path}) ->
@@ -1047,6 +1059,17 @@ note_new_order(_PluginName, _Order, _Settled) ->
 is_plugin_of_nova(PluginName) ->
     _ = application:load(nova),
     application:get_application(PluginName) =:= {ok, nova}.
+
+non_canonical_paths() ->
+    case application:get_env(nova, non_canonical_paths, reject) of
+        reject ->
+            reject;
+        resolve ->
+            resolve;
+        Other ->
+            ?LOG_ERROR(#{msg => ~"non_canonical_paths must be reject or resolve", value => Other}),
+            throw({error, {invalid_non_canonical_paths, Other}})
+    end.
 
 plugins_before_security(RouteInfo, RouterFile) ->
     case maps:get(plugins_before_security, RouteInfo, application:get_env(nova, plugins_before_security, [])) of

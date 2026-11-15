@@ -18,6 +18,7 @@ internal_exports_are_hidden_test_() ->
                                       {nova_router, overrides_in_force, 1},
                                       {nova_router, secures_in_force, 1},
                                       {nova_routing_trie, canonical_segments, 1},
+                                      {nova_routing_trie, is_canonical, 1},
                                       {nova_plugin_manager, ensure_plugin, 1},
                                       {nova_security_handler, deny, 1}]].
 

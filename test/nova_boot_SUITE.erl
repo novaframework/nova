@@ -19,6 +19,7 @@
          pubsub_scope_started_elsewhere_is_left_alone/1,
          unset_environment_is_prod_and_said_once/1,
          set_environment_is_not_mentioned/1,
+         unknown_non_canonical_paths_fails_the_boot/1,
          plugins_of_an_earlier_run_are_forgotten/1
         ]).
 
@@ -41,6 +42,7 @@ all() ->
      pubsub_scope_started_elsewhere_is_left_alone,
      unset_environment_is_prod_and_said_once,
      set_environment_is_not_mentioned,
+     unknown_non_canonical_paths_fails_the_boot,
      plugins_of_an_earlier_run_are_forgotten
     ].
 
@@ -223,6 +225,17 @@ set_environment_is_not_mentioned(_Config) ->
          ?assertMatch({200, _}, nova_test_listener:get(Port, ["/environment/", atom_to_list(Environment)])),
          ok = nova_test_listener:stop()
      end || Environment <- [dev, prod]].
+
+unknown_non_canonical_paths_fails_the_boot(_Config) ->
+    application:set_env(nova, non_canonical_paths, allow),
+    try
+        ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
+                                                 {invalid_non_canonical_paths, allow}}}, _}}},
+                     nova_test_listener:try_start(#{})),
+        ?assertEqual(undefined, whereis(nova_sup))
+    after
+        application:unset_env(nova, non_canonical_paths)
+    end.
 
 %% nova_plugin_manager starts every plugin the router has listed, also after
 %% a restart, so the list must not carry over from a run with other routes.

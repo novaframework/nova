@@ -340,7 +340,8 @@ static_dot_segments_stay_inside_the_root(Config) ->
              "http://localhost/assets/../outside_assets.txt"],
     [?assertEqual(nomatch, binary:match(raw_get(Config, Path), ~"outside-assets-sentinel"), Path)
      || Path <- Paths],
-    ?assertMatch(<<"HTTP/1.1 200", _/binary>>, raw_get(Config, "/assets/../../assets/hello.txt")).
+    ?assertMatch(<<"HTTP/1.1 400", _/binary>>, raw_get(Config, "/assets/../../assets/hello.txt")),
+    ?assertMatch(<<"HTTP/1.1 400", _/binary>>, raw_get(Config, "/assets/nested/../hello.txt")).
 
 raw_get(Config, Path) ->
     Port = ?config(port, Config),
