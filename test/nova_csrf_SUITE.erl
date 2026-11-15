@@ -100,7 +100,7 @@ init_per_suite(Config) ->
                            {"/hooks/incoming", fun nova_csrf_pages:submit/1, #{methods => [post]}},
                            {"/hooks-admin", fun nova_csrf_pages:submit/1, #{methods => [post]}}]},
               #{prefix => "/partners",
-                plugins => [{pre_request, nova_csrf_plugin, #{allowed_origins => [~"https://partner.example.com"]}}],
+                plugins => [{pre_request, nova_csrf_plugin, #{trusted_origins => [~"https://partner.example.com"]}}],
                 routes => [{"/submit", fun nova_csrf_pages:submit/1, #{methods => [post]}}]},
               #{prefix => "/members",
                 security => fun nova_csrf_pages:secure/1,
@@ -132,7 +132,7 @@ init_per_testcase(_Case, Config) ->
     Config.
 
 end_per_testcase(_Case, _Config) ->
-    nova_test_settings:unset(allowed_origins),
+    nova_test_settings:unset(trusted_origins),
     nova_test_settings:unset(csrf_secret).
 
 first_visit_starts_a_session_with_a_token(Config) ->
@@ -347,7 +347,7 @@ request_of_another_origin_is_refused(Config) ->
      || Origin <- ["https://evil.example", "http://localhost.evil.example", "null"]].
 
 request_of_a_listed_origin_is_accepted(Config) ->
-    nova_test_settings:set(allowed_origins, [~"https://app.example.com"]),
+    nova_test_settings:set(trusted_origins, [~"https://app.example.com"]),
     [?assertEqual({Headers, {200, ~"submitted"}}, {Headers, submit(Config, Headers)})
      || Headers <- [[{"sec-fetch-site", "cross-site"}, {"origin", "https://app.example.com"}],
                     [{"sec-fetch-site", "same-site"}, {"origin", "https://app.example.com"}],
@@ -359,7 +359,7 @@ request_of_a_listed_origin_is_accepted(Config) ->
                     [{"origin", "http://localhost"}]]].
 
 any_origin_still_needs_the_token(Config) ->
-    nova_test_settings:set(allowed_origins, any),
+    nova_test_settings:set(trusted_origins, any),
     Other = [{"sec-fetch-site", "cross-site"}, {"origin", "https://evil.example"}],
     ?assertEqual({200, ~"submitted"}, submit(Config, Other)),
     {Cookie, _Token} = session(Config),
@@ -374,7 +374,7 @@ origins_of_the_plugin_are_the_ones_that_count(Config) ->
               end,
     ?assertEqual({200, ~"submitted"}, Partner("https://partner.example.com")),
     ?assertMatch({403, _}, Partner("https://app.example.com")),
-    nova_test_settings:set(allowed_origins, [~"https://app.example.com"]),
+    nova_test_settings:set(trusted_origins, [~"https://app.example.com"]),
     ?assertEqual({200, ~"submitted"}, Partner("https://partner.example.com")),
     ?assertMatch({403, _}, Partner("https://app.example.com")).
 

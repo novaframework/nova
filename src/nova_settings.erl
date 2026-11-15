@@ -11,7 +11,7 @@
 
 -include_lib("kernel/include/logger.hrl").
 
--type key() :: allowed_origins | csrf_secret | csrf_token | max_sessions | non_canonical_paths |
+-type key() :: trusted_origins | csrf_secret | csrf_token | max_sessions | non_canonical_paths |
                plugins_before_security.
 -export_type([key/0]).
 
@@ -34,7 +34,7 @@ validate() ->
 
 -doc """
 The checked value of a setting, or its default. `csrf_secret` is the list
-of secrets, empty when none is set, and the origins of an `allowed_origins`
+of secrets, empty when none is set, and the origins of an `trusted_origins`
 list are binaries. On a node where Nova was not started, the settings are
 checked the first time one is read.
 """.
@@ -57,9 +57,9 @@ takes one of the settings as an option of its own.
 -spec checked(Key :: key(), Value :: term()) -> {ok, term()} | {error, Reason :: term()}.
 checked(non_canonical_paths, Value) when Value =:= reject; Value =:= resolve ->
     {ok, Value};
-checked(allowed_origins, Value) when Value =:= same_host; Value =:= same_origin; Value =:= any ->
+checked(trusted_origins, Value) when Value =:= same_host; Value =:= same_origin; Value =:= any ->
     {ok, Value};
-checked(allowed_origins, Value) ->
+checked(trusted_origins, Value) ->
     case origins(Value, []) of
         {ok, Origins} -> {ok, Origins};
         error -> {error, Value}
@@ -90,7 +90,7 @@ checked(_Key, Value) ->
 -doc "What a setting may be, in the words of the error that is logged for one that is not.".
 -spec expected(Key :: key()) -> binary().
 expected(non_canonical_paths) -> ~"non_canonical_paths must be reject or resolve";
-expected(allowed_origins) -> ~"allowed_origins must be same_host, same_origin, any or a list of origins";
+expected(trusted_origins) -> ~"trusted_origins must be same_host, same_origin, any or a list of origins";
 expected(csrf_token) -> ~"csrf_token must be stateless or session";
 expected(csrf_secret) -> ~"csrf_secret must be a binary of at least 32 bytes, or a list of such";
 expected(max_sessions) -> ~"max_sessions must be infinity or an integer above 0";
@@ -104,10 +104,13 @@ took its place. One that is still set stops the boot with
 """.
 -spec removed() -> [{Key :: atom(), Replacement :: key()}].
 removed() ->
-    [{plugins_after_security, plugins_before_security}].
+    [{plugins_after_security, plugins_before_security},
+     {allowed_origins, trusted_origins}].
 
 -doc "What is logged for a setting of `removed/0` that is still set.".
 -spec removed_notice(Key :: atom()) -> binary().
+removed_notice(allowed_origins) ->
+    ~"allowed_origins is now trusted_origins, with the values it had";
 removed_notice(plugins_after_security) ->
     ~"plugins_after_security is gone. pre_security/4 of a plugin always runs ahead of the security callback and pre_request/4 behind it, and plugins_before_security is the one setting that changes that".
 
@@ -125,11 +128,11 @@ no_removed_setting([{Key, Replacement} | Rest]) ->
 
 -spec keys() -> [key()].
 keys() ->
-    [non_canonical_paths, allowed_origins, csrf_token, csrf_secret, max_sessions, plugins_before_security].
+    [non_canonical_paths, trusted_origins, csrf_token, csrf_secret, max_sessions, plugins_before_security].
 
 -spec default(key()) -> term().
 default(non_canonical_paths) -> reject;
-default(allowed_origins) -> same_host;
+default(trusted_origins) -> same_host;
 default(csrf_token) -> undefined;
 default(csrf_secret) -> undefined;
 default(max_sessions) -> ?DEFAULT_MAX_SESSIONS;

@@ -1,7 +1,7 @@
 -module(nova_origin).
 -moduledoc false.
 
-%%% Whether a browser may call from an origin, by what `allowed_origins` of
+%%% Whether a browser may call from an origin, by what `trusted_origins` of
 %%% the nova environment says, or the option of the same name that
 %%% nova_ws_origin_plugin and nova_csrf_plugin take.
 

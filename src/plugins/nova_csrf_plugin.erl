@@ -29,14 +29,14 @@ A token is asked for whatever else the request says. On top of that, a request t
 - `Sec-Fetch-Site` is `cross-site` or `same-site`, unless its `Origin` is one of a list of allowed origins. `same-origin` and `none`, which is what a request the user made by hand has, are let through.
 - Without `Sec-Fetch-Site`, which browsers send to `https` and `localhost` only, the `Origin` is not an allowed one.
 
-A request with neither header is let through: it is not from a browser, or from one too old to say. The allowed origins are `allowed_origins` of the `nova` environment, the setting websocket upgrades go by, unless the plugin is given its own: `same_host` (the default), `same_origin`, a list such as `[~"https://app.example.com"]` for pages elsewhere that may post here, or `any`, which turns this check off and leaves the token. A list takes the place of `same_host`: a request that has an `Origin` and no `Sec-Fetch-Site` is let through only when that origin is in the list, also when a page of the site itself sent it, so put the origin of the site in the list.
+A request with neither header is let through: it is not from a browser, or from one too old to say. The allowed origins are `trusted_origins` of the `nova` environment, the setting websocket upgrades go by, unless the plugin is given its own: `same_host` (the default), `same_origin`, a list such as `[~"https://app.example.com"]` for pages elsewhere that may post here, or `any`, which turns this check off and leaves the token. A list takes the place of `same_host`: a request that has an `Origin` and no `Sec-Fetch-Site` is let through only when that origin is in the list, also when a page of the site itself sent it, so put the origin of the site in the list.
 
 ### Options
 
 * `field_name` - form field name (default `<<"_csrf_token">>`)
 * `header_name` - header name (default `<<"x-csrf-token">>`)
 * `session_key` - session storage key (default `<<"_csrf_token">>`)
-* `allowed_origins` - the origins a request that changes state may come from, when not those of the `nova` environment. A value that is none of the above stops the boot with `{invalid_setting, allowed_origins, Value}`
+* `trusted_origins` - the origins a request that changes state may come from, when not those of the `nova` environment. A value that is none of the above stops the boot with `{invalid_setting, trusted_origins, Value}`
 * `excluded_paths` - list of path prefixes to skip (default `[]`). A prefix covers whole segments of the path the request is routed on: `<<"/api">>` skips `/api` and `/api/hooks`, not `/apikeys`, and `/api/../admin` is checked as `/admin`
 """.
 -behaviour(nova_plugin).
@@ -114,8 +114,8 @@ pre_security(Req = #{method := Method, path := Path}, _Env, Options, State) ->
 -spec is_sent_by_the_site(Req :: cowboy_req:req(), Options :: map()) -> boolean().
 is_sent_by_the_site(Req, Options) ->
     Allowed = case Options of
-                  #{allowed_origins := Origins} -> Origins;
-                  _ -> nova_settings:value(allowed_origins)
+                  #{trusted_origins := Origins} -> Origins;
+                  _ -> nova_settings:value(trusted_origins)
               end,
     Origin = cowboy_req:header(~"origin", Req),
     case cowboy_req:header(~"sec-fetch-site", Req) of
@@ -179,7 +179,7 @@ plugin_info() ->
                   {field_name, <<"Form field name for CSRF token (default: _csrf_token)">>},
                   {header_name, <<"Header name for CSRF token (default: x-csrf-token)">>},
                   {session_key, <<"Session key for CSRF token (default: _csrf_token)">>},
-                  {allowed_origins, ~"same_host, same_origin, any, or the list of origins that may send unsafe requests"},
+                  {trusted_origins, ~"same_host, same_origin, any, or the list of origins that may send unsafe requests"},
                   {excluded_paths, <<"List of path prefixes to exclude from CSRF protection">>}
                  ]}.
 

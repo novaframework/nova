@@ -30,7 +30,7 @@ http3_upgrade_test_() ->
                     pre_request((http3_connect(#{~"origin" => ?EVIL}))#{protocol => ~"connect-udp"}, #{}))}].
 
 same_origin_test_() ->
-    SameOrigin = #{allowed_origins => same_origin},
+    SameOrigin = #{trusted_origins => same_origin},
     Https = fun(Origin) -> pre_request(http3_connect(#{~"origin" => Origin}), SameOrigin) end,
     OverTls = fun(Origin) ->
                       pre_request(#{version => 'HTTP/1.1', method => ~"GET", scheme => ~"https",
@@ -89,29 +89,29 @@ unparseable_upgrade_is_checked_test() ->
     Req = unparseable_upgrade(),
     ?assertExit({request_error, _Header, _Text}, cowboy_websocket:is_upgrade_request(Req)),
     ?assertMatch({stop, {reply, 403, _Body}, _Req, undefined}, pre_request(Req, #{})),
-    ?assertMatch({ok, _Req, undefined}, pre_request(Req, #{allowed_origins => [?EVIL]})).
+    ?assertMatch({ok, _Req, undefined}, pre_request(Req, #{trusted_origins => [?EVIL]})).
 
 any_origin_test() ->
-    ?assertMatch({ok, _Req, undefined}, pre_request(http3_connect(#{~"origin" => ?EVIL}), #{allowed_origins => any})).
+    ?assertMatch({ok, _Req, undefined}, pre_request(http3_connect(#{~"origin" => ?EVIL}), #{trusted_origins => any})).
 
 plugin_without_origins_of_its_own_test_() ->
     Accepted = http3_connect(#{~"origin" => ~"https://only.example.com"}),
     {setup,
-     fun() -> nova_test_settings:set(allowed_origins, [~"https://only.example.com"]) end,
-     fun(_) -> nova_test_settings:unset(allowed_origins) end,
+     fun() -> nova_test_settings:set(trusted_origins, [~"https://only.example.com"]) end,
+     fun(_) -> nova_test_settings:unset(trusted_origins) end,
      [?_assertMatch({stop, {reply, 403, _Body}, _Req, undefined},
                     pre_request(http3_connect(#{~"origin" => ~"https://example.com"}), #{})),
       ?_assertEqual({ok, Accepted, undefined}, pre_request(Accepted, #{})),
       ?_assertMatch({ok, _Req, undefined},
                     pre_request(http3_connect(#{~"origin" => ~"https://example.com"}),
-                                #{allowed_origins => same_host}))]}.
+                                #{trusted_origins => same_host}))]}.
 
 %% Nova lists the plugin first on every websocket route, where it checks
 %% every request and not only the ones that ask for an upgrade.
 request_to_a_websocket_route_that_is_no_upgrade_test_() ->
     Websocket = #{cowboy_handler => nova_ws_handler},
     [?_assertMatch({stop, {reply, 403, _Body}, _Req, undefined}, get_from_another_origin(Websocket, #{})),
-     ?_assertMatch({ok, _Req, undefined}, get_from_another_origin(Websocket, #{allowed_origins => [?EVIL]})),
+     ?_assertMatch({ok, _Req, undefined}, get_from_another_origin(Websocket, #{trusted_origins => [?EVIL]})),
      ?_assertMatch({ok, _Req, undefined}, get_from_another_origin(#{cowboy_handler => nova_handler}, #{})),
      ?_assertMatch({ok, _Req, undefined}, get_from_another_origin(#{}, #{}))].
 

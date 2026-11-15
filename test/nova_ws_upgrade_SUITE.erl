@@ -76,14 +76,14 @@ init_per_suite(Config) ->
                 routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}},
                            {"/page", fun nova_ws_upgrade_pages:page/1, #{methods => [get]}}]},
               #{prefix => "/same-origin",
-                plugins => [{pre_request, nova_ws_origin_plugin, #{allowed_origins => same_origin}}],
+                plugins => [{pre_request, nova_ws_origin_plugin, #{trusted_origins => same_origin}}],
                 routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]},
               #{prefix => "/listed",
                 plugins => [{pre_request, nova_ws_origin_plugin,
-                             #{allowed_origins => [~"https://app.example.com", "https://other.example.com"]}}],
+                             #{trusted_origins => [~"https://app.example.com", "https://other.example.com"]}}],
                 routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]},
               #{prefix => "/open",
-                plugins => [{pre_request, nova_ws_origin_plugin, #{allowed_origins => any}}],
+                plugins => [{pre_request, nova_ws_origin_plugin, #{trusted_origins => any}}],
                 routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]},
               #{prefix => "/guarded",
                 security => fun nova_ws_upgrade_pages:allow/1,
@@ -92,7 +92,7 @@ init_per_suite(Config) ->
               #{prefix => "/guarded-by-plugin",
                 security => fun nova_ws_upgrade_pages:allow/1,
                 plugins => [{pre_request, nova_ws_upgrade_pages, #{}}, {pre_request, nova_csrf_plugin, #{}},
-                            {pre_request, nova_ws_origin_plugin, #{allowed_origins => same_origin}}],
+                            {pre_request, nova_ws_origin_plugin, #{trusted_origins => same_origin}}],
                 routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]}],
     nova_ws_upgrade_pages:count(),
     [{port, nova_test_listener:start(#{host => Routes, cowboy_options => #{enable_connect_protocol => true}})}
@@ -168,27 +168,27 @@ refused_upgrade_runs_nothing_of_the_route(Config) ->
      end || Path <- ["/guarded/ws", "/guarded-by-plugin/ws"]].
 
 configured_origins_replace_the_default(Config) ->
-    nova_test_settings:set(allowed_origins, [~"https://app.example.com"]),
+    nova_test_settings:set(trusted_origins, [~"https://app.example.com"]),
     try
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/plain/ws", "https://app.example.com")),
         ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/plain/ws", "http://localhost")),
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>,
                      nova_test_listener:websocket_handshake(?config(port, Config), "/plain/ws")),
-        nova_test_settings:set(allowed_origins, same_origin),
+        nova_test_settings:set(trusted_origins, same_origin),
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/plain/ws", "http://localhost")),
         ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/plain/ws", "https://localhost"))
     after
-        nova_test_settings:unset(allowed_origins)
+        nova_test_settings:unset(trusted_origins)
     end.
 
 any_origin_when_the_check_is_off(Config) ->
-    nova_test_settings:set(allowed_origins, any),
+    nova_test_settings:set(trusted_origins, any),
     try
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/plain/ws", "https://evil.example")),
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/same-host/ws", "https://evil.example")),
         ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/same-origin/ws", "https://evil.example"))
     after
-        nova_test_settings:unset(allowed_origins)
+        nova_test_settings:unset(trusted_origins)
     end.
 
 %% What the plugin of a route group accepts is not checked again against
@@ -197,13 +197,13 @@ any_origin_when_the_check_is_off(Config) ->
 plugin_of_the_route_decides_alone(Config) ->
     ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/open/ws", "https://evil.example")),
     ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/listed/ws", "https://app.example.com")),
-    nova_test_settings:set(allowed_origins, [~"https://only.example.com"]),
+    nova_test_settings:set(trusted_origins, [~"https://only.example.com"]),
     try
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/same-origin/ws", "http://localhost")),
         ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/same-host/ws", "http://localhost")),
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/same-host/ws", "https://only.example.com"))
     after
-        nova_test_settings:unset(allowed_origins)
+        nova_test_settings:unset(trusted_origins)
     end.
 
 %% The requests are sent with `host: localhost`, to a listener without TLS.

@@ -1036,19 +1036,26 @@ dedupe_plugins([Plugin|Tl], Seen, Acc) ->
 plugin_key({Type, PluginName, _Options}) -> {Type, PluginName};
 plugin_key(Plugin)                       -> Plugin.
 
-%% allowed_origins is an option of these two plugins as well as a setting.
+%% trusted_origins is an option of these two plugins as well as a setting.
 %% It is checked by the rule of the setting, when the routes are compiled
 %% and not by the first request that goes by it, and kept as that keeps it.
+%% Under the name the setting had before any release, it is refused as the
+%% setting is.
 -spec with_checked_options(Plugin :: plugin(), Named :: map()) -> plugin().
-with_checked_options({Type, Plugin, Options = #{allowed_origins := Value}}, Named)
+with_checked_options({_Type, Plugin, #{allowed_origins := _}}, Named)
   when Plugin =:= nova_csrf_plugin; Plugin =:= nova_ws_origin_plugin ->
-    case nova_settings:checked(allowed_origins, Value) of
+    ?LOG_ERROR(Named#{msg => nova_settings:removed_notice(allowed_origins), setting => allowed_origins,
+                      replaced_by => trusted_origins, plugin => Plugin}),
+    throw({error, {invalid_setting, allowed_origins, {replaced_by, trusted_origins}}});
+with_checked_options({Type, Plugin, Options = #{trusted_origins := Value}}, Named)
+  when Plugin =:= nova_csrf_plugin; Plugin =:= nova_ws_origin_plugin ->
+    case nova_settings:checked(trusted_origins, Value) of
         {ok, Origins} ->
-            {Type, Plugin, Options#{allowed_origins := Origins}};
+            {Type, Plugin, Options#{trusted_origins := Origins}};
         {error, Reason} ->
-            ?LOG_ERROR(Named#{msg => nova_settings:expected(allowed_origins), setting => allowed_origins,
+            ?LOG_ERROR(Named#{msg => nova_settings:expected(trusted_origins), setting => trusted_origins,
                               value => Reason, plugin => Plugin}),
-            throw({error, {invalid_setting, allowed_origins, Reason}})
+            throw({error, {invalid_setting, trusted_origins, Reason}})
     end;
 with_checked_options(Plugin, _Named) ->
     Plugin.

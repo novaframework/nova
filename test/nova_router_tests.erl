@@ -579,21 +579,21 @@ plugins_after_security_of_a_route_group_is_refused_test_() ->
         ?assertEqual({error, not_found}, nova_router:lookup_url('_', ~"/after/page", ~"POST"))
     end}.
 
-%% allowed_origins is an option of two plugins as well as a setting. The
+%% trusted_origins is an option of two plugins as well as a setting. The
 %% option is checked as the setting is, when the routes are compiled.
-allowed_origins_of_a_plugin_is_checked_with_the_routes_test_() ->
+trusted_origins_of_a_plugin_is_checked_with_the_routes_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         Routes = fun(Plugin, Value) ->
-                         #{prefix => "/origins", plugins => [{pre_request, Plugin, #{allowed_origins => Value}}],
+                         #{prefix => "/origins", plugins => [{pre_request, Plugin, #{trusted_origins => Value}}],
                            routes => [{"/page", fun(_) -> {json, #{}} end, #{methods => [post]}}]}
                  end,
         [begin
              {_, Events} = nova_test_log:collect(
                              fun() ->
-                                     ?assertThrow({error, {invalid_setting, allowed_origins, Value}},
+                                     ?assertThrow({error, {invalid_setting, trusted_origins, Value}},
                                                   nova_router:add_routes(route_app, Routes(Plugin, Value)))
                              end),
-             ?assertMatch([#{setting := allowed_origins, value := Value, plugin := Plugin, app := route_app,
+             ?assertMatch([#{setting := trusted_origins, value := Value, plugin := Plugin, app := route_app,
                              prefix := "/origins"}],
                           nova_test_log:errors(Events))
          end || Plugin <- [nova_csrf_plugin, nova_ws_origin_plugin],
@@ -606,7 +606,7 @@ allowed_origins_of_a_plugin_is_checked_with_the_routes_test_() ->
              ?assertEqual({Plugin, Value, [Kept]},
                           {Plugin, Value,
                            lists:usort([Origins || {_Phase, [_ | _] = Callbacks} <- Plugins,
-                                                   {_Callback, #{allowed_origins := Origins}} <- Callbacks])})
+                                                   {_Callback, #{trusted_origins := Origins}} <- Callbacks])})
          end || {Plugin, Value, Kept} <- [{nova_csrf_plugin, same_origin, same_origin},
                                           {nova_csrf_plugin, ["https://example.com", ~"https://other.example"],
                                            [~"https://example.com", ~"https://other.example"]},
@@ -649,7 +649,7 @@ route_template_controller_and_ws_test_() ->
 %% lists it, wherever in its plugins that is.
 websocket_route_checks_the_origin_first_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        Origins = #{allowed_origins => [~"https://example.com"]},
+        Origins = #{trusted_origins => [~"https://example.com"]},
         Routes = fun(Prefix, Group) ->
                          Group#{prefix => Prefix,
                                 routes => [{"/page", fun(_) -> {json, #{}} end, #{methods => [get]}},

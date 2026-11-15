@@ -6,21 +6,21 @@ A browser sends the cookies of a site with every websocket upgrade to it, whiche
 
 A request without an `Origin` header is let through, since only browsers send it.
 
-Nova runs this plugin first on every websocket route, whether the route group lists it or not, against `allowed_origins` of the `nova` environment, which takes the values of the option below and is `same_host` when it is not set. A route group that lists the plugin with its own `allowed_origins` is checked against those alone, so listing the plugin is how one group gets other origins than the rest. `any` turns the check off, for the route group or for every route:
+Nova runs this plugin first on every websocket route, whether the route group lists it or not, against `trusted_origins` of the `nova` environment, which takes the values of the option below and is `same_host` when it is not set. A route group that lists the plugin with its own `trusted_origins` is checked against those alone, so listing the plugin is how one group gets other origins than the rest. `any` turns the check off, for the route group or for every route:
 
 ```erlang
 {nova, [
-    {allowed_origins, [~"https://example.com"]}
+    {trusted_origins, [~"https://example.com"]}
 ]}
 ```
 
-`nova_csrf_plugin` reads the same setting for the requests it checks.
+`nova_csrf_plugin` reads the same setting for the requests it checks. It is not `allow_origins` of `nova_cors_plugin`: that one says which pages may read a response, this one which pages may act with the cookies of the site.
 
 The check is made ahead of the security callback and of every other plugin of the route, wherever among the plugins of the route group this one is listed. A request that is refused is answered `403` with nothing of the route having run.
 
 ## Options
 
-- `allowed_origins` - `allowed_origins` of the `nova` environment when the option is left out. `same_host` (the default of that) accepts an origin whose host and port are the ones in the `Host` header, or the ones the request was sent to when it has no `Host` header, as over HTTP/2. Only host and port are compared, not the scheme, apart from the port an origin leaves out being the one of its scheme. `same_origin` also compares the scheme: the origin must have the scheme, host and port of the request, where a port that is left out is the one of the scheme. A list accepts exactly the origins in it, such as `[~"https://example.com"]`. It takes the place of `same_host`, so the origin of the site itself has to be in the list to be accepted, and `[]` accepts none. Use a list when a proxy in front of Nova rewrites the `Host` header or terminates TLS. `any` accepts every origin. Any other value stops the boot with `{invalid_setting, allowed_origins, Value}`.
+- `trusted_origins` - `trusted_origins` of the `nova` environment when the option is left out. `same_host` (the default of that) accepts an origin whose host and port are the ones in the `Host` header, or the ones the request was sent to when it has no `Host` header, as over HTTP/2. Only host and port are compared, not the scheme, apart from the port an origin leaves out being the one of its scheme. `same_origin` also compares the scheme: the origin must have the scheme, host and port of the request, where a port that is left out is the one of the scheme. A list accepts exactly the origins in it, such as `[~"https://example.com"]`. It takes the place of `same_host`, so the origin of the site itself has to be in the list to be accepted, and `[]` accepts none. Use a list when a proxy in front of Nova rewrites the `Host` header or terminates TLS. `any` accepts every origin. Any other value stops the boot with `{invalid_setting, trusted_origins, Value}`.
 
 With `same_host` a page loaded from `http://example.com` can open a websocket to `wss://example.com` over HTTP/1.1. `same_origin` refuses it.
 
@@ -33,7 +33,7 @@ The plugin only acts on websocket upgrades, so it can go in the global `plugins`
 ```erlang
 {nova, [
     {plugins, [
-        {pre_request, nova_ws_origin_plugin, #{allowed_origins => [~"https://example.com"]}}
+        {pre_request, nova_ws_origin_plugin, #{trusted_origins => [~"https://example.com"]}}
     ]}
 ]}
 ```
@@ -52,8 +52,8 @@ A route group that declares `plugins` uses only those and none of the global one
           {stop, nova_plugin:reply(), Req0 :: cowboy_req:req(), NewState :: any()}.
 pre_security(Req, Env, Options, State) ->
     Allowed = case Options of
-                  #{allowed_origins := Origins} -> Origins;
-                  _ -> nova_settings:value(allowed_origins)
+                  #{trusted_origins := Origins} -> Origins;
+                  _ -> nova_settings:value(trusted_origins)
               end,
     case is_for_a_websocket(Req, Env) andalso
         not nova_origin:is_allowed(cowboy_req:header(~"origin", Req), Req, Allowed) of
@@ -80,7 +80,7 @@ plugin_info() ->
       url => ~"https://github.com/novaframework/nova",
       authors => [~"Nova team <info@novaframework.org>"],
       description => ~"Refuses websocket upgrades from other origins",
-      options => [{allowed_origins,
+      options => [{trusted_origins,
                    ~"same_host, same_origin, any, or the list of origins that may open a websocket"}]}.
 
 %% Every request to a websocket route is checked, also one that does not ask

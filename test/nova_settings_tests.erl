@@ -3,7 +3,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(SECRET, ~"a secret of thirty-two bytes or more, for the tests").
--define(KEYS, [allowed_origins, csrf_secret, csrf_token, max_sessions, non_canonical_paths,
+-define(KEYS, [trusted_origins, csrf_secret, csrf_token, max_sessions, non_canonical_paths,
                plugins_before_security]).
 
 %% The settings as a boot finds them with Env in the nova environment: the
@@ -21,7 +21,7 @@ booted_with(Env) ->
     end.
 
 defaults_test() ->
-    ?assertEqual(#{allowed_origins => same_host, csrf_secret => [], csrf_token => undefined,
+    ?assertEqual(#{trusted_origins => same_host, csrf_secret => [], csrf_token => undefined,
                    max_sessions => 1000000, non_canonical_paths => reject, plugins_before_security => []},
                  booted_with([])).
 
@@ -29,11 +29,11 @@ values_that_can_be_used_test_() ->
     [?_assertMatch({Key, Value, #{Key := Kept}}, {Key, Value, booted_with([{Key, Value}])})
      || {Key, Value, Kept} <- [{non_canonical_paths, reject, reject},
                                {non_canonical_paths, resolve, resolve},
-                               {allowed_origins, same_host, same_host},
-                               {allowed_origins, same_origin, same_origin},
-                               {allowed_origins, any, any},
-                               {allowed_origins, [], []},
-                               {allowed_origins, [~"https://example.com", "https://other.example.com"],
+                               {trusted_origins, same_host, same_host},
+                               {trusted_origins, same_origin, same_origin},
+                               {trusted_origins, any, any},
+                               {trusted_origins, [], []},
+                               {trusted_origins, [~"https://example.com", "https://other.example.com"],
                                 [~"https://example.com", ~"https://other.example.com"]},
                                {csrf_token, session, session},
                                {csrf_secret, ?SECRET, [?SECRET]},
@@ -47,14 +47,14 @@ values_that_stop_the_boot_test_() ->
     [?_assertEqual({stopped, {invalid_setting, Key, Value}}, booted_with([{Key, Value}]))
      || {Key, Value} <- [{non_canonical_paths, allow},
                          {non_canonical_paths, true},
-                         {allowed_origins, none},
-                         {allowed_origins, true},
-                         {allowed_origins, ~"https://example.com"},
-                         {allowed_origins, [same_host]},
-                         {allowed_origins, [[same_host]]},
-                         {allowed_origins, nova_test_helper:improper_list([~"https://example.com"],
+                         {trusted_origins, none},
+                         {trusted_origins, true},
+                         {trusted_origins, ~"https://example.com"},
+                         {trusted_origins, [same_host]},
+                         {trusted_origins, [[same_host]]},
+                         {trusted_origins, nova_test_helper:improper_list([~"https://example.com"],
                                                                           ~"https://other.example.com")},
-                         {allowed_origins, [nova_test_helper:improper_list([$h], $t)]},
+                         {trusted_origins, [nova_test_helper:improper_list([$h], $t)]},
                          {csrf_token, signed},
                          {csrf_token, true},
                          {max_sessions, 0},
@@ -150,7 +150,8 @@ removed_settings_stop_the_boot_test_() ->
      || {Key, Value, Replacement} <- removed()].
 
 removed() ->
-    [{plugins_after_security, [nova_request_plugin], plugins_before_security}].
+    [{plugins_after_security, [nova_request_plugin], plugins_before_security},
+     {allowed_origins, [~"https://example.com"], trusted_origins}].
 
 invalid_setting_is_logged_with_what_it_may_be_test() ->
     application:set_env(nova, non_canonical_paths, allow),
@@ -181,7 +182,7 @@ settings_are_read_from_nova_alone_test() ->
     application:set_env(nova, bootstrap_application, nova_settings_tests_app),
     [application:set_env(nova_settings_tests_app, Key, Value)
      || {Key, Value} <- [{max_sessions, 7}, {csrf_token, session}, {csrf_secret, ?SECRET},
-                         {allowed_origins, any}, {non_canonical_paths, resolve}, {plugins_before_security, all}]],
+                         {trusted_origins, any}, {non_canonical_paths, resolve}, {plugins_before_security, all}]],
     try
         ?assertEqual(booted_with([]), booted_with([{max_sessions, 1000000}]))
     after
