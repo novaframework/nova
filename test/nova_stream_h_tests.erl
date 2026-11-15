@@ -362,3 +362,8 @@ set_cookies(Headers) ->
 cookie_value(Cookie) ->
     [<<"session_id=", Value/binary>> | _] = binary:split(Cookie, ~";"),
     Value.
+
+%% Not a documented function of Cowboy, so a new Cowboy is checked for it here.
+cowboy_validates_response_headers_test() ->
+    {module, cowboy_http} = code:ensure_loaded(cowboy_http),
+    ?assert(erlang:function_exported(cowboy_http, validate_response_headers, 2)).
