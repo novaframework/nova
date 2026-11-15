@@ -16,9 +16,9 @@ Stream handlers: nova_stream_h → cowboy_compress_h → cowboy_stream_h
   │
   ▼
 Middlewares, in the request process:
-  1. nova_router            find the route
-  2. nova_plugin_handler    pre_request plugins
-  3. nova_security_handler  security callback, then the plugins that wait for it
+  1. nova_router            refuse a path that is not canonical, find the route
+  2. nova_plugin_handler    pre_security/4 of the pre_request plugins
+  3. nova_security_handler  security callback, then pre_request/4 of the plugins
   4. nova_handler           controller, then the handler for what it returned
   5. nova_plugin_handler    post_request plugins
 ```
@@ -28,16 +28,19 @@ A step that answers the request ends it, and the steps after it do not run.
 1. **Stream handlers.** `nova_stream_h` sets the `server` response header to
    `Cowboy/Nova` and issues the session cookie when the request wrote to the
    session. `cowboy_compress_h` compresses responses.
-2. **Routing.** `nova_router` looks up the host, the path and the method in
-   the routing table. The path is matched after empty segments are dropped
-   and `.` and `..` are resolved. Without a match the request gets the `404`
-   page, or `405` when the path exists for another method, and no plugin
-   runs.
-3. **`pre_request` plugins**, in the order they are listed. A plugin can
-   change the request or answer it.
+2. **Routing.** `nova_router` answers a path that is not canonical, such as
+   `/a//b` or `/a/../b`, with `400`, see
+   [Routing](routing.md#paths-that-are-not-canonical). It then looks up the
+   host, the path and the method in the routing table. Without a match the
+   request gets the `404` page, or `405` when the path exists for another
+   method, and no plugin runs.
+3. **`pre_security/4` of the `pre_request` plugins**, in the order they are
+   listed. A plugin can change the request or answer it. Nothing of the body
+   is read here. On a websocket route the origin check runs first.
 4. **The security callback** of the route group, if it has one. A request it
-   refuses is answered with `401` or with what the callback returned. The
-   plugins listed in `plugins_after_security` run after it.
+   refuses is answered with `401` or with what the callback returned.
+   **`pre_request/4` of the `pre_request` plugins** runs after it, in the
+   order they are listed. This is where the body is read and decoded.
 5. **The controller.** Its return value is handed to the handler registered
    for it, which sets the response on the request. Nova then sends the
    response. For a route with `protocol => ws` the connection is upgraded
@@ -45,7 +48,8 @@ A step that answers the request ends it, and the steps after it do not run.
 6. **`post_request` plugins.** The response has been sent by then.
 
 The [Plugins](plugins.md#request-pipeline) guide has the consequences of
-this order.
+this order, and the two route group keys that move a plugin to the other
+side of the security callback.
 
 ## Terms
 
@@ -74,16 +78,17 @@ the cookies and the body from it. Nova adds these keys:
 | `extra_state` | Router | The `extra_state` of the route, or of its route group when the route has none, otherwise `undefined`. For a route ending in `[...]` it has the trailing segments under `pathinfo` |
 | `nova_route` | Router | The template of the matched route, such as `<<"/users/:id">>`. Not set when no route matched |
 | `plugins` | Router | The plugins of the route |
+| `correlation_id` | `nova_correlation_plugin`, before the security callback | The correlation id of the request |
+| `parsed_qs` | `nova_request_plugin`, before the security callback | The query string, a map or a list, with `parse_qs` |
 | `auth_data` | Security callback | The data of `{true, AuthData}` |
-| `json` | `nova_request_plugin` | The decoded JSON body, with `decode_json_body` |
-| `params` | `nova_request_plugin`, `nova_multipart_plugin` | The fields of a urlencoded or multipart body, a map with binary keys |
-| `parsed_qs` | `nova_request_plugin` | The query string, a map or a list, with `parse_qs` |
-| `files` | `nova_multipart_plugin` | The uploaded files |
-| `csrf_token` | `nova_csrf_plugin` | The CSRF token of the session |
-| `correlation_id` | `nova_correlation_plugin` | The correlation id of the request |
+| `json` | `nova_request_plugin`, after the security callback | The decoded JSON body, with `decode_json_body` |
+| `body` | `nova_request_plugin`, after the security callback | The body as it was read, with `decode_json_body` or `read_urlencoded_body`. `<<>>` otherwise |
+| `params` | `nova_request_plugin`, `nova_multipart_plugin`, after the security callback | The fields of a urlencoded or multipart body, a map with binary keys |
+| `files` | `nova_multipart_plugin`, after the security callback | The uploaded files |
+| `csrf_token` | `nova_csrf_plugin`, after the security callback | A CSRF token for the client, another one for every response |
 | `crash_info` | Nova, for a status code route | What is known about the failure the page is rendered for |
-| `controller_data` | Router, for a status code route | `#{status => StatusCode, data => Data}`, for a page reached through `nova_router:render_status_page/2,3,5`. See [Error handling](error-handling.md#your-own-pages) |
-| `resp_status_code` | Handlers | The status code of the response. Read by `post_request` plugins and by Nova when it sends the response |
+| `controller_data` | Nova, for a status code route | `#{status => StatusCode, data => Data}`. See [Error handling](error-handling.md#your-own-pages) |
+| `resp_status_code` | Handlers, and Nova for a status code route | The status code of the response. Read by status code routes, by `post_request` plugins and by Nova when it sends the response |
 
 The other keys Nova adds are internal and can change with any release:
 `nova_dispatch_key`, `nova_stream`, `nova_session_id`,
