@@ -43,8 +43,8 @@ With `redact => true` in its configuration the formatter takes request data and 
 -spec format(logger:log_event(), config()) -> unicode:chardata().
 format(
     #{msg := {report, #{format := Format, args := Args, label := {error_logger, _}}}} = Map, Config
-) ->
-    Report = #{text => text(rendered(Format, Args, Config))},
+) when is_list(Args) ->
+    Report = #{text => rendered(Format, Args, Config)},
     format(Map#{msg := {report, Report}}, Config);
 format(#{level := Level, msg := {report, Msg}, meta := Meta}, Config) when is_map(Msg) ->
     Data0 = merge_meta(redact(Msg, Config), redact(Meta#{level => Level}, Config), Config),
@@ -54,7 +54,7 @@ format(#{level := Level, msg := {report, Msg}, meta := Meta}, Config) when is_ma
 format(Map = #{msg := {report, KeyVal}}, Config) when is_list(KeyVal) ->
     format(Map#{msg := {report, maps:from_list([Pair || {_Key, _Value} = Pair <- KeyVal])}}, Config);
 format(Map = #{msg := {string, String}}, Config) ->
-    format(Map#{msg := {report, #{text => text(String)}}}, Config);
+    format(Map#{msg := {report, #{text => String}}}, Config);
 format(Map = #{msg := {Format, Terms}}, Config) ->
     format(Map#{msg := {string, rendered(Format, Terms, Config)}}, Config).
 
@@ -72,18 +72,12 @@ system_time_to_iso8601(Epoch, Unit) ->
     iolist_to_binary(calendar:system_time_to_rfc3339(Epoch, [{unit, Unit}, {offset, "Z"}])).
 
 %%%_* Private functions ================================================
-%% The string of a {string, String} message is whatever the caller of
-%% logger passed in, which the type of a log event does not narrow down.
--spec text(dynamic()) -> dynamic().
-text(String) ->
-    unicode:characters_to_binary(String).
-
 %% The arguments are redacted before they are rendered: once they are text
 %% there is no key left to tell a secret by. A redacted argument may no
 %% longer be what its control sequence takes, and is then printed as a term.
--spec rendered(io:format(), dynamic(), config()) -> io_lib:chars().
+-spec rendered(io:format(), [term()], config()) -> io_lib:chars().
 rendered(Format, Args, Config) ->
-    Redacted = redact(Args, Config),
+    Redacted = redacted_args(Args, Config),
     try
         io_lib:format(Format, Redacted)
     catch
@@ -100,6 +94,15 @@ pre_encode_value([First | _] = Vs, Config) when is_map(First) ->
     [pre_encode(V, Config) || V <- Vs, is_map(V)];
 pre_encode_value(V, _Config) ->
     jsonify(V).
+
+%% The arguments are redacted as one list, so that a list of pairs is taken
+%% for the proplist it is.
+-spec redacted_args([term()], config()) -> [term()].
+redacted_args(Args, Config) ->
+    case redact(Args, Config) of
+        Redacted when is_list(Redacted) -> Redacted;
+        Other -> [Other]
+    end.
 
 redact(Data, #{redact := true}) ->
     nova_redact:term(Data);
