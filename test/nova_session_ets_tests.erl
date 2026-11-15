@@ -86,6 +86,7 @@ cap_test_() ->
       fun provisional_write_leaves_a_session_kept/0,
       fun replicated_session_does_not_grow_the_table_past_the_cap/0,
       fun replicated_provisional_session_is_dropped_when_every_session_is_kept/0,
+      fun converted_session_is_not_dropped_for_a_provisional_one/0,
       fun cap_is_the_one_nova_started_with/0
      ]}.
 
@@ -198,6 +199,28 @@ provisional_write_leaves_a_session_kept() ->
     [ok = nova_session_ets:set_provisional_value(integer_to_binary(N), ~"k", ~"v") || N <- lists:seq(1, 30)],
     ?assertEqual({ok, ~"alice"}, nova_session_ets:get_value(~"user", ~"user")),
     ?assertEqual({ok, ~"t"}, nova_session_ets:get_value(~"user", ~"token")).
+
+%% Nothing tells the sessions of an older release apart, so a hot upgrade
+%% takes none of them for a provisional one: a request without a session
+%% does not get the place of somebody who is signed in.
+converted_session_is_not_dropped_for_a_provisional_one() ->
+    Pid = nova_session_ets,
+    Soon = erlang:system_time(millisecond) + 60000,
+    Tokens = [integer_to_binary(N) || N <- lists:seq(1, 8)],
+    sys:replace_state(Pid, fun(State) ->
+                                   ets:insert(nova_session_ets_entries,
+                                              [{~"alice", #{~"user" => ~"alice"}},
+                                               {~"bob", #{~"user" => ~"bob", ~"_csrf_token" => ~"t"}, Soon}
+                                               | [{Id, #{~"_csrf_token" => ~"t"}, Soon} || Id <- Tokens]]),
+                                   State
+                           end),
+    ok = sys:suspend(Pid),
+    ok = sys:change_code(Pid, nova_session_ets, "1.0", []),
+    ok = sys:resume(Pid),
+    ?assertEqual({error, session_store_full}, nova_session_ets:set_provisional_value(~"visitor", ~"k", ~"v")),
+    ?assertEqual([{Id, kept} || Id <- lists:sort([~"alice", ~"bob" | Tokens])],
+                 lists:sort([{Id, Class} || {Id, _Data, _ExpiresAt, Class} <- ets:tab2list(nova_session_ets_entries)])),
+    ?assertEqual({ok, ~"alice"}, nova_session_ets:get_value(~"alice", ~"user")).
 
 %% What another node stores arrives without the check the writing node made.
 replicated_session_does_not_grow_the_table_past_the_cap() ->

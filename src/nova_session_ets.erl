@@ -39,7 +39,7 @@ have to outlive a node.
 
 Rows are `{SessionId, Data, ExpiresAt, Class}`. Older releases stored
 `{SessionId, Data}` or `{SessionId, Data, ExpiresAt}`; `code_change/3`
-converts both on a hot upgrade.
+converts both on a hot upgrade, to ordinary sessions.
 """.
 
 -behaviour(gen_server).
@@ -266,6 +266,13 @@ terminate(_Reason, _State) ->
                   State :: term(),
                   Extra :: term()) -> {ok, NewState :: term()} |
                                       {error, Reason :: term()}.
+%% An older release had one kind of session, and nothing in a row tells one
+%% that signs somebody in from one that only holds a CSRF token, under a key
+%% the application chooses. Every row is converted to a kept session: taken
+%% for a provisional one, the session of somebody signed in could be dropped
+%% for a request without a session, which is what the classes are there to
+%% prevent. The price is that the token sessions of the old release are not
+%% the first to go until they expire.
 code_change(_OldVsn, _State, _Extra) ->
     _ = ets:whereis(?EXPIRY) =:= undefined andalso ets:new(?EXPIRY, [ordered_set, named_table]),
     Old = ets:select(?TABLE, [{{'$1', '$2'}, [], [{{'$1', '$2', infinity}}]},
