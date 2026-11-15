@@ -37,7 +37,9 @@ Set these in `config/prod_sys.config.src`, under `nova`:
 
 | Key | Why |
 |---|---|
-| `environment` | Set it, usually to `prod`. When it is not set, `routes/1` is called with `dev` and Nova logs a warning at boot |
+| `environment` | Set it, usually to `prod`. When it is not set it is read as `prod`, and Nova logs a notice at boot |
+| `csrf_secret` | For an application that uses `nova_csrf_plugin`: `~"${CSRF_SECRET}"`, the same value on every node. See [Plugins](plugins.md#csrf-token-modes) |
+| `allowed_origins` | Leave it out when the `Host` header reaches Nova as the browser sent it. Otherwise list the public origins of the site, see [Security](security.md#behind-a-proxy-that-terminates-tls) |
 | `use_stacktrace` | Leave it `false` |
 | `cowboy_configuration` | The port, and TLS when the node terminates it, see below |
 | `shutdown_delay`, `shutdown_drain_timeout` | See [Graceful shutdown](graceful-shutdown.md) |
@@ -82,5 +84,9 @@ When a proxy or load balancer terminates TLS and forwards plain HTTP:
   trust them when the node is reachable through the proxy alone.
 * The session cookie is still marked `Secure` unless `environment` is set to
   `dev`, so sessions work as long as the client talks HTTPS to the proxy.
+* The origin checks of websocket routes and of `nova_csrf_plugin` compare the
+  `Origin` of a request with its `Host` header. See
+  [Security](security.md#behind-a-proxy-that-terminates-tls) for what the
+  proxy has to pass on.
 * Bind the listener to an address only the proxy reaches, with the `ip` key
   of `cowboy_configuration`.
