@@ -513,6 +513,52 @@ plugin_with_pre_request_alone_is_warned_about_once_test_() ->
         end
     end}.
 
+%% No security callback is asked about a preflight to a route that does not
+%% take OPTIONS, so pre_request/4 does not run for one wherever the route
+%% group lists the plugin. Only pre_security/4 of the plugin ends the notice.
+listing_a_plugin_ahead_does_not_end_the_notice_about_preflights_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        [begin
+             meck:new(Module, [non_strict, no_link]),
+             meck:expect(Module, pre_request, fun(Req, _Env, _Options, State) -> {ok, Req, State} end),
+             meck:expect(Module, plugin_info, fun() -> #{title => ~"moved", version => ~"0"} end)
+         end || Module <- [moved_plugin, other_moved_plugin, early_plugin]],
+        meck:expect(early_plugin, pre_security, fun(Req, _Env, _Options, State) -> {ok, Req, State} end),
+        Plugins = [{pre_request, moved_plugin, #{}}, {pre_request, early_plugin, #{}},
+                   {pre_request, other_moved_plugin, #{}}, {pre_request, nova_request_plugin, #{}}],
+        Group = fun(Prefix, Methods, More) ->
+                        More#{prefix => Prefix, plugins => Plugins,
+                              routes => [{"/page", fun(_) -> {json, #{}} end, #{methods => Methods}}]}
+                end,
+        Secured = fun(Prefix, Methods, More) -> Group(Prefix, Methods, More#{security => fun allow/1}) end,
+        Notices = fun(RouteGroup) ->
+                          {ok, Events} = nova_test_log:collect(fun() -> nova_router:add_routes(route_app, RouteGroup) end),
+                          [{Notice, Named} || {warning, {report, #{notice := Notice, plugins := Named}}} <- Events]
+                  end,
+        Both = [moved_plugin, other_moved_plugin],
+        try
+            ?assertEqual([{pre_request_not_for_preflight, Both}],
+                         Notices(Group("/open-all", [post], #{plugins_before_security => all}))),
+            ?assertEqual([{pre_request_not_for_preflight, Both}],
+                         Notices(Group("/open-one", [post], #{plugins_before_security => [moved_plugin]}))),
+            ?assertEqual([{pre_request_not_for_preflight, Both}],
+                         Notices(Secured("/secured-all", [post], #{plugins_before_security => all}))),
+            ?assertEqual([{pre_request_behind_security, [other_moved_plugin]},
+                          {pre_request_not_for_preflight, [moved_plugin]}],
+                         lists:sort(Notices(Secured("/secured-one", [post],
+                                                    #{plugins_before_security => [moved_plugin]})))),
+            ?assertEqual([{pre_request_behind_security, Both}], Notices(Secured("/secured-none", [post], #{}))),
+            ?assertEqual([], Notices(Secured("/secured-any", ['_'], #{plugins_before_security => all}))),
+            ?assertEqual([], Notices(Group("/open-any", [post, options], #{plugins_before_security => all})))
+        after
+            [nova_once:forget({nova_router, About, route_app, Prefix, Named})
+             || About <- [pre_request_behind_security, pre_request_not_for_preflight],
+                Prefix <- ["/open-all", "/open-one", "/secured-all", "/secured-one", "/secured-none"],
+                Named <- [Both, [moved_plugin], [other_moved_plugin]]],
+            [meck:unload(Module) || Module <- [moved_plugin, other_moved_plugin, early_plugin]]
+        end
+    end}.
+
 plugins_before_security_test_() ->
     Group = #{app => an_app, prefix => "/admin", router_file => "router.erl"},
     Plugins = [{pre_request, nova_request_plugin, #{}}, {pre_request, nova_cors_plugin, #{}},

@@ -1135,18 +1135,22 @@ exports(Module, Function) ->
 %% callback that reads the body finds none and may let the request in, and
 %% a plugin that turned requests away does not see the ones that are
 %% refused. Each is said once for a route group, when its routes are
-%% compiled. A plugin from outside Nova is named unless it has
-%% pre_security/4, which is how its author says what runs first.
+%% compiled, and is said until 1.0. A plugin from outside Nova is named
+%% unless it has pre_security/4, which is how its author says what runs
+%% first. Listing it under plugins_before_security ends what is said about
+%% refused requests and not what is said about preflights, for which
+%% pre_request/4 does not run wherever the plugin is listed.
 -spec warn_about_order(RouteInfo :: map(), [plugin()], order(), Named :: map()) -> ok.
 warn_about_order(RouteInfo, Plugins, Order = #{secured := Secured}, Named) ->
-    Behind = [{Module, Options} || {pre_request, Module, Options} <- Plugins, not is_ahead(Module, Order)],
-    ok = warn_once(body_behind_security,
-                   [Module || {Module, Options} <- Behind, Secured, reads_body(Module, Options)], Named),
-    Outside = [Module || {Module, _Options} <- Behind, not is_plugin_of_nova(Module),
+    Behind = [{Module, Options} || {pre_request, Module, Options} <- Plugins, Secured, not is_ahead(Module, Order)],
+    ok = warn_once(body_behind_security, [Module || {Module, Options} <- Behind, reads_body(Module, Options)],
+                   Named),
+    Outside = [Module || {pre_request, Module, _Options} <- Plugins, not is_plugin_of_nova(Module),
                          not exports(Module, pre_security)],
-    case Secured orelse has_route_without_options(RouteInfo) of
-        true when Secured -> warn_once(pre_request_behind_security, Outside, Named);
-        true -> warn_once(pre_request_not_for_preflight, Outside, Named);
+    Refused = [Module || Module <- Outside, lists:keymember(Module, 1, Behind)],
+    ok = warn_once(pre_request_behind_security, Refused, Named),
+    case has_route_without_options(RouteInfo) of
+        true -> warn_once(pre_request_not_for_preflight, Outside -- Refused, Named);
         false -> ok
     end.
 
@@ -1156,7 +1160,7 @@ warn_once(_About, [], _Named) ->
 warn_once(About, Listed, Named = #{app := App, prefix := Prefix}) ->
     Plugins = lists:usort(Listed),
     case nova_once:first({?MODULE, About, App, Prefix, Plugins}) of
-        true -> ?LOG_WARNING(Named#{msg => order_warning(About), plugins => Plugins});
+        true -> ?LOG_WARNING(Named#{msg => order_warning(About), notice => About, plugins => Plugins});
         false -> ok
     end.
 
@@ -1166,7 +1170,7 @@ order_warning(body_behind_security) ->
 order_warning(pre_request_behind_security) ->
     ~"pre_request/4 of these plugins runs once the security callback of this route group has let a request through, where earlier releases ran it first. It does not run for a request that is refused, nor for a CORS preflight to a route that does not take OPTIONS. What has to run for those belongs in pre_security/4. To run pre_request/4 ahead of the security callback as before, list the plugin under plugins_before_security";
 order_warning(pre_request_not_for_preflight) ->
-    ~"pre_request/4 of these plugins does not run for a CORS preflight to a route of this group that does not take OPTIONS. A plugin that answers preflights has to do it in pre_security/4".
+    ~"pre_request/4 of these plugins does not run for a CORS preflight to a route of this group that does not take OPTIONS, also when the plugin is listed under plugins_before_security. A plugin that answers preflights has to do it in pre_security/4".
 
 -spec reads_body(module(), Options :: term()) -> boolean().
 reads_body(nova_request_plugin, Options) when is_map(Options) ->
