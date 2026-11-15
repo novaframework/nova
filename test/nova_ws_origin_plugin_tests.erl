@@ -109,13 +109,16 @@ plugin_without_origins_of_its_own_test_() ->
 %% Nova lists the plugin first on every websocket route, where it checks
 %% every request and not only the ones that ask for an upgrade.
 request_to_a_websocket_route_that_is_no_upgrade_test_() ->
+    Websocket = #{cowboy_handler => nova_ws_handler},
+    [?_assertMatch({stop, {reply, 403, _Body}, _Req, undefined}, get_from_another_origin(Websocket, #{})),
+     ?_assertMatch({ok, _Req, undefined}, get_from_another_origin(Websocket, #{allowed_origins => [?EVIL]})),
+     ?_assertMatch({ok, _Req, undefined}, get_from_another_origin(#{cowboy_handler => nova_handler}, #{})),
+     ?_assertMatch({ok, _Req, undefined}, get_from_another_origin(#{}, #{}))].
+
+get_from_another_origin(Env, Options) ->
     Get = #{version => 'HTTP/1.1', method => ~"GET", scheme => ~"http", host => ~"example.com", port => 80,
             path => ~"/ws", headers => #{~"host" => ~"example.com", ~"origin" => ?EVIL}},
-    Websocket = #{cowboy_handler => nova_ws_handler},
-    [?_assertMatch({stop, {reply, 403, _Body}, _Req, undefined},
-                   nova_ws_origin_plugin:pre_security(Get, Websocket, #{}, undefined)),
-     ?_assertMatch({ok, _Req, undefined},
-                   nova_ws_origin_plugin:pre_security(Get, Websocket, #{allowed_origins => [?EVIL]}, undefined)),
-     ?_assertMatch({ok, _Req, undefined},
-                   nova_ws_origin_plugin:pre_security(Get, #{cowboy_handler => nova_handler}, #{}, undefined)),
-     ?_assertMatch({ok, _Req, undefined}, nova_ws_origin_plugin:pre_security(Get, #{}, #{}, undefined))].
+    pre_security(Get, Env, Options).
+
+pre_security(Req, Env, Options) ->
+    nova_ws_origin_plugin:pre_security(Req, Env, Options, undefined).

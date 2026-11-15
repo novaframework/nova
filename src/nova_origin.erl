@@ -86,18 +86,12 @@ port(~"https", undefined) -> 443;
 port(_Scheme, Port) -> Port.
 
 -spec is_listed(Origin :: binary(), Allowed :: term()) -> boolean().
-is_listed(Origin, [Allowed | Rest]) ->
-    is_text(Origin, Allowed) orelse is_listed(Origin, Rest);
+is_listed(Origin, [Allowed | Rest]) when is_binary(Allowed) ->
+    ascii_lowercase(Allowed) =:= Origin orelse is_listed(Origin, Rest);
+is_listed(Origin, [_NotAnOrigin | Rest]) ->
+    is_listed(Origin, Rest);
 is_listed(_Origin, _NoMore) ->
     false.
-
--spec is_text(binary(), term()) -> boolean().
-is_text(Origin, Allowed) ->
-    try
-        ascii_lowercase(iolist_to_binary(Allowed)) =:= Origin
-    catch
-        error:badarg -> false
-    end.
 
 %% Header values may hold any byte, so this folds ASCII only.
 -spec ascii_lowercase(binary()) -> binary().

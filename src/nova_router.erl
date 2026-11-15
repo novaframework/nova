@@ -1169,7 +1169,7 @@ plugins_before_security(#{plugins_before_security := Value}, Plugins, Group) ->
     case nova_settings:checked(plugins_before_security, Value) of
         {ok, all} ->
             all;
-        {ok, Modules} ->
+        {ok, Modules} when is_list(Modules) ->
             case Modules -- Listed of
                 [] -> Modules;
                 _NotOfTheGroup -> invalid_plugins_before_security(Value, Group)

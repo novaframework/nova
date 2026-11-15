@@ -316,7 +316,8 @@ csrf_secret_that_fails_the_boot_is_not_told(_Config) ->
              application:unset_env(nova, csrf_secret),
              nova_test_listener:stop()
          end
-     end || Value <- [[New | Old], [New, Old | New], {New, Old}, [[New, Old]], binary:part(Old, 0, 31)]].
+     end || Value <- [nova_test_helper:improper_list([New], Old), nova_test_helper:improper_list([New, Old], New),
+                      {New, Old}, [[New, Old]], binary:part(Old, 0, 31)]].
 
 %% Without a secret the tokens of nova_csrf_plugin are kept in the session
 %% store, as before there were signed ones. An application that has the

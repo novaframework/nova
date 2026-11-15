@@ -546,7 +546,8 @@ plugins_before_security_test_() ->
      [{lists:flatten(io_lib:format("~0p", [Value])),
        ?_assertThrow({error, {invalid_setting, plugins_before_security, Value}},
                      nova_router:plugins_before_security(#{plugins_before_security => Value}, Plugins, Group))}
-      || Value <- [none, [~"nova_request_plugin"], [nova_request_plugin | another], [all],
+      || Value <- [none, [~"nova_request_plugin"], nova_test_helper:improper_list([nova_request_plugin], another),
+                   [all],
                    [nova_reqeust_plugin], [nova_request_plugin, nova_reqeust_plugin], [nova_cors_plugin],
                    [nova_csrf_plugin], [nova_multipart_plugin]]]].
 
@@ -600,11 +601,11 @@ allowed_origins_of_a_plugin_is_checked_with_the_routes_test_() ->
 
         [begin
              ok = nova_router:add_routes(route_app, Routes(Plugin, Value)),
-             {ok, #{plugins := Plugins}, _} =
+             {ok, #{plugins := [_ | _] = Plugins}, _} =
                  nova_router:execute(nova_test_helper:mock_req(~"POST", ~"/origins/page"), #{}),
              ?assertEqual({Plugin, Value, [Kept]},
                           {Plugin, Value,
-                           lists:usort([Origins || {_Phase, Callbacks} <- Plugins,
+                           lists:usort([Origins || {_Phase, [_ | _] = Callbacks} <- Plugins,
                                                    {_Callback, #{allowed_origins := Origins}} <- Callbacks])})
          end || {Plugin, Value, Kept} <- [{nova_csrf_plugin, same_origin, same_origin},
                                           {nova_csrf_plugin, ["https://example.com", ~"https://other.example"],

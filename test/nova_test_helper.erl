@@ -10,8 +10,15 @@
          with_content_type/2,
          setup_nova_env/0,
          cleanup_nova_env/1,
-         make_tmp_dir/1
+         make_tmp_dir/1,
+         improper_list/2
         ]).
+
+%% `[a, b | Tail]` for a tail that is no list, which is what a setting holds
+%% when somebody writes a cons where a list was meant.
+-spec improper_list(Elements :: [term()], Tail :: term()) -> term().
+improper_list(Elements, Tail) ->
+    apply(erlang, '++', [Elements, Tail]).
 
 %% A new directory for the files of a test. Its name is one no other run
 %% makes: several of them share /tmp, and every one of them counts its

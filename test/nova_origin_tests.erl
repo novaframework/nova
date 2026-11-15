@@ -121,7 +121,8 @@ request_without_what_cowboy_gives_it_test_() ->
 listed_test_() ->
     Req = with_host(~"example.com"),
     [?_assert(allowed(~"https://app.example.com", Req, [~"https://app.example.com"])),
-     ?_assert(allowed(~"HTTPS://App.Example.com", Req, [~"https://other.example.com", "https://APP.example.com"])),
+     ?_assert(allowed(~"HTTPS://App.Example.com", Req, [~"https://other.example.com", ~"https://APP.example.com"])),
+     ?_assertNot(allowed(~"https://app.example.com", Req, ["https://app.example.com"])),
      ?_assertNot(allowed(~"https://example.com", Req, [~"https://app.example.com"])),
      ?_assertNot(allowed(~"https://app.example.com:443", Req, [~"https://app.example.com"])),
      ?_assertNot(allowed(~"https://example.com", Req, []))].
@@ -132,5 +133,6 @@ allowed_that_is_none_of_the_values_test_() ->
     Req = with_host(~"example.com"),
     [?_assertEqual({Allowed, false}, {Allowed, allowed(~"https://example.com", Req, Allowed)})
      || Allowed <- [same_hosts, ~"https://example.com", [a], [same_host], [1.5], [[a]], #{}, {same_host},
-                    [~"https://other.example" | ~"https://another.example"], 443]] ++
-        [?_assert(allowed(~"https://example.com", Req, [a, ~"https://example.com" | b]))].
+                    nova_test_helper:improper_list([~"https://other.example"], ~"https://another.example"), 443]] ++
+        [?_assert(allowed(~"https://example.com", Req,
+                          nova_test_helper:improper_list([a, ~"https://example.com"], b)))].
