@@ -251,6 +251,34 @@ of `{Module, Function}` in Nova.
   Use `override_secure` to replace a callback the application declares; see
   the [multi-app guide](multi-app.md#security-of-a-mounted-application).
 
+- **A websocket upgrade the browser says is from elsewhere is refused.**
+  `nova_ws_origin_plugin` reads `Sec-Fetch-Site`: when the header is there
+  and is neither `same-origin` nor `none`, the upgrade is answered `403`
+  unless its `Origin` is in a list of `trusted_origins`, or the origins are
+  `any`. Without the header the `Origin` decides as before, and a client that
+  sends neither is let through as before. Behind a proxy that terminates TLS,
+  list the `https` origins of the site in `trusted_origins`: not every
+  browser sends the header with a websocket upgrade.
+
+- **A form read for a CSRF token behind a security callback is noticed.** A
+  route group with a security callback that lists `nova_csrf_plugin` and
+  `nova_request_plugin` with `read_urlencoded_body` logs a notice once
+  (`notice => form_behind_security`). `security_reads_body => false` in the
+  route group ends it.
+
+- **`security_reads_body => false` answers for the callback of its own route
+  group.** In the routes of a mounted application it no longer ends the
+  warning for the `secure` or `override_secure` of the `nova_apps` entry the
+  application is mounted with, nor for the `security` of a route group that
+  lists it.
+
+- **A `secret_key_base` that plainly is not random stops the boot.** One with
+  fewer than 8 different bytes (a letter or a word repeated), an example out
+  of the documentation, or a `${VARIABLE}` that was not filled in is refused
+  with `{invalid_setting, secret_key_base, redacted}`. Make one with
+  `base64:encode(crypto:strong_rand_bytes(48))` or `openssl rand -base64 48`.
+
+### Sessions
 ### Sessions
 
 - **The session cookie is issued lazily.** Nova used to set a `session_id`
@@ -292,4 +320,23 @@ of `{Module, Function}` in Nova.
 
 - **A session manager without `session_exists/1` gets a warning at boot.**
 
-- Use `nova_session:renew/1` at sign-in.
+- **Sign a user in with `nova_session:sign_in/3`.** It moves the client to a
+  new session id, stores who signed in under it and returns the request that
+  carries the new id. With `secret_key_base` set, a session id is kept by the
+  first write, so a sign-in that only calls `set/3` signs in whoever holds
+  the id, also somebody who planted it. `renew/1` is the lower-level piece,
+  and `delete/1` signs out.
+
+- **A signed session id is exactly what Nova handed out.** The same bytes
+  written another way, with whitespace in the cookie value or other spare
+  bits in the last character, are not the id and are replaced. The masked
+  token of `nova_csrf_plugin` is held to the same rule.
+
+- **A session that was deleted is not brought back.** `nova_session_ets`
+  remembers the id of a deleted session for five minutes and stores nothing
+  under it in that time: `nova_session_ets:set_value/3` returns
+  `{error, session_ended}`, and a request that was on its way when its client
+  signed out writes to a session of its own. A session backend of your own
+  can do the same with the new optional callback `session_ended/1`. Code that
+  calls `nova_session_ets:delete_value/1` and then writes to the same id
+  directly gets the error.

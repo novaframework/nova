@@ -116,7 +116,18 @@ A route group that has a security callback and decodes a body behind it is warne
 
 `false` says the callback does not read what `nova_request_plugin` decodes, and ends the warning. `true` says that it does: the routes then only compile when `nova_request_plugin` is listed under `plugins_before_security`, and stop the boot with `{invalid_setting, security_reads_body, {requires, plugins_before_security}}` when it is not. Any other value stops it with `{invalid_setting, security_reads_body, Value}`.
 
-A route group that lists `nova_csrf_plugin` and reads a form with `read_urlencoded_body`, and no JSON, is not warned about: the form is read for the token. Set `security_reads_body => true` there when the callback reads `params` as well.
+A route group that lists `nova_csrf_plugin` and reads a form with `read_urlencoded_body`, and no JSON, is not warned about: the form is read for the token, and this is the setup the generators give. Its security callback finds no `params` either, and nothing shows whether it reads them, so such a group is told once with a notice instead, at the `notice` level and with `notice => form_behind_security` in the report. `security_reads_body => false` ends it, and `security_reads_body => true` is what to set there when the callback reads `params`:
+
+```erlang
+#{prefix => "/account",
+  security => fun my_auth:signed_in/1,
+  security_reads_body => false,
+  plugins => [{pre_request, nova_request_plugin, #{read_urlencoded_body => true}},
+              {pre_request, nova_csrf_plugin, #{}}],
+  routes => [...]}
+```
+
+`security_reads_body => false` is the word of the author of a route group about the callback the group declares as its `security`. It does not end the warning for a callback the routes are behind because of where their application is mounted: the `secure` or `override_secure` of the `nova_apps` entry, or the `security` of a route group that lists the application under `apps`. Somebody else wrote that callback, and the routes of the mounted application cannot answer for it. Such a route group is warned about as if it had said nothing. When the callback in front does read the body, list `nova_request_plugin` under `plugins_before_security`, in the route group or in the `nova` environment.
 
 A websocket route runs its `pre_request` plugins on the upgrade request. For the time after the upgrade it has the phases `pre_ws_request` and `post_ws_request`, which run around every callback of the controller, and `post_ws_connection`, which runs once when the connection goes away: after `terminate/3` if the controller exports it, and also when it does not or when it crashes. `post_ws_connection` does not run for an upgrade that was refused. See the `nova_websocket` documentation.
 
