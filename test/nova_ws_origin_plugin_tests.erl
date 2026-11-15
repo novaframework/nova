@@ -94,18 +94,10 @@ unparseable_upgrade_is_checked_test() ->
 any_origin_test() ->
     ?assertMatch({ok, _Req, undefined}, pre_request(http3_connect(#{~"origin" => ?EVIL}), #{allowed_origins => any})).
 
-allowed_origins_test_() ->
-    [[?_assertEqual(Value, nova_origin:allowed(Value))
-      || Value <- [same_host, same_origin, any, [], [~"https://example.com"]]],
-     ?_assertEqual([~"https://example.com", ~"https://other.example.com"],
-                   nova_origin:allowed([~"https://example.com", "https://other.example.com"])),
-     [?_assertThrow({error, {invalid_allowed_origins, Value}}, nova_origin:allowed(Value))
-      || Value <- [none, true, ~"https://example.com", [same_host], [[same_host]]]]].
-
 plugin_without_origins_of_its_own_test_() ->
     {setup,
-     fun() -> application:set_env(nova, allowed_origins, [~"https://only.example.com"]) end,
-     fun(_) -> application:unset_env(nova, allowed_origins) end,
+     fun() -> nova_test_settings:set(allowed_origins, [~"https://only.example.com"]) end,
+     fun(_) -> nova_test_settings:unset(allowed_origins) end,
      [?_assertMatch({stop, {reply, 403, _Body}, _Req, undefined},
                     pre_request(http3_connect(#{~"origin" => ~"https://example.com"}), #{})),
       ?_assertMatch({ok, #{nova_ws_origin := decided}, undefined},

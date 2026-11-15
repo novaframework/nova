@@ -1,51 +1,11 @@
 -module(nova_origin).
 -moduledoc false.
 
-%%% The origins a browser may call from, which is what `allowed_origins` of
-%%% the nova environment says, and what nova_ws_origin_plugin and
-%%% nova_csrf_plugin take as an option of the same name.
+%%% Whether a browser may call from an origin, by what `allowed_origins` of
+%%% the nova environment says, or the option of the same name that
+%%% nova_ws_origin_plugin and nova_csrf_plugin take.
 
--export([configured/0, allowed/1, is_allowed/3]).
-
--include_lib("kernel/include/logger.hrl").
-
--type allowed() :: same_host | same_origin | any | [iodata()].
--export_type([allowed/0]).
-
--spec configured() -> allowed().
-configured() ->
-    allowed(application:get_env(nova, allowed_origins, same_host)).
-
-%% What allowed_origins may be, with the origins of a list as binaries.
--spec allowed(Value :: term()) -> same_host | same_origin | any | [binary()].
-allowed(same_host) ->
-    same_host;
-allowed(same_origin) ->
-    same_origin;
-allowed(any) ->
-    any;
-allowed(Value) ->
-    case is_list(Value) andalso origins(Value, []) of
-        {ok, Origins} ->
-            Origins;
-        _NotOrigins ->
-            ?LOG_ERROR(#{msg => ~"allowed_origins must be same_host, same_origin, any or a list of origins",
-                         value => Value}),
-            throw({error, {invalid_allowed_origins, Value}})
-    end.
-
-origins([], Origins) ->
-    {ok, lists:reverse(Origins)};
-origins([Origin | Rest], Origins) when is_binary(Origin) ->
-    origins(Rest, [Origin | Origins]);
-origins([Origin | Rest], Origins) when is_list(Origin) ->
-    Chars = [Char || Char <- Origin, is_integer(Char)],
-    case length(Chars) =:= length(Origin) andalso unicode:characters_to_binary(Chars) of
-        Binary when is_binary(Binary) -> origins(Rest, [Binary | Origins]);
-        _NotAString -> error
-    end;
-origins(_NotOrigins, _Origins) ->
-    error.
+-export([is_allowed/3]).
 
 %% A request without an Origin header is not from a page, or from a browser
 %% that says nothing about where it is, and is allowed. Every clause answers

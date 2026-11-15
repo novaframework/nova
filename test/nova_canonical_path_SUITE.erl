@@ -74,13 +74,13 @@ end_per_suite(_Config) ->
     nova_test_listener:stop().
 
 init_per_group(resolved, Config) ->
-    application:set_env(nova, non_canonical_paths, resolve),
+    nova_test_settings:set(non_canonical_paths, resolve),
     Config;
 init_per_group(refused, Config) ->
     Config.
 
 end_per_group(_Group, _Config) ->
-    application:unset_env(nova, non_canonical_paths).
+    nova_test_settings:unset(non_canonical_paths).
 
 pre_security(Req, _Env, _Options, State) ->
     nova_canonical_path_pages:seen(plugin),

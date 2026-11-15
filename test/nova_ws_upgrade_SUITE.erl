@@ -135,27 +135,27 @@ route_without_the_plugin_checks_the_host(Config) ->
                  nova_test_listener:websocket_handshake(?config(port, Config), "/plain/ws")).
 
 configured_origins_replace_the_default(Config) ->
-    application:set_env(nova, allowed_origins, [~"https://app.example.com"]),
+    nova_test_settings:set(allowed_origins, [~"https://app.example.com"]),
     try
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/plain/ws", "https://app.example.com")),
         ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/plain/ws", "http://localhost")),
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>,
                      nova_test_listener:websocket_handshake(?config(port, Config), "/plain/ws")),
-        application:set_env(nova, allowed_origins, same_origin),
+        nova_test_settings:set(allowed_origins, same_origin),
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/plain/ws", "http://localhost")),
         ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/plain/ws", "https://localhost"))
     after
-        application:unset_env(nova, allowed_origins)
+        nova_test_settings:unset(allowed_origins)
     end.
 
 any_origin_when_the_check_is_off(Config) ->
-    application:set_env(nova, allowed_origins, any),
+    nova_test_settings:set(allowed_origins, any),
     try
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/plain/ws", "https://evil.example")),
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/same-host/ws", "https://evil.example")),
         ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/same-origin/ws", "https://evil.example"))
     after
-        application:unset_env(nova, allowed_origins)
+        nova_test_settings:unset(allowed_origins)
     end.
 
 %% What the plugin of a route group accepts is not checked again against
@@ -164,13 +164,13 @@ any_origin_when_the_check_is_off(Config) ->
 plugin_of_the_route_decides_alone(Config) ->
     ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/open/ws", "https://evil.example")),
     ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/listed/ws", "https://app.example.com")),
-    application:set_env(nova, allowed_origins, [~"https://only.example.com"]),
+    nova_test_settings:set(allowed_origins, [~"https://only.example.com"]),
     try
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/same-origin/ws", "http://localhost")),
         ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/same-host/ws", "http://localhost")),
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/same-host/ws", "https://only.example.com"))
     after
-        application:unset_env(nova, allowed_origins)
+        nova_test_settings:unset(allowed_origins)
     end.
 
 %% The requests are sent with `host: localhost`, to a listener without TLS.

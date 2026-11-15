@@ -468,8 +468,9 @@ plugins_before_security_test_() ->
      ?_assertEqual(all, nova_router:plugins_before_security(#{plugins_before_security => all}, "router.erl")),
      ?_assertEqual([a_plugin], nova_router:plugins_before_security(#{plugins_before_security => [a_plugin]},
                                                                    "router.erl")),
-     ?_assertThrow({error, {invalid_plugins_before_security, none}},
-                   nova_router:plugins_before_security(#{plugins_before_security => none}, "router.erl"))].
+     [?_assertThrow({error, {invalid_setting, plugins_before_security, Value}},
+                    nova_router:plugins_before_security(#{plugins_before_security => Value}, "router.erl"))
+      || Value <- [none, [~"a_plugin"], [a_plugin | another]]]].
 
 order(Before, After) ->
     #{before => Before, 'after' => After, secured => false}.

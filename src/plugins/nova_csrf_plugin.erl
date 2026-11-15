@@ -49,13 +49,10 @@ A request with neither header is let through: it is not from a browser, or from 
          plugin_info/0
         ]).
 
--export([tokens/0]).
-
 -include_lib("kernel/include/logger.hrl").
 
 -define(NONCE_BYTES, 16).
 -define(SIGNATURE_BYTES, 32).
--define(MIN_SECRET_BYTES, 32).
 
 -ifdef(TEST).
 -export([
@@ -71,62 +68,27 @@ A request with neither header is let through: it is not from a browser, or from 
 -doc false.
 -spec init() -> nova:state().
 init() ->
-    Unset = nova_config:get_env(csrf_secret, undefined) =:= undefined
-        andalso nova_config:get_env(csrf_token, undefined) =:= undefined,
+    Unset = nova_settings:value(csrf_token) =:= undefined andalso nova_settings:value(csrf_secret) =:= [],
     _ = Unset andalso
         ?LOG_NOTICE(#{msg => ~"csrf_secret is not set, so nova_csrf_plugin keeps its tokens in the session store and starts a session for every visitor. Set csrf_secret for signed tokens that store nothing, or csrf_token to session to say that this is intended",
                       key => csrf_secret, csrf_token => session}),
     #{}.
 
-%%--------------------------------------------------------------------
-%% How tokens are made, from csrf_token and csrf_secret: signed with the
-%% secrets, the first of which signs, or kept in the session. Raises for
-%% settings nothing can go by, which nova_router looks at when a listener
-%% starts. The secret is never part of what is raised or logged.
--doc false.
--spec tokens() -> {stateless, [binary(), ...]} | session.
+%% How tokens are made: signed with the secrets, the first of which signs,
+%% or kept in the session. Both settings were checked when Nova started.
+-spec tokens() -> {stateless, [binary()]} | session.
 tokens() ->
-    case {nova_config:get_env(csrf_token, undefined), secrets(nova_config:get_env(csrf_secret, undefined))} of
-        {undefined, []} ->
-            session;
-        {session, _Secrets} ->
-            session;
-        {stateless, []} ->
-            ?LOG_ERROR(#{msg => ~"csrf_token is stateless and csrf_secret is not set"}),
-            throw({error, csrf_secret_not_set});
-        {Unset, [_ | _] = Secrets} when Unset =:= undefined; Unset =:= stateless ->
-            {stateless, Secrets};
-        {Other, _Secrets} ->
-            ?LOG_ERROR(#{msg => ~"csrf_token must be stateless or session", value => Other}),
-            throw({error, {invalid_csrf_token, Other}})
+    case nova_settings:value(csrf_token) =/= session andalso secrets() of
+        [_ | _] = Secrets -> {stateless, Secrets};
+        _NoSecret -> session
     end.
 
-%% No clause may raise on what the setting holds: a reason that is raised
-%% carries the value, and ends up in the report of the boot that failed.
-secrets(undefined) ->
-    [];
-secrets(Secret) when is_binary(Secret) ->
-    secrets([Secret]);
-secrets(Secrets) ->
-    case is_list_of_secrets(Secrets) of
-        true -> Secrets;
-        false -> invalid_secret()
+-spec secrets() -> [binary()].
+secrets() ->
+    case nova_settings:value(csrf_secret) of
+        Secrets when is_list(Secrets) -> [Secret || Secret <- Secrets, is_binary(Secret)];
+        _NoSecrets -> []
     end.
-
-is_list_of_secrets([Secret]) ->
-    is_secret(Secret);
-is_list_of_secrets([Secret | Secrets]) ->
-    is_secret(Secret) andalso is_list_of_secrets(Secrets);
-is_list_of_secrets(_NotAList) ->
-    false.
-
-is_secret(Secret) ->
-    is_binary(Secret) andalso byte_size(Secret) >= ?MIN_SECRET_BYTES.
-
--spec invalid_secret() -> no_return().
-invalid_secret() ->
-    ?LOG_ERROR(#{msg => ~"csrf_secret must be a binary of at least 32 bytes, or a list of such"}),
-    throw({error, invalid_csrf_secret}).
 
 %%--------------------------------------------------------------------
 -doc "Stops a request that changes state and that the browser says another site sent with a 403, ahead of the security callback and before anything of its body is read.".
@@ -152,7 +114,7 @@ pre_security(Req = #{method := Method, path := Path}, _Env, Options, State) ->
 is_sent_by_the_site(Req, Options) ->
     Allowed = case Options of
                   #{allowed_origins := Origins} -> Origins;
-                  _ -> nova_origin:configured()
+                  _ -> nova_settings:value(allowed_origins)
               end,
     Origin = cowboy_req:header(~"origin", Req),
     case cowboy_req:header(~"sec-fetch-site", Req) of

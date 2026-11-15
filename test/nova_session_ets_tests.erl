@@ -67,10 +67,10 @@ expiry_test_() ->
 
 cap_test_() ->
     {foreach,
-     fun() -> application:set_env(nova, max_sessions, 10), setup() end,
+     fun() -> nova_test_settings:set(max_sessions, 10), setup() end,
      fun(Pid) ->
              cleanup(Pid),
-             application:unset_env(nova, max_sessions),
+             nova_test_settings:unset(max_sessions),
              application:unset_env(nova, session_max_age)
      end,
      [
@@ -86,7 +86,7 @@ cap_test_() ->
       fun provisional_write_leaves_a_session_kept/0,
       fun replicated_session_does_not_grow_the_table_past_the_cap/0,
       fun replicated_provisional_session_is_dropped_when_every_session_is_kept/0,
-      fun cap_that_holds_no_session_is_read_as_the_default/0
+      fun cap_is_the_one_nova_started_with/0
      ]}.
 
 provisional_test_() ->
@@ -151,7 +151,7 @@ expired_session_makes_room() ->
     ?assertEqual(2, ets:info(nova_session_ets_entries, size)).
 
 cap_can_be_turned_off() ->
-    application:set_env(nova, max_sessions, infinity),
+    nova_test_settings:set(max_sessions, infinity),
     ?assertEqual(ok, fill(25)).
 
 kept() ->
@@ -217,29 +217,12 @@ replicated_provisional_session_is_dropped_when_every_session_is_kept() ->
     ?assertNot(nova_session_ets:session_exists(~"visitor")),
     ?assertEqual(10, length(kept())).
 
-cap_that_holds_no_session_is_read_as_the_default() ->
-    [begin
-         application:set_env(nova, max_sessions, Value),
-         ?assertEqual(ok, nova_session_ets:set_value(integer_to_binary(erlang:unique_integer()), ~"k", ~"v"))
-     end || Value <- [0, -1, many]],
-    ?assertEqual(3, ets:info(nova_session_ets_entries, size)).
-
-unusable_cap_stops_the_store_test_() ->
-    {foreach,
-     fun() -> pg:start_link(nova_scope) end,
-     fun(_) -> application:unset_env(nova, max_sessions) end,
-     [?_assertEqual({error, {invalid_max_sessions, Value}}, started_with_cap(Value)) || Value <- [0, -1, many, 1.5]]
-     ++ [?_assertEqual(ok, started_with_cap(Value)) || Value <- [1, infinity]]}.
-
-started_with_cap(Value) ->
-    application:set_env(nova, max_sessions, Value),
-    Trapped = process_flag(trap_exit, true),
-    try nova_session_ets:start_link() of
-        {ok, Pid} -> gen_server:stop(Pid);
-        {error, Reason} -> {error, Reason}
-    after
-        process_flag(trap_exit, Trapped)
-    end.
+%% The setting is checked and kept when Nova starts. What is put in the
+%% environment later is not what the store goes by.
+cap_is_the_one_nova_started_with() ->
+    application:set_env(nova, max_sessions, 0),
+    fill(12),
+    ?assertEqual(10, ets:info(nova_session_ets_entries, size)).
 
 expires_in(SessionId) ->
     [Row] = ets:lookup(nova_session_ets_entries, SessionId),

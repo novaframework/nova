@@ -53,7 +53,7 @@ A route group that declares `plugins` uses only those and none of the global one
 pre_security(Req, _Env, Options, State) ->
     Allowed = case Options of
                   #{allowed_origins := Origins} -> Origins;
-                  _ -> nova_origin:configured()
+                  _ -> nova_settings:value(allowed_origins)
               end,
     case is_websocket_upgrade(Req) andalso not nova_origin:is_allowed(cowboy_req:header(~"origin", Req), Req, Allowed) of
         true -> {stop, {reply, 403, ~"Origin not allowed"}, Req, State};

@@ -122,17 +122,18 @@ init_per_group(session, Config) ->
 end_per_group(_Group, _Config) ->
     ok.
 
-%% The setting is read for every request, so a case can change it.
+%% The settings are read when Nova starts, which nova_test_settings does
+%% over for a case that changes one.
 init_per_testcase(_Case, Config) ->
     case proplists:get_value(csrf_secret, Config) of
         undefined -> ok;
-        Secret -> application:set_env(nova, csrf_secret, Secret)
+        Secret -> nova_test_settings:set(csrf_secret, Secret)
     end,
     Config.
 
 end_per_testcase(_Case, _Config) ->
-    application:unset_env(nova, allowed_origins),
-    application:unset_env(nova, csrf_secret).
+    nova_test_settings:unset(allowed_origins),
+    nova_test_settings:unset(csrf_secret).
 
 first_visit_starts_a_session_with_a_token(Config) ->
     {{"cookie", <<"session_id=", SessionId/binary>>}, Token} = session(Config),
@@ -277,17 +278,17 @@ token_that_decodes_short_is_refused_without_a_crash(Config) ->
 
 token_of_another_secret_is_refused(Config) ->
     {Cookie, Token} = session(Config),
-    application:set_env(nova, csrf_secret, ?OTHER_SECRET),
+    nova_test_settings:set(csrf_secret, ?OTHER_SECRET),
     ?assertMatch({403, _}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Token}], <<>>)).
 
 %% The first secret signs and every secret in the list is accepted, so a
 %% form that was open when the secret was changed can still be sent.
 token_of_the_previous_secret_is_accepted_while_it_is_listed(Config) ->
     {Cookie, Old} = session(Config),
-    application:set_env(nova, csrf_secret, [?OTHER_SECRET, ?SECRET]),
+    nova_test_settings:set(csrf_secret, [?OTHER_SECRET, ?SECRET]),
     ?assertEqual({200, ~"submitted"}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Old}], <<>>)),
     {200, New} = request(Config, "GET", "/csrf/token", [Cookie], <<>>),
-    application:set_env(nova, csrf_secret, ?OTHER_SECRET),
+    nova_test_settings:set(csrf_secret, ?OTHER_SECRET),
     ?assertEqual({200, ~"submitted"}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", New}], <<>>)),
     ?assertMatch({403, _}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Old}], <<>>)).
 
@@ -318,9 +319,9 @@ token_stays_good_while_the_session_is_written(Config) ->
 %% A form that was rendered while the tokens were kept in the session store
 %% holds the token of its session, which is still there to compare with.
 session_token_of_an_open_form_is_accepted(Config) ->
-    application:unset_env(nova, csrf_secret),
+    nova_test_settings:unset(csrf_secret),
     {Cookie, SessionToken} = session(Config),
-    application:set_env(nova, csrf_secret, ?SECRET),
+    nova_test_settings:set(csrf_secret, ?SECRET),
     [?assertEqual({200, ~"submitted"}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Token}], <<>>))
      || Token <- [SessionToken, unmasked(SessionToken)]],
     ?assertMatch({403, _}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", ~"wrong"}], <<>>)).
@@ -346,7 +347,7 @@ request_of_another_origin_is_refused(Config) ->
      || Origin <- ["https://evil.example", "http://localhost.evil.example", "null"]].
 
 request_of_a_listed_origin_is_accepted(Config) ->
-    application:set_env(nova, allowed_origins, [~"https://app.example.com"]),
+    nova_test_settings:set(allowed_origins, [~"https://app.example.com"]),
     [?assertEqual({Headers, {200, ~"submitted"}}, {Headers, submit(Config, Headers)})
      || Headers <- [[{"sec-fetch-site", "cross-site"}, {"origin", "https://app.example.com"}],
                     [{"sec-fetch-site", "same-site"}, {"origin", "https://app.example.com"}],
@@ -358,7 +359,7 @@ request_of_a_listed_origin_is_accepted(Config) ->
                     [{"origin", "http://localhost"}]]].
 
 any_origin_still_needs_the_token(Config) ->
-    application:set_env(nova, allowed_origins, any),
+    nova_test_settings:set(allowed_origins, any),
     Other = [{"sec-fetch-site", "cross-site"}, {"origin", "https://evil.example"}],
     ?assertEqual({200, ~"submitted"}, submit(Config, Other)),
     {Cookie, _Token} = session(Config),
@@ -373,7 +374,7 @@ origins_of_the_plugin_are_the_ones_that_count(Config) ->
               end,
     ?assertEqual({200, ~"submitted"}, Partner("https://partner.example.com")),
     ?assertMatch({403, _}, Partner("https://app.example.com")),
-    application:set_env(nova, allowed_origins, [~"https://app.example.com"]),
+    nova_test_settings:set(allowed_origins, [~"https://app.example.com"]),
     ?assertEqual({200, ~"submitted"}, Partner("https://partner.example.com")),
     ?assertMatch({403, _}, Partner("https://app.example.com")).
 

@@ -42,7 +42,7 @@ init(Req = #{method := _Method, plugins := Plugins}, State = #{module := Module}
 origin_allowed(#{nova_ws_origin := decided}) ->
     true;
 origin_allowed(Req) ->
-    nova_origin:is_allowed(cowboy_req:header(~"origin", Req), Req, nova_origin:configured()).
+    nova_origin:is_allowed(cowboy_req:header(~"origin", Req), Req, nova_settings:value(allowed_origins)).
 
 upgrade_ws(Module, Req, State, ControllerData) ->
     case Module:init(ControllerData) of

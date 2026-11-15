@@ -237,56 +237,22 @@ set_environment_is_not_mentioned(_Config) ->
      end || Environment <- [dev, prod]].
 
 unknown_non_canonical_paths_fails_the_boot(_Config) ->
-    application:set_env(nova, non_canonical_paths, allow),
-    try
-        ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
-                                                 {invalid_non_canonical_paths, allow}}}, _}}},
-                     nova_test_listener:try_start(#{})),
-        ?assertEqual(undefined, whereis(nova_sup))
-    after
-        application:unset_env(nova, non_canonical_paths)
-    end.
+    ?assertEqual({invalid_setting, non_canonical_paths, allow}, stopped_by([{non_canonical_paths, allow}])).
 
 unknown_allowed_origins_fails_the_boot(_Config) ->
-    [begin
-         application:set_env(nova, allowed_origins, Value),
-         try
-             ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
-                                                      {invalid_allowed_origins, Value}}}, _}}},
-                          nova_test_listener:try_start(#{})),
-             ?assertEqual(undefined, whereis(nova_sup))
-         after
-             application:unset_env(nova, allowed_origins),
-             nova_test_listener:stop()
-         end
-     end || Value <- [none, ~"https://example.com", [same_host]]].
+    [?assertEqual({invalid_setting, allowed_origins, Value}, stopped_by([{allowed_origins, Value}]))
+     || Value <- [none, ~"https://example.com", [same_host]]].
 
 session_store_for_no_session_fails_the_boot(_Config) ->
-    application:set_env(nova, max_sessions, 0),
-    try
-        ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, _Child, {invalid_max_sessions, 0}}}, _}}},
-                     nova_test_listener:try_start(#{})),
-        ?assertEqual(undefined, whereis(nova_sup))
-    after
-        application:unset_env(nova, max_sessions)
-    end.
+    ?assertEqual({invalid_setting, max_sessions, 0}, stopped_by([{max_sessions, 0}])).
 
 csrf_settings_nothing_can_go_by_fail_the_boot(_Config) ->
-    [begin
-         [application:set_env(nova, Key, Value) || {Key, Value} <- Settings],
-         try
-             ?assertMatch({Reason, {error, {nova, {{shutdown, {failed_to_start_child, nova_listener, Reason}}, _}}}},
-                          {Reason, nova_test_listener:try_start(#{})}),
-             ?assertEqual(undefined, whereis(nova_sup))
-         after
-             application:unset_env(nova, csrf_token),
-             application:unset_env(nova, csrf_secret),
-             nova_test_listener:stop()
-         end
-     end || {Settings, Reason} <- [{[{csrf_token, stateless}], csrf_secret_not_set},
-                                   {[{csrf_token, signed}], {invalid_csrf_token, signed}},
-                                   {[{csrf_secret, ~"short"}], invalid_csrf_secret},
-                                   {[{csrf_token, session}, {csrf_secret, [~"short"]}], invalid_csrf_secret}]].
+    [?assertEqual({Settings, Reason}, {Settings, stopped_by(Settings)})
+     || {Settings, Reason} <- [{[{csrf_token, stateless}], {invalid_setting, csrf_secret, not_set}},
+                               {[{csrf_token, signed}], {invalid_setting, csrf_token, signed}},
+                               {[{csrf_secret, ~"short"}], {invalid_setting, csrf_secret, redacted}},
+                               {[{csrf_token, session}, {csrf_secret, [~"short"]}],
+                                {invalid_setting, csrf_secret, redacted}}]].
 
 %% `[New | Old]` is what "put the new secret in front of the old one" looks
 %% like to somebody who writes it as a cons. Neither that nor any other value
@@ -298,8 +264,7 @@ csrf_secret_that_fails_the_boot_is_not_told(_Config) ->
          application:set_env(nova, csrf_secret, Value),
          try
              {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{}) end),
-             ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener, invalid_csrf_secret}}, _}}},
-                          Result),
+             ?assertMatch({error, {nova, {{{invalid_setting, csrf_secret, redacted}, _Stacktrace}, _}}}, Result),
              ?assertEqual(undefined, whereis(nova_sup)),
              Told = iolist_to_binary(io_lib:format("~0p", [{Result, Events}])),
              [?assertEqual({Secret, nomatch}, {Secret, binary:match(Told, Secret)}) || Secret <- [Old, New]]
@@ -345,6 +310,19 @@ plugins_of_an_earlier_run_are_forgotten(_Config) ->
     ok = nova_test_listener:stop(),
     _ = nova_test_listener:start(#{}),
     ?assertNot(lists:member(nova_plugin_once_pages, nova_router:plugins())).
+
+%% What a boot with Settings in the nova environment is stopped with, which
+%% is before anything is started.
+stopped_by(Settings) ->
+    [application:set_env(nova, Key, Value) || {Key, Value} <- Settings],
+    try
+        {error, {nova, {{Reason, _Stacktrace}, _Start}}} = nova_test_listener:try_start(#{}),
+        undefined = whereis(nova_sup),
+        Reason
+    after
+        [application:unset_env(nova, Key) || {Key, _Value} <- Settings],
+        nova_test_listener:stop()
+    end.
 
 environment_notices(Events) ->
     [Report || {_Level, {report, #{read_as := _} = Report}} <- Events].

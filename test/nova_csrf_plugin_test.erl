@@ -293,80 +293,14 @@ masked_token_is_accepted_test() ->
         cleanup_meck([cowboy_req, nova_session])
     end.
 
-%%====================================================================
-%% csrf_token and csrf_secret
-%%====================================================================
-
 -define(SECRET, ~"a secret of thirty-two bytes or more, for the tests").
-
-tokens_test_() ->
-    Settings = fun(Token, Secret) ->
-                       fun() ->
-                               [application:set_env(nova, Key, Value)
-                                || {Key, Value} <- [{csrf_token, Token}, {csrf_secret, Secret}], Value =/= unset],
-                               try nova_csrf_plugin:tokens()
-                               catch throw:Thrown -> Thrown
-                               after
-                                   application:unset_env(nova, csrf_token),
-                                   application:unset_env(nova, csrf_secret)
-                               end
-                       end
-               end,
-    Short = binary:copy(~"s", 31),
-    [{lists:flatten(io_lib:format("~0p with ~0p", [Token, Secret])), ?_assertEqual(Expected, (Settings(Token, Secret))())}
-     || {Token, Secret, Expected} <- [{unset, unset, session},
-                                      {session, unset, session},
-                                      {session, ?SECRET, session},
-                                      {unset, ?SECRET, {stateless, [?SECRET]}},
-                                      {stateless, ?SECRET, {stateless, [?SECRET]}},
-                                      {stateless, [?SECRET, <<?SECRET/binary, "2">>],
-                                       {stateless, [?SECRET, <<?SECRET/binary, "2">>]}},
-                                      {stateless, unset, {error, csrf_secret_not_set}},
-                                      {signed, ?SECRET, {error, {invalid_csrf_token, signed}}},
-                                      {unset, Short, {error, invalid_csrf_secret}},
-                                      {unset, [?SECRET, Short], {error, invalid_csrf_secret}},
-                                      {unset, [], {error, invalid_csrf_secret}},
-                                      {unset, "a string of thirty-two characters or more", {error, invalid_csrf_secret}},
-                                      {session, Short, {error, invalid_csrf_secret}}]].
-
-%% A value that is not a secret, or not a list of them, is refused whatever
-%% it is, and what it holds is in nothing that is raised or logged.
-secret_that_cannot_be_used_is_not_told_test_() ->
-    Old = ~"the-secret-in-use-of-32-bytes-or-more",
-    New = ~"the-secret-to-come-of-32-bytes-or-more",
-    [{lists:flatten(io_lib:format("~0p", [Shape])),
-      fun() ->
-              application:set_env(nova, csrf_secret, Value),
-              try
-                  {Raised, Events} = nova_test_log:collect(fun() ->
-                                                                   try nova_csrf_plugin:tokens()
-                                                                   catch Class:Reason:Stacktrace ->
-                                                                           {Class, Reason, Stacktrace}
-                                                                   end
-                                                           end),
-                  ?assertMatch({throw, {error, invalid_csrf_secret}, _}, Raised),
-                  Told = iolist_to_binary(io_lib:format("~0p", [{Raised, Events}])),
-                  [?assertEqual({Secret, nomatch}, {Secret, binary:match(Told, Secret)}) || Secret <- [Old, New]]
-              after
-                  application:unset_env(nova, csrf_secret)
-              end
-      end}
-     || {Shape, Value} <- [{too_short, binary:part(Old, 0, 31)},
-                           {improper_list, [New | Old]},
-                           {improper_tail, [New, Old | New]},
-                           {nested_list, [[New, Old]]},
-                           {pair, {New, Old}},
-                           {map, #{New => Old}},
-                           {string, binary_to_list(Old)},
-                           {one_too_short, [New, binary:part(Old, 0, 31)]},
-                           {empty_list, []}]].
 
 %% base64 skips whitespace, so 64 characters can hold fewer bytes than a
 %% nonce and its signature are.
 signed_token_that_decodes_short_is_refused_test_() ->
     {setup,
-     fun() -> application:set_env(nova, csrf_secret, ?SECRET) end,
-     fun(_) -> application:unset_env(nova, csrf_secret) end,
+     fun() -> nova_test_settings:set(csrf_secret, ?SECRET) end,
+     fun(_) -> nova_test_settings:unset(csrf_secret) end,
      [{Name, ?_assertMatch({stop, {reply, 403, _, _}, _, _}, submitted_with(Token))}
       || {Name, Token} <- [{"spaces inside", <<(binary:copy(~"A", 10))/binary, (binary:copy(~" ", 44))/binary,
                                               (binary:copy(~"A", 10))/binary>>},

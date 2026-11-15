@@ -146,9 +146,6 @@ compile(Apps, DispatchKey) ->
 compile_fresh(Apps, DispatchKey) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
     StorageBackend = storage_backend(),
-    _ = non_canonical_paths(),
-    _ = nova_origin:configured(),
-    _ = nova_csrf_plugin:tokens(),
     StorageBackend:put(apps_key(DispatchKey), []),
     Dispatch = compile(Apps, nova_routing_trie:new(#{strict => UseStrict}),
                        #{dispatch_key => DispatchKey}),
@@ -164,8 +161,7 @@ execute(Req0 = #{path := Path}, Env) ->
     %% nova_session only tells nova_stream_h about session changes made by the
     %% process serving the request.
     Req = Req0#{nova_dispatch_key => DispatchKey, nova_session_owner => self()},
-    case application:get_env(nova, non_canonical_paths, reject) =:= resolve
-        orelse nova_routing_trie:is_canonical(Path) of
+    case nova_settings:value(non_canonical_paths) =:= resolve orelse nova_routing_trie:is_canonical(Path) of
         true ->
             route(Req, Env, StorageBackend:get(DispatchKey));
         false ->
@@ -1070,31 +1066,19 @@ is_plugin_of_nova(PluginName) ->
     _ = application:load(nova),
     application:get_application(PluginName) =:= {ok, nova}.
 
-non_canonical_paths() ->
-    case application:get_env(nova, non_canonical_paths, reject) of
-        reject ->
-            reject;
-        resolve ->
-            resolve;
-        Other ->
-            ?LOG_ERROR(#{msg => ~"non_canonical_paths must be reject or resolve", value => Other}),
-            throw({error, {invalid_non_canonical_paths, Other}})
-    end.
-
-plugins_before_security(RouteInfo, RouterFile) ->
-    case maps:get(plugins_before_security, RouteInfo, application:get_env(nova, plugins_before_security, [])) of
-        all ->
-            all;
-        Modules ->
-            case is_list(Modules) andalso lists:all(fun erlang:is_atom/1, Modules) of
-                true ->
-                    Modules;
-                false ->
-                    ?LOG_ERROR(#{msg => ~"plugins_before_security must be all or a list of plugin modules",
-                                 value => Modules, router_file => RouterFile}),
-                    throw({error, {invalid_plugins_before_security, Modules}})
-            end
-    end.
+%% The list of a route group is checked here, when its routes are compiled,
+%% by the rule the one of the nova environment was checked with at the boot.
+plugins_before_security(#{plugins_before_security := Value}, RouterFile) ->
+    case nova_settings:checked(plugins_before_security, Value) of
+        {ok, Modules} ->
+            Modules;
+        {error, Reason} ->
+            ?LOG_ERROR(#{msg => nova_settings:expected(plugins_before_security),
+                         setting => plugins_before_security, value => Reason, router_file => RouterFile}),
+            throw({error, {invalid_setting, plugins_before_security, Reason}})
+    end;
+plugins_before_security(_RouteInfo, _RouterFile) ->
+    nova_settings:value(plugins_before_security).
 
 plugins_after_security(RouteInfo, RouterFile) ->
     Modules = maps:get(plugins_after_security, RouteInfo,
