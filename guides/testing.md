@@ -131,6 +131,9 @@ Notes:
 * To post a form that `nova_csrf_plugin` protects, request the page first.
   Send the `csrf_token` of that page back in the `x-csrf-token` header,
   together with the session cookie of the same response.
+* A sign-in with `nova_session:sign_in/3` answers with a new session cookie.
+  Send that one from then on, and request a page again for a `csrf_token`:
+  the token of before the sign-in is refused.
 * Stop your application and `nova` in `end_per_suite/1`, as above, so the
   listener is gone before the next suite starts its own.
 
@@ -148,9 +151,12 @@ with helpers for tests of Nova applications.
   `403`, and so does one with the token and `sec-fetch-site: cross-site`.
 * Each route group whose security callback reads `json` or `params`: the
   callback finds them, which needs the plugin under
-  `plugins_before_security`.
+  `plugins_before_security`. `security_reads_body => true` in the group
+  makes the boot fail when it is not.
+* The sign-in: the session cookie of the response is another one than the
+  request sent, and the old one no longer reaches the session.
 * Each websocket route: an upgrade with the `origin` of another site gets a
-  `403`.
+  `403`, and so does one with `sec-fetch-site: cross-site`.
 * Each status page of your own: `404` for an unknown path, `500` for a
   controller that crashes.
 * `rebar3 nova audit --env prod --strict` in CI, to catch a route group that
