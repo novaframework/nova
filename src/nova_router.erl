@@ -325,7 +325,7 @@ add_routes(App) ->
     add_routes(App, get_routes(router_module(App), Env)).
 
 %%--------------------------------------------------------------------
--doc "Add routes to the dispatch-table for the given app. The routes can be either a list of maps or a map. It use the same structure as the routes-callback in the router-module.".
+-doc "Add routes to the dispatch-table for the given app. The routes can be either a list of maps or a map. It use the same structure as the routes-callback in the router-module. Throws `{error, {misplaced_security, App, Key, Path}}` for routes with a security callback under a key that is not read: `secure` on a route group, or `security` or `secure` in the options of a route.".
 -spec add_routes(App :: atom(), Routes :: [map() | [map()]] | map()) -> ok.
 add_routes(App, Routes) ->
     add_routes(App, Routes, ?NOVA_DISPATCH).
