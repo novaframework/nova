@@ -468,13 +468,12 @@ set_cookie(Value, Opts, Req) ->
 
 warn_ambiguous_cookie(Name) ->
     Key = {?MODULE, ambiguous_cookie_warned},
-    case persistent_term:get(Key, false) of
+    case nova_once:first(Key) of
         true ->
-            ok;
-        false ->
-            persistent_term:put(Key, true),
             ?LOG_WARNING(#{msg => ~"Request carried more than one session cookie, treated as no session. A cookie with the same name is probably set for a parent domain or path; a __Host- session_cookie_name prevents that",
-                           cookie => Name})
+                           cookie => Name});
+        false ->
+            ok
     end.
 
 %% Tells nova_stream_h which session id the response has to hand out. Only

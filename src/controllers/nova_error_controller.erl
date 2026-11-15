@@ -128,12 +128,11 @@ stacktrace(_CrashInfo) ->
 
 format_stacktrace(not_enabled) ->
     Key = {?MODULE, stacktrace_hint},
-    case persistent_term:get(Key, false) of
+    case nova_once:first(Key) of
         true ->
-            ok;
+            ?LOG_WARNING(#{msg => ~"Stacktraces are disabled. Call nova:use_stacktrace(true) or set {use_stacktrace, true} for nova in sys.config to have them"});
         false ->
-            persistent_term:put(Key, true),
-            ?LOG_WARNING(#{msg => ~"Stacktraces are disabled. Call nova:use_stacktrace(true) or set {use_stacktrace, true} for nova in sys.config to have them"})
+            ok
     end,
     [];
 format_stacktrace([]) -> [];

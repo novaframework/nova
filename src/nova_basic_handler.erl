@@ -68,13 +68,12 @@ handle_json({json, JSON}, Callback, Req = #{method := Method}) ->
 deprecated_json_order(Callback) ->
     {module, Module} = erlang:fun_info(Callback, module),
     Key = {?MODULE, json_order_warned, Module},
-    case persistent_term:get(Key, false) of
+    case nova_once:first(Key) of
         true ->
-            ok;
-        false ->
-            persistent_term:put(Key, true),
             ?LOG_WARNING(#{msg => ~"{json, Status, Headers, Req, JSON} is deprecated, return {json, Status, Headers, JSON, Req}",
-                           controller => Module})
+                           controller => Module});
+        false ->
+            ok
     end.
 
 

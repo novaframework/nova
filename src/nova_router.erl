@@ -926,13 +926,12 @@ resolve_plugins(Strategy, RouteInfo, RouterFile) ->
 %% compiled again does not log again.
 warn_route_plugin_strategy(App, #{plugin_strategy := Strategy}, RouterFile) ->
     Key = {?MODULE, route_plugin_strategy_warned, App},
-    case persistent_term:get(Key, false) of
+    case nova_once:first(Key) of
         true ->
-            ok;
-        false ->
-            persistent_term:put(Key, true),
             ?LOG_WARNING(#{msg => ~"plugin_strategy on a route entry is ignored. Set it in the application's nova_apps options instead: {nova_apps, [{App, #{plugin_strategy => Strategy}}]}",
-                           app => App, plugin_strategy => Strategy, router_file => RouterFile})
+                           app => App, plugin_strategy => Strategy, router_file => RouterFile});
+        false ->
+            ok
     end;
 warn_route_plugin_strategy(_App, _RouteInfo, _RouterFile) ->
     ok.

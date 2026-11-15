@@ -184,13 +184,12 @@ with_cookie(Value, Opts, Headers) ->
 
 log_invalid_cookie(Name) ->
     Key = {?MODULE, invalid_cookie_logged, Name},
-    case persistent_term:get(Key, false) of
+    case nova_once:first(Key) of
         true ->
-            ok;
-        false ->
-            persistent_term:put(Key, true),
             ?LOG_ERROR(#{msg => ~"Session cookie not set: session_cookie_name or session_cookie_opts is invalid",
-                         cookie => Name})
+                         cookie => Name});
+        false ->
+            ok
     end.
 
 add_cookie(Cookie, Headers) ->

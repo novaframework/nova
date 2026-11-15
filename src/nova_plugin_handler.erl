@@ -204,12 +204,11 @@ deprecated_stop(Callback) ->
 warn_once(Callback, Tag, Msg) ->
     Module = plugin_module(Callback),
     Key = {?MODULE, Tag, Module},
-    case persistent_term:get(Key, false) of
+    case nova_once:first(Key) of
         true ->
-            ok;
+            ?LOG_WARNING(#{msg => Msg, plugin => Module});
         false ->
-            persistent_term:put(Key, true),
-            ?LOG_WARNING(#{msg => Msg, plugin => Module})
+            ok
     end.
 
 plugin_module(Callback) ->

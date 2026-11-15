@@ -176,23 +176,21 @@ not_found({RootSegments, _DirSegments}) ->
 %% so it is logged the first time only.
 unusable_root(Directory, Reason) ->
     Key = {?MODULE, unusable_root, Directory},
-    case persistent_term:get(Key, false) of
+    case nova_once:first(Key) of
         true ->
-            ok;
+            ?LOG_ERROR(#{msg => ~"Static directory cannot be served", directory => Directory, reason => Reason});
         false ->
-            persistent_term:put(Key, true),
-            ?LOG_ERROR(#{msg => ~"Static directory cannot be served", directory => Directory, reason => Reason})
+            ok
     end.
 
 %% As is a static file that is gone or cannot be read.
 unusable_file(File, Reason) ->
     Key = {?MODULE, unusable_file, File},
-    case persistent_term:get(Key, false) of
+    case nova_once:first(Key) of
         true ->
-            ok;
+            ?LOG_ERROR(#{msg => ~"Static file cannot be served", file => File, reason => Reason});
         false ->
-            persistent_term:put(Key, true),
-            ?LOG_ERROR(#{msg => ~"Static file cannot be served", file => File, reason => Reason})
+            ok
     end.
 
 
