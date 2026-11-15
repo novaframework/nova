@@ -17,7 +17,8 @@ The table holds at most `max_sessions` sessions, 1 000 000 by default. Once
 it is full, a write that starts a new session drops another one to make room:
 an expired session first, then a provisional one, then the session nearest its
 expiry. Sessions that exist are still written. Set
-`{nova, [{max_sessions, infinity}]}` to turn the limit off.
+`{nova, [{max_sessions, infinity}]}` to turn the limit off. The store does not
+start with a value that is neither `infinity` nor an integer above 0.
 
 A provisional session is one that only holds what was written with
 `nova_session:set_provisional/3`, which is how `nova_csrf_plugin` stores the
@@ -158,11 +159,20 @@ has_room(SessionId, Class) ->
                 orelse gen_server:call(?SERVER, {make_room, Class, Max})
     end.
 
+%% The setting is read at every write, so it can be changed while the node
+%% runs. A value the store would not have started with is read as the
+%% default.
 max_sessions() ->
+    case configured_max_sessions() of
+        {ok, Max} -> Max;
+        {error, _Value} -> ?DEFAULT_MAX_SESSIONS
+    end.
+
+configured_max_sessions() ->
     case nova_config:get_env(max_sessions, ?DEFAULT_MAX_SESSIONS) of
-        infinity -> infinity;
-        Max when is_integer(Max), Max >= 0 -> Max;
-        _ -> ?DEFAULT_MAX_SESSIONS
+        infinity -> {ok, infinity};
+        Max when is_integer(Max), Max > 0 -> {ok, Max};
+        Value -> {error, Value}
     end.
 
 %%%===================================================================
@@ -178,12 +188,18 @@ max_sessions() ->
                               {stop, Reason :: term()} |
                               ignore.
 init([]) ->
-    process_flag(trap_exit, true),
-    ets:new(?TABLE, [set, named_table, {read_concurrency, true}]),
-    ets:new(?EXPIRY, [ordered_set, named_table]),
-    nova_pubsub:join(?CHANNEL),
-    schedule_sweep(),
-    {ok, #state{}}.
+    case configured_max_sessions() of
+        {ok, _Max} ->
+            process_flag(trap_exit, true),
+            ets:new(?TABLE, [set, named_table, {read_concurrency, true}]),
+            ets:new(?EXPIRY, [ordered_set, named_table]),
+            nova_pubsub:join(?CHANNEL),
+            schedule_sweep(),
+            {ok, #state{}};
+        {error, Value} ->
+            ?LOG_ERROR(#{msg => ~"max_sessions must be infinity or an integer above 0", value => Value}),
+            {stop, {invalid_max_sessions, Value}}
+    end.
 
 %%--------------------------------------------------------------------
 %% Handling call messages

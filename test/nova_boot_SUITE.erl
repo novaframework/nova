@@ -21,6 +21,7 @@
          set_environment_is_not_mentioned/1,
          unknown_non_canonical_paths_fails_the_boot/1,
          unknown_ws_allowed_origins_fails_the_boot/1,
+         session_store_for_no_session_fails_the_boot/1,
          plugins_of_an_earlier_run_are_forgotten/1
         ]).
 
@@ -45,6 +46,7 @@ all() ->
      set_environment_is_not_mentioned,
      unknown_non_canonical_paths_fails_the_boot,
      unknown_ws_allowed_origins_fails_the_boot,
+     session_store_for_no_session_fails_the_boot,
      plugins_of_an_earlier_run_are_forgotten
     ].
 
@@ -252,6 +254,16 @@ unknown_ws_allowed_origins_fails_the_boot(_Config) ->
              nova_test_listener:stop()
          end
      end || Value <- [none, ~"https://example.com", [same_host]]].
+
+session_store_for_no_session_fails_the_boot(_Config) ->
+    application:set_env(nova, max_sessions, 0),
+    try
+        ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, _Child, {invalid_max_sessions, 0}}}, _}}},
+                     nova_test_listener:try_start(#{})),
+        ?assertEqual(undefined, whereis(nova_sup))
+    after
+        application:unset_env(nova, max_sessions)
+    end.
 
 %% nova_plugin_manager starts every plugin the router has listed, also after
 %% a restart, so the list must not carry over from a run with other routes.

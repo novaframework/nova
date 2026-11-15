@@ -86,7 +86,7 @@ cap_test_() ->
       fun provisional_write_leaves_a_session_kept/0,
       fun replicated_session_does_not_grow_the_table_past_the_cap/0,
       fun replicated_provisional_session_is_dropped_when_every_session_is_kept/0,
-      fun no_session_fits_a_cap_of_zero/0
+      fun cap_that_holds_no_session_is_read_as_the_default/0
      ]}.
 
 provisional_test_() ->
@@ -217,11 +217,29 @@ replicated_provisional_session_is_dropped_when_every_session_is_kept() ->
     ?assertNot(nova_session_ets:session_exists(~"visitor")),
     ?assertEqual(10, length(kept())).
 
-no_session_fits_a_cap_of_zero() ->
-    application:set_env(nova, max_sessions, 0),
-    ?assertEqual({error, session_store_full}, nova_session_ets:set_value(~"s", ~"k", ~"v")),
-    ?assertEqual({error, session_store_full}, nova_session_ets:set_provisional_value(~"s", ~"k", ~"v")),
-    ?assertEqual(0, ets:info(nova_session_ets_entries, size)).
+cap_that_holds_no_session_is_read_as_the_default() ->
+    [begin
+         application:set_env(nova, max_sessions, Value),
+         ?assertEqual(ok, nova_session_ets:set_value(integer_to_binary(erlang:unique_integer()), ~"k", ~"v"))
+     end || Value <- [0, -1, many]],
+    ?assertEqual(3, ets:info(nova_session_ets_entries, size)).
+
+unusable_cap_stops_the_store_test_() ->
+    {foreach,
+     fun() -> pg:start_link(nova_scope) end,
+     fun(_) -> application:unset_env(nova, max_sessions) end,
+     [?_assertEqual({error, {invalid_max_sessions, Value}}, started_with_cap(Value)) || Value <- [0, -1, many, 1.5]]
+     ++ [?_assertEqual(ok, started_with_cap(Value)) || Value <- [1, infinity]]}.
+
+started_with_cap(Value) ->
+    application:set_env(nova, max_sessions, Value),
+    Trapped = process_flag(trap_exit, true),
+    try nova_session_ets:start_link() of
+        {ok, Pid} -> gen_server:stop(Pid);
+        {error, Reason} -> {error, Reason}
+    after
+        process_flag(trap_exit, Trapped)
+    end.
 
 expires_in(SessionId) ->
     [Row] = ets:lookup(nova_session_ets_entries, SessionId),
