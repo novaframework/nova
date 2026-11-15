@@ -25,7 +25,7 @@ When a pre_request plugin stops the request, or the security function refuses it
 
 A plugin listed as `{pre_request, Module, Options}` takes part twice before the controller, with the same options:
 
-- `pre_security/4`, when the module has it, runs ahead of the security callback of the route, for every request to the route. It is for what has to happen whether or not the request is let in: answering a CORS preflight, which carries no credentials, giving the request its correlation id, turning a client away by address or rate. It must not read the request body.
+- `pre_security/4`, when the module has it, runs ahead of the security callback of the route, for every request to the route. It is for what has to happen whether or not the request is let in: answering a CORS preflight, which carries no credentials, giving the request its correlation id, turning a client away by address or rate. It must not read the request body. It is also all that runs ahead of the `405` for a CORS preflight to a route that does not take `OPTIONS`, of the plugins of the route for the method the preflight asks about.
 - `pre_request/4` runs once the security callback has let the request through, and at once on a route without one. Reading and decoding the body belongs here, so that nothing is read from a client that is refused.
 
 Earlier releases ran `pre_request/4` ahead of the security callback. Two lists, each in a route group or in the `nova` environment (the route group wins), change the order for the modules they name:

@@ -8,6 +8,9 @@
          upload_is_not_read_for_a_refused_request/1,
          refused_request_has_its_correlation_id_and_cors_headers/1,
          preflight_is_answered_ahead_of_security/1,
+         preflight_nothing_answers_runs_pre_security_alone/1,
+         options_that_is_no_preflight_runs_no_plugin/1,
+         preflight_to_a_route_that_takes_options_meets_its_security/1,
          query_string_is_parsed_ahead_of_security/1,
          pre_request_of_a_plugin_waits_for_security/1,
          pre_security_of_a_plugin_runs_ahead_of_security/1,
@@ -37,6 +40,9 @@ groups() ->
                                upload_is_not_read_for_a_refused_request,
                                refused_request_has_its_correlation_id_and_cors_headers,
                                preflight_is_answered_ahead_of_security,
+                               preflight_nothing_answers_runs_pre_security_alone,
+                               options_that_is_no_preflight_runs_no_plugin,
+                               preflight_to_a_route_that_takes_options_meets_its_security,
                                query_string_is_parsed_ahead_of_security,
                                pre_request_of_a_plugin_waits_for_security,
                                pre_security_of_a_plugin_runs_ahead_of_security,
@@ -59,6 +65,10 @@ init_per_group(route_group_option, Config) ->
                                  plugins_before_security => [nova_request_plugin]}),
               group("/all", #{plugins => plugins() ++ [Own(#{action => mark})],
                               plugins_before_security => all}),
+              group("/all-without-cors", #{plugins => [request(), Own(#{early => mark, action => mark})],
+                                           plugins_before_security => all}),
+              (group("/takes-options", #{plugins => [Own(#{early => mark})]}))
+              #{routes => [{"/echo", fun nova_security_order_pages:echo/1, #{methods => [post, options]}}]},
               group("/after", #{plugins => plugins() ++ [Own(#{early => mark})],
                                 plugins_after_security => [nova_correlation_plugin, nova_request_plugin,
                                                            nova_security_order_pages]}),
@@ -127,6 +137,36 @@ preflight_is_answered_ahead_of_security(Config) ->
     ?assertEqual(204, Status),
     ?assertEqual(~"https://app.example", maps:get(~"access-control-allow-origin", Headers)),
     ?assertEqual(~"authorization", maps:get(~"access-control-allow-headers", Headers)).
+
+%% The route does not take OPTIONS, so there is no security callback to wait
+%% for. What a route group lists to run ahead of its callback is not
+%% something to run where there is none: the body would be read for anybody.
+preflight_nothing_answers_runs_pre_security_alone(Config) ->
+    {Status, Headers, _Body} = preflight(Config, "/all-without-cors/echo", ~"{"),
+    ?assertEqual(405, Status),
+    ?assertEqual(~"ran", maps:get(~"x-early", Headers)),
+    ?assertNot(is_map_key(~"x-late", Headers)),
+    ?assertMatch({401, #{~"body" := true, ~"late" := true}},
+                 refused(Config, "/all-without-cors/echo", [?JSON], ~"{\"a\":1}")).
+
+options_that_is_no_preflight_runs_no_plugin(Config) ->
+    [begin
+         {Status, Headers, _Body} =
+             nova_test_listener:response(?config(port, Config), "OPTIONS", "/all-without-cors/echo", Sent, <<>>),
+         ?assertEqual({Sent, 405}, {Sent, Status}),
+         ?assertNot(is_map_key(~"x-early", Headers)),
+         ?assertNot(is_map_key(~"x-late", Headers))
+     end || Sent <- [[], [{"origin", "https://app.example"}], [{"access-control-request-method", "POST"}]]].
+
+preflight_to_a_route_that_takes_options_meets_its_security(Config) ->
+    {Status, Headers, _Body} = preflight(Config, "/takes-options/echo", <<>>),
+    ?assertEqual(401, Status),
+    ?assert(is_map_key(~"x-security-saw", Headers)).
+
+preflight(Config, Path, Body) ->
+    nova_test_listener:response(?config(port, Config), "OPTIONS", Path,
+                                [{"origin", "https://app.example"}, {"access-control-request-method", "POST"}, ?JSON],
+                                Body).
 
 %% Parsing it reads nothing from the client, and a websocket or a link can
 %% only carry its token there.

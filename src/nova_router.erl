@@ -763,7 +763,10 @@ put_route(Route, Req)     -> Req#{nova_route => Route}.
 %% with another method. A route that does not take OPTIONS still has to let
 %% the plugins of the route for that method answer, or the browser never
 %% sends the request. They run before the 405 page, which stays the answer
-%% when none of them stops the request.
+%% when none of them stops the request. Only pre_security/4 runs: no
+%% security callback is asked about a preflight, so pre_request/4 of a
+%% plugin the route group lists to run ahead of its callback would read
+%% the body for anybody.
 with_preflight_plugins(Req = #{method := ~"OPTIONS"}, Host, Path, Dispatch) ->
     case cowboy_req:header(~"origin", Req) =/= undefined andalso
         cowboy_req:header(~"access-control-request-method", Req) of
@@ -773,7 +776,10 @@ with_preflight_plugins(Req = #{method := ~"OPTIONS"}, Host, Path, Dispatch) ->
                     Req;
                 RoutePlugins ->
                     {_Route, Plugins} = take_route(RoutePlugins),
-                    Req#{plugins => proplists:delete(after_security, Plugins)}
+                    Ahead = [Entry || Entry = {Callback, _Options} <- proplists:get_value(pre_request, Plugins, []),
+                                      erlang:fun_info(Callback, name) =:= {name, pre_security}],
+                    Req#{plugins => lists:keystore(pre_request, 1, proplists:delete(after_security, Plugins),
+                                                   {pre_request, Ahead})}
             end;
         _ ->
             Req
