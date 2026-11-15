@@ -299,8 +299,11 @@ masked_token_is_accepted_test() ->
 %% nonce and its signature are.
 signed_token_that_decodes_short_is_refused_test_() ->
     {setup,
-     fun() -> nova_test_settings:set(csrf_secret, ?SECRET) end,
-     fun(_) -> nova_test_settings:unset(csrf_secret) end,
+     fun() ->
+             application:unset_env(nova, environment),
+             nova_test_settings:set(secret_key_base, ?SECRET)
+     end,
+     fun(_) -> nova_test_settings:unset(secret_key_base) end,
      [{Name, ?_assertMatch({stop, {reply, 403, _, _}, _, _}, submitted_with(Token))}
       || {Name, Token} <- [{"spaces inside", <<(binary:copy(~"A", 10))/binary, (binary:copy(~" ", 44))/binary,
                                               (binary:copy(~"A", 10))/binary>>},
@@ -313,7 +316,7 @@ signed_token_that_decodes_short_is_refused_test_() ->
                            {"not base64", binary:copy(~"!", 64)}]]}.
 
 submitted_with(Token) ->
-    Req = nova_test_helper:with_header(~"cookie", ~"session_id=the-id-of-a-client",
+    Req = nova_test_helper:with_header(~"cookie", ~"__Host-session_id=the-id-of-a-client",
                                        nova_test_helper:with_header(~"x-csrf-token", Token,
                                                                     nova_test_helper:mock_req(~"POST", ~"/submit"))),
     try nova_csrf_plugin:pre_request(Req, #{}, #{}, #{})

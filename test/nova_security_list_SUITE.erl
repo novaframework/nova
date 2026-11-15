@@ -1,5 +1,5 @@
 %%% A route with the `secure` of its mount and the `security` of its route
-%%% group, and a plugin listed under `plugins_after_security`: the plugin runs
+%%% group, and a plugin that has `pre_request/4` alone: the plugin runs
 %%% once, after both callbacks have allowed the request, and not at all for a
 %%% request one of them refuses or crashes on.
 -module(nova_security_list_SUITE).
@@ -11,7 +11,9 @@
          crash_of_either_callback_renders_the_500_page/1,
          websocket_plugin_runs_once_after_both_allow/1,
          websocket_is_refused_without_the_plugin/1,
-         websocket_gets_the_500_page_for_a_crash/1]).
+         websocket_gets_the_500_page_for_a_crash/1,
+         auth_data_of_the_callback_is_what_a_controller_gets/1,
+         auth_data_of_a_plugin_is_there_when_the_callback_returns_none/1]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
@@ -22,7 +24,9 @@ all() ->
      crash_of_either_callback_renders_the_500_page,
      websocket_plugin_runs_once_after_both_allow,
      websocket_is_refused_without_the_plugin,
-     websocket_gets_the_500_page_for_a_crash].
+     websocket_gets_the_500_page_for_a_crash,
+     auth_data_of_the_callback_is_what_a_controller_gets,
+     auth_data_of_a_plugin_is_there_when_the_callback_returns_none].
 
 init_per_suite(Config) ->
     Routes = [{"/", fun nova_secure_layers_pages:page/1, #{methods => [get]}},
@@ -32,7 +36,14 @@ init_per_suite(Config) ->
                mounted => [#{prefix => "/both",
                              security => fun nova_secure_layers_pages:group/1,
                              plugins => [{pre_request, nova_security_list_pages, #{}}],
-                             plugins_after_security => [nova_security_list_pages],
+                             routes => Routes},
+                           #{prefix => "/late",
+                             security => fun nova_secure_layers_pages:group/1,
+                             plugins => [{pre_request, nova_security_list_pages, #{late => late_plugin}}],
+                             routes => Routes},
+                           #{prefix => "/early",
+                             security => fun nova_secure_layers_pages:group/1,
+                             plugins => [{pre_request, nova_security_list_pages, #{early => early_plugin}}],
                              routes => Routes}]}),
     [{port, Port} | Config].
 
@@ -73,6 +84,36 @@ websocket_is_refused_without_the_plugin(Config) ->
 websocket_gets_the_500_page_for_a_crash(Config) ->
     ?assertEqual({500, [mount]}, handshake(Config, "/mounted/both/ws?mount=raise&group=allow")),
     ?assertEqual({500, [mount, group]}, handshake(Config, "/mounted/both/ws?mount=allow&group=raise")).
+
+%% `auth_data` is what the security callback returned for the request. A
+%% plugin cannot put something else in its place, ahead of the callback or
+%% behind it, and a websocket controller gets what an HTTP one gets, in its
+%% controller data and in the request of the upgrade.
+auth_data_of_the_callback_is_what_a_controller_gets(Config) ->
+    [begin
+         Path = Prefix ++ Target ++ "?mount=allow&group=data",
+         ?assertMatch({Path, {200, ~"group", _}}, {Path, get(Config, Path)})
+     end || Prefix <- ["/mounted/late", "/mounted/early"], Target <- ["/"]],
+    [begin
+         Path = Prefix ++ "/ws?mount=data&group=" ++ Group,
+         ?assertEqual({Path, [Expected, Expected]}, {Path, both(Config, Path)})
+     end || Prefix <- ["/mounted/late", "/mounted/early"],
+            {Group, Expected} <- [{"data", ~"group"}, {"allow", ~"mount"}]].
+
+auth_data_of_a_plugin_is_there_when_the_callback_returns_none(Config) ->
+    [begin
+         Http = Prefix ++ "/?mount=allow&group=allow",
+         ?assertMatch({Http, {200, Expected, _}}, {Http, get(Config, Http)}),
+         Socket = Prefix ++ "/ws?mount=allow&group=allow",
+         ?assertEqual({Socket, [Expected, Expected]}, {Socket, both(Config, Socket)})
+     end || {Prefix, Expected} <- [{"/mounted/late", ~"late_plugin"}, {"/mounted/early", ~"early_plugin"},
+                                   {"/mounted/both", ~"none"}]].
+
+%% What a websocket controller finds under `auth_data` in its controller
+%% data, and in the request of the upgrade.
+both(Config, Path) ->
+    Port = ?config(port, Config),
+    nova_test_listener:websocket_texts(Port, Path, ~"who", 1) ++ nova_test_listener:websocket_texts(Port, Path, ~"req", 1).
 
 get(Config, Path) ->
     {Status, _Headers, Body} = nova_test_listener:response(?config(port, Config), "GET", Path,

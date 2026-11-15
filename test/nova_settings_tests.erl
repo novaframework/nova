@@ -3,7 +3,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(SECRET, ~"a secret of thirty-two bytes or more, for the tests").
--define(KEYS, [allowed_origins, csrf_secret, csrf_token, max_sessions, non_canonical_paths,
+-define(KEYS, [trusted_origins, secret_key_base, csrf_token, max_sessions, non_canonical_paths,
                plugins_before_security]).
 
 %% The settings as a boot finds them with Env in the nova environment: the
@@ -21,7 +21,7 @@ booted_with(Env) ->
     end.
 
 defaults_test() ->
-    ?assertEqual(#{allowed_origins => same_host, csrf_secret => [], csrf_token => undefined,
+    ?assertEqual(#{trusted_origins => same_host, secret_key_base => [], csrf_token => undefined,
                    max_sessions => 1000000, non_canonical_paths => reject, plugins_before_security => []},
                  booted_with([])).
 
@@ -29,15 +29,16 @@ values_that_can_be_used_test_() ->
     [?_assertMatch({Key, Value, #{Key := Kept}}, {Key, Value, booted_with([{Key, Value}])})
      || {Key, Value, Kept} <- [{non_canonical_paths, reject, reject},
                                {non_canonical_paths, resolve, resolve},
-                               {allowed_origins, same_host, same_host},
-                               {allowed_origins, same_origin, same_origin},
-                               {allowed_origins, any, any},
-                               {allowed_origins, [], []},
-                               {allowed_origins, [~"https://example.com", "https://other.example.com"],
+                               {trusted_origins, same_host, same_host},
+                               {trusted_origins, same_origin, same_origin},
+                               {trusted_origins, any, any},
+                               {trusted_origins, [], []},
+                               {trusted_origins, [~"https://example.com", "https://other.example.com"],
                                 [~"https://example.com", ~"https://other.example.com"]},
                                {csrf_token, session, session},
-                               {csrf_secret, ?SECRET, [?SECRET]},
-                               {csrf_secret, [?SECRET, <<?SECRET/binary, "2">>], [?SECRET, <<?SECRET/binary, "2">>]},
+                               {secret_key_base, ?SECRET, [nova_secret:derived(?SECRET)]},
+                               {secret_key_base, [?SECRET, <<?SECRET/binary, "2">>],
+                                [nova_secret:derived(?SECRET), nova_secret:derived(<<?SECRET/binary, "2">>)]},
                                {max_sessions, 1, 1},
                                {max_sessions, infinity, infinity},
                                {plugins_before_security, all, all},
@@ -47,14 +48,14 @@ values_that_stop_the_boot_test_() ->
     [?_assertEqual({stopped, {invalid_setting, Key, Value}}, booted_with([{Key, Value}]))
      || {Key, Value} <- [{non_canonical_paths, allow},
                          {non_canonical_paths, true},
-                         {allowed_origins, none},
-                         {allowed_origins, true},
-                         {allowed_origins, ~"https://example.com"},
-                         {allowed_origins, [same_host]},
-                         {allowed_origins, [[same_host]]},
-                         {allowed_origins, nova_test_helper:improper_list([~"https://example.com"],
+                         {trusted_origins, none},
+                         {trusted_origins, true},
+                         {trusted_origins, ~"https://example.com"},
+                         {trusted_origins, [same_host]},
+                         {trusted_origins, [[same_host]]},
+                         {trusted_origins, nova_test_helper:improper_list([~"https://example.com"],
                                                                           ~"https://other.example.com")},
-                         {allowed_origins, [nova_test_helper:improper_list([$h], $t)]},
+                         {trusted_origins, [nova_test_helper:improper_list([$h], $t)]},
                          {csrf_token, signed},
                          {csrf_token, true},
                          {max_sessions, 0},
@@ -74,22 +75,33 @@ values_that_stop_the_boot_test_() ->
 
 csrf_settings_test_() ->
     Short = binary:copy(~"s", 31),
-    Tokens = fun(#{csrf_token := Token, csrf_secret := Secrets}) -> {Token, Secrets};
+    Tokens = fun(#{csrf_token := Token, secret_key_base := Keys}) -> {Token, length(Keys)};
                 (Stopped) -> Stopped
              end,
     [{lists:flatten(io_lib:format("~0p", [Env])), ?_assertEqual(Expected, Tokens(booted_with(Env)))}
-     || {Env, Expected} <- [{[{csrf_token, stateless}, {csrf_secret, ?SECRET}], {stateless, [?SECRET]}},
-                            {[{csrf_token, session}, {csrf_secret, ?SECRET}], {session, [?SECRET]}},
-                            {[{csrf_token, stateless}], {stopped, {invalid_setting, csrf_secret, not_set}}},
-                            {[{csrf_token, signed}, {csrf_secret, ?SECRET}],
+     || {Env, Expected} <- [{[{csrf_token, stateless}, {secret_key_base, ?SECRET}], {stateless, 1}},
+                            {[{csrf_token, session}, {secret_key_base, ?SECRET}], {session, 1}},
+                            {[{csrf_token, stateless}], {stopped, {invalid_setting, secret_key_base, not_set}}},
+                            {[{csrf_token, signed}, {secret_key_base, ?SECRET}],
                              {stopped, {invalid_setting, csrf_token, signed}}},
-                            {[{csrf_secret, Short}], {stopped, {invalid_setting, csrf_secret, redacted}}},
-                            {[{csrf_secret, [?SECRET, Short]}], {stopped, {invalid_setting, csrf_secret, redacted}}},
-                            {[{csrf_secret, []}], {stopped, {invalid_setting, csrf_secret, redacted}}},
-                            {[{csrf_secret, "a string of thirty-two characters or more"}],
-                             {stopped, {invalid_setting, csrf_secret, redacted}}},
-                            {[{csrf_token, session}, {csrf_secret, Short}],
-                             {stopped, {invalid_setting, csrf_secret, redacted}}}]].
+                            {[{secret_key_base, Short}], {stopped, {invalid_setting, secret_key_base, redacted}}},
+                            {[{secret_key_base, [?SECRET, Short]}], {stopped, {invalid_setting, secret_key_base, redacted}}},
+                            {[{secret_key_base, []}], {stopped, {invalid_setting, secret_key_base, redacted}}},
+                            {[{secret_key_base, "a string of thirty-two characters or more"}],
+                             {stopped, {invalid_setting, secret_key_base, redacted}}},
+                            {[{csrf_token, session}, {secret_key_base, Short}],
+                             {stopped, {invalid_setting, secret_key_base, redacted}}}]].
+
+%% A signed token is for the session cookie of a client, which a node
+%% without sessions does not hand out.
+stateless_tokens_without_sessions_stop_the_boot_test_() ->
+    Off = {use_sessions, false},
+    [?_assertEqual({stopped, {invalid_setting, csrf_token, {requires, use_sessions}}},
+                   booted_with([Off, {csrf_token, stateless}, {secret_key_base, ?SECRET}])),
+     ?_assertMatch(#{csrf_token := undefined, secret_key_base := [_]}, booted_with([Off, {secret_key_base, ?SECRET}])),
+     ?_assertMatch(#{csrf_token := session}, booted_with([Off, {csrf_token, session}])),
+     ?_assertMatch(#{csrf_token := stateless},
+                   booted_with([{use_sessions, true}, {csrf_token, stateless}, {secret_key_base, ?SECRET}]))].
 
 %% A value that is not a secret, or not a list of them, is refused whatever
 %% it is, and what it holds is in nothing that is raised or logged.
@@ -98,7 +110,7 @@ secret_that_cannot_be_used_is_not_told_test_() ->
     New = ~"the-secret-to-come-of-32-bytes-or-more",
     [{lists:flatten(io_lib:format("~0p", [Shape])),
       fun() ->
-              application:set_env(nova, csrf_secret, Value),
+              application:set_env(nova, secret_key_base, Value),
               try
                   {Raised, Events} = nova_test_log:collect(fun() ->
                                                                    try nova_settings:validate()
@@ -106,12 +118,12 @@ secret_that_cannot_be_used_is_not_told_test_() ->
                                                                            {Class, Reason, Stacktrace}
                                                                    end
                                                            end),
-                  ?assertMatch({error, {invalid_setting, csrf_secret, redacted}, _}, Raised),
-                  ?assertMatch([#{setting := csrf_secret, value := redacted}], nova_test_log:errors(Events)),
+                  ?assertMatch({error, {invalid_setting, secret_key_base, redacted}, _}, Raised),
+                  ?assertMatch([#{setting := secret_key_base, value := redacted}], nova_test_log:errors(Events)),
                   Told = iolist_to_binary(io_lib:format("~0p", [{Raised, Events}])),
                   [?assertEqual({Secret, nomatch}, {Secret, binary:match(Told, Secret)}) || Secret <- [Old, New]]
               after
-                  nova_test_settings:unset(csrf_secret)
+                  nova_test_settings:unset(secret_key_base)
               end
       end}
      || {Shape, Value} <- [{too_short, binary:part(Old, 0, 31)},
@@ -124,6 +136,89 @@ secret_that_cannot_be_used_is_not_told_test_() ->
                            {one_too_short, [New, binary:part(Old, 0, 31)]},
                            {empty_list, []}]].
 
+%% Everything Nova signs lets whoever sees it try secrets at home, so a
+%% secret has to come from a random source. What plainly does not is
+%% refused: one byte over and over, a few bytes over and over, the examples
+%% the documentation has had, and the name of a variable nothing filled in.
+%% Nothing here measures what a passphrase is worth.
+secret_that_is_plainly_not_random_stops_the_boot_test_() ->
+    [{lists:flatten(io_lib:format("~0p", [Shape])),
+      fun() ->
+              application:set_env(nova, secret_key_base, Value),
+              try
+                  {Raised, Events} = nova_test_log:collect(fun() ->
+                                                                   try nova_settings:validate()
+                                                                   catch Class:Reason:Stacktrace ->
+                                                                           {Class, Reason, Stacktrace}
+                                                                   end
+                                                           end),
+                  ?assertMatch({error, {invalid_setting, secret_key_base, redacted}, _}, Raised),
+                  ?assertMatch([#{setting := secret_key_base, value := redacted}], nova_test_log:errors(Events)),
+                  Told = iolist_to_binary(io_lib:format("~0p", [{Raised, Events}])),
+                  [?assertEqual({Secret, nomatch}, {Secret, binary:match(Told, Written)})
+                   || Secret <- lists:flatten([Value]),
+                      Written <- [Secret, iolist_to_binary(io_lib:format("~0p", [Secret]))]]
+              after
+                  nova_test_settings:unset(secret_key_base)
+              end
+      end}
+     || {Shape, Value} <- [{one_byte, binary:copy(~"s", 32)},
+                           {one_byte_many_times, binary:copy(<<0>>, 512)},
+                           {two_bytes, binary:copy(~"ab", 16)},
+                           {a_word_repeated, binary:copy(~"changeme", 4)},
+                           {another_word_repeated, binary:copy(~"password", 8)},
+                           {seven_bytes_in_any_order, ~"abcdefgabcdefggfedcbagfedcbaabcdefg"},
+                           {digits_of_a_date, ~"20261115202611152026111520261115"},
+                           {example_of_the_documentation, ~"at least 32 bytes that every node of the system is given"},
+                           {example_of_the_guides, ~"the-new-secret-of-at-least-32-bytes-0001"},
+                           {other_example_of_the_guides, ~"the-old-secret-of-at-least-32-bytes-0000"},
+                           {variable_nothing_filled_in, ~"${SECRET_KEY_BASE_OF_THE_PRODUCTION_NODES}"},
+                           {one_of_two, [?SECRET, binary:copy(~"changeme", 4)]},
+                           {other_of_two, [binary:copy(~"s", 64), ?SECRET]}]].
+
+%% What `base64:encode(crypto:strong_rand_bytes(48))`, `openssl rand -base64 48`
+%% and `openssl rand -hex 32` give, and 32 bytes as they come.
+secret_of_a_random_source_is_taken_test_() ->
+    [{lists:flatten(io_lib:format("~0p", [Shape])),
+      ?_assertMatch(#{secret_key_base := [_ | _]}, booted_with([{secret_key_base, Value}]))}
+     || {Shape, Value} <- [{base64, ~"pT4mQ0fYxk8Hn2cWv7sJ1dLrA9uEoZb3KiG5yNqXwC6tRhVlMeSaUjOgBfDzIP+/"},
+                           {hex, ~"9f2c41d7a0b3e85c6d1f7a924be03c58d6a1f09e7b34c2d85a60f1e39c7b4d20"},
+                           {bytes, binary:decode_hex(~"9f2c41d7a0b3e85c6d1f7a924be03c58d6a1f09e7b34c2d85a60f1e39c7b4d20")},
+                           {eight_bytes, ~"abcdefghabcdefghhgfedcbahgfedcba"},
+                           {two, [?SECRET, ~"9f2c41d7a0b3e85c6d1f7a924be03c58"]}]].
+
+%% A setting that was in no release and is gone stops the boot, and what is
+%% raised and logged names the one that took its place and not the value.
+removed_settings_stop_the_boot_test_() ->
+    [{atom_to_list(Key),
+      fun() ->
+              application:set_env(nova, Key, Value),
+              try
+                  {Raised, Events} = nova_test_log:collect(fun() ->
+                                                                   try nova_settings:validate()
+                                                                   catch error:Reason -> {stopped, Reason}
+                                                                   end
+                                                           end),
+                  ?assertEqual({stopped, {invalid_setting, Key, {replaced_by, Replacement}}}, Raised),
+                  ?assertMatch([#{setting := Key, replaced_by := Replacement, msg := _}],
+                               nova_test_log:errors(Events)),
+                  [#{msg := Notice} = Report] = nova_test_log:errors(Events),
+                  ?assertNotEqual(nomatch, binary:match(Notice, atom_to_binary(Replacement))),
+                  ?assertNot(is_map_key(value, Report)),
+                  ?assertEqual(nomatch, binary:match(iolist_to_binary(io_lib:format("~0p", [{Raised, Events}])),
+                                                     ?SECRET))
+              after
+                  application:unset_env(nova, Key),
+                  nova_settings:validate()
+              end
+      end}
+     || {Key, Value, Replacement} <- removed()].
+
+removed() ->
+    [{plugins_after_security, [nova_request_plugin], plugins_before_security},
+     {allowed_origins, [~"https://example.com"], trusted_origins},
+     {csrf_secret, ?SECRET, secret_key_base}].
+
 invalid_setting_is_logged_with_what_it_may_be_test() ->
     application:set_env(nova, non_canonical_paths, allow),
     try
@@ -133,6 +228,17 @@ invalid_setting_is_logged_with_what_it_may_be_test() ->
                      nova_test_log:errors(Events))
     after
         nova_test_settings:unset(non_canonical_paths)
+    end.
+
+%% What is kept of a secret is the keys made from it, and not the secret.
+secret_is_not_kept_test() ->
+    ok = nova_test_settings:set(secret_key_base, ?SECRET),
+    try
+        Kept = iolist_to_binary(io_lib:format("~0p", [persistent_term:get(nova_settings)])),
+        ?assertEqual(nomatch, binary:match(Kept, ?SECRET)),
+        ?assertMatch([<<_:32/binary>>], nova_secret:keys(csrf_token))
+    after
+        nova_test_settings:unset(secret_key_base)
     end.
 
 %% A boot keeps what it checked. What is put in the environment afterwards
@@ -152,8 +258,8 @@ value_is_the_one_of_the_boot_test() ->
 settings_are_read_from_nova_alone_test() ->
     application:set_env(nova, bootstrap_application, nova_settings_tests_app),
     [application:set_env(nova_settings_tests_app, Key, Value)
-     || {Key, Value} <- [{max_sessions, 7}, {csrf_token, session}, {csrf_secret, ?SECRET},
-                         {allowed_origins, any}, {non_canonical_paths, resolve}, {plugins_before_security, all}]],
+     || {Key, Value} <- [{max_sessions, 7}, {csrf_token, session}, {secret_key_base, ?SECRET},
+                         {trusted_origins, any}, {non_canonical_paths, resolve}, {plugins_before_security, all}]],
     try
         ?assertEqual(booted_with([]), booted_with([{max_sessions, 1000000}]))
     after

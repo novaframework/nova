@@ -41,7 +41,6 @@ init_per_suite(Config) ->
               #{prefix => "/guarded",
                 security => fun nova_upload_cleanup_pages:refuse/1,
                 plugins => [{pre_request, nova_multipart_plugin, #{handler => Handler}}],
-                plugins_after_security => [nova_multipart_plugin],
                 routes => Upload}],
     [{port, nova_test_listener:start(#{host => Routes})}, {spool, Dir} | Config].
 

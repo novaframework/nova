@@ -19,7 +19,12 @@
          configured_origins_replace_the_default/1,
          any_origin_when_the_check_is_off/1,
          plugin_of_the_route_decides_alone/1,
-         same_host_ignores_the_scheme/1,
+         same_host_of_a_listener_without_tls_ignores_the_scheme/1,
+         page_the_browser_says_is_elsewhere_is_refused/1,
+         page_the_browser_says_is_of_the_site_is_taken_by_its_origin/1,
+         listed_origin_is_accepted_from_elsewhere/1,
+         client_that_is_no_browser_is_accepted_as_before/1,
+         page_the_browser_says_is_elsewhere_is_refused_over_http2/1,
          same_origin_needs_the_same_scheme/1,
          same_origin_needs_the_same_host_and_port/1,
          same_origin_accepts_a_missing_origin/1,
@@ -52,7 +57,12 @@ all() ->
      configured_origins_replace_the_default,
      any_origin_when_the_check_is_off,
      plugin_of_the_route_decides_alone,
-     same_host_ignores_the_scheme,
+     same_host_of_a_listener_without_tls_ignores_the_scheme,
+     page_the_browser_says_is_elsewhere_is_refused,
+     page_the_browser_says_is_of_the_site_is_taken_by_its_origin,
+     listed_origin_is_accepted_from_elsewhere,
+     client_that_is_no_browser_is_accepted_as_before,
+     page_the_browser_says_is_elsewhere_is_refused_over_http2,
      same_origin_needs_the_same_scheme,
      same_origin_needs_the_same_host_and_port,
      same_origin_accepts_a_missing_origin,
@@ -76,14 +86,14 @@ init_per_suite(Config) ->
                 routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}},
                            {"/page", fun nova_ws_upgrade_pages:page/1, #{methods => [get]}}]},
               #{prefix => "/same-origin",
-                plugins => [{pre_request, nova_ws_origin_plugin, #{allowed_origins => same_origin}}],
+                plugins => [{pre_request, nova_ws_origin_plugin, #{trusted_origins => same_origin}}],
                 routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]},
               #{prefix => "/listed",
                 plugins => [{pre_request, nova_ws_origin_plugin,
-                             #{allowed_origins => [~"https://app.example.com", "https://other.example.com"]}}],
+                             #{trusted_origins => [~"https://app.example.com", "https://other.example.com"]}}],
                 routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]},
               #{prefix => "/open",
-                plugins => [{pre_request, nova_ws_origin_plugin, #{allowed_origins => any}}],
+                plugins => [{pre_request, nova_ws_origin_plugin, #{trusted_origins => any}}],
                 routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]},
               #{prefix => "/guarded",
                 security => fun nova_ws_upgrade_pages:allow/1,
@@ -92,7 +102,7 @@ init_per_suite(Config) ->
               #{prefix => "/guarded-by-plugin",
                 security => fun nova_ws_upgrade_pages:allow/1,
                 plugins => [{pre_request, nova_ws_upgrade_pages, #{}}, {pre_request, nova_csrf_plugin, #{}},
-                            {pre_request, nova_ws_origin_plugin, #{allowed_origins => same_origin}}],
+                            {pre_request, nova_ws_origin_plugin, #{trusted_origins => same_origin}}],
                 routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]}],
     nova_ws_upgrade_pages:count(),
     [{port, nova_test_listener:start(#{host => Routes, cowboy_options => #{enable_connect_protocol => true}})}
@@ -168,27 +178,27 @@ refused_upgrade_runs_nothing_of_the_route(Config) ->
      end || Path <- ["/guarded/ws", "/guarded-by-plugin/ws"]].
 
 configured_origins_replace_the_default(Config) ->
-    nova_test_settings:set(allowed_origins, [~"https://app.example.com"]),
+    nova_test_settings:set(trusted_origins, [~"https://app.example.com"]),
     try
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/plain/ws", "https://app.example.com")),
         ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/plain/ws", "http://localhost")),
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>,
                      nova_test_listener:websocket_handshake(?config(port, Config), "/plain/ws")),
-        nova_test_settings:set(allowed_origins, same_origin),
+        nova_test_settings:set(trusted_origins, same_origin),
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/plain/ws", "http://localhost")),
         ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/plain/ws", "https://localhost"))
     after
-        nova_test_settings:unset(allowed_origins)
+        nova_test_settings:unset(trusted_origins)
     end.
 
 any_origin_when_the_check_is_off(Config) ->
-    nova_test_settings:set(allowed_origins, any),
+    nova_test_settings:set(trusted_origins, any),
     try
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/plain/ws", "https://evil.example")),
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/same-host/ws", "https://evil.example")),
         ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/same-origin/ws", "https://evil.example"))
     after
-        nova_test_settings:unset(allowed_origins)
+        nova_test_settings:unset(trusted_origins)
     end.
 
 %% What the plugin of a route group accepts is not checked again against
@@ -197,18 +207,100 @@ any_origin_when_the_check_is_off(Config) ->
 plugin_of_the_route_decides_alone(Config) ->
     ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/open/ws", "https://evil.example")),
     ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/listed/ws", "https://app.example.com")),
-    nova_test_settings:set(allowed_origins, [~"https://only.example.com"]),
+    nova_test_settings:set(trusted_origins, [~"https://only.example.com"]),
     try
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/same-origin/ws", "http://localhost")),
         ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/same-host/ws", "http://localhost")),
         ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/same-host/ws", "https://only.example.com"))
     after
-        nova_test_settings:unset(allowed_origins)
+        nova_test_settings:unset(trusted_origins)
     end.
 
-%% The requests are sent with `host: localhost`, to a listener without TLS.
-same_host_ignores_the_scheme(Config) ->
+%% The requests are sent with `host: localhost`, to a listener without TLS,
+%% which a proxy that takes the TLS off may stand in front of.
+same_host_of_a_listener_without_tls_ignores_the_scheme(Config) ->
     ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/same-host/ws", "https://localhost")).
+
+%% Behind a proxy that takes the TLS off, a page loaded from http://localhost
+%% has the host of the site and an origin same_host accepts. It is not the
+%% site: anybody between a visitor and the server can write it. A browser
+%% says so with Sec-Fetch-Site, which no page can set, and the upgrade is
+%% refused as nova_csrf_plugin refuses a form of such a page.
+page_the_browser_says_is_elsewhere_is_refused(Config) ->
+    [?assertMatch({Path, Site, Origin, <<"HTTP/1.1 403", _/binary>>},
+                  {Path, Site, Origin, handshake(Config, Path, Origin, Site)})
+     || Path <- ["/same-host/ws", "/plain/ws", "/same-origin/ws", "/guarded/ws"],
+        Site <- ["cross-site", "same-site", "Same-Origin", "elsewhere"],
+        Origin <- ["http://localhost", "https://evil.example"]],
+    [?assertMatch({Site, <<"HTTP/1.1 403", _/binary>>},
+                  {Site, nova_test_listener:websocket_handshake(?config(port, Config), "/same-host/ws",
+                                                                [{"sec-fetch-site", Site}])})
+     || Site <- ["cross-site", "same-site"]],
+    ?assertMatch({403, _}, nova_test_listener:get(?config(port, Config), "/plain/ws",
+                                                  [{"origin", "http://localhost"}, {"sec-fetch-site", "cross-site"}])).
+
+page_the_browser_says_is_of_the_site_is_taken_by_its_origin(Config) ->
+    [begin
+         ?assertMatch({Site, <<"HTTP/1.1 101", _/binary>>},
+                      {Site, handshake(Config, "/same-host/ws", "http://localhost", Site)}),
+         ?assertMatch({Site, <<"HTTP/1.1 101", _/binary>>},
+                      {Site, handshake(Config, "/same-host/ws", "https://localhost", Site)}),
+         ?assertMatch({Site, <<"HTTP/1.1 403", _/binary>>},
+                      {Site, handshake(Config, "/same-host/ws", "https://evil.example", Site)}),
+         ?assertMatch({Site, <<"HTTP/1.1 403", _/binary>>},
+                      {Site, handshake(Config, "/listed/ws", "http://localhost", Site)}),
+         ?assertMatch({Site, <<"HTTP/1.1 403", _/binary>>},
+                      {Site, handshake(Config, "/same-origin/ws", "https://localhost", Site)})
+     end || Site <- ["same-origin", "none"]].
+
+%% A list names the pages elsewhere that may open the websocket, and `any`
+%% is every page.
+listed_origin_is_accepted_from_elsewhere(Config) ->
+    [begin
+         ?assertMatch({Site, <<"HTTP/1.1 101", _/binary>>},
+                      {Site, handshake(Config, "/listed/ws", "https://app.example.com", Site)}),
+         ?assertMatch({Site, <<"HTTP/1.1 403", _/binary>>},
+                      {Site, handshake(Config, "/listed/ws", "https://evil.example", Site)}),
+         ?assertMatch({Site, <<"HTTP/1.1 101", _/binary>>},
+                      {Site, handshake(Config, "/open/ws", "https://evil.example", Site)})
+     end || Site <- ["cross-site", "same-site"]],
+    nova_test_settings:set(trusted_origins, any),
+    try
+        ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/plain/ws", "https://evil.example", "cross-site"))
+    after
+        nova_test_settings:unset(trusted_origins)
+    end.
+
+%% What sends neither header is not a page in a browser that carries the
+%% cookies of a visitor, and what sends an Origin alone is taken by it.
+client_that_is_no_browser_is_accepted_as_before(Config) ->
+    [begin
+         ?assertMatch({Path, <<"HTTP/1.1 101", _/binary>>},
+                      {Path, nova_test_listener:websocket_handshake(?config(port, Config), Path)}),
+         ?assertMatch({Path, <<"HTTP/1.1 101", _/binary>>}, {Path, handshake(Config, Path, "http://localhost")})
+     end || Path <- ["/same-host/ws", "/plain/ws", "/same-origin/ws", "/guarded/ws"]],
+    ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/same-host/ws", "https://localhost")),
+    ?assertMatch(<<"HTTP/1.1 101", _/binary>>,
+                 nova_test_listener:websocket_handshake(?config(port, Config), "/listed/ws")).
+
+page_the_browser_says_is_elsewhere_is_refused_over_http2(Config) ->
+    Authority = authority(Config),
+    Own = {~"origin", <<"http://", Authority/binary>>},
+    [?assertEqual({Path, Site, 403}, {Path, Site, connect(Config, Path, Authority, [Own, {~"sec-fetch-site", Site}])})
+     || Path <- ["/same-host/ws", "/plain/ws", "/same-origin/ws"], Site <- [~"cross-site", ~"same-site"]],
+    [?assertEqual({Path, Site, 200}, {Path, Site, connect(Config, Path, Authority, [Own, {~"sec-fetch-site", Site}])})
+     || Path <- ["/same-host/ws", "/plain/ws", "/same-origin/ws"], Site <- [~"same-origin", ~"none"]],
+    ?assertEqual(403, connect(Config, "/same-host/ws", Authority,
+                              [{~"origin", ~"https://evil.example"}, {~"sec-fetch-site", ~"same-origin"}])),
+    ?assertEqual(200, connect(Config, "/listed/ws", Authority,
+                              [{~"origin", ~"https://app.example.com"}, {~"sec-fetch-site", ~"cross-site"}])),
+    ?assertEqual(403, connect(Config, "/listed/ws", Authority,
+                              [{~"origin", ~"https://evil.example"}, {~"sec-fetch-site", ~"cross-site"}])),
+    ?assertEqual(200, connect(Config, "/open/ws", Authority,
+                              [{~"origin", ~"https://evil.example"}, {~"sec-fetch-site", ~"cross-site"}])),
+    ?assertEqual(403, connect(Config, "/same-host/ws", Authority, [{~"sec-fetch-site", ~"cross-site"}])),
+    ?assertEqual(200, connect(Config, "/same-host/ws", Authority, [Own])),
+    ?assertEqual(200, connect(Config, "/same-host/ws", Authority, [])).
 
 same_origin_needs_the_same_scheme(Config) ->
     ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/same-origin/ws", "http://localhost")),
@@ -283,3 +375,6 @@ port(Config) ->
 
 handshake(Config, Path, Origin) ->
     nova_test_listener:websocket_handshake(?config(port, Config), Path, [{"origin", Origin}]).
+
+handshake(Config, Path, Origin, Site) ->
+    nova_test_listener:websocket_handshake(?config(port, Config), Path, [{"origin", Origin}, {"sec-fetch-site", Site}]).

@@ -6,19 +6,33 @@ A page gets a token in `csrf_token` of the request, which a view receives as the
 
 __Important:__ `nova_request_plugin` must run before this plugin so that form params are parsed into the `params` key of the request map.
 
+The plugin needs sessions: the token is kept in the session of a client or signed for its session cookie. A route group that lists it while `use_sessions` is `false` stops the boot with `{invalid_setting, use_sessions, {required_by, nova_csrf_plugin}}`, and so does `{csrf_token, stateless}`, with `{invalid_setting, csrf_token, {requires, use_sessions}}`.
+
 ## Where the token comes from
 
-With `csrf_secret` set in the `nova` environment the token is signed and nothing is stored for it. It is an HMAC-SHA256, under the secret, over the id in the session cookie of the client and 16 random bytes, so every response carries another token and each of them is good for as long as the client holds that cookie and the secret is in use. A visitor without a session cookie is handed one by the response (`nova_session:client_id/1`); no session is started. A request that changes state is refused when it does not send the cookie the token was signed for. Signing in moves a visitor to another session id, and the pages rendered after that carry tokens for the new one.
+With `secret_key_base` set in the `nova` environment the token is signed and nothing is stored for it. It is an HMAC-SHA256 over the id in the session cookie of the client and 16 random bytes, under a key made from the secret for this plugin alone, so every response carries another token and each of them is good for as long as the client holds that cookie and the secret is in use. A visitor without a session cookie is handed one by the response; no session is started, and what the visitor first writes to the session is stored under the id of that cookie, so the tokens of the pages that are open stay good. A request that changes state is refused when it does not send the cookie the token was signed for. A token is the characters a page was given: the same bytes written another way, with whitespace in them or other bits to spare in the last character, are refused, with either kind of token. `nova_session:sign_in/3`, which is how a user is signed in, moves a visitor to another session id, as `nova_session:renew/1` does. A token made for the id before is refused from then on, the one in `csrf_token` of the request that signs in included, and the pages the client loads after that carry tokens for the new id: answer a sign-in with a redirect, not with a page that holds a form.
 
 ```erlang
 {nova, [
-    {csrf_secret, ~"at least 32 bytes that every node of the system is given"}
+    {secret_key_base, ~"${SECRET_KEY_BASE}"}
 ]}
 ```
 
-The secret has to be the same on every node and across restarts. A list of secrets signs with the first and accepts all of them: put the new secret in front of the old one to change it, and take the old one out once the pages that were open have been sent.
+The secret has to come from a random source, since everything signed with it lets whoever sees it try secrets at home: a word or a sentence, however long, does not do. Make one in an Erlang shell or with `openssl`, which both give 64 characters:
 
-Without `csrf_secret` the token is a random value kept in the session, as in earlier releases: a visitor without a session gets one that holds the token (`nova_session:set_provisional/3`). A page gets it under a mask that is new for every response, so the same token never looks the same twice in a compressed response. The token without a mask, which is what a page rendered by an earlier release holds, is accepted as well. The boot says so once. Set `{csrf_token, session}` to say that this is intended, or `{csrf_token, stateless}` to have a boot without a secret fail instead.
+```erlang
+base64:encode(crypto:strong_rand_bytes(48)).
+```
+
+```sh
+openssl rand -base64 48
+```
+
+It is a binary of at least 32 bytes. One that is shorter stops the boot with `{invalid_setting, secret_key_base, redacted}`, and so does one that plainly is not random: fewer than 8 different bytes, such as a letter or a word repeated, an example out of this documentation, or a `${VARIABLE}` that the release did not fill in. Nova cannot tell a sentence from a random value, so passing this check says little.
+
+The secret has to be the same on every node and across restarts, and belongs in what the release reads when it starts, such as an environment variable in `sys.config.src`, not in a file that is committed. Use it for Nova alone: an application that signs things of its own has a secret of its own. A list of secrets signs with the first and accepts all of them: put the new secret in front of the old one to change it, and take the old one out once the pages that were open have been sent. Nova never logs the secret, and what it keeps of it once it has started is the keys made from it.
+
+Without `secret_key_base` the token is a random value kept in the session, as in earlier releases: a visitor without a session gets one that holds the token. A page gets it under a mask that is new for every response, so the same token never looks the same twice in a compressed response. The token without a mask, which is what a page rendered by an earlier release holds, is accepted as well. The boot says so once. Set `{csrf_token, session}` to say that this is intended, or `{csrf_token, stateless}` to have a boot without a secret fail instead.
 
 After a secret is set, a form that was rendered before still sends the token of its session. It is accepted for as long as that session is there.
 
@@ -26,17 +40,21 @@ After a secret is set, a form that was rendered before still sends the token of 
 
 A token is asked for whatever else the request says. On top of that, a request that changes state is answered `403` ahead of the security callback, and before anything of its body is read, when the browser says that a page of another site sent it:
 
-- `Sec-Fetch-Site` is `cross-site` or `same-site`, unless its `Origin` is one of a list of allowed origins. `same-origin` and `none`, which is what a request the user made by hand has, are let through.
-- Without `Sec-Fetch-Site`, which browsers send to `https` and `localhost` only, the `Origin` is not an allowed one.
+- `Sec-Fetch-Site` is `cross-site` or `same-site`, unless its `Origin` is one of a list of trusted origins. `same-origin` and `none`, which is what a request the user made by hand has, are let through.
+- Without `Sec-Fetch-Site`, which browsers send to `https` and `localhost` only, the `Origin` is not a trusted one.
 
-A request with neither header is let through: it is not from a browser, or from one too old to say. The allowed origins are `allowed_origins` of the `nova` environment, the setting websocket upgrades go by, unless the plugin is given its own: `same_host` (the default), `same_origin`, a list such as `[~"https://app.example.com"]` for pages elsewhere that may post here, or `any`, which turns this check off and leaves the token. A list takes the place of `same_host`: a request that has an `Origin` and no `Sec-Fetch-Site` is let through only when that origin is in the list, also when a page of the site itself sent it, so put the origin of the site in the list.
+A request with neither header is let through: it is not from a browser, or from one too old to say. The trusted origins are `trusted_origins` of the `nova` environment, the setting websocket upgrades go by, unless the plugin is given its own: `same_host` (the default), `same_origin`, or a list such as `[~"https://app.example.com"]` for pages elsewhere that may post here. `same_host` takes an origin with the host and port the request was sent to, and on a request that came in over TLS only an `https` one. A list takes the place of `same_host`: a request that has an `Origin` and no `Sec-Fetch-Site` is let through only when that origin is in the list, also when a page of the site itself sent it, so put the origin of the site in the list.
+
+`any` in the `nova` environment opens websocket upgrades to every origin and nothing else: this plugin then checks by `same_host`. To turn the check off and leave a request to its token alone, give the plugin the option itself, `#{trusted_origins => any}`, in the route groups that are meant to be posted to from anywhere.
+
+This is not `allow_origins` of `nova_cors_plugin`, which says which pages may read a response. An origin that is to post here from a browser has to be in both.
 
 ### Options
 
 * `field_name` - form field name (default `<<"_csrf_token">>`)
 * `header_name` - header name (default `<<"x-csrf-token">>`)
 * `session_key` - session storage key (default `<<"_csrf_token">>`)
-* `allowed_origins` - the origins a request that changes state may come from, when not those of the `nova` environment. A value that is none of the above stops the boot with `{invalid_setting, allowed_origins, Value}`
+* `trusted_origins` - the origins a request that changes state may come from, when not those of the `nova` environment: `same_host`, `same_origin`, a list of origins, or `any`, which turns the check off. Any other value stops the boot with `{invalid_setting, trusted_origins, Value}`
 * `excluded_paths` - list of path prefixes to skip (default `[]`). A prefix covers whole segments of the path the request is routed on: `<<"/api">>` skips `/api` and `/api/hooks`, not `/apikeys`, and `/api/../admin` is checked as `/admin`
 """.
 -behaviour(nova_plugin).
@@ -68,26 +86,20 @@ A request with neither header is let through: it is not from a browser, or from 
 -doc false.
 -spec init() -> nova:state().
 init() ->
-    Unset = nova_settings:value(csrf_token) =:= undefined andalso nova_settings:value(csrf_secret) =:= [],
+    Unset = nova_settings:value(csrf_token) =:= undefined andalso nova_secret:keys(csrf_token) =:= [],
     _ = Unset andalso
-        ?LOG_NOTICE(#{msg => ~"csrf_secret is not set, so nova_csrf_plugin keeps its tokens in the session store and starts a session for every visitor. Set csrf_secret for signed tokens that store nothing, or csrf_token to session to say that this is intended",
-                      key => csrf_secret, csrf_token => session}),
+        ?LOG_NOTICE(#{msg => ~"secret_key_base is not set, so nova_csrf_plugin keeps its tokens in the session store and starts a session for every visitor. Set secret_key_base for signed tokens that store nothing, or csrf_token to session to say that this is intended",
+                      key => secret_key_base, csrf_token => session}),
     #{}.
 
-%% How tokens are made: signed with the secrets, the first of which signs,
-%% or kept in the session. Both settings were checked when Nova started.
+%% How tokens are made: signed with the keys this plugin has from
+%% secret_key_base, the first of which signs, or kept in the session. Both
+%% settings were checked when Nova started.
 -spec tokens() -> {stateless, [binary()]} | session.
 tokens() ->
-    case nova_settings:value(csrf_token) =/= session andalso secrets() of
-        [_ | _] = Secrets -> {stateless, Secrets};
+    case nova_settings:value(csrf_token) =/= session andalso nova_secret:keys(csrf_token) of
+        [_ | _] = Keys -> {stateless, Keys};
         _NoSecret -> session
-    end.
-
--spec secrets() -> [binary()].
-secrets() ->
-    case nova_settings:value(csrf_secret) of
-        Secrets when is_list(Secrets) -> [Secret || Secret <- Secrets, is_binary(Secret)];
-        _NoSecrets -> []
     end.
 
 %%--------------------------------------------------------------------
@@ -113,18 +125,27 @@ pre_security(Req = #{method := Method, path := Path}, _Env, Options, State) ->
 %% a page that some other site could have made send the request.
 -spec is_sent_by_the_site(Req :: cowboy_req:req(), Options :: map()) -> boolean().
 is_sent_by_the_site(Req, Options) ->
-    Allowed = case Options of
-                  #{allowed_origins := Origins} -> Origins;
-                  _ -> nova_settings:value(allowed_origins)
-              end,
+    Trusted = trusted_origins(Options),
     Origin = cowboy_req:header(~"origin", Req),
     case cowboy_req:header(~"sec-fetch-site", Req) of
-        Site when Site =:= ~"same-origin"; Site =:= ~"none"; Allowed =:= any ->
+        Site when Site =:= ~"same-origin"; Site =:= ~"none"; Trusted =:= any ->
             true;
         undefined ->
-            nova_origin:is_allowed(Origin, Req, Allowed);
+            nova_origin:is_allowed(Origin, Req, Trusted);
         _ElseWhere ->
-            is_binary(Origin) andalso is_list(Allowed) andalso nova_origin:is_allowed(Origin, Req, Allowed)
+            is_binary(Origin) andalso is_list(Trusted) andalso nova_origin:is_allowed(Origin, Req, Trusted)
+    end.
+
+%% `any` of the nova environment is there to open websockets to pages
+%% elsewhere. It takes the option of this plugin to leave a request that
+%% changes state to its token alone.
+-spec trusted_origins(Options :: map()) -> term().
+trusted_origins(#{trusted_origins := Origins}) ->
+    Origins;
+trusted_origins(_Options) ->
+    case nova_settings:value(trusted_origins) of
+        any -> same_host;
+        Origins -> Origins
     end.
 
 %%--------------------------------------------------------------------
@@ -143,13 +164,13 @@ pre_request(Req = #{method := Method, path := Path}, _Env, Options, State) ->
             handle_safe_request(Req, SessionKey, State);
         session ->
             handle_unsafe_request(Req, SessionKey, FieldName, HeaderName, State);
-        {stateless, Secrets} when Safe ->
-            {ok, with_signed_token(nova_session:client_id(Req), Secrets, Req), State};
-        {stateless, Secrets} ->
+        {stateless, Keys} when Safe ->
+            {ok, with_signed_token(nova_session:client_id(Req), Keys, Req), State};
+        {stateless, Keys} ->
             Presented = nova_session:presented_session_id(Req),
             Submitted = get_submitted_token(Req, FieldName, HeaderName),
-            case is_signed_for(Presented, Submitted, Secrets) orelse is_session_token(Req, SessionKey, Submitted) of
-                true -> {ok, with_signed_token({ok, Presented}, Secrets, Req), State};
+            case is_signed_for(Presented, Submitted, Keys) orelse is_session_token(Req, SessionKey, Submitted) of
+                true -> {ok, with_signed_token({ok, Presented}, Keys, Req), State};
                 false -> reject(Req, State)
             end
     end.
@@ -179,7 +200,7 @@ plugin_info() ->
                   {field_name, <<"Form field name for CSRF token (default: _csrf_token)">>},
                   {header_name, <<"Header name for CSRF token (default: x-csrf-token)">>},
                   {session_key, <<"Session key for CSRF token (default: _csrf_token)">>},
-                  {allowed_origins, ~"same_host, same_origin, any, or the list of origins that may send unsafe requests"},
+                  {trusted_origins, ~"same_host, same_origin, any, or the list of origins that may send unsafe requests"},
                   {excluded_paths, <<"List of path prefixes to exclude from CSRF protection">>}
                  ]}.
 
@@ -245,47 +266,54 @@ unmasked(Submitted) ->
     end.
 
 %% What a client sent as a token, which may be anything. The decoder skips
-%% whitespace, so the bytes cannot be counted from the characters.
+%% whitespace and ignores the bits of the last character that belong to no
+%% byte, so the bytes cannot be counted from the characters, and the same
+%% bytes can be written in many ways. A token is the characters a page was
+%% given: what does not encode back to what was sent is none.
 -spec decoded(Submitted :: term()) -> binary() | undefined.
 decoded(Submitted) when is_binary(Submitted) ->
-    try
-        base64:decode(Submitted, #{mode => urlsafe, padding => false})
+    Encoding = #{mode => urlsafe, padding => false},
+    try base64:decode(Submitted, Encoding) of
+        Decoded ->
+            case constant_time_compare(base64:encode(Decoded, Encoding), Submitted) of
+                true -> Decoded;
+                false -> undefined
+            end
     catch
         error:_NotBase64 -> undefined
     end;
 decoded(_Submitted) ->
     undefined.
 
--spec with_signed_token(SessionId :: {ok, term()} | {error, term()}, Secrets :: [binary()], Req) -> Req
+-spec with_signed_token(SessionId :: {ok, term()} | {error, term()}, Keys :: [binary()], Req) -> Req
               when Req :: cowboy_req:req().
-with_signed_token({ok, SessionId}, [Secret | _], Req) when is_binary(SessionId) ->
+with_signed_token({ok, SessionId}, [Key | _], Req) when is_binary(SessionId) ->
     Nonce = crypto:strong_rand_bytes(?NONCE_BYTES),
-    Signed = <<Nonce/binary, (signature(Secret, SessionId, Nonce))/binary>>,
+    Signed = <<Nonce/binary, (signature(Key, SessionId, Nonce))/binary>>,
     Req#{csrf_token => base64:encode(Signed, #{mode => urlsafe, padding => false})};
-with_signed_token(_NoSessionId, _Secrets, Req) ->
+with_signed_token(_NoSessionId, _Keys, Req) ->
     Req.
 
 %% The nonce has a fixed length and comes last, so the session id is what is
 %% between it and the label whatever bytes a client put in its cookie.
--spec signature(Secret :: binary(), SessionId :: binary(), Nonce :: binary()) -> binary().
-signature(Secret, SessionId, Nonce) ->
-    crypto:mac(hmac, sha256, Secret, [~"nova_csrf_plugin", SessionId, Nonce]).
+-spec signature(Key :: binary(), SessionId :: binary(), Nonce :: binary()) -> binary().
+signature(Key, SessionId, Nonce) ->
+    crypto:mac(hmac, sha256, Key, [~"nova_csrf_plugin", SessionId, Nonce]).
 
 %% 64 characters are the 16 bytes of a nonce and the 32 of its signature,
 %% when every one of them is a character of the encoding.
--spec is_signed_for(SessionId :: term(), Submitted :: term(), Secrets :: [binary()]) -> boolean().
-is_signed_for(SessionId, <<Token:64/binary>>, Secrets) when is_binary(SessionId) ->
+-spec is_signed_for(SessionId :: term(), Submitted :: term(), Keys :: [binary()]) -> boolean().
+is_signed_for(SessionId, <<Token:64/binary>>, Keys) when is_binary(SessionId) ->
     case decoded(Token) of
         <<Nonce:?NONCE_BYTES/binary, Signature:?SIGNATURE_BYTES/binary>> ->
-            [] =/= [Secret || Secret <- Secrets,
-                              constant_time_compare(Signature, signature(Secret, SessionId, Nonce))];
+            [] =/= [Key || Key <- Keys, constant_time_compare(Signature, signature(Key, SessionId, Nonce))];
         _NotSigned ->
             false
     end;
-is_signed_for(_SessionId, _Submitted, _Secrets) ->
+is_signed_for(_SessionId, _Submitted, _Keys) ->
     false.
 
-%% The token of a form that was rendered before csrf_secret was set.
+%% The token of a form that was rendered before secret_key_base was set.
 -spec is_session_token(Req :: cowboy_req:req(), SessionKey :: binary(), Submitted :: term()) -> boolean().
 is_session_token(Req, SessionKey, Submitted) ->
     case nova_session:get(Req, SessionKey) of

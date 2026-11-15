@@ -65,11 +65,35 @@ Deletes a value. It takes two arguments: the request and the key. The rest of th
 -spec delete(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} | no_return().
 ```
 
-This function deletes the whole session and clears the session cookie. The returned request carries a fresh session id, so a later `set/3` on it in the same request starts a new session instead of reviving the deleted one.
+This function deletes the whole session and clears the session cookie, which is how a user is signed out. The returned request carries a fresh session id, so a later `set/3` on it in the same request starts a new session instead of reviving the deleted one.
 
 ```erlang
-{ok, Req1} = nova_session:delete(Req).
+logout(Req) ->
+    {ok, _SignedOut} = nova_session:delete(Req),
+    {redirect, "/"}.
 ```
+
+### `nova_session:sign_in/3`
+
+```erlang
+-spec sign_in(Req :: cowboy_req:req(), Key :: binary(), Value :: term()) ->
+          {ok, Req :: cowboy_req:req()} | {error, Reason :: atom()}.
+```
+
+Signs a user in. It moves the client to a new session id, stores `Value` under `Key` in the new session and returns the request that carries the new id. Call it where a user signs in, and go on with the request it returns:
+
+```erlang
+login(Req) ->
+    {ok, SignedIn} = nova_session:sign_in(Req, <<"user_id">>, UserId),
+    ok = nova_session:set(SignedIn, <<"signed_in_at">>, erlang:system_time(second)),
+    {redirect, "/"}.
+```
+
+This is the defence against session fixation. The session the client had is deleted with everything in it, so a session id that somebody else knows, because they planted it in the browser of the user or saw it, is not the id of the user who signed in. Writing who signed in with `set/3` alone keeps the id, and signs in whoever holds it.
+
+`{error, Reason}` is what the session backend answered when it did not store the value. The id has changed by then, and nobody is signed in.
+
+A token of `nova_csrf_plugin` that was made for the old id is refused once the user has signed in, also the one in `csrf_token` of the request that signs in. Answer a sign-in with a redirect, so that the next page carries a token for the new id.
 
 ### `nova_session:renew/1`
 
@@ -77,10 +101,10 @@ This function deletes the whole session and clears the session cookie. The retur
 -spec renew(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()}.
 ```
 
-Moves the client to a new, empty session: the old session's data is deleted and the response carries a new session cookie. Call it whenever the privilege level of the client changes, at sign-in, sign-out and password change. Calling it at sign-in is the defence against session fixation: a session id that was planted or observed before that point stops working. Use the returned request for the `set/3` calls that follow.
+Moves the client to a new, empty session: the old session's data is deleted and the response carries a new session cookie. It is the lower-level piece of `sign_in/3`, which is what to call where a user signs in, and `delete/1` is what signs out. Call `renew/1` itself for another change of what the client may do, such as a second factor or a password change, and use the returned request for the `set/3` calls that follow.
 
 ```erlang
-login(Req) ->
+second_factor_passed(Req, UserId) ->
     {ok, Req1} = nova_session:renew(Req),
     ok = nova_session:set(Req1, ~"user_id", UserId),
     {redirect, "/"}.
@@ -115,7 +139,11 @@ A `stream_handlers` configuration without `nova_stream_h` keeps storing session 
 
 The session id is a random 256-bit value from `crypto:strong_rand_bytes/1`, sent in the `session_id` cookie (`session_cookie_name` changes the name). `nova_stream_h` issues the cookie with the response of the first request that writes to the session, so visitors who never store anything get no cookie and their responses stay cacheable. `nova_csrf_plugin` hands the cookie out as well when it signs its tokens, without starting a session.
 
-An id the client presents that the backend does not know (never issued, deleted or expired) is ignored and a new one is used, so a client cannot simply choose its own session id. This is defence in depth; `renew/1` at sign-in is what protects against fixation. The check runs in the request process the first time the request uses the session, not in the connection process.
+An id the client presents that the backend does not know (never issued, deleted or expired) is ignored and a new one is used, so a client cannot simply choose its own session id. This is defence in depth; `sign_in/3` is what protects against fixation. The check runs in the request process the first time the request uses the session, not in the connection process.
+
+With `secret_key_base` set, the ids Nova makes are signed, and a visitor keeps the id a page handed out when the session is first written. A signed id is the 44 characters Nova handed out and nothing else: the same bytes written another way, with a space in the cookie value or with other bits to spare in the last character, are an id nobody signed, and are replaced like any other unknown id.
+
+A session that was deleted, by `delete/1`, `renew/1` or `sign_in/3`, does not come back. A request that was on its way when another request of the same client signed out, or signed in, and that writes to the session afterwards, is given a session of its own under a new id, and never stores anything under the id the client was moved off. The default `nova_session_ets` backend remembers a deleted id for five minutes, on every node, for this: a write to it in that time stores nothing and returns `{error, session_ended}` from the backend. It remembers at most as many ended ids as it may hold sessions (`max_sessions`, or 1 000 000 when that is `infinity`), the oldest going first. A request that takes longer than five minutes is not covered.
 
 A request that carries two or more different values for the session cookie, for example because a cookie of the same name was set for a parent domain or another path, is treated as having no session, and a warning is logged once per node.
 
@@ -221,13 +249,15 @@ Implement the optional `session_exists/1` too. Nova calls it for the session id 
 
 The optional `set_provisional_value/3` gets what is written with `nova_session:set_provisional/3`. A session that only holds such values is not in use yet, so the backend can keep it for a shorter time and drop it first when it runs out of room. A backend without the callback gets those values through `set_value/3`, and then has no way to tell the sessions of visitors from those of signed-in users.
 
+Implement the optional `session_ended/1` as well when the backend can: it tells whether the session with an id was deleted with `delete_value/1` a short while ago, for at least as long as a request to your application can take. With signed ids (`secret_key_base`), Nova starts a session under a signed id that no session is stored under, and it asks `session_ended/1` first, so that a request that was on its way when its client signed out does not start one under the id that was given up. A backend that has it should also store nothing under such an id and return `{error, session_ended}` from `set_value/3`, since the session can be deleted between the moment Nova asks `session_exists/1` and the write; Nova then stores the value in a session of its own. A row with the id and a time to live of a few minutes, written by `delete_value/1`, is enough. A backend without the callback relies on what the process of the request knows: a session it has read, deleted or renewed itself is not written again, and one that another request ended before this one touched it can be.
+
 Optionally you can also implement `start_link/0`, which will start a process under nova's supervisor for handling infrastructure of your handler, if it is necessary. For example, in default `nova_session_ets` module it starts a `gen_server` for managing underlying *ETS* table.
 
 ```erlang
 -module(my_session_backend).
 -behaviour(nova_session).
 
--export([get_value/2, set_value/3, delete_value/1, delete_value/2, session_exists/1]).
+-export([get_value/2, set_value/3, delete_value/1, delete_value/2, session_exists/1, session_ended/1]).
 
 get_value(SessionId, Key) ->
     %% Your code here
@@ -247,6 +277,10 @@ delete_value(SessionId, Key) ->
 
 session_exists(SessionId) ->
     %% Your code here
+    false.
+
+session_ended(SessionId) ->
+    %% Your code here: true for an id delete_value/1 was called with a few minutes ago
     false.
 ```
 

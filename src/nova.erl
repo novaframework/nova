@@ -49,7 +49,7 @@ get_environment() ->
     application:get_env(nova, environment, ?DEFAULT_ENVIRONMENT).
 
 %%--------------------------------------------------------------------
--doc "Whether `get_environment/0` is `dev`, which an unset `environment` is not. Nova asks this wherever `dev` relaxes a security default: the `Secure` flag of the session cookie and the crash details on error pages.".
+-doc "Whether `get_environment/0` is `dev`, which an unset `environment` is not. Nova asks this wherever `dev` relaxes a security default: the `Secure` flag and the `__Host-` name of the session cookie, and the crash details on error pages.".
 -spec is_dev_environment() -> boolean().
 is_dev_environment() ->
     get_environment() =:= dev.

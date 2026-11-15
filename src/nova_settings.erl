@@ -7,33 +7,39 @@
 %%% nobody has looked at. They are read from `nova` alone, whichever
 %%% application is the bootstrap one.
 
--export([validate/0, value/1, checked/2, expected/1]).
+-export([validate/0, value/1, checked/2, expected/1, removed/0, removed_notice/1]).
 
 -include_lib("kernel/include/logger.hrl").
 
--type key() :: allowed_origins | csrf_secret | csrf_token | max_sessions | non_canonical_paths |
-               plugins_before_security.
+-type key() :: trusted_origins | csrf_token | max_sessions | non_canonical_paths | plugins_before_security |
+               secret_key_base.
 -export_type([key/0]).
 
 -define(MIN_SECRET_BYTES, 32).
+-define(MIN_DISTINCT_BYTES, 8).
 -define(DEFAULT_MAX_SESSIONS, 1000000).
 
 -doc """
 Checks every setting and keeps what `value/1` returns from then on. Raises
 `{invalid_setting, Key, Reason}` for the first one that cannot be used.
-`Reason` is the value that was refused, `redacted` where that is a secret,
-or `not_set`. For `nova_sup`, which calls it before it starts anything.
+`Reason` is the value that was refused, `redacted` where that is a secret
+(one that is too short, not a binary, or plainly not out of a random
+source), `not_set`, `{requires, Setting}` for one that cannot be used without another,
+or `{replaced_by, Replacement}` for a setting of `removed/0`. For
+`nova_sup`, which calls it before it starts anything.
 """.
 -spec validate() -> ok.
 validate() ->
+    ok = no_removed_setting(removed()),
     Settings = #{Key => valid(Key) || Key <- keys()},
     ok = secret_to_sign_with(Settings),
     persistent_term:put(?MODULE, Settings).
 
 -doc """
-The checked value of a setting, or its default. `csrf_secret` is the list
-of secrets, empty when none is set, and the origins of an `allowed_origins`
-list are binaries. On a node where Nova was not started, the settings are
+The checked value of a setting, or its default. `secret_key_base` is the keys
+made from each of its secrets (`nova_secret:derived/1`), empty when none is
+set, and never a secret itself. The origins of a `trusted_origins` list are
+binaries. On a node where Nova was not started, the settings are
 checked the first time one is read.
 """.
 -spec value(Key :: key()) -> term().
@@ -55,23 +61,23 @@ takes one of the settings as an option of its own.
 -spec checked(Key :: key(), Value :: term()) -> {ok, term()} | {error, Reason :: term()}.
 checked(non_canonical_paths, Value) when Value =:= reject; Value =:= resolve ->
     {ok, Value};
-checked(allowed_origins, Value) when Value =:= same_host; Value =:= same_origin; Value =:= any ->
+checked(trusted_origins, Value) when Value =:= same_host; Value =:= same_origin; Value =:= any ->
     {ok, Value};
-checked(allowed_origins, Value) ->
+checked(trusted_origins, Value) ->
     case origins(Value, []) of
         {ok, Origins} -> {ok, Origins};
         error -> {error, Value}
     end;
 checked(csrf_token, Value) when Value =:= undefined; Value =:= stateless; Value =:= session ->
     {ok, Value};
-checked(csrf_secret, undefined) ->
+checked(secret_key_base, undefined) ->
     {ok, []};
-checked(csrf_secret, Secret) when is_binary(Secret) ->
-    checked(csrf_secret, [Secret]);
-checked(csrf_secret, Secrets) ->
-    case is_list_of_secrets(Secrets) of
-        true -> {ok, Secrets};
-        false -> {error, redacted}
+checked(secret_key_base, Secret) when is_binary(Secret) ->
+    checked(secret_key_base, [Secret]);
+checked(secret_key_base, Value) ->
+    case secrets(Value) of
+        {ok, Secrets} -> {ok, [nova_secret:derived(Secret) || Secret <- Secrets]};
+        error -> {error, redacted}
     end;
 checked(max_sessions, Value) when Value =:= infinity; is_integer(Value), Value > 0 ->
     {ok, Value};
@@ -88,22 +94,55 @@ checked(_Key, Value) ->
 -doc "What a setting may be, in the words of the error that is logged for one that is not.".
 -spec expected(Key :: key()) -> binary().
 expected(non_canonical_paths) -> ~"non_canonical_paths must be reject or resolve";
-expected(allowed_origins) -> ~"allowed_origins must be same_host, same_origin, any or a list of origins";
+expected(trusted_origins) -> ~"trusted_origins must be same_host, same_origin, any or a list of origins";
 expected(csrf_token) -> ~"csrf_token must be stateless or session";
-expected(csrf_secret) -> ~"csrf_secret must be a binary of at least 32 bytes, or a list of such";
+expected(secret_key_base) ->
+    ~"secret_key_base must be a binary of at least 32 bytes out of a random source, or a list of such. A value that repeats a few bytes, an example out of the documentation or a ${VARIABLE} that was not filled in is refused. base64:encode(crypto:strong_rand_bytes(48)) in an Erlang shell, or openssl rand -base64 48, makes one";
 expected(max_sessions) -> ~"max_sessions must be infinity or an integer above 0";
 expected(plugins_before_security) ->
     ~"plugins_before_security must be all or a list of plugin modules that have pre_request/4".
 
+-doc """
+The settings that were in no release and are gone, each with the one that
+took its place. One that is still set stops the boot with
+`{invalid_setting, Key, {replaced_by, Replacement}}`.
+""".
+-spec removed() -> [{Key :: atom(), Replacement :: key()}].
+removed() ->
+    [{plugins_after_security, plugins_before_security},
+     {allowed_origins, trusted_origins},
+     {csrf_secret, secret_key_base}].
+
+-doc "What is logged for a setting of `removed/0` that is still set.".
+-spec removed_notice(Key :: atom()) -> binary().
+removed_notice(allowed_origins) ->
+    ~"allowed_origins is now trusted_origins, with the values it had";
+removed_notice(csrf_secret) ->
+    ~"csrf_secret is now secret_key_base: one secret for the node, from which nova_csrf_plugin has a key of its own";
+removed_notice(plugins_after_security) ->
+    ~"plugins_after_security is gone. pre_security/4 of a plugin always runs ahead of the security callback and pre_request/4 behind it, and plugins_before_security is the one setting that changes that".
+
+-spec no_removed_setting([{atom(), key()}]) -> ok.
+no_removed_setting([]) ->
+    ok;
+no_removed_setting([{Key, Replacement} | Rest]) ->
+    case application:get_env(nova, Key) of
+        undefined ->
+            no_removed_setting(Rest);
+        {ok, _Value} ->
+            ?LOG_ERROR(#{msg => removed_notice(Key), setting => Key, replaced_by => Replacement}),
+            erlang:error({invalid_setting, Key, {replaced_by, Replacement}})
+    end.
+
 -spec keys() -> [key()].
 keys() ->
-    [non_canonical_paths, allowed_origins, csrf_token, csrf_secret, max_sessions, plugins_before_security].
+    [non_canonical_paths, trusted_origins, csrf_token, secret_key_base, max_sessions, plugins_before_security].
 
 -spec default(key()) -> term().
 default(non_canonical_paths) -> reject;
-default(allowed_origins) -> same_host;
+default(trusted_origins) -> same_host;
 default(csrf_token) -> undefined;
-default(csrf_secret) -> undefined;
+default(secret_key_base) -> undefined;
 default(max_sessions) -> ?DEFAULT_MAX_SESSIONS;
 default(plugins_before_security) -> [].
 
@@ -117,11 +156,22 @@ valid(Key) ->
             erlang:error({invalid_setting, Key, Reason})
     end.
 
+%% A signed token is made for the session cookie of a client and with a key
+%% of the secret, so the setting that asks for one needs both.
 -spec secret_to_sign_with(map()) -> ok.
-secret_to_sign_with(#{csrf_token := stateless, csrf_secret := []}) ->
-    ?LOG_ERROR(#{msg => ~"csrf_token is stateless and csrf_secret is not set", setting => csrf_secret,
-                 value => not_set}),
-    erlang:error({invalid_setting, csrf_secret, not_set});
+secret_to_sign_with(#{csrf_token := stateless, secret_key_base := []}) ->
+    ?LOG_ERROR(#{msg => ~"csrf_token is stateless and secret_key_base, which signs the tokens, is not set",
+                 setting => secret_key_base, value => not_set}),
+    erlang:error({invalid_setting, secret_key_base, not_set});
+secret_to_sign_with(#{csrf_token := stateless}) ->
+    case nova_session:enabled() of
+        true ->
+            ok;
+        false ->
+            ?LOG_ERROR(#{msg => ~"csrf_token is stateless and use_sessions is false. A signed token is for the session cookie of a client, which Nova does not hand out without sessions",
+                         setting => csrf_token, value => stateless}),
+            erlang:error({invalid_setting, csrf_token, {requires, use_sessions}})
+    end;
 secret_to_sign_with(_Settings) ->
     ok.
 
@@ -149,17 +199,53 @@ string_as_binary(String) ->
 
 %% Written without a call that raises on what the setting holds: a reason
 %% that is raised carries the value into the report of the boot that failed.
--spec is_list_of_secrets(term()) -> boolean().
-is_list_of_secrets([Secret]) ->
-    is_secret(Secret);
-is_list_of_secrets([Secret | Secrets]) ->
-    is_secret(Secret) andalso is_list_of_secrets(Secrets);
-is_list_of_secrets(_NotAList) ->
+-spec secrets(term()) -> {ok, [binary()]} | error.
+secrets([Secret]) when is_binary(Secret), byte_size(Secret) >= ?MIN_SECRET_BYTES ->
+    case is_plainly_not_random(Secret) of
+        false -> {ok, [Secret]};
+        true -> error
+    end;
+secrets([Secret | Rest]) when is_binary(Secret), byte_size(Secret) >= ?MIN_SECRET_BYTES ->
+    case is_plainly_not_random(Secret) orelse secrets(Rest) of
+        {ok, Secrets} -> {ok, [Secret | Secrets]};
+        _NotSecrets -> error
+    end;
+secrets(_NotSecrets) ->
+    error.
+
+%% Whoever sees a signed session id or token can try secrets against it at
+%% home, as fast as HMAC runs, so the secret has to come from a random
+%% source and a long word does not do. Nova cannot measure that. It refuses
+%% what plainly is not: a few bytes over and over, which 32 characters out
+%% of a random source do not come to in hex or base64 or as they are, an
+%% example out of the documentation, and the name of a variable in a
+%% configuration template that nothing filled in.
+-spec is_plainly_not_random(Secret :: binary()) -> boolean().
+is_plainly_not_random(Secret) ->
+    length(lists:usort(binary_to_list(Secret))) < ?MIN_DISTINCT_BYTES orelse
+        lists:member(Secret, documented_examples()) orelse is_variable_not_filled_in(Secret).
+
+-spec documented_examples() -> [binary()].
+documented_examples() ->
+    [~"at least 32 bytes that every node of the system is given",
+     ~"the-new-secret-of-at-least-32-bytes-0001",
+     ~"the-old-secret-of-at-least-32-bytes-0000"].
+
+%% `${NAME}`, as sys.config.src has it before the release fills it in.
+-spec is_variable_not_filled_in(Secret :: binary()) -> boolean().
+is_variable_not_filled_in(<<"${", Name/binary>>) ->
+    is_variable_name(Name);
+is_variable_not_filled_in(_Secret) ->
     false.
 
--spec is_secret(term()) -> boolean().
-is_secret(Secret) ->
-    is_binary(Secret) andalso byte_size(Secret) >= ?MIN_SECRET_BYTES.
+-spec is_variable_name(binary()) -> boolean().
+is_variable_name(<<"}">>) ->
+    true;
+is_variable_name(<<Char, Rest/binary>>)
+  when Char >= $A, Char =< $Z; Char >= $a, Char =< $z; Char >= $0, Char =< $9; Char =:= $_ ->
+    is_variable_name(Rest);
+is_variable_name(_NotAName) ->
+    false.
 
 %% A name that is not a plugin moves nothing ahead of the security callback,
 %% so a misspelt one, or `all` written inside a list, is refused.

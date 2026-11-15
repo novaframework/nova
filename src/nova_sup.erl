@@ -306,9 +306,26 @@ start_cowboy(Configuration) ->
                                              apps = [BootstrapApp],
                                              dispatch_key = DispatchKey,
                                              tls = Tls}),
+            say_what_the_session_cookie_needs(Tls),
             {ok, BootstrapApp, Host, Port};
         {error, Reason} ->
             {error, Reason}
+    end.
+
+%% Nova cannot see whether a proxy in front of a listener without TLS has it,
+%% and a browser that reached the site over plain http drops a Secure cookie
+%% without a word. So it is said once, when the node starts.
+say_what_the_session_cookie_needs(true) ->
+    ok;
+say_what_the_session_cookie_needs(false) ->
+    case nova_session:needs_https() of
+        true ->
+            ?LOG_NOTICE(#{msg => ~"The session cookie is Secure, so a browser keeps it only where it reached the site over https. This listener has no TLS, which is right behind a proxy that terminates TLS. Where browsers reach it over plain http no session is kept: set environment to dev on a development machine, or session_cookie_opts to #{secure => false} together with a session_cookie_name without the __Host- prefix",
+                          notice => session_cookie_needs_https,
+                          cookie => nova_session:cookie_name(),
+                          settings => [session_cookie_name, session_cookie_opts, environment]});
+        false ->
+            ok
     end.
 
 %%--------------------------------------------------------------------

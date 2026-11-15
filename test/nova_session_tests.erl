@@ -14,6 +14,7 @@
 
 setup() ->
     pg:start_link(nova_scope),
+    application:unset_env(nova, environment),
     application:set_env(nova, bootstrap_application, nova),
     application:set_env(nova, use_sessions, true),
     application:set_env(nova, session_manager, nova_session_ets),
@@ -24,7 +25,7 @@ setup() ->
                     case maps:get(cookie_session_id, Req, undefined) of
                         undefined -> [];
                         unparsable -> exit({request_error, {header, ~"cookie"}, malformed});
-                        SId -> [{~"session_id", SId}]
+                        SId -> [{nova_session:cookie_name(), SId}]
                     end
                 end),
     meck:expect(cowboy_req, set_resp_cookie,
@@ -108,6 +109,9 @@ nova_session_ets_test_() ->
       fun set_tells_stream_handler/0,
       fun renew_drops_old_session/0,
       fun renew_tells_stream_handler/0,
+      fun sign_in_stores_under_a_new_id/0,
+      fun sign_in_moves_a_visitor_off_an_id_that_was_handed_out/0,
+      fun sign_in_says_when_the_backend_stores_nothing/0,
       fun backend_is_asked_once_about_a_presented_id/0,
       fun deleted_session_is_asked_about_again/0,
       fun session_deleted_by_another_process_is_not_written_again/0,
@@ -123,6 +127,18 @@ nova_session_ets_test_() ->
       fun client_id_of_a_request_without_a_cookie_is_handed_out/0,
       fun client_id_without_stream_handler_is_the_cookie/0,
       fun unknown_presented_id_is_replaced/0,
+      fun id_that_was_handed_out_is_kept_by_the_first_write/0,
+      fun id_that_was_handed_out_without_a_secret_is_replaced/0,
+      fun id_nobody_handed_out_is_replaced_with_a_secret_set/0,
+      fun id_of_a_secret_that_is_gone_is_replaced/0,
+      fun id_in_another_spelling_is_replaced/0,
+      fun handed_out_id_is_not_kept_for_another_process/0,
+      fun handed_out_id_that_was_deleted_is_not_written_again/0,
+      fun handed_out_id_another_process_deleted_is_not_written_again/0,
+      fun handed_out_id_that_ended_elsewhere_is_not_written/0,
+      fun write_that_arrives_behind_the_delete_starts_another_session/0,
+      fun backend_without_ended_ids_is_not_asked_about_them/0,
+      fun session_ids_have_one_length/0,
       fun renew_drops_presented_id/0,
       fun spawned_process_does_not_notify/0,
       fun request_without_owner_does_not_notify/0,
@@ -270,7 +286,7 @@ renew_sets_cookie_without_stream_handler() ->
     {ok, SId} = nova_session:generate_session_id(),
     {ok, Req1} = nova_session:renew(req_with_cookie(SId)),
     #{nova_session_id := NewId, resp_cookie := #{name := Name, value := Value, opts := Opts}} = Req1,
-    ?assertEqual({~"session_id", NewId}, {Name, Value}),
+    ?assertEqual({~"__Host-session_id", NewId}, {Name, Value}),
     ?assertMatch(#{path := ~"/", http_only := true, max_age := 1209600}, Opts),
     {ok, Req2} = nova_session:renew(Req1),
     #{nova_session_id := NewerId, resp_cookie := #{value := NewerId}} = Req2,
@@ -279,11 +295,10 @@ renew_sets_cookie_without_stream_handler() ->
 delete_expires_cookie_without_stream_handler() ->
     {ok, SId} = nova_session:generate_session_id(),
     {ok, Req1} = nova_session:delete(req_with_cookie(SId)),
-    #{resp_cookie := #{name := ~"session_id", value := <<>>, opts := #{max_age := 0}}} = Req1.
+    #{resp_cookie := #{name := ~"__Host-session_id", value := <<>>, opts := #{max_age := 0}}} = Req1.
 
 %% cowboy_req:set_resp_cookie/4 is mocked here, so the refusal is Nova's own
-%% and does not depend on the cowlib version. The mocked request only carries
-%% a session_id cookie, so delete/1 is checked with the invalid domain.
+%% and does not depend on the cowlib version.
 invalid_cookie_name_raises_without_stream_handler() ->
     application:set_env(nova, session_cookie_name, ~"app:sid"),
     try
@@ -295,6 +310,7 @@ invalid_cookie_name_raises_without_stream_handler() ->
     end.
 
 invalid_cookie_domain_raises_without_stream_handler() ->
+    application:set_env(nova, session_cookie_name, ~"session_id"),
     application:set_env(nova, session_cookie_opts, #{domain => <<"a\nb">>}),
     try
         {ok, SId} = nova_session:generate_session_id(),
@@ -303,6 +319,7 @@ invalid_cookie_domain_raises_without_stream_handler() ->
         ?assertError({invalid_session_cookie_config, #{domain := <<"a\nb">>}},
                      nova_session:delete(req_with_cookie(SId)))
     after
+        application:unset_env(nova, session_cookie_name),
         application:unset_env(nova, session_cookie_opts)
     end.
 
@@ -368,6 +385,250 @@ unknown_presented_id_is_replaced() ->
     ?assertEqual({written, ~"pending"}, stream_event()),
     ?assertNot(nova_session_ets:session_exists(~"attacker-chosen")),
     ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")).
+
+-define(SECRET, ~"a secret of thirty-two bytes or more, for the tests").
+-define(OTHER_SECRET, ~"another secret of thirty-two bytes or more, for them").
+
+with_secret(Secret, Fun) ->
+    ok = nova_test_settings:set(secret_key_base, Secret),
+    try Fun()
+    after nova_test_settings:unset(secret_key_base)
+    end.
+
+%% With a secret set, an id says by itself that Nova handed it out. A
+%% visitor who got one with a page, and no session, keeps it when the
+%% session is first written.
+id_that_was_handed_out_is_kept_by_the_first_write() ->
+    with_secret(?SECRET,
+                fun() ->
+                        {ok, Id} = nova_session:generate_session_id(),
+                        Req = presented_req(Id, ~"pending"),
+                        ?assertEqual({error, not_found}, nova_session:get(Req, ~"k")),
+                        ok = nova_session:set(Req, ~"k", ~"v"),
+                        ?assertEqual({written, Id}, stream_event()),
+                        ?assertEqual({ok, ~"v"}, nova_session_ets:get_value(Id, ~"k")),
+                        ?assertNot(nova_session_ets:session_exists(~"pending"))
+                end).
+
+id_that_was_handed_out_without_a_secret_is_replaced() ->
+    {ok, Id} = nova_session:generate_session_id(),
+    ok = nova_session:set(presented_req(Id, ~"pending"), ~"k", ~"v"),
+    ?assertEqual({written, ~"pending"}, stream_event()),
+    ?assertNot(nova_session_ets:session_exists(Id)).
+
+id_nobody_handed_out_is_replaced_with_a_secret_set() ->
+    with_secret(?SECRET,
+                fun() ->
+                        {ok, <<First, Rest/binary>>} = nova_session:generate_session_id(),
+                        Changed = <<(case First of $A -> $B; _ -> $A end), Rest/binary>>,
+                        [begin
+                             ok = nova_session:set(presented_req(Chosen, ~"pending"), ~"k", ~"v"),
+                             ?assertEqual({Chosen, {written, ~"pending"}}, {Chosen, stream_event()}),
+                             ?assertNot(nova_session_ets:session_exists(Chosen))
+                         end || Chosen <- [~"attacker-chosen", Changed, base64:encode(crypto:strong_rand_bytes(32)),
+                                           base64:encode(crypto:strong_rand_bytes(16)), ~"", ~"!!!!"]]
+                end).
+
+%% The decoder skips whitespace, takes an id without its padding when told
+%% to and ignores the bits of the last character that belong to no byte, so
+%% one signed id can be written in any number of ways. Each of them would be
+%% another session to the backend, and to whatever counts or blocks by the
+%% cookie. Only the spelling Nova hands out is the id.
+id_in_another_spelling_is_replaced() ->
+    with_secret(?SECRET,
+                fun() ->
+                        {ok, Id} = nova_session:generate_session_id(),
+                        [begin
+                             ?assertEqual({Spelling, base64:decode(Id)},
+                                          {Spelling, base64:decode(Spelling, #{padding => false})}),
+                             ok = nova_session:set(presented_req(Spelling, ~"pending"), ~"k", ~"v"),
+                             ?assertEqual({Spelling, {written, ~"pending"}}, {Spelling, stream_event()}),
+                             ?assertNot(nova_session_ets:session_exists(Spelling))
+                         end || Spelling <- other_spellings(Id)],
+                        ok = nova_session:set(presented_req(Id, ~"pending"), ~"k", ~"v"),
+                        ?assertEqual({written, Id}, stream_event())
+                end).
+
+%% Whitespace in front, inside and behind, the padding left out, and every
+%% other value of the two bits the last character of 32 bytes has to spare.
+other_spellings(<<Half:22/binary, Rest/binary>> = Id) ->
+    <<Front:42/binary, Last, "=">> = Id,
+    [<<" ", Id/binary>>, <<Half/binary, " ", Rest/binary>>, <<Half/binary, "\t", Rest/binary>>,
+     <<Half/binary, "\r\n", Rest/binary>>, <<Id/binary, "\n">>, <<Front/binary, Last>>
+     | [<<Front/binary, Spare, "=">> || Spare <- same_bytes_as(Last), Spare =/= Last]].
+
+same_bytes_as(Character) ->
+    Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+    Values = lists:zip(Alphabet, lists:seq(0, 63)),
+    {Character, Value} = lists:keyfind(Character, 1, Values),
+    [Other || {Other, OtherValue} <- Values, OtherValue bsr 2 =:= Value bsr 2].
+
+id_of_a_secret_that_is_gone_is_replaced() ->
+    Id = with_secret(?SECRET, fun() -> {ok, Id} = nova_session:generate_session_id(), Id end),
+    with_secret([?OTHER_SECRET, ?SECRET],
+                fun() ->
+                        ok = nova_session:set(presented_req(Id, ~"pending"), ~"k", ~"v"),
+                        ?assertEqual({written, Id}, stream_event())
+                end),
+    ok = nova_session_ets:delete_value(Id),
+    with_secret(?OTHER_SECRET,
+                fun() ->
+                        ok = nova_session:set(presented_req(Id, ~"other-pending"), ~"k", ~"v"),
+                        ?assertEqual({written, ~"other-pending"}, stream_event())
+                end).
+
+%% Signing in is one call: the id changes and the value is stored under the
+%% new one, which the request that comes back carries.
+sign_in_stores_under_a_new_id() ->
+    ok = nova_session_ets:set_value(~"before-sign-in", ~"basket", ~"1"),
+    Req = presented_req(~"before-sign-in", ~"pending"),
+    {ok, SignedIn} = nova_session:sign_in(Req, ~"user", ~"alice"),
+    #{nova_session_id := <<NewId/binary>>} = SignedIn,
+    ?assertEqual({renewed, NewId}, stream_event()),
+    ?assertNot(lists:member(NewId, [~"before-sign-in", ~"pending"])),
+    ?assertEqual({ok, ~"alice"}, nova_session:get(SignedIn, ~"user")),
+    ?assertEqual({ok, ~"alice"}, nova_session_ets:get_value(NewId, ~"user")),
+    ?assertEqual({error, not_found}, nova_session:get(SignedIn, ~"basket")),
+    ?assertNot(nova_session_ets:session_exists(~"before-sign-in")),
+    ?assertEqual({error, not_found}, nova_session:get(Req, ~"user")).
+
+sign_in_moves_a_visitor_off_an_id_that_was_handed_out() ->
+    with_secret(?SECRET,
+                fun() ->
+                        {ok, HandedOut} = nova_session:generate_session_id(),
+                        {ok, SignedIn} = nova_session:sign_in(presented_req(HandedOut, ~"pending"), ~"user", ~"alice"),
+                        #{nova_session_id := <<NewId/binary>>} = SignedIn,
+                        ?assertEqual({renewed, NewId}, stream_event()),
+                        ?assertNot(lists:member(NewId, [HandedOut, ~"pending"])),
+                        ?assertEqual({ok, ~"alice"}, nova_session_ets:get_value(NewId, ~"user")),
+                        ?assertNot(nova_session_ets:session_exists(HandedOut))
+                end).
+
+sign_in_says_when_the_backend_stores_nothing() ->
+    meck:new(nova_session_ets, [passthrough]),
+    try
+        meck:expect(nova_session_ets, set_value, fun(_SessionId, _Key, _Value) -> {error, session_store_full} end),
+        ?assertEqual({error, session_store_full},
+                     nova_session:sign_in(presented_req(~"refused", ~"pending"), ~"user", ~"alice"))
+    after
+        meck:unload(nova_session_ets)
+    end.
+
+%% A process that is not serving the request cannot move the cookie, and
+%% has no say in which id a session starts under.
+handed_out_id_is_not_kept_for_another_process() ->
+    with_secret(?SECRET,
+                fun() ->
+                        {ok, Id} = nova_session:generate_session_id(),
+                        Req = presented_req(Id, ~"pending"),
+                        {Pid, Ref} = spawn_monitor(fun() -> ok = nova_session:set(Req, ~"k", ~"v") end),
+                        receive {'DOWN', Ref, process, Pid, Reason} -> ?assertEqual(normal, Reason)
+                        after 1000 -> error(timeout)
+                        end,
+                        ?assertNot(nova_session_ets:session_exists(Id)),
+                        ?assert(nova_session_ets:session_exists(~"pending"))
+                end).
+
+%% An id that says Nova handed it out says nothing about the session being
+%% there still. What deleted_session_is_asked_about_again and
+%% session_deleted_by_another_process_is_not_written_again hold goes for it.
+handed_out_id_that_was_deleted_is_not_written_again() ->
+    with_secret(?SECRET,
+                fun() ->
+                        [begin
+                             {ok, Id} = nova_session:generate_session_id(),
+                             ok = nova_session_ets:set_value(Id, ~"k", ~"v"),
+                             Req = presented_req(Id, ~"pending"),
+                             {ok, _Req} = Drop(Req),
+                             ok = nova_session:set(Req, ~"k", ~"again"),
+                             ?assertNot(nova_session_ets:session_exists(Id))
+                         end || Drop <- [fun nova_session:delete/1, fun nova_session:renew/1]]
+                end).
+
+handed_out_id_another_process_deleted_is_not_written_again() ->
+    with_secret(?SECRET,
+                fun() ->
+                        {ok, Id} = nova_session:generate_session_id(),
+                        ok = nova_session_ets:set_value(Id, ~"user", ~"alice"),
+                        Req = presented_req(Id, ~"pending"),
+                        ?assertEqual({ok, ~"alice"}, nova_session:get(Req, ~"user")),
+                        {Pid, Ref} = spawn_monitor(fun() -> {ok, _} = nova_session:delete(req_with_session(Id)) end),
+                        receive {'DOWN', Ref, process, Pid, Reason} -> ?assertEqual(normal, Reason)
+                        after 1000 -> error(timeout)
+                        end,
+                        ok = nova_session:set(Req, ~"k", ~"v"),
+                        ?assertEqual({written, ~"pending"}, stream_event()),
+                        ?assertNot(nova_session_ets:session_exists(Id))
+                end).
+
+%% The request has not touched its session before another one ends it, so
+%% nothing in its own process says the id is over. The backend does.
+handed_out_id_that_ended_elsewhere_is_not_written() ->
+    with_secret(?SECRET,
+                fun() ->
+                        [begin
+                             {ok, Id} = nova_session:generate_session_id(),
+                             {ok, Pending} = nova_session:generate_session_id(),
+                             _ = Stored andalso nova_session_ets:set_value(Id, ~"user", ~"alice"),
+                             Req = presented_req(Id, Pending),
+                             {Pid, Ref} = spawn_monitor(fun() -> {ok, _} = Drop(req_with_session(Id)) end),
+                             receive {'DOWN', Ref, process, Pid, Reason} -> ?assertEqual(normal, Reason)
+                             after 1000 -> error(timeout)
+                             end,
+                             ok = nova_session:set(Req, ~"note", ~"late"),
+                             ?assertEqual({written, Pending}, stream_event()),
+                             ?assertNot(nova_session_ets:session_exists(Id)),
+                             ?assertEqual({ok, ~"late"}, nova_session:get(Req, ~"note"))
+                         end || Stored <- [true, false], Drop <- [fun nova_session:delete/1, fun nova_session:renew/1]]
+                end).
+
+%% The backend said the session was there, and it is deleted before the
+%% write gets to it. What the backend refuses for an id that has ended is
+%% stored as it would have been a moment later: in a session of its own.
+write_that_arrives_behind_the_delete_starts_another_session() ->
+    ok = nova_session_ets:set_value(~"ends-meanwhile", ~"user", ~"alice"),
+    Req = presented_req(~"ends-meanwhile", ~"pending"),
+    meck:new(nova_session_ets, [passthrough]),
+    try
+        meck:expect(nova_session_ets, session_exists,
+                    fun(~"ends-meanwhile") -> ok =:= nova_session_ets:delete_value(~"ends-meanwhile");
+                       (SessionId) -> meck:passthrough([SessionId])
+                    end),
+        ?assertEqual(ok, nova_session:set(Req, ~"note", ~"late")),
+        ?assertEqual({written, ~"pending"}, stream_event())
+    after
+        meck:unload(nova_session_ets)
+    end,
+    ?assertNot(nova_session_ets:session_exists(~"ends-meanwhile")),
+    ?assertEqual({ok, ~"late"}, nova_session_ets:get_value(~"pending", ~"note")),
+    ?assertEqual({ok, ~"late"}, nova_session:get(Req, ~"note")).
+
+%% session_ended/1 is for a backend to have or not.
+backend_without_ended_ids_is_not_asked_about_them() ->
+    meck:new(fake_session_backend, [non_strict]),
+    application:set_env(nova, session_manager, fake_session_backend),
+    try
+        with_secret(?SECRET,
+                    fun() ->
+                            {ok, Id} = nova_session:generate_session_id(),
+                            meck:expect(fake_session_backend, session_exists, fun(_SessionId) -> false end),
+                            meck:expect(fake_session_backend, set_value, fun(_SessionId, _Key, _Value) -> ok end),
+                            ?assertEqual(ok, nova_session:set(presented_req(Id, ~"pending"), ~"k", ~"v")),
+                            ?assertEqual({written, Id}, stream_event()),
+                            meck:expect(fake_session_backend, session_ended, fun(_SessionId) -> true end),
+                            ?assertEqual(ok, nova_session:set(presented_req(Id, ~"pending"), ~"k", ~"v")),
+                            ?assertEqual({written, ~"pending"}, stream_event())
+                    end)
+    after
+        application:set_env(nova, session_manager, nova_session_ets),
+        meck:unload(fake_session_backend)
+    end.
+
+session_ids_have_one_length() ->
+    {ok, Plain} = nova_session:generate_session_id(),
+    {ok, Signed} = with_secret(?SECRET, fun nova_session:generate_session_id/0),
+    ?assertEqual({44, 44}, {byte_size(Plain), byte_size(Signed)}),
+    ?assertNotEqual(with_secret(?SECRET, fun nova_session:generate_session_id/0), {ok, Signed}).
 
 backend_is_asked_once_about_a_presented_id() ->
     ok = nova_session_ets:set_value(~"asked-once", ~"k", ~"v"),
@@ -549,11 +810,120 @@ validate_cookie_config_test_() ->
        end},
       {"an invalid domain is refused and named",
        fun() ->
+               application:set_env(nova, session_cookie_name, ~"session_id"),
                application:set_env(nova, session_cookie_opts, #{domain => <<"a\nb">>}),
                ?assertError({invalid_session_cookie_config,
                              #{name := ~"session_id", path := ~"/", domain := <<"a\nb">>}},
                             nova_session:validate_cookie_config())
        end}]}.
+
+%%--------------------------------------------------------------------
+%% The name of the cookie when none is set
+%%--------------------------------------------------------------------
+
+default_cookie_name_test_() ->
+    {foreach,
+     fun() ->
+             application:set_env(nova, bootstrap_application, nova),
+             application:unset_env(nova, environment),
+             application:unset_env(nova, session_cookie_name),
+             application:unset_env(nova, session_cookie_opts)
+     end,
+     fun(_) ->
+             application:unset_env(nova, environment),
+             application:unset_env(nova, session_cookie_name),
+             application:unset_env(nova, session_cookie_opts),
+             application:unset_env(nova, bootstrap_application)
+     end,
+     [{"outside dev the cookie has the __Host- prefix",
+       fun() ->
+               ?assertEqual(~"__Host-session_id", nova_session:cookie_name()),
+               [begin
+                    application:set_env(nova, environment, Environment),
+                    ?assertEqual({Environment, ~"__Host-session_id"}, {Environment, nova_session:cookie_name()})
+                end || Environment <- [prod, test, staging]]
+       end},
+      {"in dev it is session_id, which a browser keeps over plain http",
+       fun() ->
+               application:set_env(nova, environment, dev),
+               ?assertEqual(~"session_id", nova_session:cookie_name()),
+               ?assertMatch(#{secure := false}, nova_session:cookie_opts(over_plain_http())),
+               ?assertEqual(ok, nova_session:validate_cookie_config())
+       end},
+      {"a name that is set is the name, in every environment",
+       fun() ->
+               application:set_env(nova, session_cookie_name, ~"sid"),
+               ?assertEqual(~"sid", nova_session:cookie_name()),
+               application:set_env(nova, environment, dev),
+               ?assertEqual(~"sid", nova_session:cookie_name())
+       end},
+      {"a listener without TLS does not take Secure off the cookie, so it works behind a proxy that has the TLS",
+       fun() ->
+               Opts = nova_session:cookie_opts(over_plain_http()),
+               ?assertMatch(#{secure := true, path := ~"/", http_only := true}, Opts),
+               ?assertNot(is_map_key(domain, Opts)),
+               Cookie = iolist_to_binary(cow_cookie:setcookie(nova_session:cookie_name(), ~"id", Opts)),
+               ?assertMatch(<<"__Host-session_id=id;", _/binary>>, Cookie),
+               ?assertMatch({_, _}, binary:match(Cookie, ~"; Secure")),
+               ?assertMatch({_, _}, binary:match(Cookie, ~"; Path=/")),
+               ?assertEqual(nomatch, binary:match(Cookie, ~"Domain"))
+       end},
+      {"the session_id cookie of before the upgrade is no session",
+       fun() ->
+               Req = nova_test_helper:with_header(~"cookie", ~"session_id=the-id-of-before", over_plain_http()),
+               ?assertEqual(undefined, nova_session:presented_session_id(Req)),
+               Both = nova_test_helper:with_header(~"cookie", ~"session_id=the-id-of-before; __Host-session_id=the-new-one",
+                                                   over_plain_http()),
+               ?assertEqual(~"the-new-one", nova_session:presented_session_id(Both))
+       end},
+      {"options the prefix cannot have are refused with the name unset",
+       fun() ->
+               [begin
+                    application:set_env(nova, session_cookie_opts, Opts),
+                    ?assertError({invalid_setting, session_cookie_opts, {requires, session_cookie_name}},
+                                 nova_session:validate_cookie_config())
+                end || Opts <- [#{domain => ~"example.com"}, #{path => ~"/app"}, #{secure => false}]]
+       end},
+      {"the same options are taken with a name that is set, and in dev",
+       fun() ->
+               Opts = #{domain => ~"example.com", path => ~"/app", secure => false},
+               application:set_env(nova, session_cookie_opts, Opts),
+               application:set_env(nova, session_cookie_name, ~"session_id"),
+               ?assertEqual(ok, nova_session:validate_cookie_config()),
+               ?assertMatch(#{domain := ~"example.com", path := ~"/app", secure := false},
+                            nova_session:cookie_opts(over_plain_http())),
+               application:unset_env(nova, session_cookie_name),
+               application:set_env(nova, environment, dev),
+               ?assertEqual(ok, nova_session:validate_cookie_config())
+       end},
+      {"options the prefix has anyway are taken with the name unset",
+       fun() ->
+               application:set_env(nova, session_cookie_opts,
+                                   #{path => ~"/", secure => true, same_site => strict, max_age => 60}),
+               ?assertEqual(ok, nova_session:validate_cookie_config())
+       end},
+      {"a plain listener is where the cookie needs https, unless Secure was taken off or sessions are",
+       fun() ->
+               ?assert(nova_session:needs_https()),
+               application:set_env(nova, session_cookie_name, ~"session_id"),
+               ?assert(nova_session:needs_https()),
+               application:set_env(nova, session_cookie_opts, #{secure => false}),
+               ?assertNot(nova_session:needs_https()),
+               application:unset_env(nova, session_cookie_name),
+               application:unset_env(nova, session_cookie_opts),
+               application:set_env(nova, environment, dev),
+               ?assertNot(nova_session:needs_https()),
+               application:unset_env(nova, environment),
+               application:set_env(nova, use_sessions, false),
+               try
+                   ?assertNot(nova_session:needs_https())
+               after
+                   application:unset_env(nova, use_sessions)
+               end
+       end}]}.
+
+over_plain_http() ->
+    (nova_test_helper:mock_req(~"GET", ~"/"))#{scheme => ~"http"}.
 
 valid_cookie_test_() ->
     [?_assert(nova_session:valid_cookie(~"__Host-session_id", #{path => ~"/", domain => ~"example.com"})),

@@ -76,7 +76,7 @@ break_sends_the_reply_of_the_plugin(Config) ->
 %% The answer to a request carrying credentials, what ran and what was logged.
 refused(Config, Path) ->
     Headers = [{~"authorization", [~"Bearer ", ?BEARER]},
-               {~"cookie", [~"session_id=", ?COOKIE]}],
+               {~"cookie", [~"__Host-session_id=", ?COOKIE]}],
     {Answer, Events} = nova_test_log:collect(
                          fun() -> nova_test_listener:get(?config(port, Config), Path, Headers) end),
     {Answer, observations(), unicode:characters_to_binary(io_lib:format("~0tp", [Events]))}.

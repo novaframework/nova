@@ -21,7 +21,8 @@ internal_exports_are_hidden_test_() ->
                                       {nova_routing_trie, canonical_segments, 1},
                                       {nova_routing_trie, is_canonical, 1},
                                       {nova_plugin_manager, ensure_plugin, 1},
-                                      {nova_security_handler, deny, 1}]].
+                                      {nova_security_handler, deny, 1},
+                                      {nova_session, client_id, 1}]].
 
 public_exports_stay_documented_test_() ->
     [?_assertMatch(#{}, doc(nova_router, canonical_path, 1)),

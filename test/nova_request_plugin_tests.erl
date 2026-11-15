@@ -154,6 +154,37 @@ modulate_state_decode_json_empty_body_test_() ->
              Req2, [{decode_json_body, true}], state)
      end}.
 
+%% A body that is not JSON is somebody's data all the same. The log says
+%% what kind of error it is and where, and has none of the body.
+json_that_does_not_decode_is_logged_without_the_body_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Post = fun(Body) ->
+                        Req = nova_test_helper:with_content_type(~"application/json",
+                                                                 nova_test_helper:mock_req(~"POST", ~"/")),
+                        Req#{body => Body}
+                end,
+         [begin
+              {{stop, _Req, state}, Events} =
+                  nova_test_log:collect(fun() ->
+                                                nova_request_plugin:modulate_state(Post(Body), [{decode_json_body, true}],
+                                                                                   state)
+                                        end),
+              ?assertMatch([{warning, {report, Said}}], Events),
+              ?assertEqual(nomatch, string:find(io_lib:format("~0p", [Events]), "hunter2"))
+          end || {Body, Said} <- [{~"{\"password\":\"hunter2\" x}",
+                                   #{status_code => 400, msg => ~"Request refused", reason => ~"Malformed JSON body",
+                                     error => invalid_byte, position => 22}},
+                                  {~"{\"password\":\"\\uhunter2\"}",
+                                   #{status_code => 400, msg => ~"Request refused", reason => ~"Malformed JSON body",
+                                     error => unexpected_sequence, position => 13}},
+                                  {~"{\"password\":\"hunter2\",\"password\":\"hunter2\"}",
+                                   #{status_code => 400, msg => ~"Request refused", reason => ~"Malformed JSON body",
+                                     error => duplicate_key}},
+                                  {~"", #{status_code => 400, msg => ~"Request refused",
+                                          reason => ~"Empty JSON body"}}]]
+     end}.
+
 %% Media types are case-insensitive; a byte prefix match missed these.
 modulate_state_content_type_case_test_() ->
     {setup, ?SETUP, ?CLEANUP,

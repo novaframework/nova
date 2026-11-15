@@ -9,6 +9,8 @@
 -export([
          no_cookie_until_session_is_written/1,
          cookie_has_safe_attributes/1,
+         cookie_of_a_listener_without_tls_has_the_host_prefix/1,
+         session_id_cookie_of_before_is_no_session/1,
          session_survives_requests/1,
          status_with_a_reason_phrase_carries_the_cookie/1,
          unknown_session_id_is_replaced/1,
@@ -27,6 +29,8 @@ all() ->
     [
      no_cookie_until_session_is_written,
      cookie_has_safe_attributes,
+     cookie_of_a_listener_without_tls_has_the_host_prefix,
+     session_id_cookie_of_before_is_no_session,
      session_survives_requests,
      status_with_a_reason_phrase_carries_the_cookie,
      unknown_session_id_is_replaced,
@@ -92,6 +96,31 @@ cookie_has_safe_attributes(Config) ->
     %% Secure unless the environment is explicitly dev; this suite runs in test.
     ?assert(lists:member("Secure", Attributes)).
 
+%% The listener of this suite has no TLS, as one behind a proxy that
+%% terminates it has none: the cookie is the one a browser keeps over https.
+cookie_of_a_listener_without_tls_has_the_host_prefix(Config) ->
+    {200, Headers, _} = get(Config, "/session/set/a", undefined),
+    [Cookie] = set_cookies(Headers),
+    ?assertMatch("__Host-session_id=" ++ _, Cookie),
+    Attributes = [string:trim(A) || A <- tl(string:split(Cookie, ";", all))],
+    ?assert(lists:member("Secure", Attributes)),
+    ?assert(lists:member("Path=/", Attributes)),
+    ?assertEqual([], [A || "Domain" ++ _ = A <- Attributes]).
+
+%% A client that still has the cookie of a Nova that named it session_id has
+%% no session: the id under the old name is not read, also when it is one a
+%% session is stored under.
+session_id_cookie_of_before_is_no_session(Config) ->
+    {200, H1, _} = get(Config, "/session/set/kept", undefined),
+    Id = session_id(H1),
+    Old = [{"cookie", "session_id=" ++ Id}],
+    {200, _, Body} = get_with(Config, "/session/get", Old),
+    ?assertEqual(#{~"value" => null}, json:decode(Body)),
+    {200, H2, _} = get_with(Config, "/session/set/again", Old),
+    ?assertNotEqual(Id, session_id(H2)),
+    {200, _, Kept} = get(Config, "/session/get", Id),
+    ?assertEqual(#{~"value" => ~"kept"}, json:decode(Kept)).
+
 session_survives_requests(Config) ->
     {200, H1, _} = get(Config, "/session/set/kept", undefined),
     Id = session_id(H1),
@@ -136,7 +165,7 @@ delete_clears_cookie(Config) ->
     Id = session_id(H1),
     {200, H2, _} = get(Config, "/session/delete", Id),
     [Cookie] = session_cookies(H2),
-    ?assertMatch("session_id=;" ++ _, Cookie),
+    ?assertMatch("__Host-session_id=;" ++ _, Cookie),
     ?assertNotEqual(nomatch, string:find(Cookie, "Max-Age=0")),
     {200, _, Body} = get(Config, "/session/get", Id),
     ?assertEqual(#{~"value" => null}, json:decode(Body)).
@@ -153,7 +182,7 @@ delete_expires_cookie_without_stream_h(Config) ->
     Id = session_id(H1),
     {200, H2, _} = get(Config, "/session/delete", Id),
     [Cookie] = session_cookies(H2),
-    ?assertMatch("session_id=;" ++ _, Cookie),
+    ?assertMatch("__Host-session_id=;" ++ _, Cookie),
     ?assertNotEqual(nomatch, string:find(Cookie, "Max-Age=0")),
     {200, _, Body} = get(Config, "/session/get", Id),
     ?assertEqual(#{~"value" => null}, json:decode(Body)).
@@ -205,8 +234,11 @@ invalid_cookie_name_fails_boot(_Config) ->
 get(Config, Path, SessionId) ->
     Headers = case SessionId of
                   undefined -> [];
-                  _ -> [{"cookie", "session_id=" ++ SessionId}]
+                  _ -> [{"cookie", "__Host-session_id=" ++ SessionId}]
               end,
+    get_with(Config, Path, Headers).
+
+get_with(Config, Path, Headers) ->
     {ok, {{_, Status, _}, RespHeaders, Body}} =
         httpc:request(get, {?config(base, Config) ++ Path, Headers},
                       [{autoredirect, false}], [{body_format, binary}]),
@@ -216,11 +248,11 @@ set_cookies(Headers) ->
     [Value || {Name, Value} <- Headers, string:lowercase(Name) =:= "set-cookie"].
 
 session_cookies(Headers) ->
-    [Value || {Name, Value = "session_id=" ++ _} <- Headers, string:lowercase(Name) =:= "set-cookie"].
+    [Value || {Name, Value = "__Host-session_id=" ++ _} <- Headers, string:lowercase(Name) =:= "set-cookie"].
 
 session_id(Headers) ->
     [Cookie] = session_cookies(Headers),
-    "session_id=" ++ Rest = hd(string:split(Cookie, ";")),
+    "__Host-session_id=" ++ Rest = hd(string:split(Cookie, ";")),
     Rest.
 
 log(#{msg := Msg}, #{config := #{test_pid := Pid}}) ->

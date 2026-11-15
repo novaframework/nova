@@ -100,10 +100,8 @@ callback_true_auth_data_websocket_test_() ->
         Env = (env())#{secure => Callback,
                      cowboy_handler => nova_ws_handler,
                      arguments => #{existing => data}},
-        {ok, _Req1, Env1} = nova_security_handler:execute(Req, Env),
-        Args = maps:get(arguments, Env1),
-        ?assertEqual(#{auth_data => AuthData}, maps:get(controller_data, Args)),
-        ?assertEqual(data, maps:get(existing, Args))
+        %% nova_ws_handler takes it from the request, as a controller does.
+        ?assertEqual({ok, Req#{auth_data => AuthData}, Env}, nova_security_handler:execute(Req, Env))
     end}.
 
 %%====================================================================
@@ -316,17 +314,15 @@ several_callbacks_allow_test_() ->
                {{ok, Req, _Env}, _Called} = execute_all([answering(first, {true, first_data}), Second]),
                ?assertEqual({seen, first_data}, maps:get(auth_data, Req))
        end},
-      {"the data of a websocket route follows the same rule",
+      {"the data of a websocket route follows the same rule, and is in the request alone",
        [fun() ->
                 Env = (env())#{cowboy_handler => nova_ws_handler, arguments => #{module => a_controller}},
-                {{ok, _Req, Env1}, _Called} = execute_all([answering(first, First), answering(second, Second)], Env),
-                ?assertEqual(Expected, maps:get(arguments, Env1))
-        end || {First, Second, Expected}
-                   <- [{{true, first_data}, {true, second_data},
-                        #{module => a_controller, controller_data => #{auth_data => second_data}}},
-                       {{true, first_data}, true,
-                        #{module => a_controller, controller_data => #{auth_data => first_data}}},
-                       {true, true, #{module => a_controller}}]]}]}.
+                {{ok, Req, Env1}, _Called} = execute_all([answering(first, First), answering(second, Second)], Env),
+                ?assertEqual({Expected, #{module => a_controller}},
+                             {maps:get(auth_data, Req, none), maps:get(arguments, Env1)})
+        end || {First, Second, Expected} <- [{{true, first_data}, {true, second_data}, second_data},
+                                             {{true, first_data}, true, first_data},
+                                             {true, true, none}]]}]}.
 
 several_callbacks_refuse_test_() ->
     Refused = fun(Callbacks) ->

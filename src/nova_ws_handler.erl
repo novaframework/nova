@@ -28,8 +28,14 @@ init(Req = #{method := _Method, plugins := Plugins}, State = #{module := Module}
     State0 = State#{mod => Module,
                     plugins => Plugins,
                     route => maps:get(nova_route, Req, undefined)},
-    ControllerData2 = ControllerData#{req => Req},
-    upgrade_ws(Module, Req, State0, ControllerData2).
+    upgrade_ws(Module, Req, State0, with_auth_data(Req, ControllerData#{req => Req})).
+
+%% `auth_data` of the controller data is that of the upgrade request, which
+%% is what an HTTP controller gets.
+with_auth_data(#{auth_data := AuthData}, ControllerData) ->
+    ControllerData#{auth_data => AuthData};
+with_auth_data(_Req, ControllerData) ->
+    ControllerData.
 
 upgrade_ws(Module, Req, State, ControllerData) ->
     case Module:init(ControllerData) of

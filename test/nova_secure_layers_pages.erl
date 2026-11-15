@@ -44,6 +44,8 @@ decide(Layer, Req) ->
 init(ControllerData) ->
     {ok, ControllerData}.
 
+websocket_handle({text, ~"req"}, ControllerData = #{req := Req}) ->
+    {reply, {text, auth_data(Req)}, ControllerData};
 websocket_handle({text, _Text}, ControllerData) ->
     {reply, {text, auth_data(ControllerData)}, ControllerData};
 websocket_handle(_Frame, ControllerData) ->

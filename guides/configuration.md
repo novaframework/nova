@@ -169,7 +169,7 @@ Nova writes a key `apps` to the environment of the bootstrap application for its
 
 ### Configure json_lib
 
-Nova encodes and decodes JSON with the `json` module that ships with Erlang/OTP 27 and later, so it needs no JSON dependency. With this default a non-empty list whose first element is a pair is encoded as an object: `[{a, 1}]` becomes `{"a":1}`.
+Nova encodes and decodes JSON with the `json` module that ships with Erlang/OTP 27 and later, so it needs no JSON dependency. With this default a non-empty list whose first element is a pair is encoded as an object: `[{a, 1}]` becomes `{"a":1}`. An object that has a key twice does not decode: `decode_json_body` answers such a body with `400`.
 
 To use another library, add it to your application's dependencies and set `json_lib` in your bootstrap application's environment; Nova also reads it from the `nova` environment when the bootstrap application does not set it.
 

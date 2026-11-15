@@ -196,6 +196,17 @@ these affects and how to get the earlier behaviour back.
   deprecated (see 0.9.24) and is removed in 1.0: register
   `fun Module:Function/3` instead.
 
+- **A JSON object that has a key twice is refused.** With the default
+  `json_lib`, a body such as `{"role":"user","role":"admin"}` is answered
+  with a bare `400` by `decode_json_body`. The library that was the default before
+  kept the last value of the key and OTP's `json` keeps the first, so a
+  callback that checks the body and the code behind it could each have gone
+  by another one. Bytes that follow the JSON value, other than whitespace,
+  are refused the same way. A `json_lib` of your own decides both itself.
+  The warning for a body that does not decode no longer has the reason of
+  the library, which could hold bytes of the body: it has `error`, the kind
+  of error, and `position` when OTP's `json` found it.
+
 - **`decode_json_body` decodes `application/json` and `application/*+json`.**
   The type is matched in any case, with any parameters, and `+json` types
   such as `application/vnd.api+json` are now decoded too (RFC 6839). Types
