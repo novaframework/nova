@@ -59,7 +59,7 @@ websocket_info(_Msg, State) ->
 | Key | Value |
 |---|---|
 | `req` | The upgrade request. The `extra_state` of the route, or of its route group, is in it, and so is `auth_data` |
-| `auth_data` | What the security callback returned in `{true, AuthData}`. Not there when the callback returned `true` or the route has no callback |
+| `auth_data` | The `auth_data` of the upgrade request: what the security callback returned in `{true, AuthData}`, or what a plugin wrote there when the callback returned `true` or the route has no callback. Not there otherwise |
 
 It returns `{ok, State}` to accept the connection, or `{ok, State, Options}`
 with a map of
@@ -103,46 +103,58 @@ init(#{auth_data := #{user_id := UserId}} = ControllerData) ->
     {ok, ControllerData#{user_id => UserId}}.
 ```
 
-A plugin that sets `auth_data` in `pre_request/4` changes it in `req`. The
-`auth_data` key of the controller data stays what the callback returned.
+The `auth_data` key of the controller data is the `auth_data` of the upgrade
+request, which is also under `req` there, so both are the same value. It is
+what the security callback returned as `{true, AuthData}`, whatever a plugin
+wrote. What a plugin wrote under `auth_data` is there only when the callback
+returned a plain `true`, or the route has no callback, see
+[Plugins](plugins.md#before-and-after-the-security-callback).
 
 ## The origin check
 
 A browser sends the cookies of your site with an upgrade that a page on
-another site started. Nova therefore checks the `Origin` header of every
-request to a websocket route, before anything else of the route runs. A
-request from an origin that is not allowed is answered with `403` and the
-text `Origin not allowed`. No plugin and no security callback sees it. A
-request without an `Origin` header is let through, since only browsers send
-it.
+another site started. Nova therefore checks where every request to a
+websocket route comes from, before anything else of the route runs. A
+request that is not allowed is answered with `403` and the text
+`Origin not allowed`. No plugin and no security callback sees it.
 
-The check goes by `allowed_origins` of the `nova` environment:
+The check reads two request headers that a page cannot set:
+
+| The request has | Result |
+|---|---|
+| No `Origin`, and `Sec-Fetch-Site` is `same-origin`, `none` or not sent | Let through. A client that is not a browser sends neither header |
+| An `Origin`, and `Sec-Fetch-Site` is `same-origin`, `none` or not sent | The `Origin` decides, by `trusted_origins` |
+| A `Sec-Fetch-Site` with any other value, such as `cross-site` or `same-site` | Refused, unless the `Origin` is in a list of `trusted_origins`, or `trusted_origins` is `any` |
+
+The check goes by `trusted_origins` of the `nova` environment:
 
 ```erlang
 {nova, [
-    {allowed_origins, [~"https://example.com"]}
+    {trusted_origins, [~"https://example.com"]}
 ]}
 ```
 
-| `allowed_origins` | Accepts |
+| `trusted_origins` | Accepts |
 |---|---|
-| `same_host` | An origin with the host and port the request was sent to. This is the default |
+| `same_host` | An origin with the host and port the request was sent to. Over TLS the origin has to be `https`. On a listener without TLS the scheme is not compared, and no forwarded header is read. This is the default |
 | `same_origin` | An origin with the scheme, host and port of the request as Nova received it |
-| A list of origins | Exactly those origins. Use it behind a proxy that rewrites the `Host` header or terminates TLS |
-| `any` | Every origin |
+| A list of origins | Exactly those origins, also from a page the browser says is on another site. Use it behind a proxy that rewrites the `Host` header or terminates TLS |
+| `any` | Every origin, whatever `Sec-Fetch-Site` says |
 
-The [Configuration](configuration.md#allowed-origins) guide says how ports are
-compared, and that the same setting is read by `nova_csrf_plugin`.
+The [Configuration](configuration.md#trusted-origins) guide says how ports are
+compared. `nova_csrf_plugin` reads the same setting, except that it takes
+`any` of the `nova` environment as `same_host`: `any` there opens websockets
+and nothing else.
 
 To give one route group other origins, list `nova_ws_origin_plugin` in its
-plugins with the option `allowed_origins`. The group is then checked against
+plugins with the option `trusted_origins`. The group is then checked against
 those alone. The check still runs first, wherever in the list the plugin is:
 
 ```erlang
 #{prefix => "/widget",
   security => fun my_app_auth:session/1,
   plugins => [
-      {pre_request, nova_ws_origin_plugin, #{allowed_origins => [~"https://example.com",
+      {pre_request, nova_ws_origin_plugin, #{trusted_origins => [~"https://example.com",
                                                                  ~"https://partner.example.org"]}}
   ],
   routes => [
@@ -154,11 +166,43 @@ A route group that declares `plugins` uses those and not the global ones, so
 list every other plugin the group needs with it. The option takes the values
 of the setting. Any other value is refused when the routes are compiled, and
 the application does not start, with
-`{invalid_setting, allowed_origins, Value}`.
+`{invalid_setting, trusted_origins, Value}`.
 
 `same_host` and `same_origin` do not stop DNS rebinding, where another name is
 pointed at the address of the server: the origin and the host of such a
 request are the same name. A list of origins does.
+
+### Behind a proxy that terminates TLS
+
+The listener of Nova is then one without TLS. `same_host` does not compare
+the scheme there, and `same_origin` compares it with `http`, which is not the
+scheme of the site.
+
+A page loaded from `http://example.com` has the host of a site served at
+`https://example.com`, and it is not the site: anybody on the network between
+a visitor and the server can answer for `http://example.com` and write that
+page, unless the browser already knows by HSTS that the host is only to be
+asked over TLS. Such a page that opens `wss://example.com` sends the cookies
+of the visitor with the upgrade.
+
+A browser that sends `Sec-Fetch-Site` with the upgrade says that this page is
+another site, and the upgrade is refused. Not every browser sends the header
+with a websocket upgrade: Firefox does and Safari does from 16.4, while
+Chrome and the browsers built on it have been reported not to. A browser that
+does not send it is taken by its `Origin` alone, and under `same_host` that
+page is let in: it can open the websocket as the visitor and read what the
+websocket sends. So the header narrows this risk and does not end it.
+
+To close it for every browser:
+
+- List the origins of the site, with their scheme, in `trusted_origins`:
+  `{trusted_origins, [~"https://example.com"]}`.
+- Send `Strict-Transport-Security` with `includeSubDomains` from the proxy,
+  so that a browser that has been to the site does not load a page of it
+  without TLS at all.
+
+Nova reads no `X-Forwarded-Proto` or `Forwarded` header to find out what the
+proxy did, since it has no setting that says which proxy to believe.
 
 ## Sending to a connection
 
