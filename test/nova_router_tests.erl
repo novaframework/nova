@@ -412,6 +412,58 @@ normalize_plugins_different_types_test_() ->
     end}.
 
 normalize_plugins_before_security_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Plugins = [{pre_request, nova_request_plugin, #{}}, {pre_request, nova_csrf_plugin, #{}}],
+        ?assertEqual([{after_security, [{fun nova_csrf_plugin:pre_request/4, #{}}]},
+                      {pre_request, [{fun nova_request_plugin:pre_security/4, #{}},
+                                     {fun nova_request_plugin:pre_request/4, #{}},
+                                     {fun nova_csrf_plugin:pre_security/4, #{}}]}],
+                     nova_router:normalize_plugins(Plugins, order([nova_request_plugin], []))),
+        ?assertEqual([{pre_request, [{fun nova_request_plugin:pre_security/4, #{}},
+                                     {fun nova_request_plugin:pre_request/4, #{}},
+                                     {fun nova_csrf_plugin:pre_security/4, #{}},
+                                     {fun nova_csrf_plugin:pre_request/4, #{}}]}],
+                     nova_router:normalize_plugins(Plugins, order(all, [])))
+    end}.
+
+normalize_plugins_after_security_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Plugins = [{pre_request, nova_cors_plugin, #{}},
+                   {pre_request, nova_request_plugin, #{}},
+                   {post_request, nova_request_plugin, #{}}],
+        Expected = [{after_security, [{fun nova_request_plugin:pre_security/4, #{}},
+                                      {fun nova_request_plugin:pre_request/4, #{}}]},
+                    {post_request, [{fun nova_request_plugin:post_request/4, #{}}]},
+                    {pre_request, [{fun nova_cors_plugin:pre_security/4, #{}}]}],
+        ?assertEqual(Expected, nova_router:normalize_plugins(Plugins, order([], [nova_request_plugin]))),
+        ?assertEqual(Expected, nova_router:normalize_plugins(Plugins, order(all, [nova_request_plugin])))
+    end}.
+
+%% A plugin from outside Nova that only has pre_request/4 no longer runs for
+%% a request that is refused, which nothing else would tell its author.
+plugin_that_moved_behind_security_is_noted_once_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        meck:new(moved_plugin, [non_strict, no_link]),
+        meck:expect(moved_plugin, pre_request, fun(Req, _Env, _Options, State) -> {ok, Req, State} end),
+        meck:expect(moved_plugin, plugin_info, fun() -> #{title => ~"moved", version => ~"0"} end),
+        Plugins = [{pre_request, moved_plugin, #{}}, {pre_request, nova_csrf_plugin, #{}}],
+        Noted = fun(Order) ->
+                        {_, Events} = nova_test_log:collect(fun() -> nova_router:normalize_plugins(Plugins, Order) end),
+                        [Plugin || {notice, {report, #{plugin := Plugin}}} <- Events]
+                end,
+        try
+            ?assertEqual([], Noted(order([], []))),
+            ?assertEqual([], Noted((order([moved_plugin], []))#{secured => true})),
+            ?assertEqual([], Noted((order([], [moved_plugin]))#{secured => true})),
+            ?assertEqual([moved_plugin], Noted((order([], []))#{secured => true})),
+            ?assertEqual([], Noted((order([], []))#{secured => true}))
+        after
+            nova_once:forget({nova_router, new_order_noted, moved_plugin}),
+            meck:unload(moved_plugin)
+        end
+    end}.
+
+plugins_before_security_test_() ->
     Group = #{app => an_app, prefix => "/admin", router_file => "router.erl"},
     Plugins = [{pre_request, nova_request_plugin, #{}}, {pre_request, nova_cors_plugin, #{}},
                {post_request, nova_csrf_plugin, #{}}],
