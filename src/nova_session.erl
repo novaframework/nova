@@ -66,7 +66,12 @@ above.
         when SessionId :: binary(),
              Key :: binary().
 
-%% Set a value
+-doc """
+Stores `Value` under `Key`. `Value` is any term, as it was given to
+`set/3`, and `c:get_value/2` has to return it as it was: a backend that
+stores binaries encodes it, for instance with `term_to_binary/1`, or returns
+`{error, Reason}` for a value it cannot store.
+""".
 -callback set_value(SessionId, Key, Value) ->
     ok |
     {error, Reason :: atom()}
