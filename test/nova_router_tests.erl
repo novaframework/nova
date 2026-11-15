@@ -462,6 +462,56 @@ body_read_behind_the_security_callback_is_warned_about_once_test_() ->
          || Prefix <- ["/json", "/form"]]
     end}.
 
+%% A route group says with security_reads_body whether its callback reads
+%% what nova_request_plugin decodes. `false` ends the warning. `true` makes
+%% the order the callback needs a condition of the boot. A form read for
+%% nova_csrf_plugin is the setup the guides give and is not warned about.
+security_reads_body_says_what_the_callback_reads_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Request = fun(Options) -> {pre_request, nova_request_plugin, Options} end,
+        Secured = fun(Prefix, More) ->
+                          More#{prefix => Prefix, security => fun allow/1,
+                                routes => [{"/page", fun(_) -> {json, #{}} end, #{}}]}
+                  end,
+        Json = Request(#{decode_json_body => true}),
+        Form = Request(#{read_urlencoded_body => true}),
+        Csrf = {pre_request, nova_csrf_plugin, #{}},
+        Warned = fun(Prefix) -> [#{app => route_app, prefix => Prefix, plugins => [nova_request_plugin]}] end,
+        Listed = #{plugins_before_security => [nova_request_plugin]},
+        try
+            [?assertEqual({Prefix, []}, {Prefix, order_warnings(Quiet)})
+             || {Prefix, Quiet} <- [{"/no", Secured("/no", #{plugins => [Json], security_reads_body => false})},
+                                    {"/form-no", Secured("/form-no", #{plugins => [Form],
+                                                                       security_reads_body => false})},
+                                    {"/csrf-form", Secured("/csrf-form", #{plugins => [Form, Csrf]})},
+                                    {"/yes", Secured("/yes", Listed#{plugins => [Json], security_reads_body => true})},
+                                    {"/yes-all", Secured("/yes-all", #{plugins => [Json, Csrf],
+                                                                       plugins_before_security => all,
+                                                                       security_reads_body => true})},
+                                    {"/yes-qs", Secured("/yes-qs", #{plugins => [Request(#{parse_qs => true})],
+                                                                     security_reads_body => true})},
+                                    {"/yes-open", #{prefix => "/yes-open", plugins => [Json],
+                                                    security_reads_body => true,
+                                                    routes => [{"/page", fun(_) -> {json, #{}} end, #{}}]}}]],
+            ?assertEqual(Warned("/csrf-json"), order_warnings(Secured("/csrf-json", #{plugins => [Json, Csrf]}))),
+            ?assertEqual(Warned("/csrf-both"),
+                         order_warnings(Secured("/csrf-both",
+                                                #{plugins => [Request(#{read_urlencoded_body => true,
+                                                                        decode_json_body => true}), Csrf]}))),
+            [?assertThrow({error, {invalid_setting, security_reads_body, {requires, plugins_before_security}}},
+                          nova_router:add_routes(route_app, Secured("/behind", More#{security_reads_body => true})))
+             || More <- [#{plugins => [Json]}, #{plugins => [Form, Csrf]},
+                         #{plugins => [Json, Csrf], plugins_before_security => [nova_csrf_plugin]}]],
+            [?assertThrow({error, {invalid_setting, security_reads_body, Value}},
+                          nova_router:add_routes(route_app, Secured("/typed", Listed#{plugins => [Json],
+                                                                                    security_reads_body => Value})))
+             || Value <- [yes, ~"true", 1, [true], undefined]]
+        after
+            [nova_once:forget({nova_router, body_behind_security, route_app, Prefix, [nova_request_plugin]})
+             || Prefix <- ["/csrf-json", "/csrf-both"]]
+        end
+    end}.
+
 %% A plugin from outside Nova that only has pre_request/4 no longer runs for
 %% a request that is refused, nor for a preflight to a route that does not
 %% take OPTIONS, which nothing else would tell.

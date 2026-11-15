@@ -159,7 +159,7 @@ The callback runs after `pre_security/4` of the `pre_request` plugins of the rou
 
 `security` takes `false`, a `fun/1` or the deprecated `{Module, Function}`. Any other value, `true` included, is logged as an error and stops the application from starting with `{invalid_security, Value}`. The same goes for `secure` and `override_secure` in `nova_apps`.
 
-The security function runs before a plugin reads the body, so `json`, `params` and `files` are not in the request it gets. `plugins_before_security => [Module]` in the route group runs `pre_request/4` of the listed plugins ahead of the security function; see [Running a plugin ahead of the security callback](plugins.md#running-a-plugin-ahead-of-the-security-callback).
+The security function runs before a plugin reads the body, so `json`, `params` and `files` are not in the request it gets. `plugins_before_security => [Module]` in the route group runs `pre_request/4` of the listed plugins ahead of the security function; see [Running a plugin ahead of the security callback](plugins.md#running-a-plugin-ahead-of-the-security-callback). A route group whose callback does not read them says so with `security_reads_body => false`, see [the plugins guide](plugins.md#saying-whether-the-security-callback-reads-the-body).
 
 ### The security-function callback
 

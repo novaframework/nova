@@ -36,7 +36,7 @@ Within each of the two phases the plugins run in the order they are listed. What
 
 What this order changes without anything failing is warned about, once for a route group, when its routes are compiled. The warnings are there until 1.0, and each report names the one it is under `notice`:
 
-- `body_behind_security`: `nova_request_plugin` decodes the body behind the security callback of the route group, which then finds no `json` or `params` in the request.
+- `body_behind_security`: `nova_request_plugin` decodes the body behind the security callback of the route group, which then finds no `json` or `params` in the request. `security_reads_body => false` in the route group says that the callback does not read them and ends the warning. `security_reads_body => true` says that it does, and the routes then do not compile (`{invalid_setting, security_reads_body, {requires, plugins_before_security}}`) until the plugin is listed under `plugins_before_security`. A route group that lists `nova_csrf_plugin` and reads a form alone, with `read_urlencoded_body`, is not warned about.
 - `pre_request_behind_security`: a plugin from outside Nova only has `pre_request/4` and is not listed under `plugins_before_security`, in a route group that has a security callback. It does not run for a request that is refused.
 - `pre_request_not_for_preflight`: a plugin from outside Nova only has `pre_request/4`, in a route group with a route that does not take `OPTIONS`. It does not run for a CORS preflight to such a route, also when it is listed under `plugins_before_security`.
 

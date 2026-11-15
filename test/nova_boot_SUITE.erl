@@ -34,6 +34,7 @@
          csrf_plugin_without_sessions_fails_the_boot/1,
          csrf_tokens_kept_in_the_session_store_are_said_once/1,
          body_decoded_behind_a_security_callback_is_warned_about/1,
+         security_reads_body_of_a_route_group_is_checked_by_the_boot/1,
          plugins_of_an_earlier_run_are_forgotten/1
         ]).
 
@@ -71,6 +72,7 @@ all() ->
      csrf_plugin_without_sessions_fails_the_boot,
      csrf_tokens_kept_in_the_session_store_are_said_once,
      body_decoded_behind_a_security_callback_is_warned_about,
+     security_reads_body_of_a_route_group_is_checked_by_the_boot,
      plugins_of_an_earlier_run_are_forgotten
     ].
 
@@ -462,6 +464,28 @@ body_decoded_behind_a_security_callback_is_warned_about(_Config) ->
     after
         nova_once:forget({nova_router, body_behind_security, nova_test_app, "/reads", [nova_request_plugin]})
     end.
+
+%% A callback that is said to read the body, in a route group that decodes
+%% it behind the callback, would find none: the node does not start. The
+%% same is true of a value that says neither.
+security_reads_body_of_a_route_group_is_checked_by_the_boot(_Config) ->
+    Group = fun(Value) ->
+                    #{prefix => "/reads", security => fun nova_boot_pages:allow/1, security_reads_body => Value,
+                      plugins => [{pre_request, nova_request_plugin, #{decode_json_body => true}}],
+                      routes => [{"/", fun nova_boot_pages:page/1, #{methods => [post]}}]}
+            end,
+    [begin
+         {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => [Group(Value)]}) end),
+         ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
+                                                  {invalid_setting, security_reads_body, Reason}}}, _}}},
+                      Result),
+         ?assertMatch([#{setting := security_reads_body, value := Reason, app := nova_test_app,
+                         prefix := "/reads"} | _],
+                      nova_test_log:errors(Events)),
+         ?assertEqual(undefined, whereis(nova_sup))
+     end || {Value, Reason} <- [{true, {requires, plugins_before_security}}, {sometimes, sometimes}]],
+    {{ok, _Port}, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => [Group(false)]}) end),
+    ?assertEqual([], [Report || {warning, {report, #{plugins := _} = Report}} <- Events]).
 
 %% nova_plugin_manager starts every plugin the router has listed, also after
 %% a restart, so the list must not carry over from a run with other routes.

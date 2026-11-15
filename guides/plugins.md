@@ -102,6 +102,22 @@ or for every route group that does not set the key, in `sys.config`:
 
 `all` names every plugin of the route group, and `all` in the `nova` environment is the order of 0.18 everywhere. A list has to name plugins that have `pre_request/4`, and the list of a route group plugins the group lists as `pre_request`. Any other value stops the boot with `{invalid_setting, plugins_before_security, Value}`. The default is `[]`. Nothing moves `pre_security/4` behind the security callback.
 
+### Saying whether the security callback reads the body
+
+A route group that has a security callback and decodes a body behind it is warned about once, when its routes are compiled, because a callback written for 0.18 that reads `json` or `params` finds none. `security_reads_body` in the route group says which it is:
+
+```erlang
+#{prefix => "/api",
+  security => fun my_auth:bearer/1,
+  security_reads_body => false,
+  plugins => [{pre_request, nova_request_plugin, #{decode_json_body => true}}],
+  routes => [...]}
+```
+
+`false` says the callback does not read what `nova_request_plugin` decodes, and ends the warning. `true` says that it does: the routes then only compile when `nova_request_plugin` is listed under `plugins_before_security`, and stop the boot with `{invalid_setting, security_reads_body, {requires, plugins_before_security}}` when it is not. Any other value stops it with `{invalid_setting, security_reads_body, Value}`.
+
+A route group that lists `nova_csrf_plugin` and reads a form with `read_urlencoded_body`, and no JSON, is not warned about: the form is read for the token. Set `security_reads_body => true` there when the callback reads `params` as well.
+
 A websocket route runs its `pre_request` plugins on the upgrade request. For the time after the upgrade it has the phases `pre_ws_request` and `post_ws_request`, which run around every callback of the controller, and `post_ws_connection`, which runs once when the connection goes away: after `terminate/3` if the controller exports it, and also when it does not or when it crashes. `post_ws_connection` does not run for an upgrade that was refused. See the `nova_websocket` documentation.
 
 

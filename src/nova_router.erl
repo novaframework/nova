@@ -1143,8 +1143,8 @@ exports(Module, Function) ->
 -spec warn_about_order(RouteInfo :: map(), [plugin()], order(), Named :: map()) -> ok.
 warn_about_order(RouteInfo, Plugins, Order = #{secured := Secured}, Named) ->
     Behind = [{Module, Options} || {pre_request, Module, Options} <- Plugins, Secured, not is_ahead(Module, Order)],
-    ok = warn_once(body_behind_security, [Module || {Module, Options} <- Behind, reads_body(Module, Options)],
-                   Named),
+    ok = body_behind_security(RouteInfo, [Plugin || Plugin = {Module, Options} <- Behind, reads_body(Module, Options)],
+                              lists:keymember(nova_csrf_plugin, 2, Plugins), Named),
     Outside = [Module || {pre_request, Module, _Options} <- Plugins, not is_plugin_of_nova(Module),
                          not exports(Module, pre_security)],
     Refused = [Module || Module <- Outside, lists:keymember(Module, 1, Behind)],
@@ -1153,6 +1153,42 @@ warn_about_order(RouteInfo, Plugins, Order = #{secured := Secured}, Named) ->
         true -> warn_once(pre_request_not_for_preflight, Outside -- Refused, Named);
         false -> ok
     end.
+
+%% What a route group says with security_reads_body about a body that is
+%% decoded behind its security callback. `false` is that the callback does
+%% not read it, which ends the warning. `true` is that it does, and the
+%% routes do not compile until the body is decoded ahead of the callback.
+%% A route group that says nothing is warned about, unless what it reads is
+%% a form for nova_csrf_plugin, which is the setup the guides give.
+-spec body_behind_security(RouteInfo :: map(), Readers :: [{module(), Options :: term()}],
+                           HasCsrfPlugin :: boolean(), Named :: map()) -> ok.
+body_behind_security(RouteInfo, Readers, HasCsrfPlugin, Named) ->
+    case maps:find(security_reads_body, RouteInfo) of
+        {ok, false} ->
+            ok;
+        {ok, true} when Readers =:= [] ->
+            ok;
+        {ok, true} ->
+            invalid_security_reads_body({requires, plugins_before_security}, Named);
+        {ok, Value} ->
+            invalid_security_reads_body(Value, Named);
+        error ->
+            warn_once(body_behind_security,
+                      [Module || {Module, Options} <- Readers, not (HasCsrfPlugin andalso reads_a_form_alone(Options))],
+                      Named)
+    end.
+
+-spec invalid_security_reads_body(term(), Named :: map()) -> no_return().
+invalid_security_reads_body(Value, Named) ->
+    ?LOG_ERROR(Named#{msg => ~"security_reads_body of a route group must be true or false, and true needs the plugin that decodes the body to be listed under plugins_before_security",
+                      setting => security_reads_body, value => Value}),
+    throw({error, {invalid_setting, security_reads_body, Value}}).
+
+-spec reads_a_form_alone(Options :: term()) -> boolean().
+reads_a_form_alone(Options) when is_map(Options) ->
+    maps:get(decode_json_body, Options, false) =/= true;
+reads_a_form_alone(_Options) ->
+    false.
 
 -spec warn_once(order_warning(), [module()], Named :: map()) -> ok.
 warn_once(_About, [], _Named) ->
@@ -1166,7 +1202,7 @@ warn_once(About, Listed, Named = #{app := App, prefix := Prefix}) ->
 
 -spec order_warning(order_warning()) -> binary().
 order_warning(body_behind_security) ->
-    ~"The security callback of this route group runs before nova_request_plugin reads the body, so it finds no json or params in the request. Earlier releases read the body first. List nova_request_plugin under plugins_before_security of the route group if the callback reads them";
+    ~"The security callback of this route group runs before nova_request_plugin reads the body, so it finds no json or params in the request. Earlier releases read the body first. If the callback reads them, list nova_request_plugin under plugins_before_security of the route group. If it does not, set security_reads_body => false in the route group";
 order_warning(pre_request_behind_security) ->
     ~"pre_request/4 of these plugins runs once the security callback of this route group has let a request through, where earlier releases ran it first. It does not run for a request that is refused, nor for a CORS preflight to a route that does not take OPTIONS. What has to run for those belongs in pre_security/4. To run pre_request/4 ahead of the security callback as before, list the plugin under plugins_before_security";
 order_warning(pre_request_not_for_preflight) ->
