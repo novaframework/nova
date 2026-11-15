@@ -127,6 +127,14 @@ A template that does not exist gives the `500` page, and
 `Body` is a binary, or a map, which is encoded as JSON and sent with
 `content-type: application/json`.
 
+A binary body is sent without a `content-type`, unless `Headers` has one. A
+browser that gets a body without a type may guess it from the bytes, and can
+then render as HTML what was meant as text. Set the type:
+
+```erlang
+{status, 400, #{~"content-type" => ~"text/plain; charset=utf-8"}, ~"bad input"}
+```
+
 `{status, StatusCode}` does not render the status code route registered for
 that code (see [Routing](routing.md)). A `204` and a `304` have no body: one
 given with either status, by this or any other handler, is left out.
