@@ -89,30 +89,79 @@ these affects and how to get the earlier behaviour back.
   and reads the body in `pre_request/4`. `nova_csrf_plugin` checks the
   origin there and the token in `pre_request/4`. `plugins_before_security`
   names the plugins whose `pre_request/4` runs ahead of the callback as it
-  did.
+  did. `auth_data` of the request is what the security callback returned as
+  `{true, AuthData}`, also when a plugin writes the key in `pre_request/4`.
+
+- **What the new order changes is logged when routes are compiled.** A route
+  group whose security callback runs before `nova_request_plugin` reads the
+  body, and one with a plugin from outside Nova that has no `pre_security/4`,
+  is named once, in a report that has `notice` set to `body_behind_security`,
+  `form_behind_security`, `pre_request_behind_security` or
+  `pre_request_not_for_preflight`. The new route group key
+  `security_reads_body` answers the first two: `false` says the callback of
+  the group does not read the body and ends them, `true` says that it does
+  and stops the boot until the plugin is listed under
+  `plugins_before_security`. `false` answers for the callback the group
+  declares as its `security`, not for one its application is mounted behind.
+  See [Plugins](plugins.md#warnings-about-the-order).
 
 - **A CORS preflight is answered for a route that does not take `OPTIONS`.**
   `pre_security/4` of the plugins of the route for the method the preflight
   asks about runs before the `405`.
 
-- **Websocket routes check the `Origin`.** Every request to a websocket
-  route is checked against `allowed_origins`, which is `same_host` when it
-  is not set.
+- **Websocket routes check where a request comes from.** Every request to a
+  websocket route is checked against `trusted_origins`, which is `same_host`
+  when it is not set. `same_host` takes an origin with the host and port the
+  request was sent to, and on a request that came in over TLS only an
+  `https` one. An upgrade whose `Sec-Fetch-Site` header is there and is
+  neither `same-origin` nor `none` is refused unless its `Origin` is in a
+  list of `trusted_origins`, or the origins are `any`. A client that sends
+  neither header is let through. Behind a proxy that terminates TLS, list
+  the `https` origins of the site in `trusted_origins`: not every browser
+  sends `Sec-Fetch-Site` with a websocket upgrade.
 
 - **`nova_csrf_plugin` checks where a request comes from.** A request that
   changes state is refused when `Sec-Fetch-Site` and `Origin` say that a
-  page of another site sent it.
+  page of another site sent it. It goes by `trusted_origins` too, where `any`
+  of the `nova` environment is read as `same_host`. The plugin option
+  `trusted_origins => any` turns the check off for a route group.
 
-- **`nova_csrf_plugin` signs its tokens when `csrf_secret` is set.** Nothing
-  is stored for a signed token. Without the secret the token is kept in the
-  session, handed out under a mask that is new for every response, and a
-  notice is logged at boot unless `csrf_token` is `session`.
+- **`secret_key_base` is the secret of the node.** Nova makes a key for each
+  purpose from it and never signs with the secret itself. With it set,
+  `nova_csrf_plugin` signs its tokens and stores nothing for them, and
+  session ids are signed. Without it the token is kept in the session,
+  handed out under a mask that is new for every response, and a notice is
+  logged at boot unless `csrf_token` is `session`.
+
+- **`nova_csrf_plugin` on a node without sessions stops the boot.** A route
+  group that lists the plugin while `use_sessions` is `false` is refused with
+  `{invalid_setting, use_sessions, {required_by, nova_csrf_plugin}}`, and
+  `{csrf_token, stateless}` there with
+  `{invalid_setting, csrf_token, {requires, use_sessions}}`. Every request
+  to the routes of the plugin would fail on such a node.
 
 - **Six settings are checked at boot.** `non_canonical_paths`,
-  `allowed_origins`, `csrf_token`, `csrf_secret`, `max_sessions` and
+  `trusted_origins`, `csrf_token`, `secret_key_base`, `max_sessions` and
   `plugins_before_security` are read from the `nova` environment when Nova
   starts. A value that cannot be used stops the start with
   `{invalid_setting, Key, Reason}`.
+
+- **A `secret_key_base` that plainly is not random stops the boot.** One that
+  is shorter than 32 bytes, has fewer than 8 different bytes (a letter or a
+  word repeated), is an example out of the documentation, or is a
+  `${VARIABLE}` that was not filled in is refused with
+  `{invalid_setting, secret_key_base, redacted}`. Make one with
+  `base64:encode(crypto:strong_rand_bytes(48)).` in an Erlang shell, or with
+  `openssl rand -base64 48`.
+
+- **Three keys that were in no release are refused.** `allowed_origins`,
+  `csrf_secret` and `plugins_after_security` were read by builds between
+  0.18.3 and this release, and never by a release. A node or a route group
+  that still has one does not start, with
+  `{invalid_setting, Key, {replaced_by, Setting}}`: `allowed_origins` is
+  `trusted_origins`, with the values it had, `csrf_secret` is
+  `secret_key_base`, and `plugins_after_security` is gone, with
+  `plugins_before_security` as the one setting that changes the order.
 
 - **`json_lib` defaults to `json` of Erlang/OTP.** It was `thoas`, which
   Nova no longer depends on.
@@ -203,9 +252,10 @@ these affects and how to get the earlier behaviour back.
   callback that checks the body and the code behind it could each have gone
   by another one. Bytes that follow the JSON value, other than whitespace,
   are refused the same way. A `json_lib` of your own decides both itself.
-  The warning for a body that does not decode no longer has the reason of
-  the library, which could hold bytes of the body: it has `error`, the kind
-  of error, and `position` when OTP's `json` found it.
+  The warning for a body that does not decode is `Request refused`, where it
+  was `Failed to decode json.`. It no longer has the reason of the library,
+  which could hold bytes of the body: it has `error`, the kind of error, and
+  `position` when OTP's `json` says where it is.
 
 - **`decode_json_body` decodes `application/json` and `application/*+json`.**
   The type is matched in any case, with any parameters, and `+json` types
@@ -437,7 +487,10 @@ these affects and how to get the earlier behaviour back.
 - **The security data of a websocket route is in the upgrade request.** What
   the callback returned in `{true, AuthData}` was only in the controller
   data. It is now under `auth_data` in the upgrade request as well, where the
-  callback of the route group and the plugins that run after it find it.
+  callback of the route group and the plugins that run after it find it. The
+  controller data has the `auth_data` of the upgrade request, so it also has
+  what a plugin put there on a route whose callback returned a plain `true`,
+  or that has no callback.
 
 - **Nova's `404` and `500` pages negotiate on `accept`.** They compared the
   header with `application/json` and `text/html` as text, and the `500` page
@@ -487,8 +540,8 @@ these affects and how to get the earlier behaviour back.
 
 - **The session cookie is issued lazily.** Nova used to set a `session_id`
   cookie on every response to a client without one. It is now only sent with
-  the response of a request that writes to the session (or calls `renew/1` or
-  `delete/1`), and carries `Path=/; HttpOnly; SameSite=Lax`. As before, `nova_session_id` is only in the request for a client that
+  the response of a request that writes to the session (or calls `sign_in/3`,
+  `renew/1`, `delete/1` or `client_id/1`), and carries `Path=/; HttpOnly; SameSite=Lax`. As before, `nova_session_id` is only in the request for a client that
   sent no cookie; use `nova_session` rather than reading it, since that id only
   reaches the client once the session is written.
 
@@ -520,8 +573,9 @@ these affects and how to get the earlier behaviour back.
   `session_max_age`, `session_cookie_name` and the new `redact_keys` are read
   like `use_sessions`: the bootstrap application first, then `nova`.
 
-- **Without `nova_stream_h`, `renew/1` and `delete/1` set the cookie on the
-  request they return.** Return that request from the controller.
+- **Without `nova_stream_h`, `sign_in/3`, `renew/1` and `delete/1` set the
+  cookie on the request they return.** Return that request from the
+  controller.
 
 - **A session manager without `session_exists/1` gets a warning at boot.**
 
@@ -561,4 +615,33 @@ these affects and how to get the earlier behaviour back.
   body, or its end, have to arrive within it. `read_timeout` still bounds
   the whole body. A `408` over HTTP/1 carries `connection: close`.
 
-- Use `nova_session:renew/1` at sign-in.
+### Signing in and out
+
+- **Sign a user in with `nova_session:sign_in/3`.** It is new. It moves the
+  client to a new session id, stores who signed in under it and returns the
+  request that carries the new id. `nova_session:renew/1` is the lower-level
+  piece, for another change of what a client may do, and
+  `nova_session:delete/1` signs out. With `secret_key_base` set, a session id
+  is kept by the first write, so a sign-in that only calls `set/3` signs in
+  whoever holds the id, also somebody who planted it.
+
+- **With `secret_key_base` set, session ids are signed.** An id is 16 random
+  bytes and 16 bytes of their HMAC-SHA-256, in base64, and
+  `nova_session:generate_session_id/0` returns that form. A visitor who was
+  handed an id with a page, by `nova_csrf_plugin` for instance, keeps it when
+  the session is first written. Without a secret that write moves the client
+  to a new id.
+
+- **A signed session id is exactly what Nova handed out.** The same bytes
+  written another way, with whitespace in the cookie value or other spare
+  bits in the last character, are not the id and are replaced. A token of
+  `nova_csrf_plugin` is held to the same rule.
+
+- **A session that was deleted is not brought back.** `nova_session_ets`
+  remembers the id of a deleted session for five minutes and stores nothing
+  under it in that time: `nova_session_ets:set_value/3` returns
+  `{error, session_ended}`, and a request that was on its way when its client
+  signed out writes to a session of its own. A session backend of your own
+  can do the same with the new optional callback `session_ended/1`. Code that
+  calls `nova_session_ets:delete_value/1` and then writes to the same id
+  directly gets the error.
