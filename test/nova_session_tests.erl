@@ -108,6 +108,8 @@ nova_session_ets_test_() ->
       fun set_tells_stream_handler/0,
       fun renew_drops_old_session/0,
       fun renew_tells_stream_handler/0,
+      fun backend_is_asked_once_about_a_presented_id/0,
+      fun deleted_session_is_asked_about_again/0,
       fun renew_without_session/0,
       fun renew_sets_cookie_without_stream_handler/0,
       fun delete_expires_cookie_without_stream_handler/0,
@@ -342,6 +344,30 @@ unknown_presented_id_is_replaced() ->
     ?assertEqual({written, ~"pending"}, stream_event()),
     ?assertNot(nova_session_ets:session_exists(~"attacker-chosen")),
     ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")).
+
+backend_is_asked_once_about_a_presented_id() ->
+    ok = nova_session_ets:set_value(~"asked-once", ~"k", ~"v"),
+    Req = presented_req(~"asked-once", ~"pending"),
+    meck:new(nova_session_ets, [passthrough]),
+    try
+        ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")),
+        ?assertEqual({error, not_found}, nova_session:get(Req, ~"other")),
+        ok = nova_session:set(Req, ~"k2", ~"v2"),
+        {ok, _Req} = nova_session:delete(Req, ~"k2"),
+        ?assertEqual(1, meck:num_calls(nova_session_ets, session_exists, [~"asked-once"]))
+    after
+        meck:unload(nova_session_ets)
+    end.
+
+%% A controller that goes on with the request it had before the delete must
+%% not bring the deleted session back under the id the client still holds.
+deleted_session_is_asked_about_again() ->
+    ok = nova_session_ets:set_value(~"signed-out", ~"k", ~"v"),
+    Req = presented_req(~"signed-out", ~"pending"),
+    ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")),
+    {ok, _Req} = nova_session:delete(Req),
+    ok = nova_session:set(Req, ~"k", ~"again"),
+    ?assertNot(nova_session_ets:session_exists(~"signed-out")).
 
 renew_drops_presented_id() ->
     ok = nova_session_ets:set_value(~"before", ~"k", ~"v"),

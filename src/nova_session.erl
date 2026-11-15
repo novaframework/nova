@@ -52,6 +52,8 @@ above.
 -include_lib("kernel/include/logger.hrl").
 
 -define(DEFAULT_MAX_AGE, 1209600).
+-define(KNOWN, {?MODULE, known}).
+-define(KNOWN_FOR, 1000).
 
 %%%===================================================================
 %%% Callbacks
@@ -108,9 +110,10 @@ A backend without it gets the value through `c:set_value/3`.
 -doc """
 Tells whether the backend holds a session with this id. Nova calls it for the
 id a client presents and replaces ids that return `false`. It runs in the
-process calling `nova_session`, once for every `get/2`, `set/3` and `delete`
-on a request that presented a cookie, so keep it as cheap as a key lookup. A
-backend without it accepts every presented id.
+process calling `nova_session`, which keeps the answer for a second: a
+request that presented a cookie asks once however often it reads and writes
+its session, and again after it deleted or renewed it. A backend without it
+accepts every presented id.
 """.
 -callback session_exists(SessionId :: binary()) -> boolean().
 
@@ -188,6 +191,7 @@ delete(Req) ->
         {ok, SessionId} ->
             Mod = get_session_module(),
             Mod:delete_value(SessionId),
+            erase(?KNOWN),
             {ok, NewSessionId} = generate_session_id(),
             notify(Req, {deleted, NewSessionId}),
             Req0 = case stream_handled(Req) of
@@ -217,7 +221,8 @@ renew(Req) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
             Mod = get_session_module(),
-            Mod:delete_value(SessionId);
+            Mod:delete_value(SessionId),
+            erase(?KNOWN);
         _ ->
             ok
     end,
@@ -379,7 +384,21 @@ presented_session_id(Req) ->
 %%%===================================================================
 %%% Private functions
 %%%===================================================================
+%% What the backend said about a presented id is kept by the calling process,
+%% so a request asks once. For a second and no longer: the process of a
+%% websocket goes on with the request of its upgrade for as long as it lives.
 known(SessionId) ->
+    Now = erlang:monotonic_time(millisecond),
+    case get(?KNOWN) of
+        {SessionId, Known, At} when Now - At < ?KNOWN_FOR ->
+            Known;
+        _ ->
+            Known = backend_knows(SessionId),
+            put(?KNOWN, {SessionId, Known, Now}),
+            Known
+    end.
+
+backend_knows(SessionId) ->
     Mod = get_session_module(),
     _ = code:ensure_loaded(Mod),
     case erlang:function_exported(Mod, session_exists, 1) of
