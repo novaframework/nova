@@ -7,6 +7,7 @@
 -export([stalled_upload_is_answered_at_the_chunk_timeout/1,
          trickled_upload_is_answered_at_the_read_timeout/1,
          timed_out_upload_closes_the_connection/1,
+         stalled_uploads_leave_room_for_others/1,
          refused_upload_holds_nothing_when_the_plugin_runs_after_security/1]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -18,6 +19,7 @@ all() ->
     [stalled_upload_is_answered_at_the_chunk_timeout,
      trickled_upload_is_answered_at_the_read_timeout,
      timed_out_upload_closes_the_connection,
+     stalled_uploads_leave_room_for_others,
      refused_upload_holds_nothing_when_the_plugin_runs_after_security].
 
 init_per_suite(Config) ->
@@ -70,6 +72,21 @@ timed_out_upload_closes_the_connection(Config) ->
     ?assertEqual({error, closed}, gen_tcp:recv(Socket, 0, 3000)),
     ok = gen_tcp:close(Socket).
 
+%% Forty clients send thirty-one files each and stop inside the next one,
+%% which is more files than the spool once took from all requests together.
+stalled_uploads_leave_room_for_others(Config) ->
+    Sockets = [stalled(Config, "/open/upload", 31, 2200) || _ <- lists:seq(1, 40)],
+    try
+        #{files := Held} = tracked(1025),
+        ?assert(Held > 1024),
+        {Headers, Body} = multipart([{"a.bin", ~"first"}]),
+        ?assertMatch({200, _, _},
+                     nova_test_listener:response(?config(port, Config), "POST", "/open/upload", Headers, Body))
+    after
+        [gen_tcp:close(Socket) || Socket <- Sockets]
+    end,
+    ?assertEqual(#{files => 0, bytes => 0}, settled()).
+
 refused_upload_holds_nothing_when_the_plugin_runs_after_security(Config) ->
     Socket = stalled(Config, "/guarded/upload", 1, 70000),
     ?assertEqual(~"HTTP/1.1 401", status_line(Socket)),
@@ -102,6 +119,10 @@ answer(Socket) ->
         {ok, Data} -> Data;
         {error, Reason} -> atom_to_binary(Reason)
     end.
+
+multipart(Files) ->
+    {[{"content-type", ["multipart/form-data; boundary=", ?BOUNDARY]}],
+     iolist_to_binary([[part(Filename, Data) || {Filename, Data} <- Files], "--", ?BOUNDARY, "--\r\n"])}.
 
 part(Filename, Data) ->
     [part_head(Filename), Data, "\r\n"].

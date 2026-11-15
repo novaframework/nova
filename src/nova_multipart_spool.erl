@@ -24,7 +24,7 @@ The spool is bounded across all requests that are being served. Set the limits u
 {nova, [{multipart_spool, #{max_files => 1024, max_bytes => 8000000000}}]}
 ```
 
-- `max_files` - files tracked at one time. Default `1024`.
+- `max_files` - files tracked at one time. Default `infinity`: a request spools at most `max_parts` files and the listener bounds the requests, while a count across the node is one that a few slow uploads can use up.
 - `max_bytes` - bytes tracked at one time. Default `8000000000`.
 
 Either takes `infinity`. A part that would pass a limit is refused with `{error, spool_full}`, which `nova_multipart_plugin` answers with a `503`. A kept file no longer counts.
@@ -46,7 +46,7 @@ Either takes `infinity`. A part that would pass a limit is refused with `{error,
          terminate/2]).
 
 -define(SERVER, ?MODULE).
--define(DEFAULT_MAX_FILES, 1024).
+-define(DEFAULT_MAX_FILES, infinity).
 -define(DEFAULT_MAX_BYTES, 8000000000).
 
 -type path() :: file:filename_all().
