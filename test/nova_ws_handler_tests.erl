@@ -291,6 +291,14 @@ controller_crash_returns_stop_test_() ->
         ?assertMatch({stop, _}, Result)
     end}.
 
+controller_return_the_handler_cannot_take_stops_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        meck:expect(test_ws_mod, websocket_handle, fun(_Frame, CD) ->
+            {reply, {text, ~"one"}, {text, ~"two"}, CD}
+        end),
+        ?assertMatch({stop, _}, nova_ws_handler:websocket_handle({text, ~"boom"}, make_ws_state()))
+    end}.
+
 %%====================================================================
 %% Plugin returning stop signal
 %%====================================================================

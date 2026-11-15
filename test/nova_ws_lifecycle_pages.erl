@@ -16,6 +16,8 @@ websocket_handle({text, ~"route"}, ControllerData = #{req := Req}) ->
     {reply, {text, maps:get(nova_route, Req, ~"none")}, ControllerData};
 websocket_handle({text, ~"pathinfo"}, ControllerData = #{req := #{extra_state := #{pathinfo := Pathinfo}}}) ->
     {reply, {text, lists:join(~",", Pathinfo)}, ControllerData};
+websocket_handle({text, ~"unsupported"}, ControllerData) ->
+    {reply, {text, ~"one"}, {text, ~"two"}, ControllerData};
 websocket_handle(_Frame, ControllerData) ->
     {reply, {text, ~"ok"}, ControllerData}.
 
