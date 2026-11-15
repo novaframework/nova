@@ -730,7 +730,7 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
 %% what the caller gave for the page go there. For nova_handler, which
 %% renders the page of a controller that failed.
 -doc false.
--spec status_page_request(StatusCode :: integer(), Data :: map(), Req :: cowboy_req:req()) -> routed_req().
+-spec status_page_request(StatusCode :: integer(), Data :: map(), Req :: routed_req()) -> routed_req().
 status_page_request(StatusCode, Data, Req) ->
     Req#{resp_status_code => StatusCode, controller_data => #{status => StatusCode, data => Data}}.
 
