@@ -50,8 +50,9 @@ render(StatusCode, Variables, Req) ->
 
 %% Every page of Nova leaves from here, and this is the one place that reads
 %% render_error_pages: with it off the status is sent bare to every client,
-%% whatever form it accepts, as it is to a client that accepts neither form. The status routes of an application are not
-%% pages of Nova and run either way.
+%% whatever form it accepts, as it is to a client that accepts neither form.
+%% The status routes of an application are not pages of Nova and run either
+%% way.
 page(StatusCode, Json, Variables, Req) ->
     case application:get_env(nova, render_error_pages, true) =:= true andalso response_type(Req) of
         false ->

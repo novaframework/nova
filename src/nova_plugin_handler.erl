@@ -216,7 +216,8 @@ plugin_module(Callback) ->
     {module, Module} = erlang:fun_info(Callback, module),
     Module.
 
-%% pre_security/4 runs in the phase of the pre_request plugins.
+%% CallbackType is the phase, and pre_security/4 runs in the one of the
+%% pre_request plugins: telemetry would name it pre_request.
 callback_name(Callback, CallbackType) ->
     case erlang:fun_info(Callback, name) of
         {name, pre_security} -> pre_security;

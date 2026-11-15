@@ -217,7 +217,6 @@ terminate(_Reason, #state{files = Files}) ->
     [file:delete(Path) || Path <- maps:keys(Files)],
     ok.
 
-%% A path that is tracked already starts over with its new owner.
 -spec own(binary(), pid(), non_neg_integer(), #state{}) -> #state{}.
 own(Path, Owner, Bytes, State) ->
     #state{files = Files, owners = Owners, bytes = Total} = case forget(Path, State) of
