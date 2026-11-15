@@ -29,7 +29,8 @@
          setting_that_is_gone_fails_the_boot/1,
          plugins_after_security_of_a_route_group_fails_the_boot/1,
          csrf_settings_nothing_can_go_by_fail_the_boot/1,
-         secret_key_base_that_fails_the_boot_is_not_told/1,
+         secret_that_fails_the_boot_is_not_told/1,
+         secret_is_not_told_by_a_boot/1,
          csrf_tokens_kept_in_the_session_store_are_said_once/1,
          body_decoded_behind_a_security_callback_is_warned_about/1,
          plugins_of_an_earlier_run_are_forgotten/1
@@ -64,7 +65,8 @@ all() ->
      setting_that_is_gone_fails_the_boot,
      plugins_after_security_of_a_route_group_fails_the_boot,
      csrf_settings_nothing_can_go_by_fail_the_boot,
-     secret_key_base_that_fails_the_boot_is_not_told,
+     secret_that_fails_the_boot_is_not_told,
+     secret_is_not_told_by_a_boot,
      csrf_tokens_kept_in_the_session_store_are_said_once,
      body_decoded_behind_a_security_callback_is_warned_about,
      plugins_of_an_earlier_run_are_forgotten
@@ -346,7 +348,7 @@ csrf_settings_nothing_can_go_by_fail_the_boot(_Config) ->
 %% `[New | Old]` is what "put the new secret in front of the old one" looks
 %% like to somebody who writes it as a cons. Neither that nor any other value
 %% that is refused ends up in what the boot returns, logs or reports.
-secret_key_base_that_fails_the_boot_is_not_told(_Config) ->
+secret_that_fails_the_boot_is_not_told(_Config) ->
     Old = ~"the-secret-in-use-of-32-bytes-or-more",
     New = ~"the-secret-to-come-of-32-bytes-or-more",
     [begin
