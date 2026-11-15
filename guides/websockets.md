@@ -16,9 +16,10 @@ A websocket route names the module and sets `protocol => ws`:
   ]}
 ```
 
-The upgrade is an HTTP request. It passes the `pre_request` plugins and the
-security callback of the route group like any other request, so a refused
-upgrade never reaches the controller. See [Routing](routing.md).
+The upgrade is an HTTP request. It passes [the origin check](#the-origin-check),
+the `pre_request` plugins and the security callback of the route group like
+any other request, so a refused upgrade never reaches the controller. See
+[Routing](routing.md).
 
 ## The controller
 
@@ -102,27 +103,62 @@ init(#{auth_data := #{user_id := UserId}} = ControllerData) ->
     {ok, ControllerData#{user_id => UserId}}.
 ```
 
+A plugin that sets `auth_data` in `pre_request/4` changes it in `req`. The
+`auth_data` key of the controller data stays what the callback returned.
+
+## The origin check
+
 A browser sends the cookies of your site with an upgrade that a page on
-another site started. A websocket that trusts the session cookie should check
-the `Origin` header with `nova_ws_origin_plugin`:
+another site started. Nova therefore checks the `Origin` header of every
+request to a websocket route, before anything else of the route runs. A
+request from an origin that is not allowed is answered with `403` and the
+text `Origin not allowed`. No plugin and no security callback sees it. A
+request without an `Origin` header is let through, since only browsers send
+it.
+
+The check goes by `allowed_origins` of the `nova` environment:
 
 ```erlang
 {nova, [
-    {plugins, [
-        {pre_request, nova_ws_origin_plugin, #{allowed_origins => [~"https://example.com"]}}
-    ]}
+    {allowed_origins, [~"https://example.com"]}
 ]}
 ```
 
 | `allowed_origins` | Accepts |
 |---|---|
-| `same_host` | An origin with the host and port of the request. This is the default |
-| `same_origin` | An origin with the scheme, host and port of the request |
+| `same_host` | An origin with the host and port the request was sent to. This is the default |
+| `same_origin` | An origin with the scheme, host and port of the request as Nova received it |
 | A list of origins | Exactly those origins. Use it behind a proxy that rewrites the `Host` header or terminates TLS |
+| `any` | Every origin |
 
-An upgrade from another origin is answered with `403`. A request without an
-`Origin` header is let through, since only browsers send it. The plugin is
-not active unless you configure it.
+The [Configuration](configuration.md#allowed-origins) guide says how ports are
+compared, and that the same setting is read by `nova_csrf_plugin`.
+
+To give one route group other origins, list `nova_ws_origin_plugin` in its
+plugins with the option `allowed_origins`. The group is then checked against
+those alone. The check still runs first, wherever in the list the plugin is:
+
+```erlang
+#{prefix => "/widget",
+  security => fun my_app_auth:session/1,
+  plugins => [
+      {pre_request, nova_ws_origin_plugin, #{allowed_origins => [~"https://example.com",
+                                                                 ~"https://partner.example.org"]}}
+  ],
+  routes => [
+      {"/ws", my_app_widget_ws_controller, #{protocol => ws}}
+  ]}
+```
+
+A route group that declares `plugins` uses those and not the global ones, so
+list every other plugin the group needs with it. The option takes the values
+of the setting. Any other value is refused when the routes are compiled, and
+the application does not start, with
+`{invalid_setting, allowed_origins, Value}`.
+
+`same_host` and `same_origin` do not stop DNS rebinding, where another name is
+pointed at the address of the server: the origin and the host of such a
+request are the same name. A list of origins does.
 
 ## Sending to a connection
 
@@ -167,8 +203,10 @@ Every connection, on every connected node, gets what any of them sends. See
 
 ## Plugins
 
-The `pre_request` plugins of the route run on the upgrade request. After the
-upgrade a websocket route has three phases of its own:
+The `pre_request` plugins of the route run on the upgrade request: their
+`pre_security/4` ahead of the security callback and their `pre_request/4`
+behind it, see [Plugins](plugins.md#before-and-after-the-security-callback).
+After the upgrade a websocket route has three phases of its own:
 
 | Phase | Runs |
 |---|---|
