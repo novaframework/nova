@@ -94,6 +94,22 @@ inherited_override_test_() ->
        ?_assertThrow({error, {invalid_security, true}},
                      secure_of(unset, #{inherited_override_secure => [Host], override_secure => true}))}]}.
 
+misplaced_security_on_an_entry_test_() ->
+    Host = fun ?MODULE:host_callback/1,
+    {setup, fun setup/0, fun cleanup/1,
+     [{"a callback written as security on the entry of an application stops the compile",
+       [?_assertThrow({error, {misplaced_security, nova_test_sub_app, security, "/"}},
+                      secure_of(unset, #{security => Host})),
+        ?_assertThrow({error, {misplaced_security, nova_test_sub_app, security, "/admin"}},
+                      secure_of(unset, #{prefix => "/admin", security => Host, secure => Host}))]},
+      {"security => false there is only warned about",
+       fun() ->
+               {Secure, Events} = nova_test_log:collect(fun() -> secure_of(unset, #{security => false, secure => Host}) end),
+               ?assertEqual(Host, Secure),
+               ?assertMatch([#{app := nova_test_sub_app, key := security, path := "/"}],
+                            [Report || {warning, {report, Report}} <- Events])
+       end}]}.
+
 overrides_in_force_test_() ->
     Host = fun ?MODULE:host_callback/1,
     Other = fun ?MODULE:page/1,
