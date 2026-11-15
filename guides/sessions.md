@@ -77,19 +77,19 @@ logout(Req) ->
 
 ```erlang
 -spec sign_in(Req :: cowboy_req:req(), Key :: binary(), Value :: term()) ->
-          {ok, Req :: cowboy_req:req()} | {error, Reason :: atom()}.
+          {ok, Req :: cowboy_req:req()} | {error, Reason :: atom()} | no_return().
 ```
 
 Signs a user in. It moves the client to a new session id, stores `Value` under `Key` in the new session and returns the request that carries the new id. Call it where a user signs in, and go on with the request it returns:
 
 ```erlang
 login(Req) ->
-    {ok, SignedIn} = nova_session:sign_in(Req, <<"user_id">>, UserId),
-    ok = nova_session:set(SignedIn, <<"signed_in_at">>, erlang:system_time(second)),
+    {ok, SignedIn} = nova_session:sign_in(Req, ~"user_id", UserId),
+    ok = nova_session:set(SignedIn, ~"signed_in_at", erlang:system_time(second)),
     {redirect, "/"}.
 ```
 
-This is the defence against session fixation. The session the client had is deleted with everything in it, so a session id that somebody else knows, because they planted it in the browser of the user or saw it, is not the id of the user who signed in. Writing who signed in with `set/3` alone keeps the id, and signs in whoever holds it.
+This is the defence against session fixation. The session the client had is deleted with everything in it, so a session id that somebody else knows, because they planted it in the browser of the user or saw it, is not the id of the user who signed in. Writing who signed in with `set/3` alone keeps the id, and signs in whoever holds it. Copy what is to survive the sign-in, such as a cart, to the request `sign_in/3` returns.
 
 `{error, Reason}` is what the session backend answered when it did not store the value. The id has changed by then, and nobody is signed in.
 
@@ -98,15 +98,16 @@ A token of `nova_csrf_plugin` that was made for the old id is refused once the u
 ### `nova_session:renew/1`
 
 ```erlang
--spec renew(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()}.
+-spec renew(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} | no_return().
 ```
 
 Moves the client to a new, empty session: the old session's data is deleted and the response carries a new session cookie. It is the lower-level piece of `sign_in/3`, which is what to call where a user signs in, and `delete/1` is what signs out. Call `renew/1` itself for another change of what the client may do, such as a second factor or a password change, and use the returned request for the `set/3` calls that follow.
 
 ```erlang
 second_factor_passed(Req, UserId) ->
-    {ok, Req1} = nova_session:renew(Req),
-    ok = nova_session:set(Req1, ~"user_id", UserId),
+    {ok, Renewed} = nova_session:renew(Req),
+    ok = nova_session:set(Renewed, ~"user_id", UserId),
+    ok = nova_session:set(Renewed, ~"second_factor", true),
     {redirect, "/"}.
 ```
 
@@ -129,19 +130,23 @@ Returns the session id the client of the request holds. It stores nothing and st
 | Has a `Cookie` header that does not parse | `{ok, Id}` with the id of the request | Sets no cookie, since the client may hold one Nova could not read. The id is not seen again |
 | Has no session cookie, and `nova_stream_h` is not a stream handler | `{error, not_found}` | Sets no cookie |
 
-It is for what is tied to the browser and not to what a session holds. `nova_csrf_plugin` signs its tokens for this id, see [CSRF token modes](plugins.md#csrf-token-modes). The id is not the one `set/3` writes under when the backend has no session for it: the first `set/3` then moves the client to a new id, and the response replaces the cookie.
+It is for what is tied to the browser and not to what a session holds. `nova_csrf_plugin` signs its tokens for this id, see [CSRF token modes](plugins.md#csrf-token-modes). With `secret_key_base` set the id is signed, and the first `set/3` stores the session under it, so the cookie stays as it is. Without a secret the id is not the one `set/3` writes under when the backend has no session for it: the first `set/3` then moves the client to a new id, and the response replaces the cookie.
 
-The cookie is written by `nova_stream_h`, so it reaches the client even when the controller does not return `Req1`. This works for changes made by the process serving the request, which is where controllers, plugins, security functions and `c:nova_websocket:init/1` run (a session written in `init/1` gets its cookie on the `101` response). A process spawned with the request can still read and write session data, but no cookie is sent for what it does.
+### The cookie and the request that is returned
 
-A `stream_handlers` configuration without `nova_stream_h` keeps storing session data, and `renew/1` and `delete/1` then set or expire the cookie on the request they return, with the same attributes. Return that request, for example with `{json, 200, #{}, Body, Req1}` or `{redirect, Path, Req1}`, or the cookie is lost. A `set/3` from a client without a cookie does not start a session there, and presented ids are used without the check described below.
+The cookie is written by `nova_stream_h`, so it reaches the client even when the controller does not return the request that `sign_in/3`, `renew/1` or `delete/1` gave it. This works for changes made by the process serving the request, which is where controllers, plugins, security functions and `c:nova_websocket:init/1` run (a session written in `init/1` gets its cookie on the `101` response). A process spawned with the request can still read and write session data, but no cookie is sent for what it does.
+
+A `stream_handlers` configuration without `nova_stream_h` keeps storing session data, and `sign_in/3`, `renew/1` and `delete/1` then set or expire the cookie on the request they return, with the same attributes. Return that request, for example with `{json, 200, #{}, Body, Req1}` or `{redirect, Path, Req1}`, or the cookie is lost. A `set/3` from a client without a cookie does not start a session there, and presented ids are used without the check described below.
 
 ## The session cookie
 
-The session id is a random 256-bit value from `crypto:strong_rand_bytes/1`, sent in the `session_id` cookie (`session_cookie_name` changes the name). `nova_stream_h` issues the cookie with the response of the first request that writes to the session, so visitors who never store anything get no cookie and their responses stay cacheable. `nova_csrf_plugin` hands the cookie out as well when it signs its tokens, without starting a session.
+The session id is 32 bytes in base64, 44 characters, sent in the `session_id` cookie (`session_cookie_name` changes the name). Without `secret_key_base` all 32 bytes come from `crypto:strong_rand_bytes/1`. With it, 16 bytes do, and the other 16 are their HMAC-SHA-256 under the key Nova has from the secret for session ids. `nova_stream_h` issues the cookie with the response of the first request that writes to the session, so visitors who never store anything get no cookie and their responses stay cacheable. `nova_csrf_plugin` hands the cookie out as well when it signs its tokens, without starting a session.
 
 An id the client presents that the backend does not know (never issued, deleted or expired) is ignored and a new one is used, so a client cannot simply choose its own session id. This is defence in depth; `sign_in/3` is what protects against fixation. The check runs in the request process the first time the request uses the session, not in the connection process.
 
-With `secret_key_base` set, the ids Nova makes are signed, and a visitor keeps the id a page handed out when the session is first written. A signed id is the 44 characters Nova handed out and nothing else: the same bytes written another way, with a space in the cookie value or with other bits to spare in the last character, are an id nobody signed, and are replaced like any other unknown id.
+With `secret_key_base` set, the ids Nova makes are signed, so Nova knows an id it handed out without having stored anything for it. A visitor then keeps the id a page handed out when the session is first written: the cookie stays as it is, and so do the tokens `nova_csrf_plugin` signed for it. An id that no secret in use signed is replaced by the first write, as it is without a secret. A signed id is the 44 characters Nova handed out and nothing else: the same bytes written another way, with a space in the cookie value or with other bits to spare in the last character, are an id nobody signed, and are replaced like any other unknown id.
+
+Because a signed id is kept, the id of a client changes with `sign_in/3`, `renew/1` and `delete/1` and with nothing else. An application that writes who signed in with `set/3` alone signs in whoever holds the id.
 
 A session that was deleted, by `delete/1`, `renew/1` or `sign_in/3`, does not come back. A request that was on its way when another request of the same client signed out, or signed in, and that writes to the session afterwards, is given a session of its own under a new id, and never stores anything under the id the client was moved off. The default `nova_session_ets` backend remembers a deleted id for five minutes, on every node, for this: a write to it in that time stores nothing and returns `{error, session_ended}` from the backend. It remembers at most as many ended ids as it may hold sessions (`max_sessions`, or 1 000 000 when that is `infinity`), the oldest going first. A request that takes longer than five minutes is not covered.
 
@@ -172,7 +177,7 @@ A cookie named with the `__Host-` prefix is only accepted by browsers when it is
 
 With a `__Host-` name Nova always sends `Secure` and `Path=/` and drops `domain`, whatever `session_cookie_opts` says. Changing the name of an existing application signs every client out once: the old `session_id` cookie is no longer read, so clients get a new session under the new name. The old cookie stays in the browser until it expires.
 
-`session_cookie_opts` takes the options of `cowboy_req:set_resp_cookie/4` (`path`, `domain`, `secure`, `http_only`, `same_site`, `max_age`) and is merged over the defaults above. Other keys, and values of the wrong type (a `path` that is not a binary, for example), are ignored. The cookie name must be an RFC 6265 token and `path` and `domain` plain ASCII without control characters or `;`; Nova checks both at boot and refuses to start otherwise, as it does for a name that is empty or not a binary. Changed at runtime to something invalid, `nova_stream_h` (one of the default `stream_handlers`) leaves the cookie off the response and logs one error per cookie name. Without `nova_stream_h`, `renew/1` and `delete/1` set the cookie themselves, and an invalid setting makes them raise, so the request gets a 500.
+`session_cookie_opts` takes the options of `cowboy_req:set_resp_cookie/4` (`path`, `domain`, `secure`, `http_only`, `same_site`, `max_age`) and is merged over the defaults above. Other keys, and values of the wrong type (a `path` that is not a binary, for example), are ignored. The cookie name must be an RFC 6265 token and `path` and `domain` plain ASCII without control characters or `;`; Nova checks both at boot and refuses to start otherwise, as it does for a name that is empty or not a binary. Changed at runtime to something invalid, `nova_stream_h` (one of the default `stream_handlers`) leaves the cookie off the response and logs one error per cookie name. Without `nova_stream_h`, `sign_in/3`, `renew/1` and `delete/1` set the cookie themselves, and an invalid setting makes them raise, so the request gets a 500.
 
 `session_max_age` (seconds, 14 days by default) limits how long a session lives from the moment it was created, whatever happens in between. It sets `Max-Age` on the cookie, and the default `nova_session_ets` backend drops the session once it has passed. With `infinity` the cookie has no `Max-Age` and sessions live until they are deleted or the node restarts.
 
@@ -209,7 +214,7 @@ add_to_cart(#{bindings := #{~"id" := Id}} = Req) ->
     end.
 ```
 
-The first `set/3` on a provisional session makes it a session in use, with the lifetime of a session created at that point. The values written before stay. A `set_provisional/3` on a session in use writes the value and leaves the session in use. Call `set/3` when the client signs in, after `renew/1`, as in the example of `renew/1` above. `renew/1` starts an empty session, so copy what is to survive the sign-in, such as the cart, to the request it returns.
+The first `set/3` on a provisional session makes it a session in use, with the lifetime of a session created at that point. The values written before stay. A `set_provisional/3` on a session in use writes the value and leaves the session in use. `sign_in/3` writes with `set/3`, so a client that signs in has a session in use. It starts an empty session, so copy what is to survive the sign-in, such as the cart, to the request it returns.
 
 An application that calls `set/3` for visitors who are not signed in starts a session in use for each of them. When the store is full, a flood of requests without a cookie to such a route drops the oldest sessions in use, and signs users out.
 
@@ -245,11 +250,11 @@ You can implement your own backend by creating a module that implements the `nov
 
 Implement the optional `session_exists/1` too. Nova calls it for the session id a client presents and replaces ids it returns `false` for. The answer is kept for one second in the process that calls `nova_session`, for reads: a request that presented a cookie asks once however often it reads its session, and again for every write and after it deleted or renewed it. A backend without it accepts any id a client sends, and Nova logs a warning at boot.
 
-`set_value/3` should return `ok` or `{error, Reason}`. Anything other than an error counts as a successful write. The value is any term, as it was given to `nova_session:set/3`, and `get_value/2` has to return it as it was.
+`set_value/3` should return `ok` or `{error, Reason}`. Anything other than an error counts as a successful write. `{error, session_ended}` has a meaning of its own, see `session_ended/1` below. The value is any term, as it was given to `nova_session:set/3`, and `get_value/2` has to return it as it was.
 
 The optional `set_provisional_value/3` gets what is written with `nova_session:set_provisional/3`. A session that only holds such values is not in use yet, so the backend can keep it for a shorter time and drop it first when it runs out of room. A backend without the callback gets those values through `set_value/3`, and then has no way to tell the sessions of visitors from those of signed-in users.
 
-Implement the optional `session_ended/1` as well when the backend can: it tells whether the session with an id was deleted with `delete_value/1` a short while ago, for at least as long as a request to your application can take. With signed ids (`secret_key_base`), Nova starts a session under a signed id that no session is stored under, and it asks `session_ended/1` first, so that a request that was on its way when its client signed out does not start one under the id that was given up. A backend that has it should also store nothing under such an id and return `{error, session_ended}` from `set_value/3`, since the session can be deleted between the moment Nova asks `session_exists/1` and the write; Nova then stores the value in a session of its own. A row with the id and a time to live of a few minutes, written by `delete_value/1`, is enough. A backend without the callback relies on what the process of the request knows: a session it has read, deleted or renewed itself is not written again, and one that another request ended before this one touched it can be.
+Implement the optional `session_ended/1` as well when the backend can: it tells whether the session with an id was deleted with `delete_value/1` a short while ago, for at least as long as a request to your application can take. With signed ids (`secret_key_base`), Nova starts a session under a signed id that no session is stored under, and it asks `session_ended/1` first, so that a request that was on its way when its client signed out does not start one under the id that was given up. A backend that has it should also store nothing under such an id and return `{error, session_ended}` from `set_value/3` and `set_provisional_value/3`, since the session can be deleted between the moment Nova asks `session_exists/1` and the write; Nova then stores the value in a session of its own. A row with the id and a time to live of a few minutes, written by `delete_value/1`, is enough. A backend without the callback relies on what the process of the request knows: a session it has read, deleted or renewed itself is not written again, and one that another request ended before this one touched it can be.
 
 Optionally you can also implement `start_link/0`, which will start a process under nova's supervisor for handling infrastructure of your handler, if it is necessary. For example, in default `nova_session_ets` module it starts a `gen_server` for managing underlying *ETS* table.
 
