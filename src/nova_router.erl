@@ -161,13 +161,21 @@ execute(Req0 = #{path := Path}, Env) ->
     %% nova_session only tells nova_stream_h about session changes made by the
     %% process serving the request.
     Req = Req0#{nova_dispatch_key => DispatchKey, nova_session_owner => self()},
-    case nova_settings:value(non_canonical_paths) =:= resolve orelse nova_routing_trie:is_canonical(Path) of
+    case is_origin_form(Path) andalso
+        (nova_settings:value(non_canonical_paths) =:= resolve orelse nova_routing_trie:is_canonical(Path)) of
         true ->
             route(Req, Env, StorageBackend:get(DispatchKey));
         false ->
             ?LOG_DEBUG(#{msg => ~"Request path is not canonical", path => Path}),
             render_status_page('_', 400, #{error => "Path is not canonical"}, Req, Env)
     end.
+
+%% HTTP/2 lets a client send a path that does not start with a slash. It is
+%% not one to resolve: nothing that decides by how a path starts could tell
+%% where it leads. `*` is the target of a server-wide OPTIONS.
+is_origin_form(~"*") -> true;
+is_origin_form(<<"/", _/binary>>) -> true;
+is_origin_form(_Path) -> false.
 
 route(Req = #{host := Host, path := Path, method := Method}, Env, Dispatch) ->
     case nova_routing_trie:find(Host, Path, Method, Dispatch) of
@@ -270,7 +278,7 @@ The path a request is routed on, as opposed to the `path` of the request, which 
 
 A plugin or security callback that decides by path must look at this one. Compare whole segments, not bytes: `/api` is not a prefix of `/apikeys`.
 
-A request whose path is written another way is answered `400` before a route is looked up, so before any plugin and before the security callback, unless the `nova` environment sets `non_canonical_paths` to `resolve`. What is refused is a path with an empty segment ahead of its last one (`//a`, `/a//b`), or with a `.` or `..` segment, the dots written out or percent-encoded (`/a/../b`, `/a/%2e%2e/b`). One trailing slash is not refused, so `path` and this function still differ by it: `/users/` gives `/users`. The answer is the `400` status route of the application when it has one.
+A request whose path is written another way is answered `400` before a route is looked up, so before any plugin and before the security callback, unless the `nova` environment sets `non_canonical_paths` to `resolve`. What is refused is a path with an empty segment ahead of its last one (`//a`, `/a//b`), or with a `.` or `..` segment, the dots written out or percent-encoded (`/a/../b`, `/a/%2e%2e/b`). One trailing slash is not refused, so `path` and this function still differ by it: `/users/` gives `/users`. A path that does not start with a slash, which HTTP/2 lets a client send, is refused whatever `non_canonical_paths` is. The answer is the `400` status route of the application when it has one.
 """.
 -spec canonical_path(Req :: cowboy_req:req() | binary()) -> binary().
 canonical_path(#{path := Path}) ->

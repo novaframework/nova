@@ -17,6 +17,7 @@
          encoded_slash_stays_in_its_segment/1,
          refused_before_plugins_and_security/1,
          refusal_is_a_status_page/1,
+         path_without_a_leading_slash_is_refused/1,
          dot_segments_do_not_reach_an_exclusion/1,
          canonical_spelling_of_an_excluded_path/1,
          plugin_sees_the_routed_path/1
@@ -41,14 +42,16 @@ groups() ->
                     one_trailing_slash_is_routed,
                     encoded_slash_stays_in_its_segment,
                     refused_before_plugins_and_security,
-                    refusal_is_a_status_page
+                    refusal_is_a_status_page,
+                    path_without_a_leading_slash_is_refused
                    ]},
      {resolved, [], [
                      excluded_path_is_not_checked,
                      excluded_path_ends_at_a_segment,
                      dot_segments_do_not_reach_an_exclusion,
                      canonical_spelling_of_an_excluded_path,
-                     plugin_sees_the_routed_path
+                     plugin_sees_the_routed_path,
+                     path_without_a_leading_slash_is_refused
                     ]}
     ].
 
@@ -143,6 +146,21 @@ refused_before_plugins_and_security(Config) ->
 
 refusal_is_a_status_page(Config) ->
     ?assertEqual({400, ~"bad path"}, post(Config, "/api/../admin/delete")).
+
+%% HTTP/2 lets a client send one. It is no path to resolve: a plugin that
+%% looks at how the path starts would be told nothing by it.
+path_without_a_leading_slash_is_refused(Config) ->
+    Port = ?config(port, Config),
+    true = register(nova_canonical_path_pages, self()),
+    try
+        [?assertEqual({Path, 400}, {Path, nova_test_listener:h2_get(Port, Path)})
+         || Path <- [~"guarded/page", ~"seen/by/plugin", ~"x/../guarded/page", ~"*/guarded/page", ~"**"]],
+        ?assertEqual([], seen()),
+        ?assertEqual(200, nova_test_listener:h2_get(Port, ~"/guarded/page")),
+        ?assertEqual([plugin, security], seen())
+    after
+        unregister(nova_canonical_path_pages)
+    end.
 
 seen() ->
     receive

@@ -4,7 +4,7 @@
 -module(nova_test_listener).
 
 -export([start/1, try_start/1, configure/1, stop/0, get/2, get/3, request/4, response/4, response/5,
-         websocket_handshake/2, websocket_handshake/3, websocket_texts/4, h2_websocket_connect/4,
+         websocket_handshake/2, websocket_handshake/3, websocket_texts/4, h2_websocket_connect/4, h2_get/2,
          send_and_close/2, free_port/0]).
 
 -spec start(map()) -> inet:port_number().
@@ -151,17 +151,27 @@ websocket_texts(Port, Path, Text, Count) when byte_size(Text) < 126 ->
 %% The listener needs `enable_connect_protocol` in its Cowboy options.
 -spec h2_websocket_connect(inet:port_number(), iodata(), binary(), [{binary(), binary()}]) -> 100..599.
 h2_websocket_connect(Port, Path, Authority, Headers) ->
+    h2_request(Port, nofin, [{~":method", ~"CONNECT"},
+                             {~":protocol", ~"websocket"},
+                             {~":scheme", ~"http"},
+                             {~":path", iolist_to_binary(Path)},
+                             {~":authority", Authority},
+                             {~"sec-websocket-version", ~"13"}
+                            | Headers]).
+
+%% The status of a GET over HTTP/2, whose `:path` is sent as it is given:
+%% HTTP/1.1 cannot ask for a path that does not start with a slash.
+-spec h2_get(inet:port_number(), binary()) -> 100..599.
+h2_get(Port, Path) ->
+    h2_request(Port, fin, [{~":method", ~"GET"}, {~":scheme", ~"http"}, {~":path", Path},
+                           {~":authority", ~"localhost"}]).
+
+h2_request(Port, IsFin, Headers) ->
     {ok, Socket} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}, {packet, raw}]),
     try
         ok = gen_tcp:send(Socket, [~"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", cow_http2:settings(#{})]),
-        {HeaderBlock, _Encoder} = cow_hpack:encode([{~":method", ~"CONNECT"},
-                                                    {~":protocol", ~"websocket"},
-                                                    {~":scheme", ~"http"},
-                                                    {~":path", iolist_to_binary(Path)},
-                                                    {~":authority", Authority},
-                                                    {~"sec-websocket-version", ~"13"}
-                                                   | Headers]),
-        h2_status(Socket, <<>>, cow_http2:headers(1, nofin, HeaderBlock))
+        {HeaderBlock, _Encoder} = cow_hpack:encode(Headers),
+        h2_status(Socket, <<>>, cow_http2:headers(1, IsFin, HeaderBlock))
     after
         gen_tcp:close(Socket)
     end.
