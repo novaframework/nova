@@ -15,14 +15,14 @@ What Nova does when a setting is left out:
 |---|---|---|
 | `environment` | Read as `prod`. No crash details on error pages, the session cookie is `Secure`, routers are asked for `routes(prod)` | [Configuration](configuration.md#nova-specific-configurations) |
 | `non_canonical_paths` | `reject`. A path with an empty, `.` or `..` segment is answered with `400` before routing | [Routing](routing.md#paths-that-are-not-canonical) |
-| `allowed_origins` | `same_host`. A websocket route refuses a request from another host, and so does `nova_csrf_plugin` for a request that changes state | [Configuration](configuration.md#allowed-origins) |
+| `trusted_origins` | `same_host`. A websocket route refuses a request from another host, and so does `nova_csrf_plugin` for a request that changes state | [Configuration](configuration.md#trusted-origins) |
 | `plugins_before_security` | `[]`. No plugin of Nova reads the body before the security callback has let the request through | [Plugins](plugins.md#before-and-after-the-security-callback) |
-| `csrf_secret`, `csrf_token` | `nova_csrf_plugin` keeps its tokens in the session | [Plugins](plugins.md#csrf-token-modes) |
+| `secret_key_base`, `csrf_token` | Nova has no secret to sign with. `nova_csrf_plugin` keeps its tokens in the session, and session ids are not signed | [Configuration](configuration.md#the-secret-of-the-node) |
 | `max_sessions` | `1000000` sessions on a node | [Sessions](sessions.md#when-the-session-store-is-full) |
 | `use_stacktrace` | `false`. No stacktraces in crash logs | [Configuration](configuration.md#nova-specific-configurations) |
 | `security` of a route group | The routes of the group are public | [Protecting routes](#protecting-routes) |
 
-`non_canonical_paths`, `allowed_origins`, `csrf_secret`, `csrf_token`,
+`non_canonical_paths`, `trusted_origins`, `secret_key_base`, `csrf_token`,
 `max_sessions` and `plugins_before_security` are checked when Nova starts. A
 value that cannot be used stops the boot, see
 [Configuration](configuration.md#settings-checked-at-boot).
@@ -147,6 +147,18 @@ then read from clients that are not authenticated, so keep
 `max_body_length` low there. See
 [Plugins](plugins.md#before-and-after-the-security-callback).
 
+A callback written for 0.18 that reads `json` or `params` finds none and may
+let a request in that it used to refuse. Nova cannot see what a callback
+reads, so it logs a warning for every route group that has a security
+callback and decodes a body behind it. Say which it is with
+`security_reads_body` in the route group: `false` when the callback does not
+read the body, `true` when it does, which stops the boot until the plugin is
+listed under `plugins_before_security`. See
+[Saying whether the security callback reads the body](plugins.md#saying-whether-the-security-callback-reads-the-body).
+
+`auth_data` of the request is what the security callback returned as
+`{true, AuthData}`. A plugin cannot put something else in its place.
+
 ### Included applications
 
 An application that is included with `nova_apps` keeps the callbacks its
@@ -162,16 +174,27 @@ entries mount with different callbacks stops the boot. See
 
 Sessions are described in the [Sessions](sessions.md) guide. For security:
 
-* Call `nova_session:renew/1` when a client signs in, signs out or changes
-  its password. It moves the client to a new, empty session, so a session id
-  that was planted or observed earlier stops working.
+* Sign a user in with `nova_session:sign_in/3`. It moves the client to a
+  new session id and stores who signed in under it, so a session id that was
+  planted or observed earlier is not the id of the user who signed in. A
+  sign-in that only calls `nova_session:set/3` keeps the id, and signs in
+  whoever holds it.
+* Sign a user out with `nova_session:delete/1`. Call `nova_session:renew/1`
+  for another change of what a client may do, such as a second factor or a
+  new password.
 * The session cookie is sent with `HttpOnly`, `SameSite=Lax`, `Path=/` and,
   unless `environment` is set to `dev`, `Secure`.
 * Name the cookie with the `__Host-` prefix in new applications
   (`session_cookie_name`), so another host of the same domain cannot set it.
-* The session id is 256 random bits. An id the backend does not know is
-  replaced, so a client cannot choose its own. A custom backend has to
+* The session id is 32 random bytes. With `secret_key_base` set it is 16
+  random bytes and 16 bytes of their HMAC-SHA-256, and a signed id is
+  exactly the 44 characters Nova handed out. An id the backend does not know
+  is replaced, so a client cannot choose its own. A custom backend has to
   implement `session_exists/1` for that.
+* A session that was deleted does not come back. A request that was on its
+  way when its client signed out writes to a session of its own. The default
+  backend sees to that for five minutes after the session was deleted, and a
+  custom backend does with the optional `session_ended/1`.
 * Session data is kept on the server. With the default backend it is kept in
   memory, sessions end after `session_max_age` (14 days) and the number of
   sessions on a node is limited by `max_sessions`.
@@ -232,14 +255,25 @@ It refuses a `POST`, `PUT`, `PATCH` or `DELETE`:
   `Origin`, before the security callback runs and before the body is read,
 * that does not carry the token a page of the site was given.
 
-Set `csrf_secret` so that the tokens are signed and nothing is stored for a
-visitor:
+Set `secret_key_base` so that the tokens are signed and nothing is stored
+for a visitor:
 
 ```erlang
 {nova, [
-    {csrf_secret, ~"${CSRF_SECRET}"}
+    {secret_key_base, ~"${SECRET_KEY_BASE}"}
 ]}
 ```
+
+The secret has to come out of a random source: make it with
+`base64:encode(crypto:strong_rand_bytes(48)).` in an Erlang shell, or with
+`openssl rand -base64 48`. Nova does not start with one that is shorter than
+32 bytes or that plainly is not random, see
+[The secret of the node](configuration.md#the-secret-of-the-node).
+
+The plugin needs sessions, and a node without them does not start with it.
+`{trusted_origins, any}` in the `nova` environment does not turn the first
+check off. The option `trusted_origins => any` of the plugin does, for its
+route group.
 
 See [Nova CSRF](plugins.md#nova-csrf) for the two checks, the token modes and
 how to change the secret.
@@ -259,10 +293,12 @@ requests made with cookies are not exposed to other origins. See
 A websocket upgrade passes the plugins and the security callback of its
 route group. A browser sends cookies with an upgrade started by a page of any
 site, and CORS does not apply to websockets. Nova therefore checks the
-`Origin` header of every request to a websocket route against the allowed
-origins of the node, before anything else of the route runs, and answers a
-request from another origin with `403`. The default, `same_host`, accepts
-pages served from the host the request was sent to. See
+`Origin` and `Sec-Fetch-Site` headers of every request to a websocket route
+against the trusted origins of the node, before anything else of the route
+runs, and answers a request from another origin with `403`. The default,
+`same_host`, accepts pages served from the host the request was sent to, and
+over TLS only pages loaded over `https`. An upgrade that the browser says
+another site started is refused unless its origin is listed. See
 [The origin check](websockets.md#the-origin-check).
 
 ## Request data
@@ -282,6 +318,11 @@ pages served from the host the request was sent to. See
   meanwhile. The upload is read once the security callback has let the
   request through, so put upload routes in a group with a callback, and
   limit concurrent uploads per client in the proxy.
+* **JSON.** With the default `json_lib`, a body with an object that has a
+  key twice is answered with `400`, and so is one with anything but
+  whitespace after the JSON value. A callback that checks a body and the
+  code that acts on it can therefore not go by different values of one key.
+  A `json_lib` of your own decides both itself.
 * **Binaries, not atoms.** Path parameters, query string keys and the keys of
   a decoded JSON body are binaries. Do not turn data from a request into
   atoms with `binary_to_atom/2` or `list_to_atom/1`: atoms are never garbage
@@ -349,7 +390,8 @@ plugin_info() ->
   | Logged | Redacted |
   |---|---|
   | Crash reasons and stacktraces that Nova logs or shows on an error page | A request map is reduced to its method and path, the arguments of a stacktrace frame to their number, and values under keys that look sensitive are replaced with `redacted` |
-  | A `csrf_secret` that is refused at boot | Replaced with `redacted`, in the log and in the error the boot fails with |
+  | A `secret_key_base` that is refused at boot | Replaced with `redacted`, in the log and in the error the boot fails with |
+  | A JSON body that does not decode | Nothing of the body is logged, nor the reason of the JSON library. The warning has the kind of error and its position |
   | Any other setting that is refused at boot | No. The value is logged as it was set |
   | Reports, metadata and format arguments that your own code logs | Only with `nova_jsonlogger` and `redact => true` |
   | A secret that is text already: a message logged as a plain string, a format string, anything inside a binary such as the unparsed bytes of a request in a crash report | No |
@@ -369,20 +411,33 @@ Nova then receives plain HTTP. What to check:
 
 | Check | Why |
 |---|---|
-| The proxy passes the `Host` header on as the browser sent it | `same_host` compares the `Origin` of a request with the host and port in `Host`. With a rewritten `Host`, websocket upgrades from the pages of the site are refused with `403`, and so are the requests `nova_csrf_plugin` goes by the `Origin` of |
-| `allowed_origins` is `same_host` or a list of the public origins, not `same_origin` | `same_origin` compares the scheme too, and the scheme Nova sees is `http`. Every `https` origin is refused |
-| `allowed_origins` is a list when the proxy cannot keep `Host` | A list is compared with the `Origin` alone. Put every public origin of the site in it, such as `[~"https://app.example.com"]` |
-| `allowed_origins` is not `any` | `any` also turns off the origin check of `nova_csrf_plugin` |
+| `trusted_origins` is a list of the public origins of the site, with their scheme, such as `[~"https://app.example.com"]` | A list is compared with the `Origin` alone, so it does not depend on the `Host` header or on the scheme Nova sees. It is the one value that checks the scheme behind such a proxy, see below |
+| `trusted_origins` is not `same_origin` | `same_origin` compares the scheme too, and the scheme Nova sees is `http`. Every `https` origin is refused |
+| With `same_host`, the proxy passes the `Host` header on as the browser sent it | `same_host` compares the `Origin` of a request with the host and port in `Host`. With a rewritten `Host`, websocket upgrades from the pages of the site are refused with `403`, and so are the requests `nova_csrf_plugin` goes by the `Origin` of |
+| `trusted_origins` is not `any` | `any` opens websocket upgrades to every origin. It does not turn off the origin check of `nova_csrf_plugin`: that is switched off for a route group with the plugin option `trusted_origins => any` |
 | `environment` is not `dev` | The session cookie is `Secure` whatever the scheme, unless `environment` is `dev` |
 | The node is only reachable through the proxy | Nova does not read `x-forwarded-for`, `x-forwarded-proto` or `forwarded`. `cowboy_req:peer/1` is the address of the proxy, and a header your own code reads can be set by anyone who reaches the node directly |
-| `strict-transport-security` is set, by the proxy or by a plugin | Nova does not add it |
+| `strict-transport-security` is set, with `includeSubDomains`, by the proxy or by a plugin | Nova does not add it. A browser that has it does not load a page of the site without TLS |
 
 ```erlang
 {nova, [
     {environment, prod},
-    {allowed_origins, [~"https://app.example.com"]}
+    {trusted_origins, [~"https://app.example.com"]}
 ]}
 ```
+
+What `same_host` leaves open there: on a listener without TLS it does not
+compare the scheme, since Nova cannot see what the proxy did and reads no
+forwarded header. A page loaded from `http://app.example.com` has the host of
+the site and is not the site: anybody on the network between a visitor and
+the server can write it, unless the browser knows by HSTS to ask the host
+over TLS only. A browser that sends `Sec-Fetch-Site` says that such a page is
+another site, and Nova refuses its websocket upgrade and its request that
+changes state. Browsers send the header with requests to `https` sites, but
+not every browser sends it with a websocket upgrade. A browser that does not
+is taken by its `Origin` alone, and under `same_host` that page can open the
+websocket as the visitor. The list above and HSTS close that for every
+browser. See [Websockets](websockets.md#behind-a-proxy-that-terminates-tls).
 
 ## Before going to production
 
@@ -392,15 +447,15 @@ Nova then receives plain HTTP. What to check:
 | `use_stacktrace` is `false` | `nova` environment |
 | Every route group has the `security` it needs | `rebar3 nova audit --env prod --strict` |
 | The session cookie has a `__Host-` name | `session_cookie_name` |
-| `nova_session:renew/1` is called at sign-in | Your sign-in controller |
+| Users are signed in with `nova_session:sign_in/3` and out with `nova_session:delete/1` | Your sign-in and sign-out controllers, and the libraries that sign in for you |
 | Forms of signed-in users are covered by `nova_csrf_plugin` | Route groups |
-| CSRF tokens are signed, with a secret that is the same on every node and not in the repository | See [Cross-site request forgery](#cross-site-request-forgery) |
-| The allowed origins fit how the site is reached | See [Behind a proxy that terminates TLS](#behind-a-proxy-that-terminates-tls) |
+| `secret_key_base` is set, out of a random source, the same on every node and not in the repository | See [The secret of the node](configuration.md#the-secret-of-the-node) |
+| The trusted origins fit how the site is reached | See [Behind a proxy that terminates TLS](#behind-a-proxy-that-terminates-tls) |
 | `non_canonical_paths` is not `resolve` | `nova` environment |
 | Data for visitors who are not signed in is stored with `nova_session:set_provisional/3` | Controllers and plugins that write to the session |
 | Upload routes have a security callback | Route groups |
 | `plugins_before_security` only lists plugins whose callback needs the body | Route groups and the `nova` environment |
-| The boot logs no warning about the order of plugins | See [Warnings about the order](plugins.md#warnings-about-the-order) |
+| The boot logs no warning about the order of plugins, and every route group with a security callback and a decoded body says `security_reads_body` | See [Warnings about the order](plugins.md#warnings-about-the-order) |
 | CORS lists the origins you trust, not `*` | `nova_cors_plugin` options |
 | Traffic is served over TLS | `cowboy_configuration` or the proxy |
 | The release has a distribution cookie that is long and random | `RELEASE_COOKIE`, see [Building releases](building-releases.md) |
