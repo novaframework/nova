@@ -44,15 +44,20 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 | `use_sessions` | Turn off/on support for sessions | `boolean()` | `true` |
 | `session_manager` | Specify a module to use as the session manager. Defaults to `nova_session_ets`, which keeps sessions in memory: they do not survive a restart, and with several nodes and no sticky sessions users are signed out when they reach another node. Use a shared session store for those cases; see the [Sessions](sessions.md) guide. | `atom()` | `nova_session_ets` |
 | `session_cookie_name` | Name of the session cookie. It must be an RFC 6265 token: ASCII letters, digits and the symbols a token allows such as `-`, `_` and `.`, but no spaces, `:`, `/`, `@`, `=` or quotes. Nova refuses to start with any other name, including an empty binary or a value that is not a binary. `<<"__Host-session_id">>` is recommended for new applications; see the [Sessions](sessions.md) guide. | `binary()` | `<<"session_id">>` |
-| `session_cookie_opts` | Options for the session cookie, merged over the defaults. The cookie is `Secure` unless `{nova, [{environment, dev}]}` is set explicitly; an unset `environment` counts as not `dev` here, although `nova:get_environment/0` returns `dev` for it. Developing over plain HTTP without that setting loses the session cookie. `path` and `domain` must be ASCII without control characters or `;`, or Nova refuses to start. See the [Sessions](sessions.md) guide. | `cow_cookie:cookie_opts()` | `#{path => <<"/">>, http_only => true, same_site => lax, secure => <not dev>, max_age => <session_max_age>}` |
+| `session_cookie_opts` | Options for the session cookie, merged over the defaults. The cookie is `Secure` unless `environment` is `dev`, which an unset `environment` is not. Developing over plain HTTP without `{nova, [{environment, dev}]}` loses the session cookie. `path` and `domain` must be ASCII without control characters or `;`, or Nova refuses to start. See the [Sessions](sessions.md) guide. | `cow_cookie:cookie_opts()` | `#{path => <<"/">>, http_only => true, same_site => lax, secure => <not dev>, max_age => <session_max_age>}` |
 | `session_max_age` | Seconds a session lives after it was created. Sets the cookie's `Max-Age` and expires `nova_session_ets` entries. `infinity` turns the limit off. | `pos_integer() \| infinity` | `1209600` (14 days) |
-| `max_sessions` | Sessions the `nova_session_ets` backend holds at most, on each node. In a full table a write that starts a session drops another one to make room: an expired one, then a provisional one, then the one nearest its expiry. A provisional write returns `{error, session_store_full}` when only sessions in use are left. `infinity` turns the limit off. See the [Sessions](sessions.md#when-the-session-store-is-full) guide. | `non_neg_integer() \| infinity` | `1000000` |
+| `max_sessions` | Sessions the `nova_session_ets` backend holds at most, on each node: an integer above 0, or `infinity` for no limit. In a full table a write that starts a session drops another one to make room: an expired one, then a provisional one, then the one nearest its expiry. A provisional write returns `{error, session_store_full}` when only sessions in use are left. See the [Sessions](sessions.md#when-the-session-store-is-full) guide. *Checked at boot.* | `pos_integer() \| infinity` | `1000000` |
 | `use_strict_routing`    | If the routing module should work under the strict mode. Using strict mode will cause errors if non-deterministic paths are detected. This is a beta-function so use with caution. | `boolean()` | `false` |
-| `environment` | The environment Nova runs in. It is passed to the `routes/1` callback of every router and returned by `nova:get_environment/0`. When it is not set it is read as `dev` there, so routes a router only returns for `dev` are served, and Nova logs a warning at boot: set it in every release, usually to `prod`. The session cookie and the error pages only treat it as `dev` when it is set to `dev` (`nova:is_dev_environment/0`). | `atom()` | not set, read as `dev` |
+| `environment` | The environment Nova runs in. It is passed to the `routes/1` callback of every router and returned by `nova:get_environment/0`. When it is not set it is read as `prod`: routers are asked for `routes(prod)`, and Nova logs one notice when it starts. Only `dev` turns on what is meant for development (`nova:is_dev_environment/0`): crash details on error pages, a session cookie without `Secure` over plain HTTP and the output of watchers. Set `{environment, dev}` in the development configuration. | `atom()` | not set, read as `prod` |
+| `non_canonical_paths` | What happens to a request whose path is not written the way it is routed, such as `/a//b` or `/a/../b`. `reject` answers it with `400`. `resolve` routes it as earlier releases did. See [Routing](routing.md#paths-that-are-not-canonical). *Checked at boot.* | `reject \| resolve` | `reject` |
+| `allowed_origins` | The origins a browser may open a websocket from, or send a request that changes state from. See [Allowed origins](#allowed-origins). *Checked at boot.* | `same_host \| same_origin \| any \| [binary() \| string()]` | `same_host` |
+| `csrf_secret` | The secret `nova_csrf_plugin` signs its tokens with: a binary of at least 32 bytes, or a list of such, where the first signs and all of them verify. See [Plugins](plugins.md#csrf-token-modes). *Checked at boot.* | `binary() \| [binary()]` | not set |
+| `csrf_token` | How `nova_csrf_plugin` makes its tokens: `stateless` or `session`. When it is not set, tokens are `stateless` with a `csrf_secret` and `session` without one. `stateless` without a `csrf_secret` stops the boot. See [Plugins](plugins.md#csrf-token-modes). *Checked at boot.* | `stateless \| session` | not set |
 | `bootstrap_application` | Define which application to bootstrap with Nova. This should be the name of your application. | `atom()` | *Will crash if not defined* |
 | `cowboy_configuration` | The listener configuration, see *Cowboy configuration* above. | `map()` | `#{}` |
 | `plugins` | The global plugins, a list of `{Phase, Module, Options}`. They run for every route group that declares no `plugins` of its own. See the [Plugins](plugins.md) guide. | `[{atom(), module(), map()}]` | `[]` |
-| `plugins_after_security` | `pre_request` plugin modules that run after the route's security callback and not before it, for route groups that do not set the key themselves. The security callback of such a route cannot read what those plugins produce (`json`, `params`, `files`). See the [Plugins](plugins.md#running-a-plugin-after-the-security-callback) guide. | `[module()]` | `[]` |
+| `plugins_before_security` | Plugin modules whose `pre_request/4` runs ahead of the security callback, as it did up to 0.18, for route groups that do not set the key themselves. `all`, or a list of modules that export `pre_request/4`. See [Plugins](plugins.md#running-a-plugin-ahead-of-the-security-callback). *Checked at boot.* | `all \| [module()]` | `[]` |
+| `plugins_after_security` | Plugin modules of which nothing runs ahead of the security callback, for route groups that do not set the key themselves. Read when routes are compiled. A value that is not a list of module names stops the boot with `{invalid_plugins_after_security, Value}`. See [Plugins](plugins.md#keeping-a-plugin-behind-the-security-callback). | `[module()]` | `[]` |
 | `multipart_spool` | Bounds on the upload files spooled at one time by `nova_multipart_file_handler`: `max_files` and `max_bytes`, each an integer or `infinity`. A part past a bound gets a `503`. See the [Plugins](plugins.md#nova-multipart) guide. | `map()` | `#{max_files => infinity, max_bytes => 8000000000}` |
 | `telemetry_request_fields` | Request fields to add to the controller telemetry metadata. `path` (the raw request path) and `peer` (the client's address) are the only ones accepted and are left out by default. See the [Telemetry](telemetry.md) guide. | `[path \| peer]` | `[]` |
 | `shutdown_delay` | Milliseconds to wait before suspending the listener during shutdown. Useful for letting load balancers drain traffic. See the [Graceful shutdown](graceful-shutdown.md) guide. | `integer()` | `0` |
@@ -60,7 +65,7 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 
 ### Where Nova reads a setting
 
-`json_lib`, `use_sessions`, `session_cookie_name`, `session_cookie_opts`, `session_max_age`, `max_sessions` and `redact_keys` are read from the bootstrap application's environment first, then from the `nova` environment, then the default. A value set in your own application always wins:
+`json_lib`, `use_sessions`, `session_cookie_name`, `session_cookie_opts`, `session_max_age` and `redact_keys` are read from the bootstrap application's environment first, then from the `nova` environment, then the default. A value set in your own application always wins:
 
 ```erlang
 [{nova, [{bootstrap_application, my_app}]},
@@ -68,6 +73,69 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 ```
 
 The other keys in the table above are only read from `nova`.
+
+### Settings checked at boot
+
+The rows marked *Checked at boot* are read once, when Nova starts, and from the `nova` environment only. The same key in the environment of the bootstrap application is not read.
+
+```erlang
+{nova, [
+    {bootstrap_application, my_app},
+    {environment, prod},
+    {non_canonical_paths, reject},
+    {max_sessions, 200000},
+    {plugins_before_security, []}
+]}
+```
+
+A value that cannot be used stops the boot. Nova logs an error that says what the setting may be, and `nova_sup` fails to start with `{invalid_setting, Key, Reason}`:
+
+| `Reason` | When |
+|---|---|
+| The value that was refused | Every setting but the secret |
+| `redacted` | The secret is not a binary of at least 32 bytes or a list of such. The value is not logged |
+| `not_set` | `csrf_token` is `stateless` and there is no secret to sign with. The key in the error is `csrf_secret` |
+
+```erlang
+{nova, [{max_sessions, 0}]}
+%% {invalid_setting, max_sessions, 0}
+```
+
+What a request reads is the value that was checked. `application:set_env(nova, Key, Value)` on a running node has no effect on these settings until Nova is restarted.
+
+### Allowed origins
+
+`allowed_origins` is one setting with two readers. Nova checks the `Origin` header of every request to a websocket route against it, and `nova_csrf_plugin` checks the `Origin` of a request that changes state. A request without an `Origin` header passes every value.
+
+```erlang
+{nova, [
+    {allowed_origins, [~"https://app.example.com", ~"https://admin.example.com"]}
+]}
+```
+
+| Value | An origin passes when |
+|---|---|
+| `same_host` | It names the host and the port the request was sent to. The scheme is not compared. This is the default |
+| `same_origin` | It has the scheme, the host and the port of the request as Nova received it |
+| A list of origins | It is in the list. Letter case is ignored, nothing else is: `https://app.example.com:443` is not `https://app.example.com` |
+| `any` | Always |
+
+With `same_host` the host and port come from the `Host` header of the request, or from the authority of an HTTP/2 or HTTP/3 request that has no such header. Ports are compared like this:
+
+| `Host` header | `Origin` | Result |
+|---|---|---|
+| `app.example.com` | `https://app.example.com` | Passes |
+| `app.example.com` | `https://app.example.com:443` | Passes: 443 is the port of `https` |
+| `app.example.com` | `https://app.example.com:8443` | Refused |
+| `app.example.com:443` | `https://app.example.com` | Passes: the origin leaves out the port of its scheme |
+| `app.example.com:8443` | `https://app.example.com:8443` | Passes |
+| `app.example.com:8443` | `https://app.example.com` | Refused |
+
+A list takes the place of `same_host`. An origin that is not in it is refused, the origin of the site itself included, so list that one too. `[]` passes no origin.
+
+`same_origin` compares with what Nova received. Behind a proxy that terminates TLS that is `http`, so every `https` origin is refused. Use `same_host` or a list there. See [Security](security.md#behind-a-proxy-that-terminates-tls).
+
+`any` turns the check off for both readers. Do not set it to get websockets through a proxy that rewrites the `Host` header: it also turns off the origin check of `nova_csrf_plugin`. List the origins instead. To open one route group, give the plugin of that group its own option, see [Plugins](plugins.md#csrf-allowed-origins).
 
 ### Redaction in logs and error pages
 
