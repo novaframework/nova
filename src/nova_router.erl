@@ -552,6 +552,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     Order = #{before => plugins_before_security(RouteInfo, Plugins, Named),
               'after' => plugins_after_security(RouteInfo, RouterFile),
               secured => Secure =/= false},
+    ok = warn_about_order(RouteInfo, Plugins, Order, Named),
     Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins, Order),
                                 extra_state = maps:get(extra_state, RouteInfo, #{})},
 
@@ -1063,14 +1064,11 @@ normalize_plugins(Plugins, Order) ->
 %% refused. plugins_before_security names the modules whose pre_request/4
 %% runs ahead of security as it did in earlier releases, and
 %% plugins_after_security those of which nothing does, which wins.
-phased({pre_request, PluginName, Options}, Order = #{before := Before, 'after' := After}) ->
+phased({pre_request, PluginName, Options}, Order = #{'after' := After}) ->
     add_plugin(PluginName),
-    Postponed = lists:member(PluginName, After),
-    Ahead = not Postponed andalso (Before =:= all orelse lists:member(PluginName, Before)),
     HasPreSecurity = exports(PluginName, pre_security),
-    ok = note_new_order(PluginName, Order, HasPreSecurity orelse Postponed orelse Ahead),
-    [{phase(not Postponed), {fun PluginName:pre_security/4, Options}} || HasPreSecurity] ++
-        [{phase(Ahead), {fun PluginName:pre_request/4, Options}}
+    [{phase(not lists:member(PluginName, After)), {fun PluginName:pre_security/4, Options}} || HasPreSecurity] ++
+        [{phase(is_ahead(PluginName, Order)), {fun PluginName:pre_request/4, Options}}
          || not HasPreSecurity orelse exports(PluginName, pre_request)];
 phased({Type, PluginName, Options}, _Order) ->
     add_plugin(PluginName),
@@ -1079,23 +1077,68 @@ phased({Type, PluginName, Options}, _Order) ->
 phase(true) -> pre_request;
 phase(false) -> after_security.
 
+%% Whether pre_request/4 of a plugin runs ahead of the security callback.
+is_ahead(PluginName, #{before := Before, 'after' := After}) ->
+    not lists:member(PluginName, After) andalso (Before =:= all orelse lists:member(PluginName, Before)).
+
 exports(Module, Function) ->
     _ = code:ensure_loaded(Module),
     erlang:function_exported(Module, Function, 4).
 
-%% Earlier releases ran every pre_request plugin ahead of the security
-%% callback. One that was there to count, log or turn away requests before they were
-%% let in does not see the refused ones any more, and nothing fails to tell.
-note_new_order(PluginName, #{secured := true}, false) ->
-    case not is_plugin_of_nova(PluginName) andalso nova_once:first({?MODULE, new_order_noted, PluginName}) of
-        true ->
-            ?LOG_NOTICE(#{msg => ~"pre_request/4 of this plugin runs after the security callback of a route, and not for a request that is refused. Earlier releases ran it first. Put what has to run first in pre_security/4, or list the plugin under plugins_before_security to run it first as before, or under plugins_after_security to say that this order is intended",
-                          plugin => PluginName});
-        false ->
-            ok
-    end;
-note_new_order(_PluginName, _Order, _Settled) ->
-    ok.
+%% Earlier releases ran pre_request/4 of every plugin ahead of the security
+%% callback. What relied on that goes on without anything failing: a
+%% callback that reads the body finds none and may let the request in, and
+%% a plugin that turned requests away does not see the ones that are
+%% refused. Each is said once for a route group, when its routes are
+%% compiled. A plugin from outside Nova is named unless it has
+%% pre_security/4, which is how its author says what runs first.
+warn_about_order(RouteInfo, Plugins, Order = #{secured := Secured}, Named) ->
+    Behind = [{Module, Options} || {pre_request, Module, Options} <- Plugins, not is_ahead(Module, Order)],
+    ok = warn_once(body_behind_security,
+                   [Module || {Module, Options} <- Behind, Secured, reads_body(Module, Options)], Named),
+    Outside = [Module || {Module, _Options} <- Behind, not is_plugin_of_nova(Module),
+                         not exports(Module, pre_security)],
+    case Secured orelse has_route_without_options(RouteInfo) of
+        true when Secured -> warn_once(pre_request_behind_security, Outside, Named);
+        true -> warn_once(pre_request_not_for_preflight, Outside, Named);
+        false -> ok
+    end.
+
+warn_once(_About, [], _Named) ->
+    ok;
+warn_once(About, Listed, Named = #{app := App, prefix := Prefix}) ->
+    Plugins = lists:usort(Listed),
+    case nova_once:first({?MODULE, About, App, Prefix, Plugins}) of
+        true -> ?LOG_WARNING(Named#{msg => order_warning(About), plugins => Plugins});
+        false -> ok
+    end.
+
+order_warning(body_behind_security) ->
+    ~"The security callback of this route group runs before nova_request_plugin reads the body, so it finds no json or params in the request. Earlier releases read the body first. List nova_request_plugin under plugins_before_security of the route group if the callback reads them";
+order_warning(pre_request_behind_security) ->
+    ~"pre_request/4 of these plugins runs once the security callback of this route group has let a request through, where earlier releases ran it first. It does not run for a request that is refused, nor for a CORS preflight to a route that does not take OPTIONS. What has to run for those belongs in pre_security/4. To run pre_request/4 ahead of the security callback as before, list the plugin under plugins_before_security";
+order_warning(pre_request_not_for_preflight) ->
+    ~"pre_request/4 of these plugins does not run for a CORS preflight to a route of this group that does not take OPTIONS. A plugin that answers preflights has to do it in pre_security/4".
+
+reads_body(nova_request_plugin, Options) when is_map(Options) ->
+    maps:get(decode_json_body, Options, false) =:= true orelse
+        maps:get(read_urlencoded_body, Options, false) =:= true;
+reads_body(_Module, _Options) ->
+    false.
+
+%% A preflight to such a route is answered by pre_security/4 of the plugins
+%% of the route for the method it asks about, and by nothing else.
+has_route_without_options(RouteInfo) ->
+    [] =/= [Path || {Path, _Target, #{methods := Methods}} <- maps:get(routes, RouteInfo, []),
+                    not is_integer(Path), is_list(Methods), not takes_options(Methods)].
+
+takes_options(Methods) ->
+    [] =/= [Method || Method <- Methods, Method =:= '_' orelse is_options(Method)].
+
+is_options(Method) when is_atom(Method) ->
+    string:uppercase(atom_to_binary(Method)) =:= ~"OPTIONS";
+is_options(Method) ->
+    Method =:= ~"OPTIONS" orelse Method =:= "OPTIONS".
 
 %% The routes of an application can be compiled by a tool that has not
 %% loaded Nova, which is what tells the modules of an application.

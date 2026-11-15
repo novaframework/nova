@@ -28,6 +28,7 @@
          csrf_settings_nothing_can_go_by_fail_the_boot/1,
          csrf_secret_that_fails_the_boot_is_not_told/1,
          csrf_tokens_kept_in_the_session_store_are_said_once/1,
+         body_decoded_behind_a_security_callback_is_warned_about/1,
          plugins_of_an_earlier_run_are_forgotten/1
         ]).
 
@@ -59,6 +60,7 @@ all() ->
      csrf_settings_nothing_can_go_by_fail_the_boot,
      csrf_secret_that_fails_the_boot_is_not_told,
      csrf_tokens_kept_in_the_session_store_are_said_once,
+     body_decoded_behind_a_security_callback_is_warned_about,
      plugins_of_an_earlier_run_are_forgotten
     ].
 
@@ -340,6 +342,22 @@ csrf_tokens_kept_in_the_session_store_are_said_once(_Config) ->
                                             {Csrf, [{csrf_secret, Secret}], 0},
                                             {Csrf, [{csrf_token, stateless}, {csrf_secret, Secret}], 0},
                                             {[], [], 0}]].
+
+body_decoded_behind_a_security_callback_is_warned_about(_Config) ->
+    Group = fun(Prefix, More) ->
+                    More#{prefix => Prefix, security => fun nova_boot_pages:allow/1,
+                          plugins => [{pre_request, nova_request_plugin, #{decode_json_body => true}}],
+                          routes => [{"/", fun nova_boot_pages:page/1, #{methods => [post]}}]}
+            end,
+    Routes = [Group("/reads", #{}), Group("/listed", #{plugins_before_security => [nova_request_plugin]})],
+    try
+        {{ok, _Port}, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => Routes}) end),
+        ?assertMatch([#{app := nova_test_app, prefix := "/reads", plugins := [nova_request_plugin],
+                        router_file := _}],
+                     [Report || {warning, {report, #{plugins := _} = Report}} <- Events])
+    after
+        nova_once:forget({nova_router, body_behind_security, nova_test_app, "/reads", [nova_request_plugin]})
+    end.
 
 %% nova_plugin_manager starts every plugin the router has listed, also after
 %% a restart, so the list must not carry over from a run with other routes.

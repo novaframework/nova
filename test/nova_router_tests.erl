@@ -439,27 +439,96 @@ normalize_plugins_after_security_test_() ->
         ?assertEqual(Expected, nova_router:normalize_plugins(Plugins, order(all, [nova_request_plugin])))
     end}.
 
-%% A plugin from outside Nova that only has pre_request/4 no longer runs for
-%% a request that is refused, which nothing else would tell its author.
-plugin_that_moved_behind_security_is_noted_once_test_() ->
+%% What is logged as a warning about the plugins of a route group when its
+%% routes are compiled.
+order_warnings(Group) ->
+    {ok, Events} = nova_test_log:collect(fun() -> nova_router:add_routes(route_app, Group) end),
+    [maps:with([app, prefix, plugins], Report) || {warning, {report, #{plugins := _} = Report}} <- Events].
+
+allow(_Req) ->
+    true.
+
+%% Earlier releases decoded the body ahead of the security callback. One
+%% that reads json or params now finds none and may let the request in.
+body_read_behind_the_security_callback_is_warned_about_once_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        meck:new(moved_plugin, [non_strict, no_link]),
-        meck:expect(moved_plugin, pre_request, fun(Req, _Env, _Options, State) -> {ok, Req, State} end),
-        meck:expect(moved_plugin, plugin_info, fun() -> #{title => ~"moved", version => ~"0"} end),
-        Plugins = [{pre_request, moved_plugin, #{}}, {pre_request, nova_csrf_plugin, #{}}],
-        Noted = fun(Order) ->
-                        {_, Events} = nova_test_log:collect(fun() -> nova_router:normalize_plugins(Plugins, Order) end),
-                        [Plugin || {notice, {report, #{plugin := Plugin}}} <- Events]
+        Request = fun(Options) -> {pre_request, nova_request_plugin, Options} end,
+        Group = fun(Prefix, More) ->
+                        More#{prefix => Prefix, routes => [{"/page", fun(_) -> {json, #{}} end, #{}}]}
                 end,
+        Secured = fun(Prefix, More) -> Group(Prefix, More#{security => fun allow/1}) end,
+        Json = Request(#{decode_json_body => true}),
+        Warned = fun(Prefix) -> [#{app => route_app, prefix => Prefix, plugins => [nova_request_plugin]}] end,
+        ?assertEqual(Warned("/json"), order_warnings(Secured("/json", #{plugins => [Json]}))),
+        ?assertEqual([], order_warnings(Secured("/json", #{plugins => [Json]}))),
+        ?assertEqual(Warned("/form"),
+                     order_warnings(Secured("/form", #{plugins => [Request(#{read_urlencoded_body => true})]}))),
+        ?assertEqual(Warned("/postponed"),
+                     order_warnings(Secured("/postponed", #{plugins => [Json], plugins_before_security => all,
+                                                            plugins_after_security => [nova_request_plugin]}))),
+        [?assertEqual({Prefix, []}, {Prefix, order_warnings(Quiet)})
+         || {Prefix, Quiet} <- [{"/open", Group("/open", #{plugins => [Json]})},
+                                {"/qs", Secured("/qs", #{plugins => [Request(#{parse_qs => true})]})},
+                                {"/off", Secured("/off", #{plugins => [Request(#{decode_json_body => false})]})},
+                                {"/listed", Secured("/listed", #{plugins => [Json],
+                                                                 plugins_before_security => [nova_request_plugin]})},
+                                {"/all", Secured("/all", #{plugins => [Json], plugins_before_security => all})},
+                                {"/none", Secured("/none", #{plugins => []})}]],
+        [nova_once:forget({nova_router, body_behind_security, route_app, Prefix, [nova_request_plugin]})
+         || Prefix <- ["/json", "/form", "/postponed"]]
+    end}.
+
+%% A plugin from outside Nova that only has pre_request/4 no longer runs for
+%% a request that is refused, nor for a preflight to a route that does not
+%% take OPTIONS, which nothing else would tell.
+plugin_with_pre_request_alone_is_warned_about_once_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        [begin
+             meck:new(Module, [non_strict, no_link]),
+             meck:expect(Module, pre_request, fun(Req, _Env, _Options, State) -> {ok, Req, State} end),
+             meck:expect(Module, plugin_info, fun() -> #{title => ~"moved", version => ~"0"} end)
+         end || Module <- [moved_plugin, other_moved_plugin, early_plugin]],
+        meck:expect(early_plugin, pre_security, fun(Req, _Env, _Options, State) -> {ok, Req, State} end),
+        Group = fun(Prefix, Methods, More) ->
+                        More#{prefix => Prefix,
+                              routes => [{"/page", fun(_) -> {json, #{}} end, #{methods => Methods}},
+                                         {404, fun(_) -> {status, 404} end, #{}}]}
+                end,
+        Secured = fun(Prefix, More) -> Group(Prefix, ['_'], More#{security => fun allow/1}) end,
+        Moved = [{pre_request, moved_plugin, #{}}, {pre_request, nova_csrf_plugin, #{}},
+                 {pre_request, early_plugin, #{}}, {pre_request, other_moved_plugin, #{}},
+                 {post_request, nova_cors_plugin, #{}}],
+        Warned = fun(Prefix) ->
+                         [#{app => route_app, prefix => Prefix, plugins => [moved_plugin, other_moved_plugin]}]
+                 end,
         try
-            ?assertEqual([], Noted(order([], []))),
-            ?assertEqual([], Noted((order([moved_plugin], []))#{secured => true})),
-            ?assertEqual([], Noted((order([], [moved_plugin]))#{secured => true})),
-            ?assertEqual([moved_plugin], Noted((order([], []))#{secured => true})),
-            ?assertEqual([], Noted((order([], []))#{secured => true}))
+            ?assertEqual(Warned("/secured"), order_warnings(Secured("/secured", #{plugins => Moved}))),
+            ?assertEqual([], order_warnings(Secured("/secured", #{plugins => Moved}))),
+            ?assertEqual(Warned("/after"),
+                         order_warnings(Secured("/after", #{plugins => Moved,
+                                                            plugins_after_security => [moved_plugin]}))),
+            ?assertEqual([#{app => route_app, prefix => "/one", plugins => [other_moved_plugin]}],
+                         order_warnings(Secured("/one", #{plugins => Moved,
+                                                          plugins_before_security => [moved_plugin]}))),
+            ?assertEqual(Warned("/post"), order_warnings(Group("/post", [post], #{plugins => Moved}))),
+            ?assertEqual(Warned("/get"), order_warnings(Group("/get", [~"GET", head], #{plugins => Moved}))),
+            [?assertEqual({Prefix, []}, {Prefix, order_warnings(Quiet)})
+             || {Prefix, Quiet} <- [{"/open", Group("/open", ['_'], #{plugins => Moved})},
+                                    {"/options", Group("/options", [post, options], #{plugins => Moved})},
+                                    {"/OPTIONS", Group("/OPTIONS", [post, ~"OPTIONS"], #{plugins => Moved})},
+                                    {"/all", Secured("/all", #{plugins => Moved, plugins_before_security => all})},
+                                    {"/both", Secured("/both", #{plugins => Moved,
+                                                                 plugins_before_security => [moved_plugin,
+                                                                                             other_moved_plugin]})},
+                                    {"/early", Secured("/early", #{plugins => [{pre_request, early_plugin, #{}}]})},
+                                    {"/nova", Secured("/nova", #{plugins => [{pre_request, nova_multipart_plugin,
+                                                                              #{}}]})}]]
         after
-            nova_once:forget({nova_router, new_order_noted, moved_plugin}),
-            meck:unload(moved_plugin)
+            [nova_once:forget({nova_router, About, route_app, Prefix, Plugins})
+             || About <- [pre_request_behind_security, pre_request_not_for_preflight],
+                Prefix <- ["/secured", "/after", "/one", "/post", "/get"],
+                Plugins <- [[moved_plugin, other_moved_plugin], [other_moved_plugin]]],
+            [meck:unload(Module) || Module <- [moved_plugin, other_moved_plugin, early_plugin]]
         end
     end}.
 

@@ -35,7 +35,10 @@ Earlier releases ran `pre_request/4` ahead of the security callback. Two lists, 
 
 Within each of the two phases the plugins run in the order they are listed. What the security callback finds in the request is what `pre_security/4` put there. With the plugins of Nova that is the correlation id, the CORS headers and `parsed_qs`, and not `json`, `params`, `body` or `files`: a security callback that needs the decoded body lists `nova_request_plugin` under `plugins_before_security` for its route group.
 
-When a route has a security callback, a plugin from outside Nova that only has `pre_request/4` and is in neither list is named in a notice when the routes are compiled, once, since it no longer runs for requests that are refused.
+Two things that this order changes without anything failing are warned about, once for a route group, when its routes are compiled:
+
+- `nova_request_plugin` decodes the body behind the security callback of the route group, which then finds no `json` or `params` in the request.
+- A plugin from outside Nova only has `pre_request/4` and is not listed under `plugins_before_security`, in a route group that has a security callback or a route that does not take `OPTIONS`. It does not run for a request that is refused, nor for a CORS preflight to such a route. A plugin that has `pre_security/4` is not named.
 
 The state a plugin returns is kept per plugin module and shared by every request. Nova writes it back only when it changed, and concurrent requests overwrite each other's writes (the last writer wins). Keep per-request data in `Req`, and use `ets` or `counters` for anything shared that has to add up, such as counters.
 
