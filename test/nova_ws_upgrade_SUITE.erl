@@ -19,7 +19,7 @@
          configured_origins_replace_the_default/1,
          any_origin_when_the_check_is_off/1,
          plugin_of_the_route_decides_alone/1,
-         same_host_ignores_the_scheme/1,
+         same_host_of_a_listener_without_tls_ignores_the_scheme/1,
          same_origin_needs_the_same_scheme/1,
          same_origin_needs_the_same_host_and_port/1,
          same_origin_accepts_a_missing_origin/1,
@@ -52,7 +52,7 @@ all() ->
      configured_origins_replace_the_default,
      any_origin_when_the_check_is_off,
      plugin_of_the_route_decides_alone,
-     same_host_ignores_the_scheme,
+     same_host_of_a_listener_without_tls_ignores_the_scheme,
      same_origin_needs_the_same_scheme,
      same_origin_needs_the_same_host_and_port,
      same_origin_accepts_a_missing_origin,
@@ -206,8 +206,9 @@ plugin_of_the_route_decides_alone(Config) ->
         nova_test_settings:unset(trusted_origins)
     end.
 
-%% The requests are sent with `host: localhost`, to a listener without TLS.
-same_host_ignores_the_scheme(Config) ->
+%% The requests are sent with `host: localhost`, to a listener without TLS,
+%% which a proxy that takes the TLS off may stand in front of.
+same_host_of_a_listener_without_tls_ignores_the_scheme(Config) ->
     ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/same-host/ws", "https://localhost")).
 
 same_origin_needs_the_same_scheme(Config) ->

@@ -18,7 +18,7 @@ is_allowed(_Origin, _Req, any) ->
     true;
 is_allowed(Origin, Req, same_host) when is_binary(Origin) ->
     case origin(Origin) of
-        {Scheme, Host, Port} -> is_sent_to(Scheme, Host, Port, Req);
+        {Scheme, Host, Port} -> is_as_safe_as(Scheme, Req) andalso is_sent_to(Scheme, Host, Port, Req);
         undefined -> false
     end;
 is_allowed(Origin, Req, same_origin) when is_binary(Origin) ->
@@ -57,6 +57,19 @@ host_and_port(Authority) ->
     catch
         _Class:_Reason -> undefined
     end.
+
+%% A page that was not loaded over TLS can be written by anybody between
+%% its server and the browser, so it does not speak for the host to a
+%% listener that has TLS. A listener without TLS takes an origin of either
+%% scheme: a proxy in front of it may have taken the TLS off, and Nova has
+%% no setting that names a proxy whose `X-Forwarded-Proto` or `Forwarded`
+%% could be believed, so neither header is read. A list of origins or
+%% `same_origin` is the rule for a site that needs the scheme checked there.
+-spec is_as_safe_as(Scheme :: binary(), cowboy_req:req()) -> boolean().
+is_as_safe_as(Scheme, #{scheme := ~"https"}) ->
+    Scheme =:= ~"https";
+is_as_safe_as(_Scheme, _Req) ->
+    true.
 
 %% Whether an origin names the host the request was sent to. A `Host` header
 %% that leaves the port out says nothing about it, so the origin must leave

@@ -30,13 +30,11 @@ no_origin_and_any_test_() ->
 
 same_host_test_() ->
     Accepted = [{~"https://example.com", ~"example.com"},
-                {~"http://example.com", ~"example.com"},
                 {~"https://example.com:8443", ~"example.com:8443"},
                 {~"https://[::1]", ~"[::1]"},
-                {~"http://[::1]:8080", ~"[::1]:8080"},
-                {~"http://[2001:DB8::1]:8080", ~"[2001:db8::1]:8080"},
-                {~"https://example.com.", ~"example.com."},
-                {~"ws://example.com", ~"example.com"}],
+                {~"https://[::1]:8080", ~"[::1]:8080"},
+                {~"https://[2001:DB8::1]:8080", ~"[2001:db8::1]:8080"},
+                {~"https://example.com.", ~"example.com."}],
     Refused = [{~"https://evil.example", ~"example.com"},
                {~"https://example.com.evil.example", ~"example.com"},
                {~"https://example.com:8443", ~"example.com"},
@@ -54,14 +52,39 @@ same_host_test_() ->
      [?_assertEqual({Origin, Host, false}, {Origin, Host, allowed(Origin, with_host(Host), same_host)})
       || {Origin, Host} <- Refused]].
 
+%% A page that was not loaded over TLS can be written by anybody on the way
+%% to the browser, so it does not speak for the host to a listener that has
+%% TLS. A listener without TLS cannot tell what the browser used: a proxy in
+%% front of it may have taken the TLS off, and no header of the request is
+%% trusted to say so. It goes by host and port alone.
+same_host_of_a_listener_with_tls_needs_an_origin_with_tls_test_() ->
+    Refused = [{~"http://example.com", ~"example.com"},
+               {~"HTTP://example.com", ~"example.com"},
+               {~"http://example.com:443", ~"example.com:443"},
+               {~"http://example.com:8443", ~"example.com:8443"},
+               {~"http://[::1]:8080", ~"[::1]:8080"},
+               {~"ws://example.com", ~"example.com"},
+               {~"wss://example.com", ~"example.com"}],
+    Accepted = [{~"http://example.com", ~"example.com"},
+                {~"https://example.com", ~"example.com"},
+                {~"http://[2001:DB8::1]:8080", ~"[2001:db8::1]:8080"},
+                {~"https://example.com:8443", ~"example.com:8443"},
+                {~"ws://example.com", ~"example.com"}],
+    [[?_assertEqual({Origin, Host, false}, {Origin, Host, allowed(Origin, with_host(Host), same_host)})
+      || {Origin, Host} <- Refused],
+     [?_assertEqual({Origin, Host, true}, {Origin, Host, allowed(Origin, with_host(Host, ~"http"), same_host)})
+      || {Origin, Host} <- Accepted],
+     ?_assertNot(allowed(~"http://example.com:443", to_authority(~"https", ~"example.com", 443), same_host)),
+     ?_assert(allowed(~"http://example.com", to_authority(~"http", ~"example.com", 80), same_host))].
+
 %% A proxy that is told to send `$host:$server_port` names the port a
 %% browser leaves out of the origin.
 same_host_with_the_port_of_the_scheme_test_() ->
     [?_assert(allowed(~"https://example.com", with_host(~"example.com:443"), same_host)),
-     ?_assert(allowed(~"http://example.com", with_host(~"example.com:80"), same_host)),
+     ?_assert(allowed(~"http://example.com", with_host(~"example.com:80", ~"http"), same_host)),
      ?_assert(allowed(~"https://example.com:443", with_host(~"example.com"), same_host)),
      ?_assert(allowed(~"https://example.com:443", with_host(~"example.com:443"), same_host)),
-     ?_assert(allowed(~"http://example.com:80", with_host(~"example.com"), same_host)),
+     ?_assert(allowed(~"http://example.com:80", with_host(~"example.com", ~"http"), same_host)),
      ?_assert(allowed(~"https://[::1]", with_host(~"[::1]:443"), same_host)),
      ?_assertNot(allowed(~"http://example.com", with_host(~"example.com:443"), same_host)),
      ?_assertNot(allowed(~"https://example.com", with_host(~"example.com:80"), same_host)),
@@ -74,7 +97,7 @@ same_host_without_case_test_() ->
      || {Origin, Host} <- [{~"https://example.com", ~"Example.COM"},
                            {~"HTTPS://EXAMPLE.COM", ~"example.com"},
                            {~"https://Example.com", ~"EXAMPLE.com:443"},
-                           {~"http://[2001:db8::A]", ~"[2001:DB8::a]"}]].
+                           {~"https://[2001:db8::A]", ~"[2001:DB8::a]"}]].
 
 same_host_of_a_request_without_a_host_header_test_() ->
     [?_assert(allowed(~"https://example.com", to_authority(~"https", ~"example.com", 443), same_host)),
