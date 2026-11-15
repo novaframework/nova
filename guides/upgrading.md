@@ -12,6 +12,27 @@ The release that follows 0.18.3 tightens several defaults. Go through the
 tables with your application in mind. The entries under
 [Next release](deprecations.md#next-release) have the details.
 
+### Defaults that changed
+
+Each of these turns something on, or refuses something that was let through.
+The last column says how to get the earlier behaviour back.
+
+| What changes | Who is affected | To keep the earlier behaviour |
+|---|---|---|
+| An unset `environment` is read as `prod`. It was read as `dev`. Nova logs one notice at boot | Applications that do not set it. Routers are called with `routes(prod)`, `nova:get_environment/0` returns `prod` and the output of watchers is not printed | Set `{nova, [{environment, dev}]}` in the development configuration |
+| A path with an empty segment ahead of its last one, or with a `.` or `..` segment, is answered with `400` before routing. It was resolved and routed. See [Routing](routing.md#paths-that-are-not-canonical) | Clients and proxies that send `//` or dot segments, such as a base URL that ends in `/` joined with a path that starts with one | `{nova, [{non_canonical_paths, resolve}]}` |
+| `pre_request/4` of a plugin runs once the security callback has let the request through. It ran ahead of it. What has to run first goes in the new callback `pre_security/4`. See [Plugins](plugins.md#before-and-after-the-security-callback) | Security callbacks that read `json`, `params`, `body` or `files`. Plugins of your own that have to see every request, such as a rate limit, an access log or one that answers CORS preflights: they no longer run for a request the callback refuses. Nova logs a warning for both when routes are compiled | List the plugin under `plugins_before_security` in the route group, or set `{nova, [{plugins_before_security, all}]}`. For a plugin of your own, export `pre_security/4` |
+| `nova_request_plugin` parses the query string ahead of the security callback and reads the body behind it | The same callbacks. `parsed_qs` is in the request they get, `json`, `params` and `body` are not | As above |
+| `nova_cors_plugin` and `nova_correlation_plugin` work in `pre_security/4` and have no `pre_request/4` | Code and tests that call `pre_request/4` of these modules | Call `pre_security/4`. In routes nothing changes: they are still listed as `pre_request` and still run first |
+| Nova checks the `Origin` of every request to a websocket route, against `allowed_origins`, `same_host` by default. Nothing was checked. See [Websockets](websockets.md#the-origin-check) | Pages on another host than the websocket they open. Sites behind a proxy that rewrites the `Host` header. Clients that are not browsers and send an `Origin` | List the origins in `allowed_origins`, or list `nova_ws_origin_plugin` with `allowed_origins => any` in the route group |
+| `nova_csrf_plugin` refuses a request that changes state when the browser says a page of another site sent it, whatever token it has. See [Plugins](plugins.md#csrf-allowed-origins) | Pages on another origin, a sibling subdomain included, that post with a valid token | Give the plugin of the route group `allowed_origins` with those origins and the one of the site |
+| `csrf_token` in the request is another value for every response. With `csrf_secret` set it is signed and nothing is stored. See [Plugins](plugins.md#csrf-token-modes) | Code and tests that compare it with the value in the session, or expect the same token twice | Send the token back as it was handed out. A token that an earlier release handed out is still accepted |
+| `nova_csrf_plugin` logs a notice at boot when neither `csrf_secret` nor `csrf_token` is set | Every application that uses the plugin | Set `csrf_secret`, or `{csrf_token, session}` |
+| `non_canonical_paths`, `allowed_origins`, `csrf_token`, `csrf_secret`, `max_sessions` and `plugins_before_security` are checked when Nova starts, and read from the `nova` environment only. See [Configuration](configuration.md#settings-checked-at-boot) | Configurations with a value that cannot be used, such as `{max_sessions, 0}`: the start fails with `{invalid_setting, Key, Reason}`. Configurations that set one of them under the bootstrap application: it is not read | Fix the value, and set the key under `nova` |
+| `json_lib` defaults to `json` of Erlang/OTP. It was `thoas`, which Nova no longer depends on | Applications that call `thoas` without listing it in their own `deps`. Code that relies on how `thoas` encodes or decodes | Add `thoas` to the `deps` of the application and set `{json_lib, thoas}`, see [Configuration](configuration.md#configure-json_lib) |
+| Plugin telemetry has `callback => pre_security` for `pre_security/4`. The controller span of a `400`, `404` or `405` from the router, and of the `500` after a crash in a plugin or a security callback, has `status_page => true`. See [Telemetry](telemetry.md) | Handlers that match `callback => pre_request` for `nova_cors_plugin` or `nova_correlation_plugin`. Metrics that count requests by `status_page => false` | Nothing restores it. Adjust the handlers |
+| A plugin that sets `auth_data` in `pre_request/4` replaces what the security callback returned. The callback used to run last | Plugins that write `auth_data` | Write to a key of your own |
+
 ### Start-up
 
 | Before | Now | What to change |
@@ -20,7 +41,6 @@ tables with your application in mind. The entries under
 | A method that was not one of the lowercase atoms was treated as `'_'` | An atom that is not a method, or a binary or string that is not a method token, stops the start with `{invalid_method, Method}` | Fix the method. Declare `'_'` for a route that is meant to answer every method |
 | A route declared with `<<"GET">>`, `"GET"` or `'GET'` answered every method | It answers that method only | Nothing, unless clients relied on the other methods |
 | A listener that could not be started was logged and Nova kept running | The start fails with `{listener_not_started, Reason}` | Free the port, or fix the certificate |
-| An unset `environment` was read as `dev` without notice | It is still read as `dev` by routers, and Nova logs a warning at boot | Set `{environment, prod}` in the release configuration |
 | An application without a router module crashed the start with `undef` | The start fails with `{router_module_not_found, App}` and an error in the log | Add the `<app>_router` module, or set `router_module` |
 | The router of an Elixir application named `:my_app` was looked up as `my_app.Router` | `MyApp.Router` is found as well | Nothing. A `router_module` set for that reason can go |
 | A `secure` key in a route group, `security` or `secure` in the options of a route, and `security` in a `nova_apps` entry were skipped without notice | They are still not read. With any value but `false` the start fails with `{misplaced_security, App, Key, Path}`, and an error names each key. With `false` each logs a warning | Declare the callback as `security` on the route group, or as `secure` on the `nova_apps` entry |
@@ -39,7 +59,6 @@ tables with your application in mind. The entries under
 | `secure => false` in `nova_apps` removed the callbacks of the included application | The groups keep their callbacks | Use `override_secure` with a callback that returns `true` to open a group |
 | `override_secure` did not reach the applications an included application includes | It covers them | Check that those routes are still reachable for the clients that need them |
 | An included application won a clash over a route or a status page | Your own route wins, and a warning names the route that is ignored | Move or remove one of the two |
-| A request path was matched as sent | Empty segments are dropped and `.` and `..` are resolved before matching | Use `nova_router:canonical_path/1` in callbacks and plugins that decide by path |
 | CSRF `excluded_paths` matched a byte prefix of the path | They match whole segments | List every path that is to be excluded: `<<"/webhook">>` no longer covers `/webhooks/stripe` |
 | A route without `extra_state` had `undefined` in the request, whatever its route group declared | It has the `extra_state` of its route group, and `undefined` when the group declares none | Check controllers that match on `extra_state` in a group that declares one |
 | The `AuthData` of a websocket route was only in the controller data | It is also in the upgrade request, under `auth_data` | Nothing |
@@ -54,11 +73,11 @@ tables with your application in mind. The entries under
 | Sessions lived until they were deleted | They end after `session_max_age`, 14 days by default | Set `session_max_age` if 14 days does not fit |
 | The cookie was `Secure` only for requests over HTTPS | It is `Secure` unless `environment` is set to `dev` | Set `{environment, dev}` for local development over HTTP. For a plain HTTP staging environment set `#{secure => false}` in `session_cookie_opts` |
 | A session id the backend did not know was used | It is replaced with a new one | Use a shared session store when running several nodes without sticky sessions |
-| The number of sessions was not limited | `nova_session_ets` holds at most `max_sessions` on a node, 1 000 000 by default. In a full table a new session takes the place of an expired one, then of a provisional one, then of the session nearest its expiry | Raise the limit if it does not fit |
+| The number of sessions was not limited | `nova_session_ets` holds at most `max_sessions` on a node, 1 000 000 by default, an integer above 0 or `infinity`. In a full table a new session takes the place of an expired one, then of a provisional one, then of the session nearest its expiry | Raise the limit if it does not fit |
 | There was one way to write to a session | `nova_session:set_provisional/3` writes for a visitor who is not signed in. Such a session lives one day and is dropped first. It returns `{error, session_store_full}` when the table holds nothing but sessions in use | Use it for carts, flash messages and the like, and `set/3` once a client has signed in. See [Sessions](sessions.md#data-for-visitors-who-are-not-signed-in) |
-| `nova_csrf_plugin` wrote its token with `set/3` | It writes it with `set_provisional/3`. With `nova_session_ets`, a visitor who only has the token has a session that ends after one day | Nothing, unless a form is left open for more than a day before it is posted: that post gets a `403` |
+| `nova_csrf_plugin` wrote its token with `set/3` | Without a `csrf_secret` it writes it with `set_provisional/3`. With `nova_session_ets`, a visitor who only has the token has a session that ends after one day | Nothing, unless a form is left open for more than a day before it is posted: that post gets a `403` |
 | A session backend had four callbacks | `set_provisional_value/3` is a new optional one. Without it the backend gets those writes through `set_value/3` | Implement it in a backend that limits its size |
-| `session_exists/1` of the backend was called on every access by a request with a cookie | The answer is kept for one second by the calling process, so a request asks once | Nothing |
+| `session_exists/1` of the backend was called on every access by a request with a cookie | For reads the answer is kept for one second by the calling process. Every write asks again | Nothing |
 | The typespecs of `nova_session` and its backend callbacks said a value is a `binary()` | They say `term()`, which is what was always passed through | A backend that stores binaries encodes the value, for instance with `term_to_binary/1` |
 
 ### Requests and responses
@@ -77,6 +96,7 @@ tables with your application in mind. The entries under
 | The `headers` option of a view replaced the default `content-type: text/html` | The headers are added to it, and one that names a `content-type` replaces it | Nothing |
 | A `url` tag without `application` crashed the view | It renders `#` and logs a warning | Give the tag an `application` |
 | `nova_cors_plugin` sent `access-control-allow-origin` to every request | It is sent only to a request whose `Origin` is allowed | List every origin that needs access in `allow_origins` |
+| A CORS preflight to a route that does not take `OPTIONS` got a `405`, and no plugin ran | `pre_security/4` of the plugins of the route for the method it asks about runs before the `405`, so `nova_cors_plugin` answers it | Nothing |
 | `nova_cors_plugin` answered every `OPTIONS` request | It answers preflights only. Other `OPTIONS` requests reach the application | Add a route for `OPTIONS` where the application answers it |
 | A static directory served files through symbolic links that leave it | Such a file is a `404` | Move the file, or set `follow_external_symlinks => true` on the route |
 | A static route to a single file given as a relative path followed the working directory of the node | It serves the file the path named when the routes were compiled | Nothing, unless the application changes the working directory |
@@ -102,7 +122,7 @@ tables with your application in mind. The entries under
 | `post_ws_connection` plugins ran only for a controller that exports `terminate/3`, and not when it crashed | They run whenever a connection goes away | Nothing |
 | A websocket callback that returned something Nova does not know crashed the connection process | It is logged as `Websocket handler failed on what the controller returned` and the connection is closed | Return one of the documented values |
 | `handle_websocket/3` of `nova_basic_handler` | Deprecated. Nova does not call it | Remove calls to it |
-| A status code route found what `nova_router:render_status_page/3,5` was given only in the Cowboy environment | It is in the request, as `#{status => StatusCode, data => Data}` under `controller_data` | Nothing |
+| A status code route found what `nova_router:render_status_page/3,5` was given only in the Cowboy environment | It is in the request, as `#{status => StatusCode, data => Data}` under `controller_data`. Every status page has it and `resp_status_code`, also one rendered for a controller that failed | Nothing |
 | Thirteen error reports of the router had their text under `reason` | The text is under `msg`, as in every other report | Adjust log queries that read `reason` |
 | The request key of the stream handler was `nova_stream_h` | It is `nova_stream`. The key is internal | Do not read it |
 
@@ -111,6 +131,7 @@ tables with your application in mind. The entries under
 | Before | Now | What to change |
 |---|---|---|
 | Cowboy `2.18.0` | Cowboy `~> 2.21.0`, with Cowlib 2.22 | Check the Cowboy [migration guides](https://ninenines.eu/docs/en/cowboy/2.21/guide/) for code that calls Cowboy directly |
+| `thoas` was a dependency of Nova | It is not. See [Defaults that changed](#defaults-that-changed) | List `thoas` in your own `deps` if you call it |
 
 ## To 0.17.0
 
