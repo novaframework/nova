@@ -189,8 +189,7 @@ Deletes the whole session and clears the session cookie. The returned
 request carries a fresh session id, so a `set/3` on it later in the same
 request starts a new session instead of reviving the deleted one.
 """.
--spec delete(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} |
-          {error, Reason :: atom()}.
+-spec delete(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} | no_return().
 delete(Req) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
@@ -239,8 +238,7 @@ renew(Req) ->
            end,
     {ok, with_session_id(NewSessionId, Req0)}.
 
--spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} |
-          {error, Reason :: atom()} | no_return().
+-spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} | no_return().
 delete(Req, Key) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
