@@ -312,6 +312,8 @@ All notable changes to this project will be documented in this file.
 - *(releases)* Secret_key_base and trusted_origins in the configuration of a release
 - *(testing)* What to cover for the sign-in and security_reads_body
 - *(sessions)* The session cookie is named __Host-session_id outside dev
+- *(changelog)* Regenerate with the secure defaults and their guides
+- *(sessions)* Client_id/1 is for nova_csrf_plugin and out of the guides
 
 ### Features
 
