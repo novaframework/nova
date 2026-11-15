@@ -128,6 +128,9 @@ Notes:
   `retry-after` header.
 * To send a session, take the `set-cookie` header of the response that
   started it and send its first part back in a `cookie` header.
+* To post a form that `nova_csrf_plugin` protects, request the page first.
+  Send the `csrf_token` of that page back in the `x-csrf-token` header,
+  together with the session cookie of the same response.
 * Stop your application and `nova` in `end_per_suite/1`, as above, so the
   listener is gone before the next suite starts its own.
 
@@ -142,6 +145,11 @@ with helpers for tests of Nova applications.
 * Each route group that has a security callback: a request without
   credentials is refused, one with credentials is let through.
 * Each form of a signed-in user: a `POST` without the CSRF token gets a
+  `403`, and so does one with the token and `sec-fetch-site: cross-site`.
+* Each route group whose security callback reads `json` or `params`: the
+  callback finds them, which needs the plugin under
+  `plugins_before_security`.
+* Each websocket route: an upgrade with the `origin` of another site gets a
   `403`.
 * Each status page of your own: `404` for an unknown path, `500` for a
   controller that crashes.
