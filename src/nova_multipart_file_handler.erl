@@ -56,9 +56,8 @@ handle_data(Data, #{fd := Fd, tmp_path := TmpPath} = State) ->
 handle_end(#{fd := Fd, tmp_path := TmpPath, final_path := FinalPath}) ->
     case file:close(Fd) of
         ok ->
-            case file:rename(TmpPath, FinalPath) of
+            case nova_multipart_spool:rename(TmpPath, FinalPath) of
                 ok ->
-                    _ = nova_multipart_spool:renamed(TmpPath, FinalPath),
                     {ok, #{path => FinalPath}};
                 {error, _} = Error ->
                     _ = nova_multipart_spool:discard(TmpPath),

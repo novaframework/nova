@@ -6,6 +6,7 @@ spool_test_() ->
      [fun file_is_deleted_when_its_owner_ends/1,
       fun kept_file_outlives_its_owner/1,
       fun renamed_file_is_deleted_at_its_new_path/1,
+      fun file_renamed_by_the_spool_is_deleted_at_its_new_path/1,
       fun discarded_file_is_deleted_at_once/1,
       fun owner_crash_deletes_its_files_only/1,
       fun owner_with_a_kept_file_loses_the_others/1,
@@ -58,6 +59,20 @@ renamed_file_is_deleted_at_its_new_path(Dir) ->
                       ok = file:rename(Path, NewPath),
                       ok = nova_multipart_spool:renamed(Path, NewPath)
               end),
+        ?assertEqual({ok, []}, file:list_dir(Dir))
+    end.
+
+file_renamed_by_the_spool_is_deleted_at_its_new_path(Dir) ->
+    fun() ->
+        Path = filename:join(Dir, "upload.part"),
+        NewPath = filename:join(Dir, "upload"),
+        spool(Path, ~"data"),
+        ok = nova_multipart_spool:rename(Path, NewPath),
+        ?assertEqual({ok, ["upload"]}, file:list_dir(Dir)),
+        ?assertEqual(#{files => 1, bytes => 4}, nova_multipart_spool:usage()),
+        ?assertEqual({error, not_tracked}, nova_multipart_spool:rename(Path, NewPath)),
+        ?assertEqual({error, enoent}, nova_multipart_spool:rename(NewPath, filename:join([Dir, "missing", "upload"]))),
+        ok = nova_multipart_spool:discard(NewPath),
         ?assertEqual({ok, []}, file:list_dir(Dir))
     end.
 

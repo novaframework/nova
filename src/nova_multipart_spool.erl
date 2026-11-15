@@ -34,6 +34,7 @@ Either takes `infinity`. A part that would pass a limit is refused with `{error,
 -export([start_link/0,
          track/1,
          grow/2,
+         rename/2,
          renamed/2,
          discard/1,
          keep/1,
@@ -74,7 +75,12 @@ track(Path) ->
 grow(Path, Bytes) ->
     call({grow, name(Path), Bytes}).
 
--doc "Tells the spool that a tracked file now lives at `NewPath`.".
+-doc "Renames a tracked file to `NewPath` and goes on tracking it there. The spool does the renaming, so a request that ends in the middle of it leaves no file behind, which `file:rename/2` followed by `renamed/2` can.".
+-spec rename(Path :: path(), NewPath :: path()) -> ok | {error, not_tracked | spool_not_running | file:posix()}.
+rename(Path, NewPath) ->
+    call({rename, name(Path), name(NewPath)}).
+
+-doc "Tells the spool that a tracked file now lives at `NewPath`. A file renamed by a process that ends before it says so is left on disk; `rename/2` has no such moment.".
 -spec renamed(Path :: path(), NewPath :: path()) -> ok | {error, not_tracked | spool_not_running}.
 renamed(Path, NewPath) ->
     call({renamed, name(Path), name(NewPath)}).
@@ -140,6 +146,19 @@ handle_call({grow, Path, Bytes}, _From, State = #state{files = Files, bytes = To
                     {reply, ok, State#state{files = Files#{Path => {Owner, Size + Bytes}}, bytes = Total + Bytes}};
                 false ->
                     {reply, {error, spool_full}, State}
+            end;
+        _ ->
+            {reply, {error, not_tracked}, State}
+    end;
+handle_call({rename, Path, NewPath}, _From, State) when is_binary(Path), is_binary(NewPath) ->
+    case State#state.files of
+        #{Path := {Owner, Bytes}} ->
+            case file:rename(Path, NewPath) of
+                ok ->
+                    {ok, State1} = forget(Path, State),
+                    {reply, ok, own(NewPath, Owner, Bytes, State1)};
+                {error, _Reason} = Error ->
+                    {reply, Error, State}
             end;
         _ ->
             {reply, {error, not_tracked}, State}

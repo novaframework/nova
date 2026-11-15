@@ -134,6 +134,37 @@ abort_deletes_partial_file_with_extension_test_() ->
          end
      end}.
 
+%% A request process can be stopped at any point, also right after a
+%% finished part got its final name: before it told the spool, when it did
+%% the renaming itself, or as soon as the spool had done it.
+part_of_a_request_that_ends_inside_the_rename_is_deleted_test_() ->
+    {setup, fun setup/0, fun teardown/1,
+     fun(Dir) ->
+         fun() ->
+             meck:new(nova_multipart_spool, [passthrough]),
+             meck:expect(nova_multipart_spool, renamed, fun(_Path, _NewPath) -> exit(stopped) end),
+             meck:expect(nova_multipart_spool, rename, fun(Path, NewPath) ->
+                                                               ok = meck:passthrough([Path, NewPath]),
+                                                               exit(stopped)
+                                                       end),
+             try
+                 {Pid, Monitor} = spawn_monitor(
+                                    fun() ->
+                                            PartInfo = #{name => ~"upload", filename => ~"x.bin",
+                                                         content_type => ~"application/octet-stream"},
+                                            {ok, State} = nova_multipart_file_handler:init(PartInfo, #{dir => Dir}),
+                                            {ok, State1} = nova_multipart_file_handler:handle_data(~"data", State),
+                                            nova_multipart_file_handler:handle_end(State1)
+                                    end),
+                 receive {'DOWN', Monitor, process, Pid, Reason} -> ?assertEqual(stopped, Reason) end,
+                 ?assertEqual(#{files => 0, bytes => 0}, nova_multipart_spool:usage()),
+                 ?assertEqual({ok, []}, file:list_dir(Dir))
+             after
+                 meck:unload(nova_multipart_spool)
+             end
+         end
+     end}.
+
 part_is_refused_without_the_spool_test() ->
     PartInfo = #{name => ~"upload", filename => ~"x.bin", content_type => ~"application/octet-stream"},
     ?assertEqual({error, spool_not_running}, nova_multipart_file_handler:init(PartInfo, #{dir => "/tmp"})).
