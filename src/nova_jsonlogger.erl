@@ -156,8 +156,11 @@ meta_with(Meta, _ConfigNotPresent) ->
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
+decoded(Json) ->
+    json:decode(iolist_to_binary(Json)).
+
 -define(assertJSONEqual(Expected, Actual),
-    ?assertEqual(thoas:decode(Expected), thoas:decode(Actual))
+    ?assertEqual(decoded(Expected), decoded(Actual))
 ).
 
 format_test() ->
@@ -260,7 +263,7 @@ meta_without_test() ->
             <<"level">> => <<"info">>,
             <<"secret">> => <<"xyz">>
         }},
-        thoas:decode(format(Error, #{}))
+        {ok, decoded(format(Error, #{}))}
     ),
     Config2 = #{meta_without => [secret]},
     ?assertEqual(
@@ -268,7 +271,7 @@ meta_without_test() ->
             <<"answer">> => 42,
             <<"level">> => <<"info">>
         }},
-        thoas:decode(format(Error, Config2))
+        {ok, decoded(format(Error, Config2))}
     ),
     ok.
 
@@ -284,7 +287,7 @@ meta_with_test() ->
             <<"level">> => <<"info">>,
             <<"secret">> => <<"xyz">>
         }},
-        thoas:decode(format(Error, #{}))
+        {ok, decoded(format(Error, #{}))}
     ),
     Config2 = #{meta_with => [level]},
     ?assertEqual(
@@ -292,23 +295,23 @@ meta_with_test() ->
             <<"answer">> => 42,
             <<"level">> => <<"info">>
         }},
-        thoas:decode(format(Error, Config2))
+        {ok, decoded(format(Error, Config2))}
     ),
     ok.
 
 newline_test() ->
     ConfigDefault = #{new_line => true},
     ?assertEqual(
-        [<<"{\"level\":\"alert\",\"text\":\"derp\"}">>, <<"\n">>],
-        format(#{level => alert, msg => {string, "derp"}, meta => #{}}, ConfigDefault)
+        <<"{\"level\":\"alert\",\"text\":\"derp\"}\n">>,
+        iolist_to_binary(format(#{level => alert, msg => {string, "derp"}, meta => #{}}, ConfigDefault))
     ),
     ConfigCRLF = #{
         new_line_type => crlf,
         new_line => true
     },
     ?assertEqual(
-        [<<"{\"level\":\"alert\",\"text\":\"derp\"}">>, <<"\r\n">>],
-        format(#{level => alert, msg => {string, "derp"}, meta => #{}}, ConfigCRLF)
+        <<"{\"level\":\"alert\",\"text\":\"derp\"}\r\n">>,
+        iolist_to_binary(format(#{level => alert, msg => {string, "derp"}, meta => #{}}, ConfigCRLF))
     ).
 
 newline_types_test() ->
@@ -330,8 +333,8 @@ newline_types_test() ->
 
 no_newline_test() ->
     Base = #{level => alert, msg => {string, "x"}, meta => #{}},
-    Result = format(Base, #{}),
-    ?assert(is_binary(Result)).
+    Result = iolist_to_binary(format(Base, #{})),
+    ?assertEqual(<<"{\"level\":\"alert\",\"text\":\"x\"}">>, Result).
 
 jsonify_types_test() ->
     %% atom
@@ -360,29 +363,29 @@ jsonify_types_test() ->
 
 format_keyval_list_test() ->
     Event = #{level => info, msg => {report, [{key, <<"val">>}]}, meta => #{}},
-    {ok, Decoded} = thoas:decode(format(Event, #{})),
+    Decoded = decoded(format(Event, #{})),
     ?assertEqual(<<"val">>, maps:get(<<"key">>, Decoded)).
 
 format_format_terms_test() ->
     Event = #{level => info, msg => {"hello ~s", ["world"]}, meta => #{}},
-    {ok, Decoded} = thoas:decode(format(Event, #{})),
+    Decoded = decoded(format(Event, #{})),
     ?assertEqual(<<"hello world">>, maps:get(<<"text">>, Decoded)).
 
 format_error_logger_test() ->
     Event = #{level => error,
               msg => {report, #{format => "error: ~p", args => [bad], label => {error_logger, error}}},
               meta => #{}},
-    {ok, Decoded} = thoas:decode(format(Event, #{})),
+    Decoded = decoded(format(Event, #{})),
     ?assert(maps:is_key(<<"text">>, Decoded)).
 
 nested_map_test() ->
     Event = #{level => info, msg => {report, #{outer => #{inner => value}}}, meta => #{}},
-    {ok, Decoded} = thoas:decode(format(Event, #{})),
+    Decoded = decoded(format(Event, #{})),
     ?assertEqual(#{<<"inner">> => <<"value">>}, maps:get(<<"outer">>, Decoded)).
 
 list_of_maps_test() ->
     Event = #{level => info, msg => {report, #{items => [#{a => 1}, #{b => 2}]}}, meta => #{}},
-    {ok, Decoded} = thoas:decode(format(Event, #{})),
+    Decoded = decoded(format(Event, #{})),
     ?assertEqual([#{<<"a">> => 1}, #{<<"b">> => 2}], maps:get(<<"items">>, Decoded)).
 
 system_time_to_iso8601_test() ->

@@ -428,8 +428,8 @@ handle_status_with_headers_test_() ->
         ?assertEqual(301, maps:get(resp_status_code, Req1))
     end}.
 
-decoded_body(#{resp_body := Body}) when is_binary(Body) ->
-    json:decode(Body).
+decoded_body(#{resp_body := Body}) ->
+    json:decode(iolist_to_binary(Body)).
 
 %% io_lib:format/2 prints a binary with a control byte as a list of integers,
 %% so a text search of its output would miss a leak.

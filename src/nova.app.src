@@ -13,8 +13,7 @@
                  cowboy,
                  compiler,
                  erlydtl,
-                 jhn_stdlib,
-                 thoas
+                 jhn_stdlib
                 ]},
   {env,[]},
   {modules,[nova]},

@@ -590,8 +590,7 @@ header(Name, Headers) ->
     end.
 
 json(Body) ->
-    {ok, Decoded} = thoas:decode(Body),
-    Decoded.
+    json:decode(Body).
 
 free_port() ->
     {ok, Socket} = gen_tcp:listen(0, [{reuseaddr, true}]),
