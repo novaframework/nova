@@ -65,8 +65,14 @@ visitor_gets_a_token_while_the_table_is_full(Config) ->
     flood(Config, 2 * ?MAX_SESSIONS),
     {200, Headers, Token} = nova_test_listener:response(?config(port, Config), "GET", "/csrf/token", []),
     ?assertNotEqual(~"no token", Token),
-    ?assertEqual({200, Token},
-                 nova_test_listener:get(?config(port, Config), "/csrf/token", [{"cookie", cookie(Headers)}])).
+    {200, Again} = nova_test_listener:get(?config(port, Config), "/csrf/token", [{"cookie", cookie(Headers)}]),
+    ?assertEqual(unmasked(Token), unmasked(Again)).
+
+%% nova_csrf_plugin hands the token of a session out under a mask that is
+%% new for every response.
+unmasked(Token) ->
+    <<Mask:44/binary, Masked:44/binary>> = base64:decode(Token, #{mode => urlsafe, padding => false}),
+    crypto:exor(Mask, Masked).
 
 %% The sessions that are in use are not dropped for a visitor's token.
 visitor_gets_no_token_when_every_session_is_in_use(Config) ->
