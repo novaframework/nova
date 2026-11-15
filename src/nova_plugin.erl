@@ -30,6 +30,8 @@ A plugin listed as `{pre_request, Module, Options}` takes part twice before the 
 
 Earlier releases ran `pre_request/4` ahead of the security callback. `plugins_before_security`, in a route group or in the `nova` environment (the route group wins), puts it back there for the modules it names: `pre_request/4` of these modules runs ahead of the security callback, as it did. `all` names every plugin of the route group, and `all` in the `nova` environment is the order of earlier releases everywhere. A list has to name plugins that have `pre_request/4`, and the list of a route group plugins that the group lists as `pre_request`: any other name stops the boot with `{invalid_setting, plugins_before_security, List}`. Nothing moves `pre_security/4` behind the security callback.
 
+`auth_data` of the request is what the security callback returned as `{true, AuthData}`, and a plugin that writes the key, in either callback, does not change that. What a plugin writes there stays when the security callback returns a plain `true` and on a route without one. A websocket controller gets the `auth_data` of the upgrade request in its controller data.
+
 Within each of the two phases the plugins run in the order they are listed. What the security callback finds in the request is what `pre_security/4` put there. With the plugins of Nova that is the correlation id, the CORS headers and `parsed_qs`, and not `json`, `params`, `body` or `files`: a security callback that needs the decoded body lists `nova_request_plugin` under `plugins_before_security` for its route group.
 
 Two things that this order changes without anything failing are warned about, once for a route group, when its routes are compiled:

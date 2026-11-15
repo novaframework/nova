@@ -80,6 +80,8 @@ A plugin listed as `{pre_request, Module, Options}` takes part twice before the 
 
 The security callback finds in the request what `pre_security/4` put there: the correlation id, the CORS headers and `parsed_qs`, and not `json`, `params` or `files`.
 
+`auth_data` of the request is what the security callback returned as `{true, AuthData}`. A plugin that writes the key does not change that, in `pre_security/4` or in `pre_request/4`. What a plugin writes there stays when the callback returns a plain `true` and on a route without a callback, so a plugin can be what signs a request in. A websocket controller gets the `auth_data` of the upgrade request in its controller data, whoever wrote it.
+
 ### Running a plugin ahead of the security callback
 
 Releases up to 0.18 ran `pre_request/4` ahead of the security callback. `plugins_before_security` puts it back there for the modules it names, in the route group:

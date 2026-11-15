@@ -11,16 +11,25 @@
 
 execute(Req, Env = #{secure := Secure}) ->
     case check(Secure, Req, Env) of
-        {allowed, Req1, Env1} -> nova_plugin_handler:after_security(Req1, Env1);
+        {allowed, Returned, Req1} -> returned_stands(Returned, nova_plugin_handler:after_security(Req1, Env));
         {answered, Answer} -> Answer
     end.
 
-%% Whether the request may go on. pre_request/4 of the plugins runs once,
-%% after every callback has allowed it.
-check(false, Req, Env) ->
-    {allowed, Req, Env};
+%% `auth_data` of the request is what the callback returned, and a plugin
+%% that writes the key in its pre_request/4 does not change that. When the
+%% callback returned a plain true, what a plugin wrote is left there.
+returned_stands({ok, AuthData}, {ok, Req, Env}) ->
+    {ok, Req#{auth_data => AuthData}, Env};
+returned_stands(_Returned, Result) ->
+    Result.
+
+%% Whether the request may go on, and the data the callbacks returned for
+%% it. pre_request/4 of the plugins runs once, after every callback has
+%% allowed it.
+check(false, Req, _Env) ->
+    {allowed, none, Req};
 check([_ | _] = Callbacks, Req, Env) ->
-    all_allow(Callbacks, Req, Env);
+    all_allow(Callbacks, none, Req, Env);
 check(Callback, Req = #{host := Host}, Env) when is_function(Callback, 1) ->
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
     try Callback(Req) of
@@ -51,11 +60,12 @@ check(_Invalid, Req, Env) ->
 %% A route with several callbacks: each has to allow the request, in order,
 %% and the first that does not answers it. The data a later callback returns
 %% replaces that of an earlier one, which a plain true leaves in place.
-all_allow([], Req, Env) ->
-    {allowed, Req, Env};
-all_allow([Callback | Rest], Req, Env) ->
+all_allow([], Returned, Req, _Env) ->
+    {allowed, Returned, Req};
+all_allow([Callback | Rest], Returned, Req, Env) ->
     case check(Callback, Req, Env) of
-        {allowed, Req1, Env1} -> all_allow(Rest, Req1, Env1);
+        {allowed, none, Req1} -> all_allow(Rest, Returned, Req1, Env);
+        {allowed, Later, Req1} -> all_allow(Rest, Later, Req1, Env);
         Answered -> Answered
     end.
 
@@ -67,17 +77,10 @@ all_allow([Callback | Rest], Req, Env) ->
 deny(_Req) ->
     false.
 
-handle_response({true, AuthData}, Req, Env) ->
-    case maps:get(cowboy_handler, Env, undefined) of
-        nova_ws_handler ->
-            Args = maps:get(arguments, Env, #{}),
-            {allowed, Req#{auth_data => AuthData},
-             Env#{arguments => Args#{controller_data => #{auth_data => AuthData}}}};
-        _ ->
-            {allowed, Req#{auth_data => AuthData}, Env}
-    end;
-handle_response(true, Req, Env) ->
-    {allowed, Req, Env};
+handle_response({true, AuthData}, Req, _Env) ->
+    {allowed, {ok, AuthData}, Req#{auth_data => AuthData}};
+handle_response(true, Req, _Env) ->
+    {allowed, none, Req};
 handle_response({false, Headers}, Req, Env) ->
     handle_response({false, 401, Headers, false}, Req, Env);
 handle_response({false, StatusCode, Headers}, Req, Env) ->

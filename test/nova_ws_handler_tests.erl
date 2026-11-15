@@ -83,6 +83,15 @@ init_preserves_existing_controller_data_test_() ->
         ?assertEqual(value, maps:get(existing, CD))
     end}.
 
+init_hands_over_the_auth_data_of_the_request_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Req = (make_req())#{auth_data => someone},
+        {cowboy_websocket, _Req1, #{controller_data := Given}} = nova_ws_handler:init(Req, make_state()),
+        ?assertEqual({someone, Req}, {maps:get(auth_data, Given), maps:get(req, Given)}),
+        {cowboy_websocket, _Req2, #{controller_data := Without}} = nova_ws_handler:init(make_req(), make_state()),
+        ?assertNot(maps:is_key(auth_data, Without))
+    end}.
+
 init_default_controller_data_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         Req = make_req(),

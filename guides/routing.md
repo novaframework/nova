@@ -197,7 +197,7 @@ get_user(Req) ->
     {ok, #{name => "John Doe", role => "Admin"}}.
 ```
 
-Once the security function has been called, the data will be available in the `Req` object under the `auth_data` key. A websocket controller gets it under `auth_data` in its controller data, and in the upgrade request under `req` there.
+Once the security function has been called, the data will be available in the `Req` object under the `auth_data` key. A websocket controller gets it under `auth_data` in its controller data, and in the upgrade request under `req` there. A [plugin](plugins.md#before-and-after-the-security-callback) cannot put something else in its place.
 
 A route group of an [included application](multi-app.md#security-of-a-mounted-application) can have two callbacks, the `secure` of the application that includes it and its own `security`. Both have to allow the request, and the controller gets the data of the group's callback when that returns some, otherwise the data of the other one.
 
