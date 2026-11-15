@@ -69,6 +69,62 @@ of `{Module, Function}` in Nova.
 
 These changes are part of the release that follows 0.18.3.
 
+### Defaults that changed
+
+The [Upgrading](upgrading.md#defaults-that-changed) guide says who each of
+these affects and how to get the earlier behaviour back.
+
+- **An unset `environment` is read as `prod`.** It was read as `dev`.
+  `nova:get_environment/0` returns `prod` for it, routers are called with
+  `routes(prod)`, and Nova logs one notice at boot.
+
+- **A path that is not canonical is answered with `400`.** A path with an
+  empty segment ahead of its last one, or with a `.` or `..` segment, was
+  resolved and routed. `{non_canonical_paths, resolve}` routes it as before.
+
+- **`pre_request/4` of a plugin runs after the security callback.** The new
+  optional callback `pre_security/4` runs ahead of it. `nova_cors_plugin`,
+  `nova_correlation_plugin` and `nova_ws_origin_plugin` work there and have
+  no `pre_request/4`. `nova_request_plugin` parses the query string there
+  and reads the body in `pre_request/4`. `nova_csrf_plugin` checks the
+  origin there and the token in `pre_request/4`. `plugins_before_security`
+  names the plugins whose `pre_request/4` runs ahead of the callback as it
+  did.
+
+- **A CORS preflight is answered for a route that does not take `OPTIONS`.**
+  `pre_security/4` of the plugins of the route for the method the preflight
+  asks about runs before the `405`.
+
+- **Websocket routes check the `Origin`.** Every request to a websocket
+  route is checked against `allowed_origins`, which is `same_host` when it
+  is not set.
+
+- **`nova_csrf_plugin` checks where a request comes from.** A request that
+  changes state is refused when `Sec-Fetch-Site` and `Origin` say that a
+  page of another site sent it.
+
+- **`nova_csrf_plugin` signs its tokens when `csrf_secret` is set.** Nothing
+  is stored for a signed token. Without the secret the token is kept in the
+  session, handed out under a mask that is new for every response, and a
+  notice is logged at boot unless `csrf_token` is `session`.
+
+- **Six settings are checked at boot.** `non_canonical_paths`,
+  `allowed_origins`, `csrf_token`, `csrf_secret`, `max_sessions` and
+  `plugins_before_security` are read from the `nova` environment when Nova
+  starts. A value that cannot be used stops the start with
+  `{invalid_setting, Key, Reason}`.
+
+- **`json_lib` defaults to `json` of Erlang/OTP.** It was `thoas`, which
+  Nova no longer depends on.
+
+- **`nova_session:client_id/1` is new.** It returns the session id the
+  client holds, and hands one out in the session cookie to a client without
+  one, without starting a session.
+
+- **Telemetry.** Plugin spans have `callback => pre_security` for
+  `pre_security/4`. The controller span of a status page that the router or
+  a failing plugin or security callback asked for has `status_page => true`.
+
 ### Behaviour changes to be aware of
 
 - **`nova:format_stacktrace/1` always returns an integer `arity`.** A frame
@@ -437,9 +493,8 @@ These changes are part of the release that follows 0.18.3.
 
 - **The cookie is `Secure` unless `{nova, [{environment, dev}]}` is set.**
   It used to be `Secure` only when the request came in over HTTPS, which a
-  proxy that terminates TLS hides. An unset `environment` counts as not
-  `dev` for the cookie, although `nova:get_environment/0` returns `dev` for
-  it. Local development over plain HTTP without that setting loses the
+  proxy that terminates TLS hides. An unset `environment` is read as `prod`.
+  Local development over plain HTTP without that setting loses the
   session cookie, as does a staging environment served over plain HTTP; set
   `{nova, [{environment, dev}]}` or `#{secure => false}` in
   `session_cookie_opts`.
@@ -460,7 +515,7 @@ These changes are part of the release that follows 0.18.3.
 - **A session manager without `session_exists/1` gets a warning at boot.**
 
 - **`nova_session_ets` holds at most `max_sessions` sessions**, 1 000 000 by
-  default, on each node. In a full table a write that starts a session drops
+  default, on each node. The setting is an integer above 0, or `infinity`. In a full table a write that starts a session drops
   another one: an expired one, then a provisional one, then, for
   `nova_session:set/3` only, the session nearest its expiry.
 
@@ -469,11 +524,12 @@ These changes are part of the release that follows 0.18.3.
   holds such values lives one day, is dropped first from a full table, and
   is refused with `{error, session_store_full}` when the table holds nothing
   but sessions written with `set/3`. `nova_csrf_plugin` stores its token
-  this way. A backend takes these writes in the new optional callback
+  this way when it keeps tokens in the session. A backend takes these writes in the new optional callback
   `set_provisional_value/3`, and in `set_value/3` without it.
 
-- **`session_exists/1` is asked once per request.** The answer is kept for
-  one second by the process that calls `nova_session`.
+- **`session_exists/1` is asked once for the reads of a request.** For reads
+  the answer is kept for one second by the process that calls
+  `nova_session`. Every write asks again.
 
 - **Session values are typed as `term()`.** The typespecs said `binary()`,
   while any term was passed through to the backend.
