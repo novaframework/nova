@@ -1,10 +1,26 @@
 -module(nova_csrf_plugin).
 -moduledoc """
-CSRF protection plugin for Nova using the synchronizer token pattern.
+CSRF protection plugin for Nova.
 
-Generates a random token per session, stores it server-side, and validates it on state-changing requests (POST, PUT, PATCH, DELETE).
+A page gets a token in `csrf_token` of the request, which a view receives as the variable `csrf_token`. A state-changing request (POST, PUT, PATCH, DELETE) has to send it back, in the form field or the header, and is answered `403` when it does not.
 
-__Important:__`nova_request_plugin` must run before this plugin so that form params are parsed into the `params` key of the request map.
+__Important:__ `nova_request_plugin` must run before this plugin so that form params are parsed into the `params` key of the request map.
+
+## Where the token comes from
+
+With `csrf_secret` set in the `nova` environment the token is signed and nothing is stored for it. It is an HMAC-SHA256, under the secret, over the id in the session cookie of the client and 16 random bytes, so every response carries another token and each of them is good for as long as the client holds that cookie and the secret is in use. A visitor without a session cookie is handed one by the response (`nova_session:client_id/1`); no session is started. A request that changes state is refused when it does not send the cookie the token was signed for. Signing in moves a visitor to another session id, and the pages rendered after that carry tokens for the new one.
+
+```erlang
+{nova, [
+    {csrf_secret, ~"at least 32 bytes that every node of the system is given"}
+]}
+```
+
+The secret has to be the same on every node and across restarts. A list of secrets signs with the first and accepts all of them: put the new secret in front of the old one to change it, and take the old one out once the pages that were open have been sent.
+
+Without `csrf_secret` the token is a random value kept in the session, as in earlier releases: a visitor without a session gets one that holds the token (`nova_session:set_provisional/3`). The boot says so once. Set `{csrf_token, session}` to say that this is intended, or `{csrf_token, stateless}` to have a boot without a secret fail instead.
+
+After a secret is set, a form that was rendered before still sends the token of its session. It is accepted for as long as that session is there.
 
 ### Options
 
@@ -16,10 +32,18 @@ __Important:__`nova_request_plugin` must run before this plugin so that form par
 -behaviour(nova_plugin).
 
 -export([
+         init/0,
          pre_request/4,
          post_request/4,
          plugin_info/0
         ]).
+
+-export([tokens/0]).
+
+-include_lib("kernel/include/logger.hrl").
+
+-define(NONCE_BYTES, 16).
+-define(MIN_SECRET_BYTES, 32).
 
 -ifdef(TEST).
 -export([
@@ -32,7 +56,58 @@ __Important:__`nova_request_plugin` must run before this plugin so that form par
 -endif.
 
 %%--------------------------------------------------------------------
--doc "Pre-request callback. On safe methods, ensures a CSRF token exists in the session and injects it into the Req map. On unsafe methods, validates the submitted token against the session token.".
+-doc false.
+-spec init() -> nova:state().
+init() ->
+    Unset = nova_config:get_env(csrf_secret, undefined) =:= undefined
+        andalso nova_config:get_env(csrf_token, undefined) =:= undefined,
+    _ = Unset andalso
+        ?LOG_NOTICE(#{msg => ~"csrf_secret is not set, so nova_csrf_plugin keeps its tokens in the session store and starts a session for every visitor. Set csrf_secret for signed tokens that store nothing, or csrf_token to session to say that this is intended",
+                      key => csrf_secret, csrf_token => session}),
+    #{}.
+
+%%--------------------------------------------------------------------
+%% How tokens are made, from csrf_token and csrf_secret: signed with the
+%% secrets, the first of which signs, or kept in the session. Raises for
+%% settings nothing can go by, which nova_router looks at when a listener
+%% starts. The secret is never part of what is raised or logged.
+-doc false.
+-spec tokens() -> {stateless, [binary(), ...]} | session.
+tokens() ->
+    case {nova_config:get_env(csrf_token, undefined), secrets(nova_config:get_env(csrf_secret, undefined))} of
+        {undefined, []} ->
+            session;
+        {session, _Secrets} ->
+            session;
+        {stateless, []} ->
+            ?LOG_ERROR(#{msg => ~"csrf_token is stateless and csrf_secret is not set"}),
+            throw({error, csrf_secret_not_set});
+        {Unset, [_ | _] = Secrets} when Unset =:= undefined; Unset =:= stateless ->
+            {stateless, Secrets};
+        {Other, _Secrets} ->
+            ?LOG_ERROR(#{msg => ~"csrf_token must be stateless or session", value => Other}),
+            throw({error, {invalid_csrf_token, Other}})
+    end.
+
+secrets(undefined) ->
+    [];
+secrets(Secret) when is_binary(Secret) ->
+    secrets([Secret]);
+secrets([_ | _] = Secrets) ->
+    case [Secret || Secret <- Secrets, is_binary(Secret), byte_size(Secret) >= ?MIN_SECRET_BYTES] of
+        Usable when length(Usable) =:= length(Secrets) -> Usable;
+        _TooShort -> invalid_secret()
+    end;
+secrets(_Other) ->
+    invalid_secret().
+
+-spec invalid_secret() -> no_return().
+invalid_secret() ->
+    ?LOG_ERROR(#{msg => ~"csrf_secret must be a binary of at least 32 bytes, or a list of such"}),
+    throw({error, invalid_csrf_secret}).
+
+%%--------------------------------------------------------------------
+-doc "Pre-request callback. On safe methods, puts a CSRF token into the Req map. On unsafe methods, validates the submitted token.".
 -spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
     {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
     {stop, nova_plugin:reply(), Req0 :: cowboy_req:req(), NewState :: any()}.
@@ -41,11 +116,21 @@ pre_request(Req = #{method := Method, path := Path}, _Env, Options, State) ->
     HeaderName = maps:get(header_name, Options, <<"x-csrf-token">>),
     SessionKey = maps:get(session_key, Options, <<"_csrf_token">>),
     ExcludedPaths = maps:get(excluded_paths, Options, []),
-    case is_safe_method(Method) orelse is_excluded_path(Path, ExcludedPaths) of
-        true ->
+    Safe = is_safe_method(Method) orelse is_excluded_path(Path, ExcludedPaths),
+    case tokens() of
+        session when Safe ->
             handle_safe_request(Req, SessionKey, State);
-        false ->
-            handle_unsafe_request(Req, SessionKey, FieldName, HeaderName, State)
+        session ->
+            handle_unsafe_request(Req, SessionKey, FieldName, HeaderName, State);
+        {stateless, Secrets} when Safe ->
+            {ok, with_signed_token(nova_session:client_id(Req), Secrets, Req), State};
+        {stateless, Secrets} ->
+            Presented = nova_session:presented_session_id(Req),
+            Submitted = get_submitted_token(Req, FieldName, HeaderName),
+            case is_signed_for(Presented, Submitted, Secrets) orelse is_session_token(Req, SessionKey, Submitted) of
+                true -> {ok, with_signed_token({ok, Presented}, Secrets, Req), State};
+                false -> reject(Req, State)
+            end
     end.
 
 %%--------------------------------------------------------------------
@@ -108,6 +193,37 @@ handle_unsafe_request(Req, SessionKey, FieldName, HeaderName, State) ->
             end;
         {error, _} ->
             reject(Req, State)
+    end.
+
+with_signed_token({ok, SessionId}, [Secret | _], Req) when is_binary(SessionId) ->
+    Nonce = crypto:strong_rand_bytes(?NONCE_BYTES),
+    Signed = <<Nonce/binary, (signature(Secret, SessionId, Nonce))/binary>>,
+    Req#{csrf_token => base64:encode(Signed, #{mode => urlsafe, padding => false})};
+with_signed_token(_NoSessionId, _Secrets, Req) ->
+    Req.
+
+%% The nonce has a fixed length and comes last, so the session id is what is
+%% between it and the label whatever bytes a client put in its cookie.
+signature(Secret, SessionId, Nonce) ->
+    crypto:mac(hmac, sha256, Secret, [~"nova_csrf_plugin", SessionId, Nonce]).
+
+%% 64 characters are the 16 bytes of a nonce and the 32 of its signature.
+is_signed_for(SessionId, <<Token:64/binary>>, Secrets) when is_binary(SessionId) ->
+    try base64:decode(Token, #{mode => urlsafe, padding => false}) of
+        <<Nonce:?NONCE_BYTES/binary, Signature/binary>> ->
+            [] =/= [Secret || Secret <- Secrets,
+                              constant_time_compare(Signature, signature(Secret, SessionId, Nonce))]
+    catch
+        error:_NotBase64 -> false
+    end;
+is_signed_for(_SessionId, _Submitted, _Secrets) ->
+    false.
+
+%% The token of a form that was rendered before csrf_secret was set.
+is_session_token(Req, SessionKey, Submitted) ->
+    case nova_session:get(Req, SessionKey) of
+        {ok, SessionToken} -> constant_time_compare(SessionToken, Submitted);
+        {error, _} -> false
     end.
 
 reject(Req, State) ->

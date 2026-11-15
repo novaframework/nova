@@ -22,6 +22,8 @@
          unknown_non_canonical_paths_fails_the_boot/1,
          unknown_allowed_origins_fails_the_boot/1,
          session_store_for_no_session_fails_the_boot/1,
+         csrf_settings_nothing_can_go_by_fail_the_boot/1,
+         csrf_tokens_kept_in_the_session_store_are_said_once/1,
          plugins_of_an_earlier_run_are_forgotten/1
         ]).
 
@@ -47,6 +49,8 @@ all() ->
      unknown_non_canonical_paths_fails_the_boot,
      unknown_allowed_origins_fails_the_boot,
      session_store_for_no_session_fails_the_boot,
+     csrf_settings_nothing_can_go_by_fail_the_boot,
+     csrf_tokens_kept_in_the_session_store_are_said_once,
      plugins_of_an_earlier_run_are_forgotten
     ].
 
@@ -264,6 +268,48 @@ session_store_for_no_session_fails_the_boot(_Config) ->
     after
         application:unset_env(nova, max_sessions)
     end.
+
+csrf_settings_nothing_can_go_by_fail_the_boot(_Config) ->
+    [begin
+         [application:set_env(nova, Key, Value) || {Key, Value} <- Settings],
+         try
+             ?assertMatch({Reason, {error, {nova, {{shutdown, {failed_to_start_child, nova_listener, Reason}}, _}}}},
+                          {Reason, nova_test_listener:try_start(#{})}),
+             ?assertEqual(undefined, whereis(nova_sup))
+         after
+             application:unset_env(nova, csrf_token),
+             application:unset_env(nova, csrf_secret),
+             nova_test_listener:stop()
+         end
+     end || {Settings, Reason} <- [{[{csrf_token, stateless}], csrf_secret_not_set},
+                                   {[{csrf_token, signed}], {invalid_csrf_token, signed}},
+                                   {[{csrf_secret, ~"short"}], invalid_csrf_secret},
+                                   {[{csrf_token, session}, {csrf_secret, [~"short"]}], invalid_csrf_secret}]].
+
+%% Without a secret the tokens of nova_csrf_plugin are kept in the session
+%% store, as before there were signed ones. An application that has the
+%% plugin is told once, unless it has said that this is what it wants.
+csrf_tokens_kept_in_the_session_store_are_said_once(_Config) ->
+    Csrf = [#{plugins => [{pre_request, nova_csrf_plugin, #{}}],
+              routes => [{"/", fun nova_boot_pages:page/1, #{methods => [get]}},
+                         {"/other", fun nova_boot_pages:page/1, #{methods => [get]}}]}],
+    Secret = binary:copy(~"s", 32),
+    [begin
+         [application:set_env(nova, Key, Value) || {Key, Value} <- Settings],
+         try
+             {{ok, _Port}, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => Routes}) end),
+             ?assertEqual({Settings, Notices},
+                          {Settings, length([Report || {notice, {report, #{key := csrf_secret} = Report}} <- Events])})
+         after
+             application:unset_env(nova, csrf_token),
+             application:unset_env(nova, csrf_secret),
+             nova_test_listener:stop()
+         end
+     end || {Routes, Settings, Notices} <- [{Csrf, [], 1},
+                                            {Csrf, [{csrf_token, session}], 0},
+                                            {Csrf, [{csrf_secret, Secret}], 0},
+                                            {Csrf, [{csrf_token, stateless}, {csrf_secret, Secret}], 0},
+                                            {[], [], 0}]].
 
 %% nova_plugin_manager starts every plugin the router has listed, also after
 %% a restart, so the list must not carry over from a run with other routes.

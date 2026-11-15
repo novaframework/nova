@@ -1,7 +1,8 @@
 %%% nova_csrf_plugin with a real session, a real form body and a real view.
 -module(nova_csrf_SUITE).
 
--export([all/0, init_per_suite/1, end_per_suite/1]).
+-export([all/0, groups/0, init_per_suite/1, end_per_suite/1, init_per_group/2, end_per_group/2,
+         init_per_testcase/2, end_per_testcase/2]).
 
 -export([first_visit_starts_a_session_with_a_token/1,
          token_stays_the_same_within_a_session/1,
@@ -16,22 +17,51 @@
          excluded_path_needs_no_token/1,
          path_next_to_an_excluded_one_needs_a_token/1]).
 
+-export([first_visit_gets_a_cookie_and_no_session/1,
+         every_response_has_another_token_and_each_is_accepted/1,
+         post_without_the_cookie_is_refused/1,
+         post_with_the_token_of_another_client_is_refused/1,
+         token_that_was_changed_is_refused/1,
+         token_of_another_secret_is_refused/1,
+         token_of_the_previous_secret_is_accepted_while_it_is_listed/1,
+         signing_in_moves_the_token_to_the_new_session/1,
+         token_stays_good_while_the_session_is_written/1,
+         session_token_of_an_open_form_is_accepted/1]).
+
+-define(SECRET, ~"a secret of thirty-two bytes or more, for the tests").
+-define(OTHER_SECRET, ~"another secret of thirty-two bytes or more, for them").
+
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
 all() ->
-    [first_visit_starts_a_session_with_a_token,
-     token_stays_the_same_within_a_session,
-     view_receives_the_token,
-     post_without_a_token_is_refused,
-     post_without_a_session_is_refused,
-     post_with_the_token_in_the_header_is_accepted,
-     post_with_the_token_in_the_form_is_accepted,
-     post_with_a_wrong_token_is_refused,
-     post_with_the_token_of_another_session_is_refused,
-     other_unsafe_methods_are_refused_too,
-     excluded_path_needs_no_token,
-     path_next_to_an_excluded_one_needs_a_token].
+    [{group, session}, {group, stateless}].
+
+groups() ->
+    Either = [view_receives_the_token,
+              post_without_a_token_is_refused,
+              post_with_the_token_in_the_header_is_accepted,
+              post_with_the_token_in_the_form_is_accepted,
+              post_with_a_wrong_token_is_refused,
+              other_unsafe_methods_are_refused_too,
+              excluded_path_needs_no_token,
+              path_next_to_an_excluded_one_needs_a_token],
+    [{session, [], [first_visit_starts_a_session_with_a_token,
+                    token_stays_the_same_within_a_session,
+                    post_without_a_session_is_refused,
+                    post_with_the_token_of_another_session_is_refused
+                    | Either]},
+     {stateless, [], [first_visit_gets_a_cookie_and_no_session,
+                      every_response_has_another_token_and_each_is_accepted,
+                      post_without_the_cookie_is_refused,
+                      post_with_the_token_of_another_client_is_refused,
+                      token_that_was_changed_is_refused,
+                      token_of_another_secret_is_refused,
+                      token_of_the_previous_secret_is_accepted_while_it_is_listed,
+                      signing_in_moves_the_token_to_the_new_session,
+                      token_stays_good_while_the_session_is_written,
+                      session_token_of_an_open_form_is_accepted
+                      | Either]}].
 
 init_per_suite(Config) ->
     {ok, nova_csrf_pages_dtl} =
@@ -43,6 +73,7 @@ init_per_suite(Config) ->
                 routes => [{"/token", fun nova_csrf_pages:token/1, #{methods => [get]}},
                            {"/form", fun nova_csrf_pages:form/1, #{methods => [get]}},
                            {"/submit", fun nova_csrf_pages:submit/1, #{methods => [post, put, patch, delete]}},
+                           {"/sign-in", fun nova_csrf_pages:sign_in/1, #{methods => [post]}},
                            {"/hooks/incoming", fun nova_csrf_pages:submit/1, #{methods => [post]}},
                            {"/hooks-admin", fun nova_csrf_pages:submit/1, #{methods => [post]}}]}],
     [{port, nova_test_listener:start(#{host => Routes})} | Config].
@@ -52,6 +83,25 @@ end_per_suite(_Config) ->
     code:purge(nova_csrf_pages_dtl),
     code:delete(nova_csrf_pages_dtl),
     ok.
+
+init_per_group(stateless, Config) ->
+    [{csrf_secret, ?SECRET} | Config];
+init_per_group(session, Config) ->
+    Config.
+
+end_per_group(_Group, _Config) ->
+    ok.
+
+%% The setting is read for every request, so a case can change it.
+init_per_testcase(_Case, Config) ->
+    case proplists:get_value(csrf_secret, Config) of
+        undefined -> ok;
+        Secret -> application:set_env(nova, csrf_secret, Secret)
+    end,
+    Config.
+
+end_per_testcase(_Case, _Config) ->
+    application:unset_env(nova, csrf_secret).
 
 first_visit_starts_a_session_with_a_token(Config) ->
     {200, Headers, Token} = nova_test_listener:response(?config(port, Config), "GET", "/csrf/token", []),
@@ -63,9 +113,11 @@ token_stays_the_same_within_a_session(Config) ->
     ?assertEqual({200, Token}, request(Config, "GET", "/csrf/token", [Cookie], <<>>)).
 
 view_receives_the_token(Config) ->
-    {Cookie, Token} = session(Config),
-    ?assertEqual({200, <<"<input name=\"_csrf_token\" value=\"", Token/binary, "\">">>},
-                 request(Config, "GET", "/csrf/form", [Cookie], <<>>)).
+    {Cookie, _Token} = session(Config),
+    {200, Form} = request(Config, "GET", "/csrf/form", [Cookie], <<>>),
+    [~"<input name=", ~"_csrf_token", ~" value=", Token, ~">"] = binary:split(Form, ~"\"", [global]),
+    ?assertEqual({200, ~"submitted"},
+                 request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Token}], <<>>)).
 
 post_without_a_token_is_refused(Config) ->
     {Cookie, _Token} = session(Config),
@@ -113,10 +165,100 @@ excluded_path_needs_no_token(Config) ->
 path_next_to_an_excluded_one_needs_a_token(Config) ->
     ?assertMatch({403, _}, request(Config, "POST", "/csrf/hooks-admin", [], <<>>)).
 
+%% Nothing is kept for a visitor: the token is signed for the id the
+%% response hands out in the session cookie.
+first_visit_gets_a_cookie_and_no_session(Config) ->
+    Sessions = ets:info(nova_session_ets_entries, size),
+    {{"cookie", <<"session_id=", SessionId/binary>>}, Token} = session(Config),
+    ?assertEqual(64, byte_size(Token)),
+    ?assertNot(nova_session_ets:session_exists(SessionId)),
+    [session(Config) || _ <- lists:seq(1, 20)],
+    ?assertEqual(Sessions, ets:info(nova_session_ets_entries, size)).
+
+every_response_has_another_token_and_each_is_accepted(Config) ->
+    {Cookie, First} = session(Config),
+    {200, Second} = request(Config, "GET", "/csrf/token", [Cookie], <<>>),
+    ?assertNotEqual(First, Second),
+    [?assertEqual({200, ~"submitted"}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Token}], <<>>))
+     || Token <- [First, Second, First]].
+
+post_without_the_cookie_is_refused(Config) ->
+    {_Cookie, Token} = session(Config),
+    {403, Headers, _Body} =
+        nova_test_listener:response(?config(port, Config), "POST", "/csrf/submit", [{"x-csrf-token", Token}], <<>>),
+    ?assertNot(is_map_key(~"set-cookie", Headers)).
+
+post_with_the_token_of_another_client_is_refused(Config) ->
+    {Cookie, _Token} = session(Config),
+    {_OtherCookie, OtherToken} = session(Config),
+    ?assertMatch({403, _}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", OtherToken}], <<>>)).
+
+token_that_was_changed_is_refused(Config) ->
+    {Cookie, <<First, Rest/binary>> = Token} = session(Config),
+    Flipped = <<(case First of $A -> $B; _ -> $A end), Rest/binary>>,
+    [?assertMatch({Changed, {403, _}},
+                  {Changed, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Changed}], <<>>)})
+     || Changed <- [Flipped, binary:part(Token, 0, 63), <<Token/binary, "A">>, binary:copy(~"!", 64),
+                    binary:copy(~"A", 64), base64:encode(crypto:strong_rand_bytes(32))]].
+
+token_of_another_secret_is_refused(Config) ->
+    {Cookie, Token} = session(Config),
+    application:set_env(nova, csrf_secret, ?OTHER_SECRET),
+    ?assertMatch({403, _}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Token}], <<>>)).
+
+%% The first secret signs and every secret in the list is accepted, so a
+%% form that was open when the secret was changed can still be sent.
+token_of_the_previous_secret_is_accepted_while_it_is_listed(Config) ->
+    {Cookie, Old} = session(Config),
+    application:set_env(nova, csrf_secret, [?OTHER_SECRET, ?SECRET]),
+    ?assertEqual({200, ~"submitted"}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Old}], <<>>)),
+    {200, New} = request(Config, "GET", "/csrf/token", [Cookie], <<>>),
+    application:set_env(nova, csrf_secret, ?OTHER_SECRET),
+    ?assertEqual({200, ~"submitted"}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", New}], <<>>)),
+    ?assertMatch({403, _}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Old}], <<>>)).
+
+%% The id a visitor was handed is not one a session is stored under, so
+%% signing in moves the client to another id. A token is for the id it was
+%% signed for.
+signing_in_moves_the_token_to_the_new_session(Config) ->
+    {Cookie, Token} = session(Config),
+    {200, Headers, ~"signed in"} =
+        nova_test_listener:response(?config(port, Config), "POST", "/csrf/sign-in", [Cookie, {"x-csrf-token", Token}], <<>>),
+    SignedIn = cookie(Headers),
+    ?assertNotEqual(Cookie, SignedIn),
+    ?assertMatch({403, _}, request(Config, "POST", "/csrf/submit", [SignedIn, {"x-csrf-token", Token}], <<>>)),
+    {200, New} = request(Config, "GET", "/csrf/token", [SignedIn], <<>>),
+    ?assertEqual({200, ~"submitted"}, request(Config, "POST", "/csrf/submit", [SignedIn, {"x-csrf-token", New}], <<>>)).
+
+token_stays_good_while_the_session_is_written(Config) ->
+    {Cookie, Token} = session(Config),
+    {200, Headers, ~"signed in"} =
+        nova_test_listener:response(?config(port, Config), "POST", "/csrf/sign-in", [Cookie, {"x-csrf-token", Token}], <<>>),
+    SignedIn = cookie(Headers),
+    {200, New} = request(Config, "GET", "/csrf/token", [SignedIn], <<>>),
+    {200, AgainHeaders, ~"signed in"} =
+        nova_test_listener:response(?config(port, Config), "POST", "/csrf/sign-in", [SignedIn, {"x-csrf-token", New}], <<>>),
+    ?assertNot(is_map_key(~"set-cookie", AgainHeaders)),
+    ?assertEqual({200, ~"submitted"}, request(Config, "POST", "/csrf/submit", [SignedIn, {"x-csrf-token", New}], <<>>)).
+
+%% A form that was rendered while the tokens were kept in the session store
+%% holds the token of its session, which is still there to compare with.
+session_token_of_an_open_form_is_accepted(Config) ->
+    application:unset_env(nova, csrf_secret),
+    {Cookie, SessionToken} = session(Config),
+    ?assertEqual(44, byte_size(SessionToken)),
+    application:set_env(nova, csrf_secret, ?SECRET),
+    ?assertEqual({200, ~"submitted"},
+                 request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", SessionToken}], <<>>)),
+    ?assertMatch({403, _}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", ~"wrong"}], <<>>)).
+
 session(Config) ->
     {200, Headers, Token} = nova_test_listener:response(?config(port, Config), "GET", "/csrf/token", []),
+    {cookie(Headers), Token}.
+
+cookie(Headers) ->
     [SessionCookie | _Attributes] = binary:split(maps:get(~"set-cookie", Headers), ~";"),
-    {{"cookie", SessionCookie}, Token}.
+    {"cookie", SessionCookie}.
 
 request(Config, Method, Path, Headers, Body) ->
     {Status, _Headers, ResponseBody} =

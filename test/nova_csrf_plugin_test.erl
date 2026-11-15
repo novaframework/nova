@@ -259,3 +259,54 @@ setup_meck(Modules) ->
 
 cleanup_meck(Modules) ->
     [meck:unload(M) || M <- Modules].
+
+%%====================================================================
+%% csrf_token and csrf_secret
+%%====================================================================
+
+-define(SECRET, ~"a secret of thirty-two bytes or more, for the tests").
+
+tokens_test_() ->
+    Settings = fun(Token, Secret) ->
+                       fun() ->
+                               [application:set_env(nova, Key, Value)
+                                || {Key, Value} <- [{csrf_token, Token}, {csrf_secret, Secret}], Value =/= unset],
+                               try nova_csrf_plugin:tokens()
+                               catch throw:Thrown -> Thrown
+                               after
+                                   application:unset_env(nova, csrf_token),
+                                   application:unset_env(nova, csrf_secret)
+                               end
+                       end
+               end,
+    Short = binary:copy(~"s", 31),
+    [{lists:flatten(io_lib:format("~0p with ~0p", [Token, Secret])), ?_assertEqual(Expected, (Settings(Token, Secret))())}
+     || {Token, Secret, Expected} <- [{unset, unset, session},
+                                      {session, unset, session},
+                                      {session, ?SECRET, session},
+                                      {unset, ?SECRET, {stateless, [?SECRET]}},
+                                      {stateless, ?SECRET, {stateless, [?SECRET]}},
+                                      {stateless, [?SECRET, <<?SECRET/binary, "2">>],
+                                       {stateless, [?SECRET, <<?SECRET/binary, "2">>]}},
+                                      {stateless, unset, {error, csrf_secret_not_set}},
+                                      {signed, ?SECRET, {error, {invalid_csrf_token, signed}}},
+                                      {unset, Short, {error, invalid_csrf_secret}},
+                                      {unset, [?SECRET, Short], {error, invalid_csrf_secret}},
+                                      {unset, [], {error, invalid_csrf_secret}},
+                                      {unset, "a string of thirty-two characters or more", {error, invalid_csrf_secret}},
+                                      {session, Short, {error, invalid_csrf_secret}}]].
+
+secret_is_not_logged_test() ->
+    Short = ~"too-short-to-sign-with",
+    application:set_env(nova, csrf_secret, Short),
+    try
+        {Thrown, Events} = nova_test_log:collect(fun() ->
+                                                         try nova_csrf_plugin:tokens()
+                                                         catch throw:Reason -> Reason
+                                                         end
+                                                 end),
+        ?assertEqual({error, invalid_csrf_secret}, Thrown),
+        ?assertEqual(nomatch, binary:match(iolist_to_binary(io_lib:format("~0p", [Events])), Short))
+    after
+        application:unset_env(nova, csrf_secret)
+    end.

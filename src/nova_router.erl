@@ -148,6 +148,7 @@ compile_fresh(Apps, DispatchKey) ->
     StorageBackend = storage_backend(),
     _ = non_canonical_paths(),
     _ = nova_origin:configured(),
+    _ = nova_csrf_plugin:tokens(),
     StorageBackend:put(apps_key(DispatchKey), []),
     Dispatch = compile(Apps, nova_routing_trie:new(#{strict => UseStrict}),
                        #{dispatch_key => DispatchKey}),
