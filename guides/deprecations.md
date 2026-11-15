@@ -273,9 +273,7 @@ of `{Module, Function}` in Nova.
 
 - **The cookie is `Secure` unless `{nova, [{environment, dev}]}` is set.**
   It used to be `Secure` only when the request came in over HTTPS, which a
-  proxy that terminates TLS hides. An unset `environment` counts as not
-  `dev` for the cookie, although `nova:get_environment/0` returns `dev` for
-  it. Local development over plain HTTP without that setting loses the
+  proxy that terminates TLS hides. An unset `environment` is `prod`. Local development over plain HTTP without that setting loses the
   session cookie, as does a staging environment served over plain HTTP; set
   `{nova, [{environment, dev}]}` or `#{secure => false}` in
   `session_cookie_opts`.
