@@ -5,8 +5,8 @@ All kind of operations on sessions is handled by the nova_session-module. The mo
 
 The session id lives in the `session_id` cookie (see `session_cookie_name` in
 the configuration guide). `nova_stream_h` issues it with the response of the
-first request that writes to the session, so visitors that never store
-anything get no cookie. A request carrying two or more different session ids
+first request that writes to the session or calls `client_id/1`, so visitors
+that do neither get no cookie. A request carrying two or more different session ids
 is treated as having no session. A request whose Cookie header does not parse
 gets a session for that request only and no cookie, so a session cookie the
 client already holds is not overwritten.
