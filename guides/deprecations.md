@@ -114,8 +114,7 @@ of `{Module, Function}` in Nova.
 
 - **A JSON object that has a key twice is refused.** With the default
   `json_lib`, a body such as `{"role":"user","role":"admin"}` is answered
-  with a bare `400` by `decode_json_body`, and `nova_json:decode/1` returns
-  `{error, duplicate_key}` for it. The library that was the default before
+  with a bare `400` by `decode_json_body`. The library that was the default before
   kept the last value of the key and OTP's `json` keeps the first, so a
   callback that checks the body and the code behind it could each have gone
   by another one. Bytes that follow the JSON value, other than whitespace,
