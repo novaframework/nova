@@ -89,8 +89,13 @@ to a log, or shows them on an error page, it:
 `redact_keys` adds key fragments of your own. The rules are listed in
 [Configuration](configuration.md#redaction-in-logs-and-error-pages).
 
-A `csrf_secret` that Nova refuses at boot is not written anywhere: the log
+A `secret_key_base` that Nova refuses at boot is not written anywhere: the log
 entry and the reason `nova_sup` fails with have `redacted` in its place.
+
+The warning for a JSON body that does not decode has nothing of the body, and
+not the reason of the JSON library, which can hold bytes of it. It has the
+kind of error under `error` and, from OTP's `json`, where it is under
+`position`.
 
 This covers what Nova logs. What your application and other libraries log is
 only covered when the handler uses `nova_jsonlogger` with `redact => true`.
@@ -132,14 +137,18 @@ for.
 | `Starting nova` | notice | Nova is starting, with the `environment` it uses |
 | `Nova is running` | notice | The listener is accepting connections |
 | `The environment key of the nova application is not set and is read as prod: ...` | notice | `environment` is not set. Routers get `prod` and nothing meant for development is on. The report has `key` and `read_as`. Set `{environment, dev}` for development |
-| `non_canonical_paths must be reject or resolve`, `allowed_origins must be same_host, same_origin, any or a list of origins`, `csrf_token must be stateless or session`, `csrf_secret must be a binary of at least 32 bytes, or a list of such`, `max_sessions must be infinity or an integer above 0`, `plugins_before_security must be all or a list of plugin modules that have pre_request/4` | error | A [setting checked at boot](configuration.md#settings-checked-at-boot) has a value that cannot be used. The report has the `setting` and the `value`, which is `redacted` for `csrf_secret`. Nova does not start. The one for `allowed_origins` is also logged for the option of `nova_csrf_plugin` and `nova_ws_origin_plugin`, with the `app`, the `prefix` and the `plugin` |
-| `csrf_token is stateless and csrf_secret is not set` | error | Signed tokens are asked for and there is no secret. Nova does not start |
+| `non_canonical_paths must be reject or resolve`, `trusted_origins must be same_host, same_origin, any or a list of origins`, `csrf_token must be stateless or session`, `secret_key_base must be a binary of at least 32 bytes out of a random source, or a list of such. ...`, `max_sessions must be infinity or an integer above 0`, `plugins_before_security must be all or a list of plugin modules that have pre_request/4` | error | A [setting checked at boot](configuration.md#settings-checked-at-boot) has a value that cannot be used. The report has the `setting` and the `value`, which is `redacted` for `secret_key_base`. Nova does not start. The one for `trusted_origins` is also logged for the option of `nova_csrf_plugin` and `nova_ws_origin_plugin`, with the `app`, the `prefix` and the `plugin` |
+| `csrf_token is stateless and secret_key_base, which signs the tokens, is not set` | error | Signed tokens are asked for and there is no secret. Nova does not start |
+| `csrf_token is stateless and use_sessions is false. ...` | error | Signed tokens are asked for on a node without sessions. Nova does not start |
+| `nova_csrf_plugin keeps its token in the session, or signs it for the session cookie, and use_sessions is false` | error | A route group lists `nova_csrf_plugin` on a node without sessions. The report has the `app`, the `prefix` and the `plugin`. Nova does not start |
+| `allowed_origins is now trusted_origins, with the values it had`, `csrf_secret is now secret_key_base: ...`, `plugins_after_security is gone. ...` | error | A key that was in no release is still set, in the `nova` environment, in a route group or as the option of a plugin. The report has the `setting` and what it is `replaced_by`. Nova does not start |
 | `plugins_before_security of a route group must be all or a list of its pre_request plugins that have pre_request/4` | error | The key of a route group names a module that is not one of its `pre_request` plugins or has no `pre_request/4`. The report has the `app`, the `prefix` and the `value`. Nova does not start |
-| `plugins_after_security must be a list of plugin modules` | error | The key of a route group or of the `nova` environment is not a list of module names. Nova does not start |
-| `csrf_secret is not set, so nova_csrf_plugin keeps its tokens in the session store and starts a session for every visitor. ...` | notice | `nova_csrf_plugin` is used and neither `csrf_secret` nor `csrf_token` is set. See [CSRF token modes](plugins.md#csrf-token-modes) |
-| `The security callback of this route group runs before nova_request_plugin reads the body, ...` | warning | See [Warnings about the order](plugins.md#warnings-about-the-order). The report has the `app`, the `prefix` and the `plugins` |
-| `pre_request/4 of these plugins runs once the security callback of this route group has let a request through, ...` | warning | The same |
-| `pre_request/4 of these plugins does not run for a CORS preflight to a route of this group that does not take OPTIONS. ...` | warning | The same |
+| `security_reads_body of a route group must be true or false, and true needs the plugin that decodes the body to be listed under plugins_before_security` | error | `security_reads_body` of a route group is not a boolean, or is `true` while the body is decoded behind the security callback. The report has the `app`, the `prefix` and the `value`, which is `{requires, plugins_before_security}` for the second. Nova does not start |
+| `secret_key_base is not set, so nova_csrf_plugin keeps its tokens in the session store and starts a session for every visitor. ...` | notice | `nova_csrf_plugin` is used and neither `secret_key_base` nor `csrf_token` is set. See [CSRF token modes](plugins.md#csrf-token-modes) |
+| `The security callback of this route group runs before nova_request_plugin reads the body, ...` | warning | `notice => body_behind_security`. See [Warnings about the order](plugins.md#warnings-about-the-order). The report has the `app`, the `prefix`, the `plugins` and, under `notice`, which of the four it is. `security_reads_body => false` in the route group ends it |
+| `The security callback of this route group runs before nova_request_plugin reads the form, ...` | notice | `notice => form_behind_security`. The same, for a route group that reads a form for the token of `nova_csrf_plugin`. `security_reads_body => false` ends it |
+| `pre_request/4 of these plugins runs once the security callback of this route group has let a request through, ...` | warning | `notice => pre_request_behind_security`. The same, for a plugin from outside Nova without `pre_security/4` |
+| `pre_request/4 of these plugins does not run for a CORS preflight to a route of this group that does not take OPTIONS, ...` | warning | `notice => pre_request_not_for_preflight`. The same |
 | `You need to define bootstrap_application option in configuration` | error | `bootstrap_application` is missing. Nova does not start |
 | `Cowboy could not start` | error | The listener could not be started, for instance because the port is in use. Nova does not start |
 | `Could not start cowboy with SSL` | error | The TLS listener could not be started, for instance because a certificate cannot be read. Nova does not start |
@@ -180,6 +189,7 @@ for.
 | `Template could not find application` | warning | A `url` tag names an application Nova has not compiled, or none. It rendered `#` |
 | `Static directory cannot be served` | error | The directory of a static route is gone, cannot be read or cannot be resolved. Logged once per directory, with the first request under it. The request got a `404` |
 | `Static file cannot be served` | error | The file of a static route to a single file is gone or cannot be read. Logged once per file. The request got a `404` |
+| `Request refused` | warning | `nova_request_plugin` answered a request it could not decode. The report has the `status_code` and a `reason`: `Malformed JSON body`, `Empty JSON body`, `Malformed urlencoded body`, `Too many fields in the urlencoded body` or `Malformed query string`. For a JSON body it also has the kind of error under `error` and, from OTP's `json`, its `position`. Nothing the client sent is logged |
 | `Invalid nova_request_plugin option, using the default` | warning | `max_body_length` or `body_read_timeout` has a value that is not valid |
 | `nova_multipart_plugin needs handler => {Mod, InitArgs}.` | error | The plugin is configured without a handler |
 | `logger_metadata_key of nova_correlation_plugin is a binary that names no atom this node knows. ...` | error | The option is a binary that is not the name of an existing atom. The id is logged under `'correlation-id'`. Logged once per key, with the first request |
@@ -194,4 +204,5 @@ for.
 | `Request carried more than one session cookie, treated as no session ...` | warning | A cookie of the same name is set for a parent domain or another path. Use a `__Host-` cookie name |
 | `Session store is full. Sessions are dropped to make room for new ones, provisional ones first, and a provisional one is refused when there is none to drop` | warning | `max_sessions` is reached, and a session that had not expired was dropped or a write was refused. Logged at most once a minute, with the number of `sessions` and `max_sessions`. See [Sessions](sessions.md#when-the-session-store-is-full) |
 | `Session backend failed to look up a session` | warning | `session_exists/1` of the session backend raised an exception. The presented session id is treated as unknown |
+| `Session backend failed to say whether a session has ended` | warning | `session_ended/1` of the session backend raised an exception. The session is taken to have ended, so nothing is stored under the presented id |
 | `Session called but the 'use_sessions' option is set to false` | error | `nova_session` was called with sessions turned off |
