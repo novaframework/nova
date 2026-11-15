@@ -403,7 +403,8 @@ format_status_passthrough() ->
 %% ExpiresAt}; a hot upgrade converts the rows of both and leaves the ones it
 %% already converted alone.
 code_change_converts_old_rows() ->
-    Pid = whereis(nova_session_ets),
+    Pid = nova_session_ets,
+    Started = whereis(Pid),
     Soon = erlang:system_time(millisecond) + 60000,
     Past = erlang:system_time(millisecond) - 1,
     ok = nova_session_ets:set_value(~"current", ~"k", ~"v"),
@@ -425,12 +426,12 @@ code_change_converts_old_rows() ->
     [?assertEqual({Id, {ok, ~"v2"}}, {Id, nova_session_ets:get_value(Id, ~"k2")}) || Id <- Live],
     ?assertEqual({error, not_found}, nova_session_ets:get_value(~"three-expired", ~"k")),
     ?assertMatch([{~"three", _, Soon, kept}], ets:lookup(nova_session_ets_entries, ~"three")),
-    Pid ! sweep,
+    Started ! sweep,
     ok = gen_server:call(Pid, sync),
     ?assertEqual([], ets:lookup(nova_session_ets_entries, ~"three-expired")),
     ?assertEqual(4, ets:info(nova_session_ets_entries, size)),
     ?assertEqual(4, ets:info(nova_session_ets_expiry, size)),
-    ?assertEqual(Pid, whereis(nova_session_ets)).
+    ?assertEqual(Started, whereis(Pid)).
 
 terminate_returns_ok() ->
     ?assertEqual(ok, nova_session_ets:terminate(normal, #{})).

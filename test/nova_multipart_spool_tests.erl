@@ -118,9 +118,9 @@ owner_without_files_is_no_longer_watched(Dir) ->
     fun() ->
         Path = filename:join(Dir, "upload"),
         spool(Path, ~"data"),
-        ?assertEqual({monitors, [{process, self()}]}, process_info(whereis(nova_multipart_spool), monitors)),
+        ?assertEqual([{process, self()}], watched()),
         ok = nova_multipart_spool:discard(Path),
-        ?assertEqual({monitors, []}, process_info(whereis(nova_multipart_spool), monitors))
+        ?assertEqual([], watched())
     end.
 
 path_tracked_again_starts_over(Dir) ->
@@ -173,6 +173,13 @@ stopping_the_spool_deletes_what_it_tracks(Dir) ->
         ok = gen_server:stop(nova_multipart_spool),
         ?assertEqual({error, enoent}, file:read_file(Path)),
         ?assertEqual({error, spool_not_running}, nova_multipart_spool:track(Path))
+    end.
+
+watched() ->
+    case whereis(nova_multipart_spool) of
+        Spool when is_pid(Spool) ->
+            {monitors, Monitors} = process_info(Spool, monitors),
+            Monitors
     end.
 
 spool(Path, Data) ->
