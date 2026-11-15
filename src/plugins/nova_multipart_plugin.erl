@@ -28,15 +28,16 @@ Multipart fields win over `params` set by an earlier plugin, and a repeated fiel
 -doc """
 Reads the body of a `multipart/form-data` request. `Options` needs
 `handler => {Mod, InitArgs}`, a `nova_multipart_handler`, and takes the
-limits `max_parts`, `max_part_size`, `max_field_size`, `max_total_size` and
-`read_timeout`.
+limits `max_parts`, `max_part_size`, `max_field_size`, `max_total_size`,
+`read_timeout` and `chunk_timeout`.
 
 Returns `{ok, Req, State}` with `params` and `files` set in the request. A
 request the plugin refuses is answered here and ends with
 `{stop, Req, State}`: `400` for a malformed body or a part the handler
-rejects, `408` when the body is not read within `read_timeout`, `413` past a
-limit, `503` when the handler reports `spool_full`, and `500` when the
-handler fails or the plugin has no handler.
+rejects, `408` when the body is not read within `read_timeout` or its next
+64 000 bytes do not arrive within `chunk_timeout`, `413` past a limit, `503`
+when the handler reports `spool_full`, and `500` when the handler fails or
+the plugin has no handler. A `408` over HTTP/1 carries `connection: close`.
 """.
 -spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
           {ok, Req0 :: cowboy_req:req(), NewState :: any()} |

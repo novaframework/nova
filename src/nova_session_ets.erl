@@ -104,13 +104,22 @@ get_value(SessionId, Key) ->
 %% which may arrive as soon as the response is out, already sees it.
 -doc """
 Stores `Value` under `Key` in the session, on every node, and creates the
-session when it does not exist. Returns `{error, session_store_full}` when
-that would take the table past `max_sessions`.
+session when it does not exist. A provisional session becomes an ordinary
+one. In a full table a new session takes the place of another one, as the
+module documentation describes. Returns `{error, session_store_full}` when
+the session is not in the table of this node after the write.
 """.
 -spec set_value(SessionId :: binary(), Key :: binary(), Value :: term()) -> ok | {error, session_store_full}.
 set_value(SessionId, Key, Value) ->
     write(kept, "set_value", SessionId, Key, Value).
 
+-doc """
+Stores `Value` under `Key` like `set_value/3`, and creates a provisional
+session when the session does not exist. A session that exists keeps its
+kind. In a full table a new provisional session takes the place of an
+expired or another provisional one. Returns `{error, session_store_full}`
+when there is none of those to drop.
+""".
 -spec set_provisional_value(SessionId :: binary(), Key :: binary(), Value :: term()) ->
           ok | {error, session_store_full}.
 set_provisional_value(SessionId, Key, Value) ->

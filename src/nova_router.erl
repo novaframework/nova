@@ -735,8 +735,8 @@ that the returned `{ok, Req, Env}` is handed to.
 
 The page is the route registered for `StatusCode` on `Host`, or the page of
 Nova when there is none. Its controller is called with the request, which
-has `StatusCode` under `resp_status_code`. `Data` is put under
-`controller_data` in the returned environment.
+has `StatusCode` under `resp_status_code` and `#{status => StatusCode,
+data => Data}` under `controller_data`.
 """.
 -spec render_status_page(Host :: binary() | atom(),
                          StatusCode :: integer(),

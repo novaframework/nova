@@ -36,7 +36,9 @@ These callbacks run for HTTP requests. Websocket handlers run their plugins thro
 -doc """
 A reply a plugin hands to Nova to send. `{reply, ...}` takes a body, with a
 status of `200` unless one is given. `{redirect, Url}` answers `302` with a
-`location` header. `{status, ...}` answers with that status and no body.
+`location` header. `{redirect_local, Path}` does the same for a path on the
+site the request was made to, and answers `400` for anything else.
+`{status, ...}` answers with that status and no body.
 """.
 -type reply() :: {reply, Body :: iodata()} |
                  {reply, Status :: integer(), Body :: iodata()} |

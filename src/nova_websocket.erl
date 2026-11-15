@@ -72,7 +72,8 @@ What `websocket_init/1`, `websocket_handle/2` and `websocket_info/2` return.
 - `{stop, State}` closes the connection.
 
 With `hibernate` as the last element the connection process hibernates until
-the next frame or message.
+the next frame or message. Any other return is logged as an error and closes
+the connection.
 """.
 -type call_result() :: {ok, State :: map()} |
                        {ok, State :: map(), hibernate} |

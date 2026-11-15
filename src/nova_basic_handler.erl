@@ -354,7 +354,9 @@ It returns the state with the new controller data. The frames of a `reply`,
 one frame or a list of them, are queued for sending, and `hibernate` is
 noted. `{stop, ControllerData}` gives `{stop, State}`, which closes the
 connection. A bare `ok` leaves the state as it is. Any other return value
-matches no clause and crashes the connection process.
+matches no clause: Nova logs
+`Websocket handler failed on what the controller returned` and closes the
+connection.
 """.
 handle_ws({reply, Frames, NewControllerData}, State = #{commands := Commands}) ->
     State#{controller_data => NewControllerData,
