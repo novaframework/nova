@@ -39,7 +39,7 @@ get_falls_back_to_cookie_test() ->
         SessionId = <<"cookie-session-id">>,
         meck:expect(nova_session_ets, get_value,
                     fun(SId, <<"key">>) when SId =:= SessionId -> {ok, <<"val">>} end),
-        Req = req_with_cookie_header(<<"session_id=", SessionId/binary>>),
+        Req = req_with_cookie_header(<<"__Host-session_id=", SessionId/binary>>),
         ?assertEqual({ok, <<"val">>}, nova_session:get(Req, <<"key">>))
     after
         cleanup_meck()
@@ -70,7 +70,7 @@ set_returns_error_when_no_session_test() ->
 get_returns_error_when_cookie_header_does_not_parse_test() ->
     setup_meck(),
     try
-        Req = req_with_cookie_header(~"session_id=cookie-session-id; =x"),
+        Req = req_with_cookie_header(~"__Host-session_id=cookie-session-id; =x"),
         ?assertExit({request_error, {header, ~"cookie"}, _}, cowboy_req:parse_cookies(Req)),
         ?assertEqual({error, not_found}, nova_session:get(Req, <<"key">>)),
         ?assertEqual(0, meck:num_calls(nova_session_ets, get_value, '_'))
@@ -84,7 +84,7 @@ nova_session_id_takes_priority_over_cookie_test() ->
         ReqSessionId = <<"req-session-id">>,
         meck:expect(nova_session_ets, get_value,
                     fun(SId, <<"key">>) when SId =:= ReqSessionId -> {ok, <<"val">>} end),
-        Req = (req_with_cookie_header(~"session_id=cookie-session-id"))#{nova_session_id => ReqSessionId},
+        Req = (req_with_cookie_header(~"__Host-session_id=cookie-session-id"))#{nova_session_id => ReqSessionId},
         ?assertEqual({ok, <<"val">>}, nova_session:get(Req, <<"key">>))
     after
         cleanup_meck()
@@ -104,6 +104,7 @@ req_with_cookie_header(Cookie) ->
     #{headers => #{~"cookie" => Cookie}}.
 
 setup_meck() ->
+    application:unset_env(nova, environment),
     meck:new(nova_session_ets, [passthrough]),
     application:set_env(nova, session_manager, nova_session_ets).
 

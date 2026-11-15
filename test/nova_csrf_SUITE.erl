@@ -156,7 +156,7 @@ end_per_testcase(_Case, _Config) ->
     nova_test_settings:unset(secret_key_base).
 
 first_visit_starts_a_session_with_a_token(Config) ->
-    {{"cookie", <<"session_id=", SessionId/binary>>}, Token} = session(Config),
+    {{"cookie", <<"__Host-session_id=", SessionId/binary>>}, Token} = session(Config),
     {ok, <<Stored:44/binary>>} = nova_session_ets:get_value(SessionId, ~"_csrf_token"),
     ?assertEqual(Stored, unmasked(Token)).
 
@@ -262,7 +262,7 @@ path_next_to_an_excluded_one_needs_a_token(Config) ->
 %% response hands out in the session cookie.
 first_visit_gets_a_cookie_and_no_session(Config) ->
     Sessions = ets:info(nova_session_ets_entries, size),
-    {{"cookie", <<"session_id=", SessionId/binary>>}, Token} = session(Config),
+    {{"cookie", <<"__Host-session_id=", SessionId/binary>>}, Token} = session(Config),
     ?assertEqual(64, byte_size(Token)),
     ?assertNot(nova_session_ets:session_exists(SessionId)),
     [session(Config) || _ <- lists:seq(1, 20)],
@@ -339,7 +339,7 @@ signing_in_moves_the_token_to_the_new_session(Config) ->
     ?assertMatch({403, _}, request(Config, "POST", "/csrf/submit", [SignedIn, {"x-csrf-token", Token}], <<>>)),
     {200, New} = request(Config, "GET", "/csrf/token", [SignedIn], <<>>),
     ?assertEqual({200, ~"submitted"}, request(Config, "POST", "/csrf/submit", [SignedIn, {"x-csrf-token", New}], <<>>)),
-    {"cookie", <<"session_id=", Before/binary>>} = Cookie,
+    {"cookie", <<"__Host-session_id=", Before/binary>>} = Cookie,
     ?assertNot(nova_session_ets:session_exists(Before)).
 
 %% Session fixation with an id Nova signed. Somebody gets one with a page,
@@ -348,7 +348,7 @@ signing_in_moves_the_token_to_the_new_session(Config) ->
 %% it, and must not be the one who signed in.
 planted_id_is_not_signed_in_after_sign_in(Config) ->
     [begin
-         {{"cookie", <<"session_id=", Planted/binary>>} = Cookie, OfThePlanter} = session(Config),
+         {{"cookie", <<"__Host-session_id=", Planted/binary>>} = Cookie, OfThePlanter} = session(Config),
          [{200, ~"written"} = request(Config, "POST", "/csrf/write", [Cookie, {"x-csrf-token", OfThePlanter}], <<>>)
           || Stored],
          ?assertEqual({Stored, Stored}, {Stored, nova_session_ets:session_exists(Planted)}),
@@ -356,7 +356,7 @@ planted_id_is_not_signed_in_after_sign_in(Config) ->
          {200, Headers, ~"signed in"} =
              nova_test_listener:response(?config(port, Config), "POST", "/csrf/sign-in-in-one-call",
                                          [Cookie, {"x-csrf-token", Token}], <<>>),
-         {"cookie", <<"session_id=", Issued/binary>>} = SignedIn = cookie(Headers),
+         {"cookie", <<"__Host-session_id=", Issued/binary>>} = SignedIn = cookie(Headers),
          ?assertNotEqual(Planted, Issued),
          ?assertEqual({200, ~"anonymous"}, request(Config, "GET", "/csrf/who", [Cookie], <<>>)),
          ?assertEqual({200, ~"alice"}, request(Config, "GET", "/csrf/who", [SignedIn], <<>>)),
@@ -370,7 +370,7 @@ planted_id_is_not_signed_in_after_sign_in(Config) ->
 %% stored under when something is first written to it, so the pages that are
 %% open go on working.
 first_write_of_a_visitor_keeps_the_cookie_and_the_token(Config) ->
-    {{"cookie", <<"session_id=", SessionId/binary>>} = Cookie, Token} = session(Config),
+    {{"cookie", <<"__Host-session_id=", SessionId/binary>>} = Cookie, Token} = session(Config),
     ?assertNot(nova_session_ets:session_exists(SessionId)),
     {200, Headers, ~"written"} =
         nova_test_listener:response(?config(port, Config), "POST", "/csrf/write", [Cookie, {"x-csrf-token", Token}], <<>>),
@@ -382,12 +382,12 @@ first_write_of_a_visitor_keeps_the_cookie_and_the_token(Config) ->
 %% gets a token for it like anybody, and is moved off it by the first write.
 id_nobody_handed_out_is_replaced_by_the_first_write(Config) ->
     [begin
-         Cookie = {"cookie", ["session_id=", Planted]},
+         Cookie = {"cookie", ["__Host-session_id=", Planted]},
          {200, Token} = request(Config, "GET", "/csrf/token", [Cookie], <<>>),
          {200, Headers, ~"written"} =
              nova_test_listener:response(?config(port, Config), "POST", "/csrf/write", [Cookie, {"x-csrf-token", Token}],
                                          <<>>),
-         {"cookie", <<"session_id=", Issued/binary>>} = cookie(Headers),
+         {"cookie", <<"__Host-session_id=", Issued/binary>>} = cookie(Headers),
          ?assertNotEqual(iolist_to_binary(Planted), Issued),
          ?assertNot(nova_session_ets:session_exists(iolist_to_binary(Planted))),
          ?assertEqual({ok, ~"1"}, nova_session_ets:get_value(Issued, ~"basket"))
@@ -398,17 +398,17 @@ id_nobody_handed_out_is_replaced_by_the_first_write(Config) ->
 %% character after its last one, which differs in a bit that belongs to no
 %% byte. None of them is the id.
 id_in_another_spelling_is_replaced_by_the_first_write(Config) ->
-    {{"cookie", <<"session_id=", Id/binary>>}, _Token} = session(Config),
+    {{"cookie", <<"__Host-session_id=", Id/binary>>}, _Token} = session(Config),
     <<Half:22/binary, Rest/binary>> = Id,
     <<Front:42/binary, Last, "=">> = Id,
     [begin
          ?assertEqual({Spelling, base64:decode(Id)}, {Spelling, base64:decode(Spelling)}),
-         Cookie = {"cookie", ["session_id=", Spelling]},
+         Cookie = {"cookie", ["__Host-session_id=", Spelling]},
          {200, Token} = request(Config, "GET", "/csrf/token", [Cookie], <<>>),
          {200, Headers, ~"written"} =
              nova_test_listener:response(?config(port, Config), "POST", "/csrf/write", [Cookie, {"x-csrf-token", Token}],
                                          <<>>),
-         {"cookie", <<"session_id=", Issued/binary>>} = cookie(Headers),
+         {"cookie", <<"__Host-session_id=", Issued/binary>>} = cookie(Headers),
          ?assertNot(lists:member(Issued, [Spelling, Id])),
          ?assertNot(nova_session_ets:session_exists(Spelling)),
          ?assertEqual({ok, ~"1"}, nova_session_ets:get_value(Issued, ~"basket"))

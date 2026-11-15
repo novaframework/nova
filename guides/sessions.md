@@ -102,7 +102,7 @@ A `stream_handlers` configuration without `nova_stream_h` keeps storing session 
 
 ## The session cookie
 
-The session id is a random 256-bit value from `crypto:strong_rand_bytes/1`, sent in the `session_id` cookie (`session_cookie_name` changes the name). `nova_stream_h` issues the cookie with the response of the first request that writes to the session, so visitors who never store anything get no cookie and their responses stay cacheable.
+The session id is a random 256-bit value from `crypto:strong_rand_bytes/1`, sent in the `__Host-session_id` cookie, or in `session_id` when the `environment` is `dev` (`session_cookie_name` changes the name, see [The `__Host-` cookie name](#the-__host-cookie-name)). `nova_stream_h` issues the cookie with the response of the first request that writes to the session, so visitors who never store anything get no cookie and their responses stay cacheable.
 
 An id the client presents that the backend does not know (never issued, deleted or expired) is ignored and a new one is used, so a client cannot simply choose its own session id. This is defence in depth; `sign_in/3` is what protects against fixation. The check runs in the request process the first time the request uses the session, not in the connection process.
 
@@ -112,14 +112,17 @@ A session that was deleted, by `delete/1`, `renew/1` or `sign_in/3`, does not co
 
 A request that carries two or more different values for the session cookie, for example because a cookie of the same name was set for a parent domain or another path, is treated as having no session, and a warning is logged once per node.
 
-The cookie is sent with `Path=/`, `HttpOnly`, `SameSite=Lax`, `Max-Age` set to `session_max_age`, and with `Secure` unless `{nova, [{environment, dev}]}` is set (a dev request over HTTPS still gets `Secure`). An unset `environment` counts as not `dev` here, although `nova:get_environment/0` returns `dev` for it. Behind a proxy that terminates TLS Nova sees plain HTTP, which is why `Secure` does not depend on the scheme. A staging environment served over plain HTTP that is not marked `dev` gets a cookie the browser refuses to store, so sessions do not work there until you set `secure => false` in `session_cookie_opts` or serve it over HTTPS:
+The cookie is sent with `Path=/`, `HttpOnly`, `SameSite=Lax`, `Max-Age` set to `session_max_age`, and with `Secure` unless `{nova, [{environment, dev}]}` is set (a dev request over HTTPS still gets `Secure`). An unset `environment` counts as not `dev` here, although `nova:get_environment/0` returns `dev` for it. Behind a proxy that terminates TLS Nova sees plain HTTP, which is why `Secure` does not depend on the scheme. A staging environment served over plain HTTP that is not marked `dev` gets a cookie the browser refuses to store, so sessions do not work there until you serve it over HTTPS, or name the cookie without the `__Host-` prefix and set `secure => false` in `session_cookie_opts`:
 
 ```erlang
 {nova, [
+    {session_cookie_name, <<"session_id">>},
     {session_cookie_opts, #{secure => false}},
     {session_max_age, 86400}
 ]}
 ```
+
+Nova cannot see whether a proxy in front of it has the TLS. So when it starts outside `dev` with a listener that has no TLS and a session cookie that is `Secure`, it logs one notice (`notice => session_cookie_needs_https`) that says what the cookie needs and names these settings. Behind a proxy that terminates TLS there is nothing to change.
 
 The same applies to local development. Over plain HTTP without `{nova, [{environment, dev}]}`, the browser refuses to store the `Secure` session cookie Nova sets (some browsers make an exception for `localhost`). Every request then starts a new, empty session, and signing in seems to do nothing. Set the environment in your development config:
 
@@ -129,13 +132,22 @@ The same applies to local development. Over plain HTTP without `{nova, [{environ
 
 ### The `__Host-` cookie name
 
-A cookie named with the `__Host-` prefix is only accepted by browsers when it is `Secure`, has `Path=/` and no `Domain`, so a sibling or parent domain cannot set or shadow it. New applications should use it:
+A cookie named with the `__Host-` prefix is only accepted by browsers when it is `Secure`, has `Path=/` and no `Domain`, so a sibling or parent domain cannot set or shadow it. When `session_cookie_name` is not set, the session cookie is named `__Host-session_id`, and `session_id` when the `environment` is `dev`, where the site is reached over plain HTTP and a browser would not keep the other.
+
+With a `__Host-` name Nova always sends `Secure` and `Path=/` and drops `domain`, whatever `session_cookie_opts` says, and `Secure` does not depend on the listener: behind a proxy that terminates TLS the browser sees https, and keeps the cookie.
+
+An application that needs what the prefix rules out, a cookie for several hosts of a domain (`domain`), for a part of the site (`path`) or one sent over plain HTTP (`secure => false`), names its cookie:
 
 ```erlang
-{nova, [{session_cookie_name, <<"__Host-session_id">>}]}
+{nova, [
+    {session_cookie_name, <<"session_id">>},
+    {session_cookie_opts, #{domain => <<"example.com">>}}
+]}
 ```
 
-With a `__Host-` name Nova always sends `Secure` and `Path=/` and drops `domain`, whatever `session_cookie_opts` says. Changing the name of an existing application signs every client out once: the old `session_id` cookie is no longer read, so clients get a new session under the new name. The old cookie stays in the browser until it expires.
+With one of those three in `session_cookie_opts` and no `session_cookie_name`, outside `dev`, Nova does not start: `{invalid_setting, session_cookie_opts, {requires, session_cookie_name}}`. It would otherwise send a cookie without what was asked for.
+
+Changing the name of the cookie signs every client out once, and so does an upgrade from a Nova that named it `session_id`: the old cookie is no longer read, so clients get a new session under the new name. The old cookie stays in the browser until it expires. To keep the sessions there are, set `{session_cookie_name, <<"session_id">>}`.
 
 `session_cookie_opts` takes the options of `cowboy_req:set_resp_cookie/4` (`path`, `domain`, `secure`, `http_only`, `same_site`, `max_age`) and is merged over the defaults above. Other keys, and values of the wrong type (a `path` that is not a binary, for example), are ignored. The cookie name must be an RFC 6265 token and `path` and `domain` plain ASCII without control characters or `;`; Nova checks both at boot and refuses to start otherwise, as it does for a name that is empty or not a binary. Changed at runtime to something invalid, `nova_stream_h` (one of the default `stream_handlers`) leaves the cookie off the response and logs one error per cookie name. Without `nova_stream_h`, `renew/1` and `delete/1` set the cookie themselves, and an invalid setting makes them raise, so the request gets a 500.
 

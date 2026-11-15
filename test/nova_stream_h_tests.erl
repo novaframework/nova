@@ -23,6 +23,7 @@ terminate(_StreamID, _Reason, _State) ->
 
 setup() ->
     pg:start_link(nova_scope),
+    application:unset_env(nova, environment),
     application:set_env(nova, bootstrap_application, nova),
     application:set_env(nova, use_sessions, true),
     application:set_env(nova, session_manager, nova_session_ets),
@@ -93,7 +94,7 @@ cookie_issued_when_session_is_written() ->
     {#{nova_session_id := Id}, State} = start(req()),
     State1 = event({written, Id}, State),
     [Cookie] = set_cookies(respond(State1)),
-    ?assertMatch(<<"session_id=", _/binary>>, Cookie),
+    ?assertMatch(<<"__Host-session_id=", _/binary>>, Cookie),
     ?assertEqual(Id, cookie_value(Cookie)).
 
 %% nova_session:client_id/1 hands the id of the request to a client that
@@ -105,7 +106,7 @@ cookie_issued_for_an_id_that_is_handed_out() ->
     ?assertNot(nova_session_ets:session_exists(Id)).
 
 handed_out_id_is_not_issued_over_a_presented_cookie() ->
-    {_Req, State} = start(req(~"session_id=held")),
+    {_Req, State} = start(req(~"__Host-session_id=held")),
     ?assertEqual([], set_cookies(respond(event({issued, ~"other"}, State)))).
 
 handed_out_id_follows_what_the_session_does_next() ->
@@ -132,6 +133,7 @@ dev_cookie_attributes() ->
     application:set_env(nova, environment, dev),
     {#{nova_session_id := Id}, State} = start(req()),
     [Cookie] = set_cookies(respond(event({written, Id}, State))),
+    ?assertMatch(<<"session_id=", _/binary>>, Cookie),
     ?assertEqual(nomatch, binary:match(Cookie, ~"; Secure")).
 
 max_age_infinity_has_no_max_age() ->
@@ -169,19 +171,19 @@ host_prefixed_cookie_name() ->
 two_session_cookies_mean_no_session() ->
     ok = nova_session_ets:set_value(~"one", ~"k", ~"v"),
     ok = nova_session_ets:set_value(~"two", ~"k", ~"v"),
-    {Req, _} = start(req(~"session_id=one; session_id=two")),
+    {Req, _} = start(req(~"__Host-session_id=one; __Host-session_id=two")),
     ?assertNot(maps:is_key(nova_session_presented, Req)),
     ?assert(is_binary(maps:get(nova_session_id, Req))),
     ?assertNot(nova_once:first({nova_session, ambiguous_cookie_warned})).
 
 repeated_identical_cookie_is_one_session() ->
-    {Req, _} = start(req(~"session_id=same; session_id=same")),
+    {Req, _} = start(req(~"__Host-session_id=same; __Host-session_id=same")),
     ?assertEqual(~"same", maps:get(nova_session_presented, Req)).
 
 %% The client may hold a valid session cookie Nova cannot read past the rest
 %% of the header, so a write, renew or delete leaves it alone.
 unparsable_cookie_header_never_sets_cookie() ->
-    {Req, State} = start(req(~"session_id=abc; =x")),
+    {Req, State} = start(req(~"__Host-session_id=abc; =x")),
     #{nova_session_id := Id} = Req,
     ?assertNot(maps:is_key(nova_session_presented, Req)),
     ?assertEqual({ok, Id}, nova_session:client_id(Req)),
@@ -196,6 +198,7 @@ secure_over_https() ->
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Secure")).
 
 configured_cookie_attributes() ->
+    application:set_env(nova, session_cookie_name, ~"session_id"),
     application:set_env(nova, session_cookie_opts, #{secure => true, same_site => strict,
                                                      domain => ~"example.com"}),
     application:set_env(nova, session_max_age, 3600),
@@ -218,7 +221,7 @@ invalid_cookie_opts_are_ignored() ->
 
 known_session_is_kept() ->
     ok = nova_session_ets:set_value(~"known", ~"k", ~"v"),
-    {Req, State} = start(req(~"session_id=known")),
+    {Req, State} = start(req(~"__Host-session_id=known")),
     ?assertEqual(~"known", maps:get(nova_session_presented, Req)),
     ?assertNot(maps:is_key(nova_session_id, Req)),
     ?assertEqual([], set_cookies(respond(event({written, ~"known"}, State)))).
@@ -226,7 +229,7 @@ known_session_is_kept() ->
 %% A client must not be able to pick its own session id: nova_session falls
 %% back to the fresh id, and that is the cookie the client gets.
 unknown_session_is_replaced() ->
-    {Req, State} = start(req(~"session_id=attacker-chosen")),
+    {Req, State} = start(req(~"__Host-session_id=attacker-chosen")),
     #{nova_session_pending := Id} = Req,
     ?assertNotEqual(~"attacker-chosen", Id),
     [Cookie] = set_cookies(respond(event({written, Id}, State))),
@@ -237,7 +240,7 @@ unknown_session_is_replaced() ->
 no_backend_lookup_in_connection_process() ->
     meck:new(nova_session_ets, [passthrough]),
     try
-        {_Req, _State} = start(req(~"session_id=whatever")),
+        {_Req, _State} = start(req(~"__Host-session_id=whatever")),
         ?assertEqual(0, meck:num_calls(nova_session_ets, session_exists, '_'))
     after
         meck:unload(nova_session_ets)
@@ -256,21 +259,21 @@ switch_protocol_carries_cookie() ->
 
 renew_issues_new_cookie() ->
     ok = nova_session_ets:set_value(~"before-login", ~"k", ~"v"),
-    {_Req, State} = start(req(~"session_id=before-login")),
+    {_Req, State} = start(req(~"__Host-session_id=before-login")),
     [Cookie] = set_cookies(respond(event({renewed, ~"after-login"}, State))),
     ?assertEqual(~"after-login", cookie_value(Cookie)).
 
 delete_expires_cookie() ->
     ok = nova_session_ets:set_value(~"logged-in", ~"k", ~"v"),
-    {_Req, State} = start(req(~"session_id=logged-in")),
+    {_Req, State} = start(req(~"__Host-session_id=logged-in")),
     [Cookie] = set_cookies(respond(event({deleted, ~"fresh"}, State))),
-    ?assertMatch(<<"session_id=;", _/binary>>, Cookie),
+    ?assertMatch(<<"__Host-session_id=;", _/binary>>, Cookie),
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"Max-Age=0")),
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Path=/")).
 
 write_after_delete_issues_new_cookie() ->
     ok = nova_session_ets:set_value(~"old", ~"k", ~"v"),
-    {_Req, State} = start(req(~"session_id=old")),
+    {_Req, State} = start(req(~"__Host-session_id=old")),
     State1 = event({written, ~"new"}, event({deleted, ~"new"}, State)),
     [Cookie] = set_cookies(respond(State1)),
     ?assertEqual(~"new", cookie_value(Cookie)).
@@ -397,7 +400,7 @@ set_cookies(Headers) ->
     [iolist_to_binary(C) || C <- maps:get(~"set-cookie", Headers, [])].
 
 cookie_value(Cookie) ->
-    [<<"session_id=", Value/binary>> | _] = binary:split(Cookie, ~";"),
+    [<<"__Host-session_id=", Value/binary>> | _] = binary:split(Cookie, ~";"),
     Value.
 
 %% Not a documented function of Cowboy, so a new Cowboy is checked for it here.

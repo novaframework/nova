@@ -586,7 +586,7 @@ websocket_echo(Config) ->
 %% gets its cookie on the 101.
 websocket_session_cookie_on_upgrade(Config) ->
     {ok, Socket, Response} = ws_connect_response(Config, "/session/ws"),
-    ?assertMatch({_, _}, binary:match(Response, ~"set-cookie: session_id=")),
+    ?assertMatch({_, _}, binary:match(Response, ~"set-cookie: __Host-session_id=")),
     gen_tcp:close(Socket).
 
 %% A process spawned with the request must not message the connection, which

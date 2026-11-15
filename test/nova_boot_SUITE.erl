@@ -36,6 +36,9 @@
          body_decoded_behind_a_security_callback_is_warned_about/1,
          security_reads_body_of_a_route_group_is_checked_by_the_boot/1,
          mounted_application_does_not_answer_for_the_callback_of_its_host/1,
+         listener_without_tls_is_told_once_what_the_session_cookie_needs/1,
+         listener_with_tls_is_not_told_about_the_session_cookie/1,
+         cookie_options_the_default_name_cannot_have_fail_the_boot/1,
          plugins_of_an_earlier_run_are_forgotten/1
         ]).
 
@@ -75,6 +78,9 @@ all() ->
      body_decoded_behind_a_security_callback_is_warned_about,
      security_reads_body_of_a_route_group_is_checked_by_the_boot,
      mounted_application_does_not_answer_for_the_callback_of_its_host,
+     listener_without_tls_is_told_once_what_the_session_cookie_needs,
+     listener_with_tls_is_not_told_about_the_session_cookie,
+     cookie_options_the_default_name_cannot_have_fail_the_boot,
      plugins_of_an_earlier_run_are_forgotten
     ].
 
@@ -532,6 +538,46 @@ mounted_application_does_not_answer_for_the_callback_of_its_host(_Config) ->
 
 %% nova_plugin_manager starts every plugin the router has listed, also after
 %% a restart, so the list must not carry over from a run with other routes.
+%% Outside dev the session cookie is Secure and, with no name set, has the
+%% __Host- prefix, so a browser keeps it only where it reached the site over
+%% https. Nova cannot see a proxy that has the TLS in front of a listener
+%% without it, so such a listener is told once what the cookie needs.
+listener_without_tls_is_told_once_what_the_session_cookie_needs(_Config) ->
+    [Told] = session_cookie_notices([]),
+    ?assertMatch(#{cookie := ~"__Host-session_id", settings := [session_cookie_name, session_cookie_opts, environment]},
+                 Told),
+    [?assertMatch({Setting, {_, _}}, {Setting, binary:match(maps:get(msg, Told), Setting)})
+     || Setting <- [~"session_cookie_name", ~"session_cookie_opts", ~"environment"]],
+    ?assertMatch([#{cookie := ~"sid"}], session_cookie_notices([{session_cookie_name, ~"sid"}])),
+    ?assertEqual([], session_cookie_notices([{environment, dev}])),
+    ?assertEqual([], session_cookie_notices([{use_sessions, false}])),
+    ?assertEqual([], session_cookie_notices([{session_cookie_name, ~"session_id"},
+                                             {session_cookie_opts, #{secure => false}}])).
+
+listener_with_tls_is_not_told_about_the_session_cookie(_Config) ->
+    Chain = #{root => [], intermediates => [], peer => []},
+    #{server_config := Tls} = public_key:pkix_test_data(#{server_chain => Chain, client_chain => Chain}),
+    Listener = #{port => nova_test_listener:free_port(), use_ssl => true, ssl_options => maps:from_list(Tls)},
+    ?assertEqual([], session_cookie_notices([{cowboy_configuration, Listener}])).
+
+%% A Domain, a Path other than / and a cookie that is not Secure are what the
+%% prefix rules out. An application that asks for one of them and has not
+%% named its cookie would get a cookie without what it asked for.
+cookie_options_the_default_name_cannot_have_fail_the_boot(_Config) ->
+    [begin
+         {Reason, Events} = nova_test_log:collect(fun() -> stopped_by([{session_cookie_opts, Opts}]) end),
+         ?assertEqual({invalid_setting, session_cookie_opts, {requires, session_cookie_name}}, Reason),
+         ?assertMatch([#{setting := session_cookie_opts, requires := session_cookie_name}],
+                      [Report || #{setting := session_cookie_opts} = Report <- nova_test_log:errors(Events)])
+     end || Opts <- [#{domain => ~"example.com"}, #{path => ~"/app"}, #{secure => false}]],
+    Named = [{session_cookie_name, ~"session_id"}, {session_cookie_opts, #{domain => ~"example.com"}}],
+    [application:set_env(nova, Key, Value) || {Key, Value} <- Named],
+    try
+        ?assertMatch({ok, _Port}, nova_test_listener:try_start(#{}))
+    after
+        [application:unset_env(nova, Key) || {Key, _Value} <- Named]
+    end.
+
 plugins_of_an_earlier_run_are_forgotten(_Config) ->
     Routes = [#{prefix => "/earlier",
                 plugins => [{pre_request, nova_plugin_once_pages, #{name => earlier}}],
@@ -550,6 +596,19 @@ stopped_by(Settings) ->
         {error, {nova, {{Reason, _Stacktrace}, _Start}}} = nova_test_listener:try_start(#{}),
         undefined = whereis(nova_sup),
         Reason
+    after
+        [application:unset_env(nova, Key) || {Key, _Value} <- Settings],
+        nova_test_listener:stop()
+    end.
+
+%% What a boot with Settings in the nova environment says about the session
+%% cookie and https.
+session_cookie_notices(Settings) ->
+    ok = nova_test_listener:configure(#{}),
+    [application:set_env(nova, Key, Value) || {Key, Value} <- Settings],
+    try
+        {{ok, _Started}, Events} = nova_test_log:collect(fun() -> application:ensure_all_started(nova_test_app) end),
+        [Report || {notice, {report, #{notice := session_cookie_needs_https} = Report}} <- Events]
     after
         [application:unset_env(nova, Key) || {Key, _Value} <- Settings],
         nova_test_listener:stop()

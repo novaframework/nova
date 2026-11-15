@@ -311,6 +311,22 @@ of `{Module, Function}` in Nova.
   per node. The new `session_cookie_name` option takes a `__Host-` name,
   which prevents this; changing the name signs every client out once.
 
+- **The session cookie is named `__Host-session_id`, and everyone signs in
+  again.** That is the name when `session_cookie_name` is not set and the
+  `environment` is not `dev`; in `dev` it stays `session_id`. A browser keeps
+  a `__Host-` cookie only when it is `Secure`, has `Path=/` and no `Domain`,
+  so another host of the domain cannot set or shadow it. A request that still
+  carries the `session_id` cookie of before the upgrade has no session: every
+  client is signed out once. Set `{session_cookie_name, <<"session_id">>}` to
+  keep the old name and the sessions. With a `domain`, a `path` other than
+  `/` or `secure => false` in `session_cookie_opts` and no
+  `session_cookie_name`, Nova does not start
+  (`{invalid_setting, session_cookie_opts, {requires, session_cookie_name}}`):
+  name the cookie, or take the option out. Outside `dev`, a node whose
+  listener has no TLS logs one notice at boot
+  (`notice => session_cookie_needs_https`); behind a proxy that terminates
+  TLS nothing has to change.
+
 - **Session settings follow the bootstrap application.** `session_cookie_opts`,
   `session_max_age`, `session_cookie_name` and the new `redact_keys` are read
   like `use_sessions`: the bootstrap application first, then `nova`.

@@ -50,7 +50,7 @@ request_in_flight_does_not_bring_back_a_session_that_was_signed_out(Config) ->
          {SignedIn, Id} = sign_in(Config, []),
          InFlight = held_write(Config, Path, SignedIn),
          {200, Headers, ~"signed out"} = post(Config, "/race/sign-out", [SignedIn]),
-         ?assertMatch(<<"session_id=;", _/binary>>, maps:get(~"set-cookie", Headers)),
+         ?assertMatch(<<"__Host-session_id=;", _/binary>>, maps:get(~"set-cookie", Headers)),
          {_Other, OtherId} = written(InFlight),
          ?assertNotEqual(Id, OtherId),
          ?assertEqual({Path, false}, {Path, nova_session_ets:session_exists(Id)}),
@@ -79,7 +79,7 @@ request_in_flight_does_not_bring_back_a_session_that_was_renewed(Config) ->
 %% under it afterwards.
 request_in_flight_does_not_start_a_session_under_an_id_that_was_renewed_away(Config) ->
     {ok, HandedOut} = nova_session:generate_session_id(),
-    Visitor = {"cookie", ["session_id=", HandedOut]},
+    Visitor = {"cookie", ["__Host-session_id=", HandedOut]},
     InFlight = held_write(Config, "/race/held-write", Visitor),
     {_SignedIn, Id} = sign_in(Config, [Visitor]),
     {_Other, OtherId} = written(InFlight),
@@ -119,5 +119,5 @@ post(Config, Path, Headers) ->
     nova_test_listener:response(?config(port, Config), "POST", Path, Headers, <<>>).
 
 cookie(Headers) ->
-    [<<"session_id=", Id/binary>> = SessionCookie | _Attributes] = binary:split(maps:get(~"set-cookie", Headers), ~";"),
+    [<<"__Host-session_id=", Id/binary>> = SessionCookie | _Attributes] = binary:split(maps:get(~"set-cookie", Headers), ~";"),
     {{"cookie", SessionCookie}, Id}.

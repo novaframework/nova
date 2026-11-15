@@ -3,8 +3,11 @@
 -moduledoc """
 All kind of operations on sessions is handled by the nova_session-module. The module also presents a behaviour that can be used to create customized backends for the session-data.
 
-The session id lives in the `session_id` cookie (see `session_cookie_name` in
-the configuration guide). `nova_stream_h` issues it with the response of the
+The session id lives in the `__Host-session_id` cookie, and in `session_id`
+when the `environment` is `dev` (see `session_cookie_name` in the
+configuration guide). A browser keeps a cookie with the `__Host-` prefix only
+when it is `Secure`, has `Path=/` and no `Domain`, so no other host of the
+domain can set or shadow it. `nova_stream_h` issues it with the response of the
 first request that writes to the session, so visitors that never store
 anything get no cookie. A request carrying two or more different session ids
 is treated as having no session. A request whose Cookie header does not parse
@@ -70,6 +73,7 @@ above.
 -export([
          enabled/0,
          cookie_name/0,
+         needs_https/0,
          cookie_opts/1,
          validate_cookie_config/0,
          valid_cookie/2,
@@ -401,10 +405,27 @@ enabled() ->
 -doc false.
 -spec cookie_name() -> binary().
 cookie_name() ->
-    case nova_config:get_env(session_cookie_name, ~"session_id") of
+    case nova_config:get_env(session_cookie_name, undefined) of
         Name when is_binary(Name), Name =/= <<>> -> Name;
-        _ -> ~"session_id"
+        _ -> default_cookie_name()
     end.
+
+%% A cookie with the __Host- prefix is one no other host of the domain can
+%% set or shadow. A browser keeps it over https only, which a development
+%% machine does not have.
+-spec default_cookie_name() -> binary().
+default_cookie_name() ->
+    case nova:is_dev_environment() of
+        true -> ~"session_id";
+        false -> ~"__Host-session_id"
+    end.
+
+%% Whether a browser keeps the session cookie only where it reached the site
+%% over https. nova_sup tells a listener without TLS about it.
+-doc false.
+-spec needs_https() -> boolean().
+needs_https() ->
+    enabled() andalso maps:get(secure, cookie_opts_for(~"http"), false).
 
 -doc false.
 -spec max_age() -> pos_integer() | infinity.
@@ -440,13 +461,14 @@ cookie_opts_for(Scheme) ->
     end.
 
 %% Checked at boot so a bad setting stops the node instead of failing every
-%% response that sets the cookie. cookie_name/0 falls back to session_id for a
+%% response that sets the cookie. cookie_name/0 falls back to the default for a
 %% name that is not a non-empty binary, so the configured value is checked here.
 -doc false.
 -spec validate_cookie_config() -> ok.
 validate_cookie_config() ->
+    ok = default_name_can_have_the_options(),
     Opts = cookie_opts_for(~"http"),
-    Configured = nova_config:get_env(session_cookie_name, ~"session_id"),
+    Configured = nova_config:get_env(session_cookie_name, default_cookie_name()),
     Valid = is_binary(Configured) andalso valid_cookie(Configured, Opts) andalso
         try cow_cookie:setcookie(Configured, ~"x", Opts) of
             _ -> true
@@ -457,6 +479,39 @@ validate_cookie_config() ->
         true -> ok;
         false -> erlang:error(invalid_cookie_config(Configured, Opts))
     end.
+
+%% With a __Host- name the cookie is always Secure, has Path=/ and no Domain.
+%% An application that asks for something else and has not named its cookie
+%% would lose what it asked for without a word, so it is told to name it.
+-spec default_name_can_have_the_options() -> ok.
+default_name_can_have_the_options() ->
+    Named = nova_config:get_env(session_cookie_name, undefined) =/= undefined,
+    case Named orelse nova:is_dev_environment() of
+        true -> ok;
+        false -> no_option_ruled_out_by_the_prefix(ruled_out_by_the_prefix())
+    end.
+
+-spec no_option_ruled_out_by_the_prefix([domain | path | secure]) -> ok.
+no_option_ruled_out_by_the_prefix([]) ->
+    ok;
+no_option_ruled_out_by_the_prefix(Options) ->
+    ?LOG_ERROR(#{msg => ~"session_cookie_opts asks for what a cookie with the __Host- prefix cannot have. The session cookie is named __Host-session_id when session_cookie_name is not set, and is then always Secure, with Path=/ and no Domain. Set session_cookie_name, to session_id for the cookie as it was, or take the options out",
+                 setting => session_cookie_opts, options => Options, requires => session_cookie_name}),
+    erlang:error({invalid_setting, session_cookie_opts, {requires, session_cookie_name}}).
+
+-spec ruled_out_by_the_prefix() -> [domain | path | secure].
+ruled_out_by_the_prefix() ->
+    case nova_config:get_env(session_cookie_opts, #{}) of
+        #{} = Configured ->
+            [Key || Key <- [domain, path, secure], is_ruled_out_by_the_prefix(Key, Configured)];
+        _ ->
+            []
+    end.
+
+-spec is_ruled_out_by_the_prefix(domain | path | secure, map()) -> boolean().
+is_ruled_out_by_the_prefix(domain, Configured) -> is_binary(maps:get(domain, Configured, undefined));
+is_ruled_out_by_the_prefix(path, Configured) -> is_binary(maps:get(path, Configured, undefined)) andalso maps:get(path, Configured) =/= ~"/";
+is_ruled_out_by_the_prefix(secure, Configured) -> maps:get(secure, Configured, true) =:= false.
 
 %% The name must be an RFC 6265 token and path and domain ASCII without control
 %% characters or ";". cowlib 2.21 refuses anything else, older versions only

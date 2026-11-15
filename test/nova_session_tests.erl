@@ -14,6 +14,7 @@
 
 setup() ->
     pg:start_link(nova_scope),
+    application:unset_env(nova, environment),
     application:set_env(nova, bootstrap_application, nova),
     application:set_env(nova, use_sessions, true),
     application:set_env(nova, session_manager, nova_session_ets),
@@ -24,7 +25,7 @@ setup() ->
                     case maps:get(cookie_session_id, Req, undefined) of
                         undefined -> [];
                         unparsable -> exit({request_error, {header, ~"cookie"}, malformed});
-                        SId -> [{~"session_id", SId}]
+                        SId -> [{nova_session:cookie_name(), SId}]
                     end
                 end),
     meck:expect(cowboy_req, set_resp_cookie,
@@ -285,7 +286,7 @@ renew_sets_cookie_without_stream_handler() ->
     {ok, SId} = nova_session:generate_session_id(),
     {ok, Req1} = nova_session:renew(req_with_cookie(SId)),
     #{nova_session_id := NewId, resp_cookie := #{name := Name, value := Value, opts := Opts}} = Req1,
-    ?assertEqual({~"session_id", NewId}, {Name, Value}),
+    ?assertEqual({~"__Host-session_id", NewId}, {Name, Value}),
     ?assertMatch(#{path := ~"/", http_only := true, max_age := 1209600}, Opts),
     {ok, Req2} = nova_session:renew(Req1),
     #{nova_session_id := NewerId, resp_cookie := #{value := NewerId}} = Req2,
@@ -294,11 +295,10 @@ renew_sets_cookie_without_stream_handler() ->
 delete_expires_cookie_without_stream_handler() ->
     {ok, SId} = nova_session:generate_session_id(),
     {ok, Req1} = nova_session:delete(req_with_cookie(SId)),
-    #{resp_cookie := #{name := ~"session_id", value := <<>>, opts := #{max_age := 0}}} = Req1.
+    #{resp_cookie := #{name := ~"__Host-session_id", value := <<>>, opts := #{max_age := 0}}} = Req1.
 
 %% cowboy_req:set_resp_cookie/4 is mocked here, so the refusal is Nova's own
-%% and does not depend on the cowlib version. The mocked request only carries
-%% a session_id cookie, so delete/1 is checked with the invalid domain.
+%% and does not depend on the cowlib version.
 invalid_cookie_name_raises_without_stream_handler() ->
     application:set_env(nova, session_cookie_name, ~"app:sid"),
     try
@@ -310,6 +310,7 @@ invalid_cookie_name_raises_without_stream_handler() ->
     end.
 
 invalid_cookie_domain_raises_without_stream_handler() ->
+    application:set_env(nova, session_cookie_name, ~"session_id"),
     application:set_env(nova, session_cookie_opts, #{domain => <<"a\nb">>}),
     try
         {ok, SId} = nova_session:generate_session_id(),
@@ -318,6 +319,7 @@ invalid_cookie_domain_raises_without_stream_handler() ->
         ?assertError({invalid_session_cookie_config, #{domain := <<"a\nb">>}},
                      nova_session:delete(req_with_cookie(SId)))
     after
+        application:unset_env(nova, session_cookie_name),
         application:unset_env(nova, session_cookie_opts)
     end.
 
@@ -808,11 +810,120 @@ validate_cookie_config_test_() ->
        end},
       {"an invalid domain is refused and named",
        fun() ->
+               application:set_env(nova, session_cookie_name, ~"session_id"),
                application:set_env(nova, session_cookie_opts, #{domain => <<"a\nb">>}),
                ?assertError({invalid_session_cookie_config,
                              #{name := ~"session_id", path := ~"/", domain := <<"a\nb">>}},
                             nova_session:validate_cookie_config())
        end}]}.
+
+%%--------------------------------------------------------------------
+%% The name of the cookie when none is set
+%%--------------------------------------------------------------------
+
+default_cookie_name_test_() ->
+    {foreach,
+     fun() ->
+             application:set_env(nova, bootstrap_application, nova),
+             application:unset_env(nova, environment),
+             application:unset_env(nova, session_cookie_name),
+             application:unset_env(nova, session_cookie_opts)
+     end,
+     fun(_) ->
+             application:unset_env(nova, environment),
+             application:unset_env(nova, session_cookie_name),
+             application:unset_env(nova, session_cookie_opts),
+             application:unset_env(nova, bootstrap_application)
+     end,
+     [{"outside dev the cookie has the __Host- prefix",
+       fun() ->
+               ?assertEqual(~"__Host-session_id", nova_session:cookie_name()),
+               [begin
+                    application:set_env(nova, environment, Environment),
+                    ?assertEqual({Environment, ~"__Host-session_id"}, {Environment, nova_session:cookie_name()})
+                end || Environment <- [prod, test, staging]]
+       end},
+      {"in dev it is session_id, which a browser keeps over plain http",
+       fun() ->
+               application:set_env(nova, environment, dev),
+               ?assertEqual(~"session_id", nova_session:cookie_name()),
+               ?assertMatch(#{secure := false}, nova_session:cookie_opts(over_plain_http())),
+               ?assertEqual(ok, nova_session:validate_cookie_config())
+       end},
+      {"a name that is set is the name, in every environment",
+       fun() ->
+               application:set_env(nova, session_cookie_name, ~"sid"),
+               ?assertEqual(~"sid", nova_session:cookie_name()),
+               application:set_env(nova, environment, dev),
+               ?assertEqual(~"sid", nova_session:cookie_name())
+       end},
+      {"a listener without TLS does not take Secure off the cookie, so it works behind a proxy that has the TLS",
+       fun() ->
+               Opts = nova_session:cookie_opts(over_plain_http()),
+               ?assertMatch(#{secure := true, path := ~"/", http_only := true}, Opts),
+               ?assertNot(is_map_key(domain, Opts)),
+               Cookie = iolist_to_binary(cow_cookie:setcookie(nova_session:cookie_name(), ~"id", Opts)),
+               ?assertMatch(<<"__Host-session_id=id;", _/binary>>, Cookie),
+               ?assertMatch({_, _}, binary:match(Cookie, ~"; Secure")),
+               ?assertMatch({_, _}, binary:match(Cookie, ~"; Path=/")),
+               ?assertEqual(nomatch, binary:match(Cookie, ~"Domain"))
+       end},
+      {"the session_id cookie of before the upgrade is no session",
+       fun() ->
+               Req = nova_test_helper:with_header(~"cookie", ~"session_id=the-id-of-before", over_plain_http()),
+               ?assertEqual(undefined, nova_session:presented_session_id(Req)),
+               Both = nova_test_helper:with_header(~"cookie", ~"session_id=the-id-of-before; __Host-session_id=the-new-one",
+                                                   over_plain_http()),
+               ?assertEqual(~"the-new-one", nova_session:presented_session_id(Both))
+       end},
+      {"options the prefix cannot have are refused with the name unset",
+       fun() ->
+               [begin
+                    application:set_env(nova, session_cookie_opts, Opts),
+                    ?assertError({invalid_setting, session_cookie_opts, {requires, session_cookie_name}},
+                                 nova_session:validate_cookie_config())
+                end || Opts <- [#{domain => ~"example.com"}, #{path => ~"/app"}, #{secure => false}]]
+       end},
+      {"the same options are taken with a name that is set, and in dev",
+       fun() ->
+               Opts = #{domain => ~"example.com", path => ~"/app", secure => false},
+               application:set_env(nova, session_cookie_opts, Opts),
+               application:set_env(nova, session_cookie_name, ~"session_id"),
+               ?assertEqual(ok, nova_session:validate_cookie_config()),
+               ?assertMatch(#{domain := ~"example.com", path := ~"/app", secure := false},
+                            nova_session:cookie_opts(over_plain_http())),
+               application:unset_env(nova, session_cookie_name),
+               application:set_env(nova, environment, dev),
+               ?assertEqual(ok, nova_session:validate_cookie_config())
+       end},
+      {"options the prefix has anyway are taken with the name unset",
+       fun() ->
+               application:set_env(nova, session_cookie_opts,
+                                   #{path => ~"/", secure => true, same_site => strict, max_age => 60}),
+               ?assertEqual(ok, nova_session:validate_cookie_config())
+       end},
+      {"a plain listener is where the cookie needs https, unless Secure was taken off or sessions are",
+       fun() ->
+               ?assert(nova_session:needs_https()),
+               application:set_env(nova, session_cookie_name, ~"session_id"),
+               ?assert(nova_session:needs_https()),
+               application:set_env(nova, session_cookie_opts, #{secure => false}),
+               ?assertNot(nova_session:needs_https()),
+               application:unset_env(nova, session_cookie_name),
+               application:unset_env(nova, session_cookie_opts),
+               application:set_env(nova, environment, dev),
+               ?assertNot(nova_session:needs_https()),
+               application:unset_env(nova, environment),
+               application:set_env(nova, use_sessions, false),
+               try
+                   ?assertNot(nova_session:needs_https())
+               after
+                   application:unset_env(nova, use_sessions)
+               end
+       end}]}.
+
+over_plain_http() ->
+    (nova_test_helper:mock_req(~"GET", ~"/"))#{scheme => ~"http"}.
 
 valid_cookie_test_() ->
     [?_assert(nova_session:valid_cookie(~"__Host-session_id", #{path => ~"/", domain => ~"example.com"})),
