@@ -8,10 +8,10 @@ __Important:__`nova_request_plugin` must run before this plugin so that form par
 
 ### Options
 
-* `field_name` — form field name (default `<<"_csrf_token">>`)
-* `header_name` — header name (default `<<"x-csrf-token">>`)
-* `session_key` — session storage key (default `<<"_csrf_token">>`)
-* `excluded_paths` — list of path prefixes to skip (default `[]`). A prefix covers whole segments of the path the request is routed on: `<<"/api">>` skips `/api` and `/api/hooks`, not `/apikeys`, and `/api/../admin` is checked as `/admin`
+* `field_name` - form field name (default `<<"_csrf_token">>`)
+* `header_name` - header name (default `<<"x-csrf-token">>`)
+* `session_key` - session storage key (default `<<"_csrf_token">>`)
+* `excluded_paths` - list of path prefixes to skip (default `[]`). A prefix covers whole segments of the path the request is routed on: `<<"/api">>` skips `/api` and `/api/hooks`, not `/apikeys`, and `/api/../admin` is checked as `/admin`
 """.
 -behaviour(nova_plugin).
 
@@ -85,7 +85,7 @@ handle_safe_request(Req, SessionKey, State) ->
         {ok, Token} ->
             {ok, Req#{csrf_token => Token}, State};
         {error, _} ->
-            %% No session yet (first visit) — generate token and store it
+            %% No session yet (first visit): generate token and store it
             Token = generate_token(),
             case nova_session:set_provisional(Req, SessionKey, Token) of
                 ok ->
