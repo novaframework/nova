@@ -5,7 +5,9 @@
          init_per_testcase/2, end_per_testcase/2]).
 
 -export([first_visit_starts_a_session_with_a_token/1,
-         token_stays_the_same_within_a_session/1,
+         token_is_masked_anew_in_every_response/1,
+         token_without_a_mask_is_accepted/1,
+         masked_token_of_another_session_is_refused/1,
          view_receives_the_token/1,
          post_without_a_token_is_refused/1,
          post_without_a_session_is_refused/1,
@@ -47,7 +49,9 @@ groups() ->
               excluded_path_needs_no_token,
               path_next_to_an_excluded_one_needs_a_token],
     [{session, [], [first_visit_starts_a_session_with_a_token,
-                    token_stays_the_same_within_a_session,
+                    token_is_masked_anew_in_every_response,
+                    token_without_a_mask_is_accepted,
+                    masked_token_of_another_session_is_refused,
                     post_without_a_session_is_refused,
                     post_with_the_token_of_another_session_is_refused
                     | Either]},
@@ -104,13 +108,39 @@ end_per_testcase(_Case, _Config) ->
     application:unset_env(nova, csrf_secret).
 
 first_visit_starts_a_session_with_a_token(Config) ->
-    {200, Headers, Token} = nova_test_listener:response(?config(port, Config), "GET", "/csrf/token", []),
-    ?assertMatch(<<"session_id=", _/binary>>, maps:get(~"set-cookie", Headers)),
-    ?assertEqual(44, byte_size(Token)).
+    {{"cookie", <<"session_id=", SessionId/binary>>}, Token} = session(Config),
+    {ok, <<Stored:44/binary>>} = nova_session_ets:get_value(SessionId, ~"_csrf_token"),
+    ?assertEqual(Stored, unmasked(Token)).
 
-token_stays_the_same_within_a_session(Config) ->
+%% The token of a session is sent under another mask in every response, so
+%% a response that is compressed gives nothing to compare from one request
+%% to the next. What is under the mask stays the same.
+token_is_masked_anew_in_every_response(Config) ->
+    {Cookie, First} = session(Config),
+    {200, Second} = request(Config, "GET", "/csrf/token", [Cookie], <<>>),
+    ?assertNotEqual(First, Second),
+    ?assertEqual(unmasked(First), unmasked(Second)),
+    [?assertEqual({200, ~"submitted"}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Token}], <<>>))
+     || Token <- [First, Second, First]].
+
+%% What a page rendered by an earlier release holds.
+token_without_a_mask_is_accepted(Config) ->
     {Cookie, Token} = session(Config),
-    ?assertEqual({200, Token}, request(Config, "GET", "/csrf/token", [Cookie], <<>>)).
+    ?assertEqual({200, ~"submitted"},
+                 request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", unmasked(Token)}], <<>>)).
+
+masked_token_of_another_session_is_refused(Config) ->
+    {Cookie, Token} = session(Config),
+    {_OtherCookie, OtherToken} = session(Config),
+    Mask = binary:part(base64:decode(Token, #{mode => urlsafe, padding => false}), 0, 44),
+    Remasked = base64:encode(<<Mask/binary, (crypto:exor(Mask, unmasked(OtherToken)))/binary>>,
+                             #{mode => urlsafe, padding => false}),
+    [?assertMatch({403, _}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Wrong}], <<>>))
+     || Wrong <- [OtherToken, Remasked, binary:part(Token, 0, 117), <<Token/binary, "A">>, binary:copy(~"!", 118)]].
+
+unmasked(Token) ->
+    <<Mask:44/binary, Masked:44/binary>> = base64:decode(Token, #{mode => urlsafe, padding => false}),
+    crypto:exor(Mask, Masked).
 
 view_receives_the_token(Config) ->
     {Cookie, _Token} = session(Config),
@@ -246,10 +276,9 @@ token_stays_good_while_the_session_is_written(Config) ->
 session_token_of_an_open_form_is_accepted(Config) ->
     application:unset_env(nova, csrf_secret),
     {Cookie, SessionToken} = session(Config),
-    ?assertEqual(44, byte_size(SessionToken)),
     application:set_env(nova, csrf_secret, ?SECRET),
-    ?assertEqual({200, ~"submitted"},
-                 request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", SessionToken}], <<>>)),
+    [?assertEqual({200, ~"submitted"}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Token}], <<>>))
+     || Token <- [SessionToken, unmasked(SessionToken)]],
     ?assertMatch({403, _}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", ~"wrong"}], <<>>)).
 
 session(Config) ->

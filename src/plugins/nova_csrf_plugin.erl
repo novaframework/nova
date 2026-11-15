@@ -18,7 +18,7 @@ With `csrf_secret` set in the `nova` environment the token is signed and nothing
 
 The secret has to be the same on every node and across restarts. A list of secrets signs with the first and accepts all of them: put the new secret in front of the old one to change it, and take the old one out once the pages that were open have been sent.
 
-Without `csrf_secret` the token is a random value kept in the session, as in earlier releases: a visitor without a session gets one that holds the token (`nova_session:set_provisional/3`). The boot says so once. Set `{csrf_token, session}` to say that this is intended, or `{csrf_token, stateless}` to have a boot without a secret fail instead.
+Without `csrf_secret` the token is a random value kept in the session, as in earlier releases: a visitor without a session gets one that holds the token (`nova_session:set_provisional/3`). A page gets it under a mask that is new for every response, so the same token never looks the same twice in a compressed response. The token without a mask, which is what a page rendered by an earlier release holds, is accepted as well. The boot says so once. Set `{csrf_token, session}` to say that this is intended, or `{csrf_token, stateless}` to have a boot without a secret fail instead.
 
 After a secret is set, a form that was rendered before still sends the token of its session. It is accepted for as long as that session is there.
 
@@ -168,13 +168,13 @@ plugin_info() ->
 handle_safe_request(Req, SessionKey, State) ->
     case nova_session:get(Req, SessionKey) of
         {ok, Token} ->
-            {ok, Req#{csrf_token => Token}, State};
+            {ok, Req#{csrf_token => masked(Token)}, State};
         {error, _} ->
             %% No session yet (first visit): generate token and store it
             Token = generate_token(),
             case nova_session:set_provisional(Req, SessionKey, Token) of
                 ok ->
-                    {ok, Req#{csrf_token => Token}, State};
+                    {ok, Req#{csrf_token => masked(Token)}, State};
                 {error, _} ->
                     %% Session not established yet (no cookie), proceed without token
                     {ok, Req, State}
@@ -184,16 +184,44 @@ handle_safe_request(Req, SessionKey, State) ->
 handle_unsafe_request(Req, SessionKey, FieldName, HeaderName, State) ->
     case nova_session:get(Req, SessionKey) of
         {ok, SessionToken} ->
-            SubmittedToken = get_submitted_token(Req, FieldName, HeaderName),
-            case constant_time_compare(SessionToken, SubmittedToken) of
+            case is_token(SessionToken, get_submitted_token(Req, FieldName, HeaderName)) of
                 true ->
-                    {ok, Req#{csrf_token => SessionToken}, State};
+                    {ok, Req#{csrf_token => masked(SessionToken)}, State};
                 false ->
                     reject(Req, State)
             end;
         {error, _} ->
             reject(Req, State)
     end.
+
+%% The token of a session is the same for as long as the session lives. Sent
+%% as it is, a response that is compressed would give it away a byte at a
+%% time to somebody who can make the client ask again and again and choose
+%% part of what the page says (BREACH). Every response gets it under a pad
+%% of its own instead.
+masked(Token) when is_binary(Token) ->
+    Pad = crypto:strong_rand_bytes(byte_size(Token)),
+    base64:encode(<<Pad/binary, (crypto:exor(Pad, Token))/binary>>, #{mode => urlsafe, padding => false});
+masked(Token) ->
+    Token.
+
+%% A page rendered by a release that did not mask holds the token itself.
+is_token(SessionToken, Submitted) ->
+    constant_time_compare(SessionToken, Submitted) orelse constant_time_compare(SessionToken, unmasked(Submitted)).
+
+unmasked(Submitted) when is_binary(Submitted) ->
+    try base64:decode(Submitted, #{mode => urlsafe, padding => false}) of
+        Decoded when byte_size(Decoded) rem 2 =:= 0 ->
+            Size = byte_size(Decoded) div 2,
+            <<Pad:Size/binary, Masked:Size/binary>> = Decoded,
+            crypto:exor(Pad, Masked);
+        _Odd ->
+            undefined
+    catch
+        error:_NotBase64 -> undefined
+    end;
+unmasked(_Submitted) ->
+    undefined.
 
 with_signed_token({ok, SessionId}, [Secret | _], Req) when is_binary(SessionId) ->
     Nonce = crypto:strong_rand_bytes(?NONCE_BYTES),
@@ -222,7 +250,7 @@ is_signed_for(_SessionId, _Submitted, _Secrets) ->
 %% The token of a form that was rendered before csrf_secret was set.
 is_session_token(Req, SessionKey, Submitted) ->
     case nova_session:get(Req, SessionKey) of
-        {ok, SessionToken} -> constant_time_compare(SessionToken, Submitted);
+        {ok, SessionToken} -> is_token(SessionToken, Submitted);
         {error, _} -> false
     end.
 
