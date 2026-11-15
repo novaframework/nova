@@ -179,6 +179,19 @@ All notable changes to this project will be documented in this file.
 - *(router)* A preflight to a route without OPTIONS runs pre_security/4 alone
 - *(router)* A path that does not start with a slash is refused
 - *(types)* The changes to the settings and origins pass eqwalizer
+- *(csrf)* Any origin of the nova environment is for websockets alone
+- *(csrf)* The plugin on a node without sessions stops the boot
+- *(session)* The id a visitor was handed is kept by the first write
+- *(security)* Auth_data is what the security callback returned
+- *(router)* The notice about preflights names a plugin wherever it is listed
+- *(origin)* Same_host of a request over TLS needs an https origin
+- *(request)* A body that is not JSON is logged without the body
+- *(json)* An object that has a key twice does not decode
+- *(session)* A signed id is the characters Nova handed out
+- *(session)* A session that was deleted is not brought back
+- *(websocket)* An upgrade the browser says is from elsewhere is refused
+- *(router)* What is said about a body behind the callback has no blind spots
+- *(settings)* A secret that plainly is not random stops the boot
 
 ### Documentation
 
@@ -282,6 +295,23 @@ All notable changes to this project will be documented in this file.
 - *(views)* Every response gets another csrf_token
 - *(testing)* What to cover for the origin checks and the plugin order
 - *(changelog)* The changes since 0.18.3
+- *(configuration)* An unset environment is prod
+- *(deprecations)* The note on JSON keys names no internal module
+- *(guides)* Sign-in, exact ids, ended sessions and the new notices are in the guides
+- *(configuration)* Secret_key_base, trusted_origins, csrf_token and the settings that are refused
+- *(plugins)* Security_reads_body, the order notices, the secret of the CSRF tokens and what auth_data holds
+- *(routing)* Security_reads_body and trusted_origins in a route group
+- *(sessions)* Sign_in/3, signed ids and a session that has ended
+- *(websockets)* The headers the origin check reads, and a proxy that terminates TLS
+- *(security)* Signing in, the secret of the node and the origin checks behind a proxy
+- *(logging)* The messages of the renamed settings, the order notices and a refused request
+- *(lifecycle)* What auth_data holds after the security callback
+- *(multi-app)* The secure of an entry runs before the body is read
+- *(upgrading)* The rows for sign-in, signed ids, the secret and the origin checks
+- *(deprecations)* Signing in and out, the renamed settings and the origin checks
+- *(releases)* Secret_key_base and trusted_origins in the configuration of a release
+- *(testing)* What to cover for the sign-in and security_reads_body
+- *(sessions)* The session cookie is named __Host-session_id outside dev
 
 ### Features
 
@@ -311,6 +341,10 @@ All notable changes to this project will be documented in this file.
 - *(csrf)* The token of a session is masked anew in every response
 - *(csrf)* A request that changes state is refused when the browser says another site sent it
 - *(router)* A route group is warned about what its plugin order leaves out
+- *(settings)* One secret for the node, a key for every purpose
+- *(router)* A route group says whether its security callback reads the body
+- *(session)* Sign_in/3 changes the id and stores who signed in
+- *(session)* The session cookie is named __Host-session_id outside dev
 
 ### Miscellaneous
 
@@ -371,6 +405,9 @@ All notable changes to this project will be documented in this file.
 - *(websocket)* The allowed origins are one setting in a module of their own
 - *(settings)* One module checks the node settings when Nova starts
 - *(types)* Specs for the private functions of the router and the CSRF plugin
+- *(router)* Plugins_after_security is gone
+- *(origin)* Allowed_origins is trusted_origins
+- *(types)* What the secret, a JSON error and a route group option are is told to the type checker
 
 ### Testing
 
@@ -428,6 +465,7 @@ All notable changes to this project will be documented in this file.
 - One way to pick the port of a test listener
 - *(multipart)* The directory of a test is its own and always removed
 - *(session)* A hot upgrade keeps every session of the older release
+- *(settings)* The boot case about the secret is in the suite
 
 ## [0.18.3] - 2026-11-08
 
