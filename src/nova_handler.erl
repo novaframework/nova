@@ -6,8 +6,7 @@
 -export([
          execute/2,
          terminate/3,
-         request_error_status/1,
-         answered/1
+         request_error_status/1
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -155,7 +154,6 @@ render_crash_page(Req, Env, _StatusPage) ->
 %% is rendered for a controller that failed: the page would run for nothing,
 %% and nova_stream_h would drop it. The request that comes back is marked as
 %% answered.
--doc false.
 -spec answered(Req) -> false | {true, Req} when Req :: cowboy_req:req().
 answered(Req) ->
     case response_begun(Req) of
