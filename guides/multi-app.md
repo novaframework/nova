@@ -127,6 +127,13 @@ websocket.
 A callback that is both the `secure` of the entry and the `security` of the
 group runs once. Websocket routes follow the same rules.
 
+The `secure` of an entry runs before the `pre_request` plugins of the routes
+behind it, as the `security` of a group does, so it finds no `json` and no
+`params` unless `nova_request_plugin` is listed under
+`plugins_before_security`. A mounted route group that sets
+`security_reads_body => false` answers for its own callback only, see
+[Plugins](plugins.md#saying-whether-the-security-callback-reads-the-body).
+
 The key of an entry is `secure` and the key of a route group is `security`.
 A `security` key in a `nova_apps` entry and a `secure` key in a route group
 are not read. Written with a callback they stop the start with
