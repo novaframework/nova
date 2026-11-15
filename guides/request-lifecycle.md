@@ -82,11 +82,14 @@ the cookies and the body from it. Nova adds these keys:
 | `csrf_token` | `nova_csrf_plugin` | The CSRF token of the session |
 | `correlation_id` | `nova_correlation_plugin` | The correlation id of the request |
 | `crash_info` | Nova, for a status code route | What is known about the failure the page is rendered for |
+| `controller_data` | Router, for a status code route | `#{status => StatusCode, data => Data}`, for a page reached through `nova_router:render_status_page/2,3,5`. See [Error handling](error-handling.md#your-own-pages) |
 | `resp_status_code` | Handlers | The status code of the response. Read by `post_request` plugins and by Nova when it sends the response |
 
-Keys that start with `nova_session` and `nova_dispatch_key` are internal.
-Use `nova_session` and `nova_router:dispatch_key/1` to get at what they
-hold.
+The other keys Nova adds are internal and can change with any release:
+`nova_dispatch_key`, `nova_stream`, `nova_session_id`,
+`nova_session_presented`, `nova_session_pending`, `nova_session_direct` and
+`nova_session_owner`. Use `nova_session` and `nova_router:dispatch_key/1` to
+get at what they hold.
 
 A plugin can add keys of its own. Use a name that will not clash, such as the
 name of your application.

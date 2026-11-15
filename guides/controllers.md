@@ -54,9 +54,12 @@ download(Req) ->
 ```
 
 A request is answered once. When a controller or a fallback controller has
-answered and returns without that request, what it returned is not sent, and
-Nova logs a warning that names the controller, the function and the form of
-the return.
+answered and returns without that request, Nova answers a second time. That
+response is dropped: the client keeps the one the controller sent, the
+connection stays open, and Nova logs the warning
+`The request was answered already, so this response is not sent ...`, once
+per request. The warning has the status of the dropped response and the
+method, and does not name the controller.
 
 ### JSON
 
@@ -102,7 +105,8 @@ same.
 | `status_code` | The status code, `200` by default |
 | `headers` | Response headers. They are added to the default `content-type: text/html`, which stays unless they name a `content-type` |
 
-A template that does not exist gives a `404`.
+A template that does not exist gives the `500` page, and
+`Nova could not render template` in the log.
 
 ### Status codes
 

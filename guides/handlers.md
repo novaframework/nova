@@ -93,8 +93,8 @@ Nova sends the response when a handler returns, unless the response has
 begun. A handler that streamed the response returns `{ok, Req}` with the
 request `cowboy_req:stream_reply/3` gave it, and nothing more is sent. A
 controller that streams does the same with the request in its return, such
-as `{status, 200, #{}, <<>>, Req}`. A return without that request is not sent
-either, and is logged as a warning, see
+as `{status, 200, #{}, <<>>, Req}`. With a return without that request Nova
+answers again. That response is dropped and logged as a warning, see
 [Controllers](controllers.md#return-values).
 
 A handler or a controller that fails after the response has begun is logged

@@ -87,7 +87,10 @@ A frame is `{text, Binary}`, `{binary, Binary}`, `ping`, `pong`,
 `{ping, Binary}`, `{pong, Binary}`, `close` or `{close, Code, Reason}`.
 
 A callback that crashes is logged as `Controller crashed` and the connection
-is closed.
+is closed. A callback that returns something that is not in the table is
+logged as `Websocket handler failed on what the controller returned`, and
+the connection is closed as well. The one exception is a bare `ok`, which is
+still taken as `{ok, State}` with the state unchanged.
 
 ## Authentication
 

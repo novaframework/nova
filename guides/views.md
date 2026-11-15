@@ -65,7 +65,9 @@ The options map takes:
 | `status_code` | The status code of the response, `200` by default |
 | `headers` | Headers of the response. They are added to the default `content-type: text/html`, which stays unless they name a `content-type` |
 
-When the template does not exist the response is `404`.
+When the template does not exist the response is the `500` page, and Nova
+logs `Nova could not render template` with the name of the template. In
+`dev` the page names the template as well.
 
 ## Escaping
 

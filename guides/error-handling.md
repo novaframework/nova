@@ -12,8 +12,9 @@ change it.
 | A controller throws `{StatusCode, Reason}` | The page for that status code | `Controller threw an exception` |
 | A controller crashes | The `500` page | `Controller crashed` |
 | A controller returns something no handler knows | The fallback controller of the module if it has one, otherwise the `500` page | |
+| A view names a template that does not exist | The `500` page. In `dev` the page names the template | `Nova could not render template` |
 | A controller or a handler fails after the response has begun | What was sent already. No page | The failure, and a warning that no page is sent |
-| A controller answers the request itself and returns without the request it answered with | The response the controller sent. What it returned is not sent | A warning that names the controller |
+| A request that was answered already is answered again, for instance by a controller that replied with `cowboy_req:reply/4` and returned without the request that call gave back | The response that was sent first. The second one is dropped, and the connection stays open | `The request was answered already, so this response is not sent ...`, once per request |
 | A `pre_request` plugin crashes or returns `{error, Reason}` | The `500` page | `Plugin crashed` |
 | The security callback crashes | The `500` page | `Security handler crashed` |
 | The security callback refuses the request | `401`, or what the callback returned. No page is rendered | |
@@ -68,16 +69,16 @@ does not count as `dev` here. The stacktrace also needs
 `{use_stacktrace, true}`. Without it, Nova logs a hint about the setting
 with the first such page in `dev`, once per node.
 
-`{render_error_pages, false}` under `nova` has two effects:
+`{render_error_pages, false}` under `nova` turns the pages that come with
+Nova off. It is read when one of those pages is rendered and nowhere else, so
+the status code routes of your application run either way:
 
-* A controller that crashes or throws a status is answered with the bare
-  status code. No page is looked up, neither Nova's nor a status code route
-  of the application.
-* Nova's `500` page, which a crash in a plugin or in a security callback is
-  answered with, sends the bare status code where it would send the HTML
-  page. Its JSON form is sent as before.
-
-The `404` page for a request no route matches is not affected.
+| Situation | `true`, the default | `false` |
+|---|---|---|
+| The application has a route for the status code | The route runs, for every client | The route runs, for every client |
+| A `404` or a `500` without such a route: no route matches, a controller throws `{404, Reason}`, a controller crashes or returns something no handler knows, a plugin or a security callback crashes | Nova's page, in the form the `accept` header asks for | The bare status code for every client, without a body and without a `content-type` |
+| Any other status code without a route, such as a `405`, a thrown `{403, Reason}`, a request the security callback refuses, or a `400`, `408` or `413` | The bare status code | The bare status code |
+| A page of the application crashes | Nova's `500` page, and a bare `500` if that fails too | A bare `500` |
 
 ## Your own pages
 
@@ -106,6 +107,17 @@ A page is a controller function and returns what a controller returns. Your
 routes replace the pages that come with Nova. For a `500`, the request has
 what is known about the failure under `crash_info`, after
 [redaction](logging.md#redaction). Do not send it to the client.
+
+What else the request of a page holds depends on how the page was reached:
+
+| Reached from | In the request |
+|---|---|
+| A request no route or no method matches, a crash in a plugin or in a security callback, and your own call of `nova_router:render_status_page/2,3,5` | `resp_status_code`, and `controller_data` with `#{status => StatusCode, data => Data}`. `Data` is the map `render_status_page` was given: `#{error => "Not found in path"}` for a `404`, `#{error => "Method not allowed"}` for a `405`, otherwise `#{}`. A crash has `crash_info` as well |
+| A controller that crashed, threw `{StatusCode, Reason}` or returned something no handler knows | `crash_info`. Neither `resp_status_code` nor `controller_data` |
+| A request `cowboy_req` could not parse in a controller (`400`, `408`, `413`) | None of the three |
+
+Match on the keys a page needs with a default, as in
+`maps:get(resp_status_code, Req, 500)`, so that one page serves both.
 
 A page that crashes is not rendered again: the request gets the `500` page,
 Nova's own if it was your `500` page that failed, and a `500` without a body
