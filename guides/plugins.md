@@ -9,7 +9,9 @@ CORS headers, check CSRF tokens and more, see [Nova plugins](#nova-plugins).
 
 A plugin is configured as `{Phase, Module, Options}`. The phases of a request
 are `pre_request` and `post_request`. Plugins of one phase run in the order
-they are listed.
+they are listed. A `pre_request` plugin runs ahead of the security callback of
+the route, behind it, or both, see
+[Before and after the security callback](#before-and-after-the-security-callback).
 
 Global plugins are set under the `nova` application in *sys.config*:
 
@@ -49,9 +51,9 @@ create(#{json := #{~"id" := Id, ~"value" := Value}}) ->
 
 ## Writing a plugin
 
-A plugin implements the `nova_plugin` behaviour. `pre_request/4` and
-`post_request/4` take the request, the Cowboy middleware environment, the
-options from the configuration and the state of the plugin:
+A plugin implements the `nova_plugin` behaviour. `pre_security/4`,
+`pre_request/4` and `post_request/4` take the request, the Cowboy middleware
+environment, the options from the configuration and the state of the plugin:
 
 ```erlang
 -module(my_app_header_plugin).
@@ -73,7 +75,8 @@ plugin_info() ->
       options => []}.
 ```
 
-A plugin exports the callbacks of the phases it is configured for.
+A plugin exports the callbacks of the phases it is configured for. A
+`pre_request` plugin exports `pre_security/4`, `pre_request/4` or both.
 `plugin_info/0` is required and its map needs at least `title` and
 `version`. `rebar3 new nova_plugin <name>` creates a skeleton.
 
@@ -82,7 +85,7 @@ plugin module, shared by every request, see below.
 
 ## Return values
 
-`pre_request/4` and `post_request/4` return one of:
+`pre_security/4`, `pre_request/4` and `post_request/4` return one of:
 
 | Return | Effect |
 |--------|--------|
@@ -123,34 +126,129 @@ pre_request(Req, _Env, _Options, State) ->
     end.
 ```
 
-Once a `pre_request` plugin stops the request or the security function refuses it, the controller and the `post_request` plugins do not run. Keep access logging and similar work that has to see every request in a stream handler or in a `pre_request` plugin.
+Once a `pre_request` plugin stops the request or the security function refuses it, the controller and the `post_request` plugins do not run. Keep access logging and similar work that has to see every request in a stream handler or in `pre_security/4` of a plugin.
 
 The state a plugin returns is stored per plugin module, not per request, and is shared by every request. Nova only writes it when it changed, and concurrent requests overwrite each other's writes: the last writer wins. Keep per-request data in `Req`, and keep shared data that has to add up (counters, rate-limit buckets) in `ets` or `counters`.
 
-## Running a plugin after the security callback
+## Before and after the security callback
 
-Every `pre_request` plugin runs before the route's security callback. A plugin that reads the request body, such as `nova_request_plugin` or `nova_multipart_plugin`, therefore reads, decodes and (for uploads) spools what an unauthenticated client sent. List the plugin modules that should wait for the security callback under `plugins_after_security`, in the route group:
+A plugin listed as `{pre_request, Module, Options}` takes part twice before the controller, with the same options:
 
-```erlang
-#{prefix => "/files",
-  security => fun my_auth:check/1,
-  plugins => [{pre_request, nova_cors_plugin, #{allow_origins => [~"https://app.example.com"]}},
-              {pre_request, nova_multipart_plugin, #{handler => {nova_multipart_file_handler, #{dir => ~"/var/uploads"}}}}],
-  plugins_after_security => [nova_multipart_plugin],
-  routes => [{"/upload", fun upload_controller:upload/1, #{methods => [post]}}]}
-```
+| Callback | Runs | For |
+|---|---|---|
+| `pre_security/4` | Ahead of the security callback of the route, for every request to the route | What has to happen whether or not the request is let in: answering a CORS preflight, setting a correlation id, turning a client away by address or rate. It must not read the request body |
+| `pre_request/4` | Once the security callback has let the request through. At once on a route without one | Reading and decoding the body, and what only a request that is let in needs |
 
-or for every route group that does not set the key, in `sys.config`:
+Both are optional. Within each of the two the plugins run in the order they are listed.
+
+A plugin that turns clients away before they are authenticated does it in `pre_security/4`:
 
 ```erlang
-{nova, [{plugins_after_security, [nova_request_plugin, nova_multipart_plugin]}]}
+-module(my_app_blocklist_plugin).
+-behaviour(nova_plugin).
+-export([pre_security/4, plugin_info/0]).
+
+pre_security(Req, _Env, #{blocked := Blocked}, State) ->
+    {Address, _Port} = cowboy_req:peer(Req),
+    case lists:member(Address, Blocked) of
+        true -> {stop, {status, 403}, Req, State};
+        false -> {ok, Req, State}
+    end.
+
+plugin_info() ->
+    #{title => ~"my_app_blocklist_plugin",
+      version => ~"0.1.0",
+      url => ~"https://example.com/my_app",
+      authors => [~"My App team"],
+      description => ~"Refuses requests from listed addresses",
+      options => [{blocked, ~"The addresses to refuse, as inet:ip_address()"}]}.
 ```
 
-The default is `[]`, which is the order Nova has always had. A listed plugin keeps its options and its place among the other listed plugins, and runs once the security callback has let the request through. It does not run for a request the callback refuses, nor after an earlier plugin failed. Plugins that are not listed still run first, so CORS preflights are still answered before the security callback.
+```erlang
+{pre_request, my_app_blocklist_plugin, #{blocked => [{203, 0, 113, 7}]}}
+```
 
-The security callback of such a route cannot read what a listed plugin produces: `json`, `params`, `parsed_qs` and `files` are not in `Req` yet. A callback that needs the body, for instance to check a signature over it, has to keep the body-reading plugin out of the list. A plugin that depends on a listed one, such as `nova_csrf_plugin` reading the token from a multipart form, has to be listed too, after it.
+The plugins of Nova are split like this:
 
-A websocket route runs its `pre_request` plugins on the upgrade request. For the time after the upgrade it has the phases `pre_ws_request` and `post_ws_request`, which run around every callback of the controller, and `post_ws_connection`, which runs once when the connection goes away: after `terminate/3` if the controller exports it, and also when it does not or when it crashes. `post_ws_connection` does not run for an upgrade that was refused. See the [Websockets](websockets.md#plugins) guide.
+| Plugin | `pre_security/4` | `pre_request/4` |
+|---|---|---|
+| `nova_correlation_plugin` | Sets the correlation id | |
+| `nova_cors_plugin` | Sets the CORS headers and answers a preflight | |
+| `nova_ws_origin_plugin` | Checks the `Origin` of a request to a websocket route | |
+| `nova_csrf_plugin` | Checks where a request that changes state comes from | Hands out and checks the token |
+| `nova_request_plugin` | Parses the query string into `parsed_qs` | Reads and decodes the body into `json`, `params` and `body` |
+| `nova_multipart_plugin` | | Reads the parts into `params` and `files` |
+
+The security callback finds in the request what `pre_security/4` put there: the correlation id, the CORS response headers and `parsed_qs`. `json`, `params`, `body` and `files` are not there yet. Nothing of the body is read from a client the callback refuses.
+
+A websocket route runs its `pre_request` plugins on the upgrade request, in the same two steps. For the time after the upgrade it has the phases `pre_ws_request` and `post_ws_request`, which run around every callback of the controller, and `post_ws_connection`, which runs once when the connection goes away: after `terminate/3` if the controller exports it, and also when it does not or when it crashes. `post_ws_connection` does not run for an upgrade that was refused. See the [Websockets](websockets.md#plugins) guide.
+
+Releases up to 0.18 ran `pre_request/4` of every plugin ahead of the security callback. Two lists change the order for the modules they name. Each is a key of a route group or of the `nova` environment, and a route group that has the key does not read the one of the environment.
+
+### Running a plugin ahead of the security callback
+
+`plugins_before_security` names the modules whose `pre_request/4` runs ahead of the security callback, right after their `pre_security/4`. Use it for a security callback that reads what a plugin decodes, such as one that checks a signature over the body:
+
+```erlang
+#{prefix => "/hooks",
+  security => fun my_app_hooks:is_signed/1,
+  plugins => [{pre_request, nova_request_plugin, #{decode_json_body => true}}],
+  plugins_before_security => [nova_request_plugin],
+  routes => [{"/payment", fun my_app_hooks:payment/1, #{methods => [post]}}]}
+```
+
+```erlang
+is_signed(Req = #{body := Body}) ->
+    Sent = cowboy_req:header(~"x-signature", Req, ~""),
+    Expected = binary:encode_hex(crypto:mac(hmac, sha256, signing_key(), Body), lowercase),
+    byte_size(Sent) =:= byte_size(Expected) andalso crypto:hash_equals(Sent, Expected).
+```
+
+The body of every request to such a route is read and decoded, also of one the callback goes on to refuse. Keep `max_body_length` low on it.
+
+The value is `all`, for every plugin of the route group, or a list of modules:
+
+```erlang
+{nova, [{plugins_before_security, [nova_request_plugin]}]}
+```
+
+| Where | What the list may name | Otherwise |
+|---|---|---|
+| `nova` environment | Modules that export `pre_request/4` | `nova_sup` fails to start with `{invalid_setting, plugins_before_security, Value}` |
+| Route group | Modules that export `pre_request/4` and that the group uses as `pre_request` plugins | The routes are refused with `{invalid_setting, plugins_before_security, Value}` and the application does not start |
+
+`[nova_cors_plugin]` is refused in both places, since that plugin has no `pre_request/4`, and so are `[all]` and a misspelt name. The default is `[]`.
+
+A CORS preflight to a route that does not take `OPTIONS` runs `pre_security/4` only, also of a module that is listed here, see [Nova cors](#nova-cors).
+
+### Keeping a plugin behind the security callback
+
+`plugins_after_security` names the modules of which nothing runs ahead of the security callback. Their `pre_security/4` runs behind it too, right before their `pre_request/4`:
+
+```erlang
+#{prefix => "/account",
+  security => fun my_app_auth:session/1,
+  plugins => [{pre_request, nova_correlation_plugin, #{}},
+              {pre_request, nova_request_plugin, #{parse_qs => true, read_urlencoded_body => true}}],
+  plugins_after_security => [nova_request_plugin],
+  routes => [{"/profile", fun my_app_profile_controller:update/1, #{methods => [post]}}]}
+```
+
+Here a request the callback refuses does not get its query string parsed either. A listed module does not run for a request that is refused, nor for a CORS preflight to a route that does not take `OPTIONS`. A module in both lists runs behind the callback.
+
+The value is a list of module names, `[]` by default. Any other value stops the application from starting with `{invalid_plugins_after_security, Value}`. The key of the `nova` environment is read when routes are compiled.
+
+### Warnings about the order
+
+What the order changes without anything failing is logged as a warning when routes are compiled, once for a route group and its plugins:
+
+| Warning starts with | When | Goes away when |
+|---|---|---|
+| `The security callback of this route group runs before nova_request_plugin reads the body` | A route group with a security callback has `nova_request_plugin` with `decode_json_body` or `read_urlencoded_body`, and the body is read behind the callback | The plugin is listed under `plugins_before_security`. Nothing else turns it off. When the callback does not read `json` or `params`, leave the warning alone |
+| `pre_request/4 of these plugins runs once the security callback of this route group has let a request through` | A route group with a security callback has a plugin from outside Nova that exports `pre_request/4` and not `pre_security/4` | The plugin exports `pre_security/4`, or is listed under `plugins_before_security` |
+| `pre_request/4 of these plugins does not run for a CORS preflight to a route of this group that does not take OPTIONS` | A route group without a security callback has such a plugin, and a route whose `methods` has neither `options` nor `'_'` | The plugin exports `pre_security/4`. Listing it under `plugins_before_security` turns the warning off too, but `pre_request/4` still does not run for such a preflight |
+
+Each names the application, the prefix and the plugins.
 
 
 ## Request errors
@@ -194,33 +292,51 @@ A request passes these steps in this order. A step that answers the request
 ends it, and the steps after it do not run.
 
 1. **Routing.** The path and the method are looked up in the routing table.
-2. **`pre_request` plugins**, in the order they are listed.
+   A path that is not canonical has been answered with `400` before that, see
+   [Routing](routing.md#paths-that-are-not-canonical).
+2. **`pre_security/4`** of the `pre_request` plugins, in the order they are
+   listed. On a websocket route the origin check comes first. `pre_request/4`
+   of a plugin listed under `plugins_before_security` runs here too.
 3. **The security callback** of the route. A route of an included
    application can have two, see the
    [multi-app guide](multi-app.md#security-of-a-mounted-application).
-4. **The controller**, or the upgrade of a `protocol => ws` route.
-5. **`post_request` plugins.** The response has been sent by then.
+4. **`pre_request/4`** of the `pre_request` plugins, in the order they are
+   listed.
+5. **The controller**, or the upgrade of a `protocol => ws` route.
+6. **`post_request` plugins.** The response has been sent by then.
 
 What follows from that order:
 
-- A `pre_request` plugin sees every request to its routes, also the ones the
+- `pre_security/4` sees every request to its routes, also the ones the
   security callback is about to refuse, and `auth_data` is not set yet.
-  `nova_csrf_plugin` and `nova_ws_origin_plugin` are `pre_request` plugins, so
-  they refuse a request before the security callback is asked.
-- The security callback sees what the plugins added to the request, such as
-  `json` and `params` from `nova_request_plugin`.
-- A `pre_request` plugin that returns `{stop, ...}` answers the request itself.
-  The security callback, the controller and the `post_request` plugins do not
-  run.
-- A `pre_request` plugin that crashes is logged and answered with the `500`
-  page. The controller is not called and a websocket is not upgraded.
+- `pre_request/4` sees only requests the security callback let through. It
+  finds `auth_data` in the request when the callback returned
+  `{true, AuthData}`.
+- The security callback sees what `pre_security/4` added to the request, such
+  as `parsed_qs` from `nova_request_plugin`. It does not see `json`, `params`
+  or `files`, unless the plugin is listed under `plugins_before_security`.
+- `nova_csrf_plugin` and `nova_ws_origin_plugin` refuse a request from
+  another origin in `pre_security/4`, before the security callback is asked.
+  The token of `nova_csrf_plugin` is checked in `pre_request/4`, after it.
+- A plugin that returns `{stop, ...}` answers the request itself. Nothing
+  after it runs: from `pre_security/4` that leaves out the security callback,
+  `pre_request/4`, the controller and the `post_request` plugins.
+- A plugin that crashes in either callback is logged and answered with the
+  `500` page. The controller is not called and a websocket is not upgraded.
 - A request the security callback refuses is answered with `401`, or with what
   the callback returned, and one whose callback crashes with `500`. Neither
-  reaches the controller or the `post_request` plugins.
+  reaches `pre_request/4`, the controller or the `post_request` plugins.
+- `auth_data` in the request is what was written last. A plugin that sets it
+  in `pre_security/4` is overwritten by a callback that returns
+  `{true, AuthData}` and kept by one that returns `true`. A plugin that sets it
+  in `pre_request/4` replaces what the callback returned. A websocket
+  controller still gets what the callback returned, under `auth_data` in its
+  controller data.
 - A request that matches no route gets the `404` page, or `405` when the path
   exists for another method, and runs no plugins at all. Headers that a plugin
   adds to every response, CORS headers or a correlation ID, are missing from
-  those two.
+  those two. The one exception is a CORS preflight, see
+  [Nova cors](#nova-cors).
 - A page declared for a status code is a route like any other. Declared in a
   group with `security`, the `404` and `405` pages are only rendered for a
   request that callback lets through, and every other request gets a `401`.
@@ -242,10 +358,10 @@ These plugins come with Nova.
 |------|-----------|----|
 |nova_correlation_plugin|Gives every request a correlation id: in the `x-correlation-id` response header, in the logger metadata and under `correlation_id` in the request.|[nova_correlation_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_correlation_plugin.erl)|
 |nova_cors_plugin|Answers CORS preflights and adds the CORS headers to responses.|[nova_cors_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_cors_plugin.erl)|
-|nova_csrf_plugin|Refuses a state-changing request that does not carry the CSRF token of the session.|[nova_csrf_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_csrf_plugin.erl)|
+|nova_csrf_plugin|Refuses a state-changing request that another site sent, or that does not carry the CSRF token of the client.|[nova_csrf_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_csrf_plugin.erl)|
 |nova_multipart_plugin|Reads `multipart/form-data` bodies and streams uploaded files to a handler.|[nova_multipart_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_multipart_plugin.erl)|
 |nova_request_plugin|Parses the query string and decodes urlencoded and JSON bodies. Multipart bodies are left to `nova_multipart_plugin`.|[nova_request_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_request_plugin.erl)|
-|nova_ws_origin_plugin|Refuses a websocket upgrade that a page on another origin started.|[nova_ws_origin_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_ws_origin_plugin.erl)|
+|nova_ws_origin_plugin|Refuses a websocket upgrade that a page on another origin started. Nova runs it on every websocket route, see [Websockets](websockets.md#the-origin-check).|[nova_ws_origin_plugin](https://github.com/novaframework/nova/blob/master/src/plugins/nova_ws_origin_plugin.erl)|
 
 
 ### Nova correlation
@@ -274,7 +390,11 @@ A correlation ID from the request is used when it is 1 to 255 visible ASCII char
 
 This plugin answers CORS preflights (an `OPTIONS` request with both `Origin` and `Access-Control-Request-Method`) itself with a `204` and the CORS headers, so the controller never sees them. Any other request, including a plain `OPTIONS`, goes on to the application with the CORS headers added to the response.
 
-The route does not have to accept `OPTIONS` for that. A preflight names the method of the request it is about, in `Access-Control-Request-Method`, and Nova runs the `pre_request` and `post_request` plugins of the route for that method on it. `{"/orders", fun orders:create/1, #{methods => [post]}}` in a route group with this plugin therefore answers the preflight for a `POST`. Without a plugin that answers, the preflight gets the `405` it always got, as does a preflight for a method the path has no route for, and a plain `OPTIONS`. The security callback of the route does not run for a preflight, and neither do plugins listed in `plugins_after_security`.
+The plugin works in `pre_security/4`, so a preflight is answered ahead of the security callback of the route. A preflight carries no credentials, and a browser shows a `401` to the page only when the response has the CORS headers.
+
+The route does not have to accept `OPTIONS` for that. A preflight names the method of the request it is about, in `Access-Control-Request-Method`, and Nova runs `pre_security/4` of the `pre_request` plugins of the route for that method on it, and then its `post_request` plugins. `{"/orders", fun orders:create/1, #{methods => [post]}}` in a route group with this plugin therefore answers the preflight for a `POST`. Without a plugin that answers, the preflight gets the `405` it always got, as does a preflight for a method the path has no route for, and a plain `OPTIONS`.
+
+For such a preflight the security callback of the route does not run. Neither does `pre_request/4` of any plugin, one listed under `plugins_before_security` included, nor anything of a plugin that is [kept behind the security callback](#keeping-a-plugin-behind-the-security-callback). A plugin of your own that answers preflights has to do it in `pre_security/4`.
 
 The plugin never sends `access-control-allow-credentials`, so a browser does not expose a response to a request made with cookies or HTTP authentication.
 
@@ -296,13 +416,19 @@ By default a preflight is told that every header it asks for is allowed. That is
 
 ### Nova CSRF
 
-The plugin protects forms against cross-site request forgery with a token
-that is kept in the session. For `GET`, `HEAD` and `OPTIONS` it makes sure the
-session has a token and puts it in the request under `csrf_token`. For every
-other method it compares the token of the session with the one the request
-submitted, in the `x-csrf-token` header or in the form field `_csrf_token`.
-A request without the right token is answered with `403` and the text
-`Forbidden - CSRF token invalid`, and the controller is not called.
+The plugin protects forms against cross-site request forgery. It makes two
+checks on a request that changes state, which is every method but `GET`,
+`HEAD` and `OPTIONS`:
+
+| Check | Runs in | A refused request gets |
+|---|---|---|
+| The browser says another site sent the request | `pre_security/4`, before the security callback and before the body is read | `403` and `Forbidden - request from another origin` |
+| The request carries the token a page of the site was given | `pre_request/4`, after the security callback | `403` and `Forbidden - CSRF token invalid` |
+
+The controller is not called for a request that is refused. For `GET`, `HEAD`
+and `OPTIONS` the plugin puts a token in the request under `csrf_token`. The
+other methods send it back in the `x-csrf-token` header or in the form field
+`_csrf_token`.
 
 ```erlang
 #{prefix => "/account",
@@ -331,21 +457,126 @@ A view gets the token as the variable `csrf_token`:
 ```
 
 A page that submits with JavaScript sends the token in the `x-csrf-token`
-header.
+header. Every response carries another token, and the earlier ones are still
+accepted.
 
 |Option|Description|
 |------|-----------|
-|field_name|The form field that carries the token. Defaults to `<<"_csrf_token">>`.|
-|header_name|The request header that carries the token. Defaults to `<<"x-csrf-token">>`.|
-|session_key|The session key the token is stored under. Defaults to `<<"_csrf_token">>`.|
-|excluded_paths|Path prefixes that are not checked. A prefix covers whole path segments: `<<"/api">>` covers `/api` and `/api/hooks`, not `/apikeys`. Defaults to `[]`.|
+|field_name|The form field that carries the token. Defaults to `~"_csrf_token"`.|
+|header_name|The request header that carries the token. Defaults to `~"x-csrf-token"`.|
+|session_key|The session key a token kept in the session is stored under. Defaults to `~"_csrf_token"`.|
+|allowed_origins|The origins a request that changes state may come from, for this route group. Defaults to `allowed_origins` of the `nova` environment. See [Allowed origins](#csrf-allowed-origins).|
+|excluded_paths|Path prefixes that are not checked, by either check. A prefix covers whole path segments: `~"/api"` covers `/api` and `/api/hooks`, not `/apikeys`. Defaults to `[]`.|
 
 Routes for API clients that authenticate with a token in a header and not
 with the session cookie do not need the plugin.
 
+### CSRF token modes
+
+The plugin makes its tokens in one of two ways. `csrf_secret` and `csrf_token`
+of the `nova` environment decide which:
+
+| `csrf_secret` | `csrf_token` | Tokens |
+|---|---|---|
+| Set | Not set, or `stateless` | Signed with the secret. Nothing is stored |
+| Set | `session` | Kept in the session |
+| Not set | Not set | Kept in the session. A notice is logged once, when the plugin is first loaded |
+| Not set | `session` | Kept in the session, without the notice |
+| Not set | `stateless` | Nova does not start, with `{invalid_setting, csrf_secret, not_set}` |
+
+```erlang
+{nova, [
+    {use_sessions, true},
+    {csrf_secret, ~"${CSRF_SECRET}"}
+]}
+```
+
+`csrf_secret` is a binary of at least 32 bytes. Give every node the same one,
+and keep it across restarts: a token signed with another secret is refused.
+The example is for a `sys.config.src` of a release, which takes the value
+from the environment variable `CSRF_SECRET` when the node starts. A value
+that is too short stops the boot with `{invalid_setting, csrf_secret, redacted}`.
+
+A signed token is tied to the session cookie of the client:
+
+- It is an HMAC-SHA256, under the secret, over the id in the session cookie
+  and 16 random bytes. Each token is good for as long as the client holds
+  that cookie and the secret is in use.
+- A visitor without a session cookie is handed one by the response. No
+  session is started and nothing is stored for it.
+- A request that changes state is refused when it does not send the cookie
+  its token was signed for.
+- `nova_session:renew/1` moves the client to another session id, and so does
+  the first `nova_session:set/3` for a client that has no session yet. A token
+  handed out before that is refused afterwards. That goes for `csrf_token`
+  in the request that signs in too, so answer a sign-in with a redirect: the
+  next page is then rendered for the new cookie.
+
+To change the secret, set a list. The first secret signs and all of them are
+accepted:
+
+```erlang
+{nova, [
+    {csrf_secret, [~"the-new-secret-of-at-least-32-bytes-0001",
+                   ~"the-old-secret-of-at-least-32-bytes-0000"]}
+]}
+```
+
+Take the old secret out once the pages that were open have been sent.
+
+A token kept in the session is a random value, stored with
+`nova_session:set_provisional/3`, so every visitor to a page with the plugin
+gets a session. A page gets the token under a mask that is new for every
+response.
+
+After a secret is set, a form that was rendered before still sends the token
+of its session. It is accepted for as long as that session is there.
+
+### CSRF allowed origins
+
+The first check goes by two request headers that a page cannot set,
+`Sec-Fetch-Site` and `Origin`, and by `allowed_origins`:
+
+| The request has | `same_host` | `same_origin` | A list | `any` |
+|---|---|---|---|---|
+| `Sec-Fetch-Site: same-origin` or `none` | Passes | Passes | Passes | Passes |
+| Any other `Sec-Fetch-Site`, such as `same-site` or `cross-site` | Refused | Refused | Passes when the `Origin` is in the list | Passes |
+| No `Sec-Fetch-Site` and no `Origin` | Passes | Passes | Passes | Passes |
+| No `Sec-Fetch-Site`, and an `Origin` | Passes when host and port are those of the request | Passes when scheme, host and port are those of the request | Passes when the `Origin` is in the list | Passes |
+
+A request with neither header is not from a browser, or from one too old to
+send them. Without `Sec-Fetch-Site`, `Origin: null` is refused by everything
+but `any`. The
+[Configuration](configuration.md#allowed-origins) guide says how an origin is
+compared with each value.
+
+`allowed_origins` of the `nova` environment is the default, and websocket
+upgrades go by the same setting. To let pages of other origins post to one
+route group, give the plugin of that group a list. A list takes the place of
+`same_host`, so the origin of the site itself goes in it too:
+
+```erlang
+#{prefix => "/embed",
+  security => fun my_app_auth:session/1,
+  plugins => [
+      {pre_request, nova_request_plugin, #{read_urlencoded_body => true}},
+      {pre_request, nova_csrf_plugin, #{allowed_origins => [~"https://app.example.com",
+                                                            ~"https://partner.example.org"]}}
+  ],
+  routes => [
+      {"/comment", fun my_app_embed_controller:comment/1, #{methods => [post]}}
+  ]}
+```
+
+The option takes the values of the setting. Any other value is refused when
+the routes are compiled, and the application does not start, with
+`{invalid_setting, allowed_origins, Value}`. `any` turns this check off and
+leaves the token check. `nova_ws_origin_plugin` takes the same option, see
+[Websockets](websockets.md#the-origin-check).
+
 ### Nova request
 
-The plugin parses the query string and decodes the request body, and adds the result to the request.
+The plugin parses the query string and decodes the request body, and adds the result to the request. The query string is parsed in `pre_security/4`, ahead of the security callback. The body is read and decoded in `pre_request/4`, once the callback has let the request through, so `json`, `params` and `body` are not in the request the callback gets. See [Running a plugin ahead of the security callback](#running-a-plugin-ahead-of-the-security-callback) for a callback that needs them.
 
 ```erlang
 {pre_request, nova_request_plugin, #{decode_json_body => true,
@@ -360,8 +591,8 @@ and at most `max_body_length` bytes of it (default `1000000`, 1 MB). A body
 whose `Content-Length` is over the limit gets a `413` before any of it is
 read; a chunked body gets one as soon as it passes the limit. Decoded JSON
 takes several times the size of its text in memory, and this happens before
-your controller or security callback runs, so raise the limit only on the
-routes that need it, for example
+your controller runs, so raise the limit only on the routes that need it, for
+example
 `{pre_request, nova_request_plugin, #{decode_json_body => true, max_body_length => 10000000}}`
 in that route group's `plugins`. `max_body_length => infinity` reads bodies of
 any size.
@@ -505,12 +736,12 @@ single uploads are larger. The number of files is not bounded by default: a
 request spools at most `max_parts` of them, and a count across the node is
 one that a few slow uploads can use up.
 
-By default the upload is read before the route's security callback runs, so
-a client that is not signed in can spool up to the limits above. List
-`nova_multipart_plugin` under `plugins_after_security` on every upload route
-that has a security callback: a request the callback refuses is then answered
-at once and nothing of its body is read or spooled. See
-[Running a plugin after the security callback](#running-a-plugin-after-the-security-callback).
+The upload is read once the security callback of the route has let the
+request through. A request the callback refuses is answered at once and
+nothing of its body is read or spooled. On a route without a security
+callback, and on one that lists `nova_multipart_plugin` under
+`plugins_before_security`, any client can spool up to the limits above. See
+[Before and after the security callback](#before-and-after-the-security-callback).
 
 To read the parts yourself, leave `nova_multipart_plugin` off the route and use
 [cowboy_req:read_part/1](https://ninenines.eu/docs/en/cowboy/2.21/manual/cowboy_req.read_part/)
