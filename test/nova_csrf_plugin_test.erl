@@ -229,7 +229,7 @@ excluded_path_skips_validation_test() ->
         Req = nova_test_helper:mock_req(~"POST", ~"/api/webhooks/stripe"),
         Options = #{excluded_paths => [<<"/api/webhooks">>]},
         {ok, Req1, _State} = nova_csrf_plugin:pre_request(Req, #{}, Options, #{}),
-        ?assertEqual(<<"token">>, unmasked(maps:get(csrf_token, Req1)))
+        ?assertEqual(~"token", unmasked(maps:get(csrf_token, Req1)))
     after
         cleanup_meck([nova_session])
     end.
@@ -270,7 +270,7 @@ masked_token_is_accepted_test() ->
     setup_meck([nova_session, cowboy_req]),
     try
         Token = ~"the-token-of-the-session",
-        meck:expect(nova_session, get, fun(_Req, <<"_csrf_token">>) -> {ok, Token} end),
+        meck:expect(nova_session, get, fun(_Req, ~"_csrf_token") -> {ok, Token} end),
         Get = nova_test_helper:mock_req(~"GET", ~"/"),
         {ok, #{csrf_token := <<Masked/binary>>}, _} = nova_csrf_plugin:pre_request(Get, #{}, #{}, #{}),
         {ok, #{csrf_token := <<Again/binary>>}, _} = nova_csrf_plugin:pre_request(Get, #{}, #{}, #{}),
@@ -278,11 +278,11 @@ masked_token_is_accepted_test() ->
         ?assertEqual(nomatch, binary:match(Masked, Token)),
         Post = nova_test_helper:mock_req(~"POST", ~"/submit"),
         [begin
-             meck:expect(cowboy_req, header, fun(<<"x-csrf-token">>, _Req) -> Submitted end),
+             meck:expect(cowboy_req, header, fun(~"x-csrf-token", _Req) -> Submitted end),
              ?assertMatch({Submitted, {ok, _, _}}, {Submitted, nova_csrf_plugin:pre_request(Post, #{}, #{}, #{})})
          end || Submitted <- [Masked, Again, Token]],
         [begin
-             meck:expect(cowboy_req, header, fun(<<"x-csrf-token">>, _Req) -> Submitted end),
+             meck:expect(cowboy_req, header, fun(~"x-csrf-token", _Req) -> Submitted end),
              ?assertMatch({Submitted, {stop, {reply, 403, _, _}, _, _}},
                           {Submitted, nova_csrf_plugin:pre_request(Post, #{}, #{}, #{})})
          end || Submitted <- [binary:part(Masked, 0, byte_size(Masked) - 1), <<Masked/binary, "A">>,

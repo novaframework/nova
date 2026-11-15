@@ -389,7 +389,7 @@ handle_websocket_req_passthrough_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         meck:new(test_ws_ctrl3, [non_strict, no_link]),
         meck:expect(test_ws_ctrl3, init, fun(CD) -> {ok, CD} end),
-        Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
+        Req = nova_test_helper:mock_req(~"GET", ~"/ws"),
         Own = Req#{custom => true},
         Return = {websocket, #{data => test}, Own},
         {cowboy_websocket, Req1, _State} =
