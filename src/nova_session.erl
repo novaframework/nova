@@ -8,8 +8,8 @@ when the `environment` is `dev` (see `session_cookie_name` in the
 configuration guide). A browser keeps a cookie with the `__Host-` prefix only
 when it is `Secure`, has `Path=/` and no `Domain`, so no other host of the
 domain can set or shadow it. `nova_stream_h` issues it with the response of the
-first request that writes to the session or calls `client_id/1`, so visitors
-that do neither get no cookie. A request carrying two or more different session ids
+first request that writes to the session or is given a token by
+`nova_csrf_plugin`, so visitors that do neither get no cookie. A request carrying two or more different session ids
 is treated as having no session. A request whose Cookie header does not parse
 gets a session for that request only and no cookie, so a session cookie the
 client already holds is not overwritten.
@@ -138,8 +138,8 @@ A backend without it gets the value through `c:set_value/3`.
              Value :: term().
 
 -doc """
-Called by `delete/1` and `renew/1` to drop the session `SessionId` and all
-its data. The return value is not used.
+Called by `delete/1`, `renew/1` and `sign_in/3` to drop the session
+`SessionId` and all its data. The return value is not used.
 """.
 -callback delete_value(SessionId) ->
     ok |

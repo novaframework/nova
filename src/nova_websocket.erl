@@ -113,8 +113,9 @@ and `max_frame_size`.
 
 -doc """
 Called in the request process, before the upgrade, with the controller data:
-a map with the upgrade request under `req`, and `auth_data` when the
-security callback of the route returned `{true, AuthData}`.
+a map with the upgrade request under `req`, and under `auth_data` the
+`auth_data` of that request when it has one: what the security callback of
+the route returned in `{true, AuthData}`, or what a plugin wrote there.
 
 `{ok, State}` accepts the connection, and `{ok, State, Options}` accepts it
 with the given `t:opts/0`. `State` is what the other callbacks get. Any other

@@ -129,7 +129,9 @@ Stores `Value` under `Key` in the session, on every node, and creates the
 session when it does not exist. A provisional session becomes an ordinary
 one. In a full table a new session takes the place of another one, as the
 module documentation describes. Returns `{error, session_store_full}` when
-the session is not in the table of this node after the write.
+the session is not in the table of this node after the write, and
+`{error, session_ended}`, storing nothing, when the session was deleted in
+the last five minutes.
 """.
 -spec set_value(SessionId :: binary(), Key :: binary(), Value :: term()) ->
           ok | {error, session_store_full | session_ended}.
@@ -141,7 +143,8 @@ Stores `Value` under `Key` like `set_value/3`, and creates a provisional
 session when the session does not exist. A session that exists keeps its
 kind. In a full table a new provisional session takes the place of an
 expired or another provisional one. Returns `{error, session_store_full}`
-when there is none of those to drop.
+when there is none of those to drop, and `{error, session_ended}`, storing
+nothing, when the session was deleted in the last five minutes.
 """.
 -spec set_provisional_value(SessionId :: binary(), Key :: binary(), Value :: term()) ->
           ok | {error, session_store_full | session_ended}.

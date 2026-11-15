@@ -6,7 +6,9 @@ Reads and decodes the body and the query string of a request. Use it as a
 - `decode_json_body => true` - decodes the body of a request whose content
   type is `application/json` or ends in `+json`, and puts it in the request
   under `json`. `GET` and `DELETE` requests are left alone. An empty body or
-  one that is not JSON is answered with a `400`.
+  one that is not JSON is answered with a `400`, and with the default
+  `json_lib` so is an object that has a key twice and a body with anything
+  but whitespace after its value.
 - `read_urlencoded_body => true` - parses an
   `application/x-www-form-urlencoded` body and puts its fields in the request
   under `params`. A malformed body is answered with a `400`, one with too
