@@ -47,6 +47,12 @@ the options of that entry:
   ]}.
 ```
 
+Nova logs the notice
+`Application has an entry for itself in its nova_apps, and is compiled with its options`
+with the keys of the entry when the routes are compiled. A `secure` or an
+`override_secure` in that entry also covers the applications the application
+mounts.
+
 An entry an included application writes for itself is not used. Such an
 application gets its options from the entry that includes it.
 
@@ -85,8 +91,10 @@ links:
 ```
 
 An application mounted without a prefix is listed with `"/"`.
-`nova:get_apps/0` reads the default listener's table; use
-`nova_router:compiled_apps/1` for any other.
+`nova:get_apps/0` lists the applications of every listener, those of the
+default listener first. An application that several listeners serve is
+listed once, with its prefix on the default listener when that one serves
+it. Use `nova_router:compiled_apps/1` for the table of one listener.
 
 ### Security of a mounted application
 
@@ -119,6 +127,12 @@ websocket.
 A callback that is both the `secure` of the entry and the `security` of the
 group runs once. Websocket routes follow the same rules.
 
+The key of an entry is `secure` and the key of a route group is `security`.
+A `security` key in a `nova_apps` entry and a `secure` key in a route group
+are not read. Written with a callback they stop the start with
+`{misplaced_security, App, Key, Path}`, see
+[Routing](routing.md#secure-routing).
+
 Replacing a callback the application declares takes `override_secure`, see
 the [routing guide](routing.md#overriding-security-for-an-included-application).
 With `override_secure`, neither `secure` nor the callback of a group runs.
@@ -128,31 +142,46 @@ a callback stops the start with `{invalid_security, Value}`.
 ### Applications included by an included application
 
 An included application can declare `nova_apps` of its own. Those
-applications share the listener too. Each is mounted with the options of its
-own entry, not with the options of the entry that included its parent:
+applications share the listener too. Each is mounted with the `prefix` and
+the `plugin_strategy` of its own entry. The security of the entry that
+included its parent stays in force around it:
 
 | Option in the entry of the parent | Applies to the nested application |
 |---|---|
 | `prefix` | No. It answers under the `prefix` of its own entry, counted from the root of the listener, and at the root when it has none |
-| `secure` | No |
+| `secure` | Yes. The callback runs in front of the `secure` of the nested entry and the `security` of its route groups |
 | `plugin_strategy` | No. Its route groups use the plugins they declare or the global ones, as any route group does |
 | `override_secure` | Yes |
 
 With `{admin_app, #{prefix => "/admin", secure => fun my_auth:check/1}}`,
 where `admin_app` declares `{nova_apps, [dashboard_app]}`, the routes of
-`dashboard_app` answer at the root of the listener and without
-`my_auth:check/1`. Give `dashboard_app` an entry with its own `prefix` and
-`secure` in the `nova_apps` of `admin_app`, or use `override_secure`.
+`dashboard_app` answer at the root of the listener, behind
+`my_auth:check/1`. Give `dashboard_app` an entry with its own `prefix` in the
+`nova_apps` of `admin_app` to move it under `/admin`.
 
-`override_secure` is the option that covers everything an application brings
-in. When the entry of the nested application sets an `override_secure` too,
-both callbacks run, the outer one first. The request goes on when both allow
-it. The first that does not answers it, and the other one is not run. The
-controller gets the `auth_data` of the nested callback when that returns
-some, and otherwise that of the outer one.
+The callbacks around a route run outermost first: the `secure` of every
+entry the application was mounted through, then the `secure` of its own
+entry, then the `security` of the route group. Every one has to allow the
+request. The first that does not answers it, and the ones after it are not
+run. A callback that occurs more than once in that row runs once. The
+controller gets the `auth_data` of the last callback that returned some.
 
-An application is mounted once. When it is listed more than once, the entry
-that comes first is used, going through `nova_apps` depth-first.
+`override_secure` replaces all of them, an inherited `secure` included. When
+the entry of the nested application sets an `override_secure` too, both
+callbacks run, the outer one first, and both have to allow the request.
+
+The same holds for the application that starts the listener: the `secure`
+and the `override_secure` of the entry it writes for itself in its own
+`nova_apps` cover the applications it mounts.
+
+An application is mounted once, by the entry that comes first, going through
+`nova_apps` depth-first. A later entry for the same application is skipped
+when it asks for the same `secure` and `override_secure` callbacks, counting
+the inherited ones. When it asks for others, it would be left open which of
+the two protects the application, so Nova logs
+`Application is mounted by two nova_apps entries that ask for different security callbacks ...`
+and does not start, with `{nova_app_mounted_twice, App}`. Mount the
+application once, or give both entries the same callbacks.
 
 A route group can include applications as well, with the `apps` key:
 
@@ -166,13 +195,15 @@ Those are compiled with the options the application of the group was mounted
 with, and the prefix of the group as their `prefix`. `tools_app` answers
 under `/tools`, with the `secure`, `override_secure` and `plugin_strategy` of
 that entry. Options given with an application replace the inherited ones, so
-`reports_app` answers under `/reports`, not `/tools/reports`. An
-`override_secure` is the exception: an inherited one stays in force and one
+`reports_app` answers under `/reports`, not `/tools/reports`. `secure` and
+`override_secure` are the exception: an inherited one stays in force and one
 given with the application is added to it, as above.
 
-The `security` and `plugins` of the group are not inherited. They apply to
-the `routes` of the group, and `my_auth:check/1` above does not run for
-`tools_app` or `reports_app`.
+The `security` of the group covers the applications it lists: it runs after
+the `secure` callbacks in force and before the callbacks those applications
+declare, so `my_auth:check/1` above runs for every route of `tools_app` and
+`reports_app`. The `plugins` of the group are not inherited. They apply to
+the `routes` of the group.
 
 ## Starting an application at runtime
 
@@ -225,8 +256,9 @@ nova_sup:get_started_applications().
 
 `nova_router:compiled_apps/0` lists the applications compiled into the default
 listener's routing table, and `nova_router:compiled_apps/1` does the same for
-any other. `nova_router:lookup_url/1,2,3` and `nova:get_apps/0` also read the
-default table. Inside a request, `nova_router:dispatch_key(Req)` gives the key
+any other, and `nova_router:dispatch_keys/0` lists the keys of the tables
+there are. `nova_router:lookup_url/1,2,3` also read the default table, and
+`nova:get_apps/0` lists the applications of every listener. Inside a request, `nova_router:dispatch_key(Req)` gives the key
 of the listener it came in on, for `nova_router:compiled_apps/1` and
 `nova_router:lookup_url/4`.
 

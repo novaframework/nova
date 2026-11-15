@@ -187,11 +187,12 @@ A route is protected by the security callback of its route group. Where the call
 
 Nothing else is read:
 
-* A route group without a `security` key has no callback. Its routes are public, unless the `nova_apps` entry of the application has `secure` or `override_secure`.
+* A route group without a `security` key has no callback. Its routes are public, unless a `nova_apps` entry the application is mounted through has `secure` or `override_secure`, or the application is listed under the `apps` key of a route group with `security`.
 * A `security` or `secure` key in the options map of a single route is not read. Put routes that need another callback in a route group of their own.
 * A `secure` key in a route group is not read. The key of a route group is `security`.
+* A `security` key in a `nova_apps` entry is not read. The key of an entry is `secure`.
 
-Each such key is logged as a warning when the routes are compiled, with the application, the path and the key. It adds no callback to the routes.
+A callback written in one of those places would protect nothing, so Nova refuses the routes: with any value but `false` it logs the error `This key is not read here, so the callback would protect nothing ...` for each such key, with the application, the path and the key, and the application does not start, with `{misplaced_security, App, Key, Path}`. `nova_router:add_routes/2,3` throw `{error, {misplaced_security, App, Key, Path}}` for the same routes. With `false` as the value the key is logged as a warning and the routes are compiled.
 
 `rebar3 nova audit` lists the routes that change state and have no callback, see [Rebar3 Nova](rebar3_nova.md). The [Security](security.md) guide has complete examples.
 
@@ -232,7 +233,8 @@ A security function takes the request and returns one of the values below. With 
 | ---------------- | --------------- |
 | `true` | The request will continue to the controller. |
 | `{true, Data :: term()}` | The request will continue to the controller and the data will be available in the `Req` object under the `auth_data` key. |
-| `{redirect, Url :: binary() \| string()}` | The request will be redirected to the specified URL with HTTP status 302. |
+| `{redirect, Url :: binary() \| string()}` | The request will be redirected to the specified URL with HTTP status 302. The URL can name another site. |
+| `{redirect_local, Path :: binary() \| string()}` | As above, but only to a path on the site the request was made to, such as `/login`. Anything else, `https://example.com/` and `//example.com/` included, is answered with `400` and logged as a warning. Use it when the target comes from the request. |
 | `false` | The request will be stopped and a `401` status code will be returned. |
 | `{false, Headers :: map()}` | Same as above but also adds additional headers to the response. |
 | `{false, StatusCode :: integer(), Headers :: map()}` | Same as above but uses a custom status code. |
@@ -264,7 +266,7 @@ get_user(Req) ->
 
 Once the security function has been called, the data will be available in the `Req` object under the `auth_data` key. A websocket controller gets it under `auth_data` in its controller data, and in the upgrade request under `req` there.
 
-A route group of an [included application](multi-app.md#security-of-a-mounted-application) can have two callbacks, the `secure` of the application that includes it and its own `security`. Both have to allow the request, and the controller gets the data of the group's callback when that returns some, otherwise the data of the other one.
+A route group of an [included application](multi-app.md#security-of-a-mounted-application) can have several callbacks: the `secure` of every `nova_apps` entry its application is mounted through, and its own `security`. They run in that order and all have to allow the request. The controller gets the data of the last callback that returned some.
 
 ```erlang
 -module(my_controller).
@@ -335,8 +337,8 @@ It takes the same values as `secure`: `false` for no override, a `fun/1`, or
 the deprecated `{Module, Function}`.
 
 It also covers the applications that the included application includes
-itself. One of those can have an `override_secure` of its own, and then both
-callbacks have to allow a request. The
+itself, as `secure` does. One of those can have an `override_secure` of its
+own, and then both callbacks have to allow a request. The
 [multi-app guide](multi-app.md#applications-included-by-an-included-application)
 has the details.
 
