@@ -80,7 +80,7 @@ the cookies and the body from it. Nova adds these keys:
 | `plugins` | Router | The plugins of the route |
 | `correlation_id` | `nova_correlation_plugin`, before the security callback | The correlation id of the request |
 | `parsed_qs` | `nova_request_plugin`, before the security callback | The query string, a map or a list, with `parse_qs` |
-| `auth_data` | Security callback | The data of `{true, AuthData}` |
+| `auth_data` | Security callback | The data of `{true, AuthData}`. What a plugin wrote under the key stays only when the callback returned `true` or the route has none |
 | `json` | `nova_request_plugin`, after the security callback | The decoded JSON body, with `decode_json_body` |
 | `body` | `nova_request_plugin`, after the security callback | The body as it was read, with `decode_json_body` or `read_urlencoded_body`. `<<>>` otherwise |
 | `params` | `nova_request_plugin`, `nova_multipart_plugin`, after the security callback | The fields of a urlencoded or multipart body, a map with binary keys |
