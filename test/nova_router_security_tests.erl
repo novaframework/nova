@@ -94,6 +94,84 @@ inherited_override_test_() ->
        ?_assertThrow({error, {invalid_security, true}},
                      secure_of(unset, #{inherited_override_secure => [Host], override_secure => true}))}]}.
 
+inherited_secure_test_() ->
+    Group = fun ?MODULE:group_callback/1,
+    Host = fun ?MODULE:host_callback/1,
+    Other = fun ?MODULE:page/1,
+    {setup, fun setup/0, fun cleanup/1,
+     [{"an inherited secure is the default for a group that sets none",
+       ?_assertEqual(Host, secure_of(unset, #{inherited_secure => [Host]}))},
+      {"an inherited secure runs in front of the application's own and of a group callback",
+       ?_assertEqual([Other, Host, Group], secure_of(Group, #{inherited_secure => [Other], secure => Host}))},
+      {"secure => false leaves an inherited one in force",
+       ?_assertEqual([Host, Group], secure_of(Group, #{inherited_secure => [Host], secure => false}))},
+      {"a callback that is in force twice runs once",
+       ?_assertEqual([Host, Other], secure_of(Host, #{inherited_secure => [Host, Other], secure => Other}))},
+      {"override_secure replaces an inherited secure",
+       [?_assertEqual(Other, secure_of(Group, #{inherited_secure => [Host], override_secure => Other})),
+        ?_assertEqual(Other, secure_of(Group, #{inherited_secure => [Host], inherited_override_secure => [Other]}))]},
+      {"the deprecated {Mod, Fun} form is accepted for an inherited value",
+       ?_assertEqual([Host, Group], secure_of(Group, #{inherited_secure => [{?MODULE, host_callback}]}))},
+      {"an invalid inherited value stops the compile, also where an override_secure replaces it",
+       [?_assertThrow({error, {invalid_security, "my_auth:check"}},
+                      secure_of(unset, #{inherited_secure => ["my_auth:check"]})),
+        ?_assertThrow({error, {invalid_security, "my_auth:check"}},
+                      secure_of(unset, #{inherited_secure => ["my_auth:check"], override_secure => Host}))]}]}.
+
+secures_in_force_test_() ->
+    Host = fun ?MODULE:host_callback/1,
+    Other = fun ?MODULE:page/1,
+    [?_assertEqual([], nova_router:secures_in_force(#{})),
+     ?_assertEqual([], nova_router:secures_in_force(#{prefix => "/admin", secure => false, override_secure => Host})),
+     ?_assertEqual([Host], nova_router:secures_in_force(#{secure => Host})),
+     ?_assertEqual([Other, Host], nova_router:secures_in_force(#{inherited_secure => [Other], secure => Host})),
+     ?_assertEqual([Other], nova_router:secures_in_force(#{inherited_secure => [Other], secure => false}))].
+
+%% The applications a route group lists under `apps` are behind the security
+%% of that group.
+apps_of_a_group_test_() ->
+    Group = fun ?MODULE:group_callback/1,
+    Host = fun ?MODULE:host_callback/1,
+    Other = fun ?MODULE:page/1,
+    SecureOf = fun(GroupSecurity, Apps) ->
+                       nova_test_mounted_router:set_routes([group(Group)]),
+                       Outer = (group(GroupSecurity))#{prefix => "/outer", routes => [], apps => Apps},
+                       try
+                           _ = nova_router:compile_fresh([], ?KEY),
+                           ok = nova_router:add_routes(security_tests_app, [Outer], ?KEY),
+                           {ok, _Bindings, #nova_handler_value{secure = Secure}} =
+                               nova_router:lookup_url('_', ~"/outer/admin/", ~"GET", ?KEY),
+                           Secure
+                       after
+                           nova_router:delete_dispatch(?KEY)
+                       end
+               end,
+    {setup, fun setup/0, fun cleanup/1,
+     [{"the security of the group runs in front of that of the application's own group",
+       ?_assertEqual([Host, Group], SecureOf(Host, [nova_test_sub_app]))},
+      {"and in front of the secure the application is listed with",
+       ?_assertEqual([Host, Other, Group], SecureOf(Host, [{nova_test_sub_app, #{secure => Other}}]))},
+      {"a group without security adds nothing",
+       ?_assertEqual(Group, SecureOf(unset, [nova_test_sub_app]))},
+      {"override_secure on the entry of the application replaces it",
+       ?_assertEqual(Other, SecureOf(Host, [{nova_test_sub_app, #{override_secure => Other}}]))}]}.
+
+misplaced_security_on_an_entry_test_() ->
+    Host = fun ?MODULE:host_callback/1,
+    {setup, fun setup/0, fun cleanup/1,
+     [{"a callback written as security on the entry of an application stops the compile",
+       [?_assertThrow({error, {misplaced_security, nova_test_sub_app, security, "/"}},
+                      secure_of(unset, #{security => Host})),
+        ?_assertThrow({error, {misplaced_security, nova_test_sub_app, security, "/admin"}},
+                      secure_of(unset, #{prefix => "/admin", security => Host, secure => Host}))]},
+      {"security => false there is only warned about",
+       fun() ->
+               {Secure, Events} = nova_test_log:collect(fun() -> secure_of(unset, #{security => false, secure => Host}) end),
+               ?assertEqual(Host, Secure),
+               ?assertMatch([#{app := nova_test_sub_app, key := security, path := "/"}],
+                            [Report || {warning, {report, Report}} <- Events])
+       end}]}.
+
 overrides_in_force_test_() ->
     Host = fun ?MODULE:host_callback/1,
     Other = fun ?MODULE:page/1,

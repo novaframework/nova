@@ -118,7 +118,7 @@ listeners() ->
     [Ref || #nova_listener{ref = Ref} <- all_listeners()].
 
 %%--------------------------------------------------------------------
--doc "The key of the routing table of every listener Nova has started, for the `nova_router` functions that take a `DispatchKey`.".
+-doc false.
 -spec dispatch_keys() -> [nova_router:dispatch_key()].
 dispatch_keys() ->
     [Key || #nova_listener{dispatch_key = Key} <- all_listeners()].
@@ -487,49 +487,85 @@ get_version(Application) ->
 %% Recursively resolve nested nova_apps. Each nova_app can declare its own
 %% nova_apps dependencies. An application comes before the applications it
 %% mounts, and routes are first-wins, so where both declare the same route or
-%% status page the mounting application's is kept. An application already
-%% resolved is skipped, so a cycle terminates.
+%% status page the mounting application's is kept. An application is mounted
+%% once, by the first entry that reaches it. An entry that reaches it again is
+%% skipped when it asks for the same security callbacks, and stops the boot
+%% when it asks for others, since one of the two would be dropped without a
+%% word. An application that mounts itself, directly or through another, is
+%% skipped, so a cycle terminates.
 -spec resolve_nova_apps([nova_app()]) -> [nova_app()].
 resolve_nova_apps(Apps) ->
-    {Resolved, _Seen} = resolve_nova_apps(Apps, [], []),
+    {Resolved, _Seen} = resolve_nova_apps(Apps, [], [], []),
     lists:reverse(Resolved).
 
--spec resolve_nova_apps([nova_app()], [nova_app()], [atom()]) -> {[nova_app()], [atom()]}.
-resolve_nova_apps([], Acc, Seen) ->
+-spec resolve_nova_apps([nova_app()], [nova_app()], [{atom(), term()}], [atom()]) ->
+          {[nova_app()], [{atom(), term()}]}.
+resolve_nova_apps([], Acc, Seen, _Around) ->
     {Acc, Seen};
-resolve_nova_apps([App | Rest], Acc, Seen) ->
+resolve_nova_apps([App | Rest], Acc, Seen, Around) ->
     Name = nova_app_name(App),
-    case lists:member(Name, Seen) of
-        true ->
-            resolve_nova_apps(Rest, Acc, Seen);
+    Security = security_in_force(App),
+    case lists:keyfind(Name, 1, Seen) of
         false ->
-            {Acc0, Seen0} = resolve_nova_apps(nested_nova_apps(App), [App | Acc], [Name | Seen]),
-            resolve_nova_apps(Rest, Acc0, Seen0)
+            {Acc0, Seen0} = resolve_nova_apps(nested_nova_apps(App), [App | Acc], [{Name, Security} | Seen],
+                                              [Name | Around]),
+            resolve_nova_apps(Rest, Acc0, Seen0, Around);
+        {Name, Mounted} when Mounted =:= Security ->
+            resolve_nova_apps(Rest, Acc, Seen, Around);
+        {Name, _Mounted} ->
+            case lists:member(Name, Around) of
+                true ->
+                    resolve_nova_apps(Rest, Acc, Seen, Around);
+                false ->
+                    ?LOG_ERROR(#{msg => ~"Application is mounted by two nova_apps entries that ask for different security callbacks. Mount it once, or give both entries the same secure and override_secure",
+                                 app => Name}),
+                    throw({error, {nova_app_mounted_twice, Name}})
+            end
     end.
 
-%% An application that starts on a listener, followed by its nova_apps. No
-%% entry mounts it, so the options it is compiled with are those of the
-%% entry it has written for itself there, if any.
+%% The callbacks an entry puts in front of the routes of its application:
+%% those it inherits from the applications it is mounted through and its
+%% own, which are the same wish wherever they are written.
+-spec security_in_force(nova_app()) -> {[term()], [term()]}.
+security_in_force(App) ->
+    Options = nova_app_options(App),
+    {nova_router:secures_in_force(Options), nova_router:overrides_in_force(Options)}.
+
+%% An application that starts on a listener. No entry mounts it, so the
+%% options it is compiled with are those of the entry it has written for
+%% itself in its own nova_apps, if any. The applications it mounts follow
+%% as its nested ones.
 -spec with_nova_apps(atom()) -> [nova_app()].
 with_nova_apps(App) ->
-    Mounted = configured_nova_apps(App),
-    case [Entry || Entry <- Mounted, nova_app_name(Entry) =:= App] of
-        [Own | _] -> [Own | Mounted];
-        []        -> [App | Mounted]
+    case [Entry || Entry <- configured_nova_apps(App), nova_app_name(Entry) =:= App] of
+        [Own | _] ->
+            notice_own_entry(App, nova_app_options(Own)),
+            [Own];
+        [] ->
+            [App]
     end.
 
-%% The nova_apps of a mounted application. An override_secure covers every
-%% route the application brings in, so one that is in force for it is
-%% handed on to the applications it mounts. Nothing else is: they are
+%% For years such an entry was ignored. One with a prefix now moves every
+%% route of the application, so it is said when the routes are compiled.
+notice_own_entry(App, Options) when map_size(Options) > 0 ->
+    ?LOG_NOTICE(#{msg => ~"Application has an entry for itself in its nova_apps, and is compiled with its options",
+                  app => App, options => lists:sort(maps:keys(Options))});
+notice_own_entry(_App, _Options) ->
+    ok.
+
+%% The nova_apps of a mounted application. A secure and an override_secure
+%% cover every route the application brings in, so those in force for it
+%% are handed on to the applications it mounts. Nothing else is: they are
 %% mounted with the options of their own entry.
 -spec nested_nova_apps(nova_app()) -> [nova_app()].
 nested_nova_apps(App) ->
     Nested = configured_nova_apps(nova_app_name(App)),
-    case nova_router:overrides_in_force(nova_app_options(App)) of
-        [] ->
+    case security_in_force(App) of
+        {[], []} ->
             Nested;
-        Overrides ->
-            [{nova_app_name(NestedApp), (nova_app_options(NestedApp))#{inherited_override_secure => Overrides}}
+        {Secures, Overrides} ->
+            [{nova_app_name(NestedApp), (nova_app_options(NestedApp))#{inherited_secure => Secures,
+                                                                        inherited_override_secure => Overrides}}
              || NestedApp <- Nested]
     end.
 

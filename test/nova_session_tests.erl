@@ -108,6 +108,8 @@ nova_session_ets_test_() ->
       fun set_tells_stream_handler/0,
       fun renew_drops_old_session/0,
       fun renew_tells_stream_handler/0,
+      fun backend_is_asked_once_about_a_presented_id/0,
+      fun deleted_session_is_asked_about_again/0,
       fun renew_without_session/0,
       fun renew_sets_cookie_without_stream_handler/0,
       fun delete_expires_cookie_without_stream_handler/0,
@@ -121,6 +123,8 @@ nova_session_ets_test_() ->
       fun spawned_process_does_not_notify/0,
       fun request_without_owner_does_not_notify/0,
       fun non_error_set_results_notify/0,
+      fun provisional_write_goes_to_a_backend_that_takes_it/0,
+      fun provisional_write_is_an_ordinary_one_for_a_backend_without_it/0,
       fun delete_key_preserves_other_keys/0,
       fun set_overwrites_existing_key/0,
       fun generate_session_id_format/0
@@ -341,6 +345,30 @@ unknown_presented_id_is_replaced() ->
     ?assertNot(nova_session_ets:session_exists(~"attacker-chosen")),
     ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")).
 
+backend_is_asked_once_about_a_presented_id() ->
+    ok = nova_session_ets:set_value(~"asked-once", ~"k", ~"v"),
+    Req = presented_req(~"asked-once", ~"pending"),
+    meck:new(nova_session_ets, [passthrough]),
+    try
+        ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")),
+        ?assertEqual({error, not_found}, nova_session:get(Req, ~"other")),
+        ok = nova_session:set(Req, ~"k2", ~"v2"),
+        {ok, _Req} = nova_session:delete(Req, ~"k2"),
+        ?assertEqual(1, meck:num_calls(nova_session_ets, session_exists, [~"asked-once"]))
+    after
+        meck:unload(nova_session_ets)
+    end.
+
+%% A controller that goes on with the request it had before the delete must
+%% not bring the deleted session back under the id the client still holds.
+deleted_session_is_asked_about_again() ->
+    ok = nova_session_ets:set_value(~"signed-out", ~"k", ~"v"),
+    Req = presented_req(~"signed-out", ~"pending"),
+    ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")),
+    {ok, _Req} = nova_session:delete(Req),
+    ok = nova_session:set(Req, ~"k", ~"again"),
+    ?assertNot(nova_session_ets:session_exists(~"signed-out")).
+
 renew_drops_presented_id() ->
     ok = nova_session_ets:set_value(~"before", ~"k", ~"v"),
     {ok, Req1} = nova_session:renew(presented_req(~"before", ~"pending")),
@@ -380,6 +408,34 @@ non_error_set_results_notify() ->
         meck:expect(fake_session_backend, set_value, fun(_, _, _) -> {error, full} end),
         ?assertEqual({error, full}, nova_session:set(stream_req(~"c"), ~"k", ~"v")),
         no_stream_event()
+    after
+        application:set_env(nova, session_manager, nova_session_ets),
+        meck:unload(fake_session_backend)
+    end.
+
+provisional_write_goes_to_a_backend_that_takes_it() ->
+    meck:new(fake_session_backend, [non_strict]),
+    application:set_env(nova, session_manager, fake_session_backend),
+    try
+        meck:expect(fake_session_backend, set_value, fun(_, _, _) -> {error, not_this_one} end),
+        meck:expect(fake_session_backend, set_provisional_value, fun(~"a", ~"k", ~"v") -> ok end),
+        ?assertEqual(ok, nova_session:set_provisional(stream_req(~"a"), ~"k", ~"v")),
+        ?assertEqual({written, ~"a"}, stream_event()),
+        meck:expect(fake_session_backend, set_provisional_value, fun(_, _, _) -> {error, full} end),
+        ?assertEqual({error, full}, nova_session:set_provisional(stream_req(~"b"), ~"k", ~"v")),
+        no_stream_event()
+    after
+        application:set_env(nova, session_manager, nova_session_ets),
+        meck:unload(fake_session_backend)
+    end.
+
+provisional_write_is_an_ordinary_one_for_a_backend_without_it() ->
+    meck:new(fake_session_backend, [non_strict]),
+    application:set_env(nova, session_manager, fake_session_backend),
+    try
+        meck:expect(fake_session_backend, set_value, fun(~"a", ~"k", ~"v") -> ok end),
+        ?assertEqual(ok, nova_session:set_provisional(stream_req(~"a"), ~"k", ~"v")),
+        ?assertEqual({written, ~"a"}, stream_event())
     after
         application:set_env(nova, session_manager, nova_session_ets),
         meck:unload(fake_session_backend)

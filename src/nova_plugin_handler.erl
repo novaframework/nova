@@ -82,7 +82,7 @@ handle_result({ok, Req0, State0}, Callback, State, Tl, CallbackType, _Req, Env) 
 handle_result({ok, Reply, Req0, State0}, Callback, State, Tl, CallbackType, _Req, Env)
   when element(1, Reply) =:= reply ->
     set_state(Callback, State, State0),
-    case handle_reply(Reply, Req0) of
+    case handle_reply(Reply, Req0, Callback) of
         {ok, Req1} -> run_plugins(Tl, CallbackType, Req1, Env);
         error -> unsupported_reply(Callback, Reply, Req0, Env)
     end;
@@ -104,23 +104,24 @@ handle_result({stop, Req0}, Callback, _State, _Tl, _CallbackType, _Req, _Env) wh
     deprecated_stop(Callback),
     {stop, Req0};
 %% The controller has answered by the time the post_request plugins run, and
-%% a plugin may have answered itself before it asks Nova to.
+%% a plugin may have answered itself before it asks Nova to. Cowboy exits on
+%% a reply to a request it marked as answered. A second answer to a request
+%% without the mark is dropped by nova_stream_h.
+handle_result({stop, _Reply, Req0, State0}, Callback, State, _Tl, _CallbackType, _Req, _Env)
+  when is_map_key(has_sent_resp, Req0) ->
+    set_state(Callback, State, State0),
+    warn_once(Callback, late_reply_warned,
+              ~"Plugin replied after the response was sent. The reply is dropped"),
+    {stop, Req0};
 handle_result({stop, Reply, Req0, State0}, Callback, State, _Tl, _CallbackType, _Req, Env) ->
     set_state(Callback, State, State0),
-    case nova_handler:answered(Req0) of
-        {true, Req1} ->
-            warn_once(Callback, late_reply_warned,
-                      ~"Plugin replied after the response was sent. The reply is dropped"),
-            {stop, Req1};
-        false ->
-            case handle_reply(Reply, Req0) of
-                {ok, Req1} ->
-                    %% Stopping means nobody else will answer, so the reply goes out here.
-                    StatusCode = maps:get(resp_status_code, Req1, 200),
-                    {stop, cowboy_req:reply(StatusCode, Req1)};
-                error ->
-                    unsupported_reply(Callback, Reply, Req0, Env)
-            end
+    case handle_reply(Reply, Req0, Callback) of
+        {ok, Req1} ->
+            %% Stopping means nobody else will answer, so the reply goes out here.
+            StatusCode = maps:get(resp_status_code, Req1, 200),
+            {stop, cowboy_req:reply(StatusCode, Req1)};
+        error ->
+            unsupported_reply(Callback, Reply, Req0, Env)
     end;
 handle_result({error, Reason}, Callback, _State, _Tl, _CallbackType, Req, Env) ->
     ?LOG_ERROR(#{msg => ~"Plugin returned an error", plugin => plugin_module(Callback),
@@ -131,15 +132,16 @@ handle_result(Result, Callback, _State, _Tl, _CallbackType, Req, Env) ->
                  result => nova_redact:term(Result)}),
     render_500(Req, Env, #{class => error, reason => unsupported_plugin_result}).
 
-handle_reply({reply, Body}, Req) ->
-    handle_reply({reply, 200, #{}, Body}, Req);
-handle_reply({reply, Status, Body}, Req) ->
-    handle_reply({reply, Status, #{}, Body}, Req);
-handle_reply({reply, Status, Headers, Body}, Req) when is_integer(Status), is_map(Headers) orelse is_list(Headers) ->
+handle_reply({reply, Body}, Req, Callback) ->
+    handle_reply({reply, 200, #{}, Body}, Req, Callback);
+handle_reply({reply, Status, Body}, Req, Callback) ->
+    handle_reply({reply, Status, #{}, Body}, Req, Callback);
+handle_reply({reply, Status, Headers, Body}, Req, _Callback)
+  when is_integer(Status), is_map(Headers) orelse is_list(Headers) ->
     Req0 = cowboy_req:set_resp_headers(Headers, Req),
     Req1 = cowboy_req:set_resp_body(Body, Req0),
     {ok, Req1#{resp_status_code => Status}};
-handle_reply({redirect, Url}, Req) when is_binary(Url); is_list(Url) ->
+handle_reply({redirect, Url}, Req, _Callback) when is_binary(Url); is_list(Url) ->
     case nova_basic_handler:location(Url) of
         error ->
             error;
@@ -147,11 +149,23 @@ handle_reply({redirect, Url}, Req) when is_binary(Url); is_list(Url) ->
             Req0 = cowboy_req:set_resp_headers(#{~"location" => Location}, Req),
             {ok, Req0#{resp_status_code => 302}}
     end;
-handle_reply({status, Status}, Req) ->
-    handle_reply({status, Status, #{}}, Req);
-handle_reply({status, Status, Headers}, Req) when is_integer(Status), is_map(Headers) orelse is_list(Headers) ->
+handle_reply({redirect_local, Url}, Req, Callback) when is_binary(Url); is_list(Url) ->
+    case nova_basic_handler:local_location(Url) of
+        error ->
+            ?LOG_WARNING(#{msg => ~"Plugin refused to redirect to a location that is not a local path",
+                           plugin => plugin_module(Callback),
+                           location => nova_basic_handler:loggable_location(Url)}),
+            {ok, Req#{resp_status_code => 400}};
+        Location ->
+            Req0 = cowboy_req:set_resp_headers(#{~"location" => Location}, Req),
+            {ok, Req0#{resp_status_code => 302}}
+    end;
+handle_reply({status, Status}, Req, Callback) ->
+    handle_reply({status, Status, #{}}, Req, Callback);
+handle_reply({status, Status, Headers}, Req, _Callback)
+  when is_integer(Status), is_map(Headers) orelse is_list(Headers) ->
     {ok, (cowboy_req:set_resp_headers(Headers, Req))#{resp_status_code => Status}};
-handle_reply(_Reply, _Req) ->
+handle_reply(_Reply, _Req, _Callback) ->
     error.
 
 unsupported_reply(Callback, Reply, Req, Env) ->
@@ -159,8 +173,8 @@ unsupported_reply(Callback, Reply, Req, Env) ->
                  reply => nova_redact:term(loggable_reply(Reply))}),
     render_500(Req, Env, #{class => error, reason => unsupported_plugin_reply}).
 
-loggable_reply({redirect, Url}) ->
-    {redirect, nova_basic_handler:loggable_location(Url)};
+loggable_reply({Redirect, Url}) when Redirect =:= redirect; Redirect =:= redirect_local ->
+    {Redirect, nova_basic_handler:loggable_location(Url)};
 loggable_reply(Reply) ->
     Reply.
 
@@ -190,12 +204,11 @@ deprecated_stop(Callback) ->
 warn_once(Callback, Tag, Msg) ->
     Module = plugin_module(Callback),
     Key = {?MODULE, Tag, Module},
-    case persistent_term:get(Key, false) of
+    case nova_once:first(Key) of
         true ->
-            ok;
+            ?LOG_WARNING(#{msg => Msg, plugin => Module});
         false ->
-            persistent_term:put(Key, true),
-            ?LOG_WARNING(#{msg => Msg, plugin => Module})
+            ok
     end.
 
 plugin_module(Callback) ->

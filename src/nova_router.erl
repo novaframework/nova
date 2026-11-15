@@ -16,6 +16,7 @@
          compile/2,
          compile_fresh/2,
          overrides_in_force/1,
+         secures_in_force/1,
          lookup_url/1,
          lookup_url/2,
          lookup_url/3,
@@ -34,6 +35,7 @@
          forget_plugins/0,
          compiled_apps/0,
          compiled_apps/1,
+         dispatch_keys/0,
 
          %% Modulates the routes-table
          add_routes/1,
@@ -111,6 +113,11 @@ the listener of the bootstrap application.
 """.
 -type dispatch_key() :: term().
 -export_type([dispatch_key/0]).
+
+-doc "The key of the routing table of every listener Nova has started, for the functions that take a `DispatchKey`.".
+-spec dispatch_keys() -> [dispatch_key()].
+dispatch_keys() ->
+    nova_sup:dispatch_keys().
 
 -doc """
 The applications compiled into the routing table of the default listener,
@@ -253,7 +260,7 @@ execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
                  }
             };
         Error ->
-            ?LOG_ERROR(#{reason => <<"Unexpected return from nova_routing_trie:find/4">>,
+            ?LOG_ERROR(#{msg => ~"Unexpected return from nova_routing_trie:find/4",
                          return_object => Error}),
             render_status_page(Host, 404, #{error => Error}, Req, Env)
     end.
@@ -338,7 +345,7 @@ add_routes(App, [Routes|Tl], DispatchKey) when is_list(Routes) ->
 add_routes(App, [RouteInfo|_Tl] = Routes, DispatchKey) when is_map(RouteInfo) ->
     insert_route_maps(App, Routes, DispatchKey);
 add_routes(App, Routes, _DispatchKey) ->
-    ?LOG_ERROR(#{reason => <<"Invalid routes structure">>, app => App, routes => Routes}),
+    ?LOG_ERROR(#{msg => ~"Invalid routes structure", app => App, routes => Routes}),
     throw({error, {invalid_routes, App, Routes}}).
 
 insert_route_maps(App, Routes, DispatchKey) ->
@@ -442,6 +449,9 @@ compile([], Dispatch, _Options) -> Dispatch;
 compile([{App, AppOptions}|Tl], Dispatch, GlobalOptions) ->
     %% Per-application options win over the global ones, and must not leak
     %% into the applications compiled after this one.
+    ok = misplaced_security([{security, Value, mount_path(GlobalOptions, AppOptions)}
+                             || security := Value <- AppOptions],
+                            App, maps:get(router_file, GlobalOptions, undefined)),
     Dispatch0 = compile([App], Dispatch, mount_options(GlobalOptions, AppOptions)),
     compile(Tl, Dispatch0, GlobalOptions);
 compile([App|Tl], Dispatch, Options) ->
@@ -468,14 +478,32 @@ compile([App|Tl], Dispatch, Options) ->
 
     compile(Tl, Dispatch1, Options).
 
-%% An override_secure that is in force around an application is the one
-%% option its own entry does not replace. It stays in force, in front of the
-%% override_secure of the entry.
+%% The secure and the override_secure that are in force around an
+%% application are the options its own entry does not replace. They stay in
+%% force, in front of those of the entry.
 mount_options(GlobalOptions, AppOptions) ->
     Options = maps:merge(GlobalOptions, AppOptions),
-    Options#{override_secure => maps:get(override_secure, AppOptions, false),
+    Options#{secure => maps:get(secure, AppOptions, false),
+             inherited_secure => secures_in_force(GlobalOptions) ++ maps:get(inherited_secure, AppOptions, []),
+             override_secure => maps:get(override_secure, AppOptions, false),
              inherited_override_secure => overrides_in_force(GlobalOptions) ++
                  maps:get(inherited_override_secure, AppOptions, [])}.
+
+mount_path(GlobalOptions, AppOptions) ->
+    case concat_strings(maps:get(prefix, GlobalOptions, ""), maps:get(prefix, AppOptions, "")) of
+        "" -> "/";
+        Path -> Path
+    end.
+
+%%--------------------------------------------------------------------
+%% The secure values that apply to an application mounted with Options,
+%% outermost first, as they were written. For nova_sup, which hands them to
+%% the applications that one mounts in turn.
+-doc false.
+-spec secures_in_force(Options :: map()) -> [term()].
+secures_in_force(Options) ->
+    maps:get(inherited_secure, Options, []) ++
+        [Secure || Secure <- [maps:get(secure, Options, false)], Secure =/= false].
 
 %%--------------------------------------------------------------------
 %% The override_secure values that apply to an application mounted with
@@ -501,7 +529,7 @@ router_module(App) ->
                 {ok, RouterModule} ->
                     RouterModule;
                 error ->
-                    ?LOG_ERROR(#{reason => <<"Could not find the router module of the application">>,
+                    ?LOG_ERROR(#{msg => ~"Could not find the router module of the application",
                                  app => App, router_module => Names}),
                     throw({error, {router_module_not_found, App}})
             end
@@ -561,7 +589,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
                             maps:get(prefix, RouteInfo, "")),
     Host = maps:get(host, RouteInfo, '_'),
     SubApps = maps:get(apps, RouteInfo, []),
-    ok = warn_misplaced_security(App, Prefix, RouteInfo, RouterFile),
+    ok = misplaced_security(misplaced_in_group(Prefix, RouteInfo), App, RouterFile),
 
     %% We need to add this app info to nova-env
     nova:set_env(apps, lists:keystore(App, 1, mounted_apps(), {App, #{prefix => Prefix}})),
@@ -573,7 +601,11 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
                                        insert_opts => maps:get(insert_opts, Options, #{})},
                                 Value, Dispatch),
 
-    Dispatch2 = compile(SubApps, Dispatch1, Options#{value => Value, prefix => Prefix}),
+    %% The applications the group lists are behind its security as well.
+    Dispatch2 = compile(SubApps, Dispatch1,
+                        Options#{value => Value, prefix => Prefix, secure => false,
+                                 inherited_secure => secures_in_force(Options) ++
+                                     [Security || security := Security <- RouteInfo, Security =/= false]}),
 
     compile_paths(Tl, Dispatch2, Options).
 
@@ -599,7 +631,7 @@ parse_url(Host, [{RemotePath, LocalPath, Options}|Tl], T = #{prefix := Prefix},
                 case {filelib:is_file(LocalPath), filelib:is_file(PrivPath)} of
                     {false, false} ->
                         %% No dir nor file
-                        ?LOG_ERROR(#{reason => <<"Could not find local path for the given resource">>,
+                        ?LOG_ERROR(#{msg => ~"Could not find local path for the given resource",
                                      local_path => LocalPath,
                                      remote_path => RemotePath,
                                      router_file => maps:get(router_file, Options, undefined)}),
@@ -659,7 +691,7 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
                                            fun method_to_binary/1),
             parse_url(Host, Tl, T, Value, CompiledPaths);
         OtherProtocol ->
-            ?LOG_ERROR(#{reason => <<"Unknown protocol">>, protocol => OtherProtocol,
+            ?LOG_ERROR(#{msg => ~"Unknown protocol", protocol => OtherProtocol,
                         router_file => maps:get(router_file, Options, undefined)}),
             parse_url(Host, Tl, T, Value, Tree)
     end;
@@ -717,6 +749,9 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
     %% A status page is rendered by a controller. Left in place, the handler
     %% of a websocket route would run instead and upgrade the connection.
     Env1 = maps:without([cowboy_handler, arguments], Env),
+    %% The controller of the page is called with the request alone, so what
+    %% it was given goes there too.
+    ControllerData = #{status => StatusCode, data => Data},
     {Req0, Env0} =
         case nova_routing_trie:find(Host, StatusCode, '_', Dispatch) of
             {error, _} ->
@@ -724,7 +759,7 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
                 {Req, Env1#{app => nova,
                            callback => fun nova_error_controller:status_code/1,
                            secure => false,
-                           controller_data => #{status => StatusCode, data => Data}}};
+                           controller_data => ControllerData}};
             {ok, Bindings, #nova_handler_value{app = App,
                                                callback = Callback,
                                                secure = Secure,
@@ -734,11 +769,11 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
                  Env1#{app => App,
                       callback => Callback,
                       secure => Secure,
-                      controller_data => #{status => StatusCode, data => Data},
+                      controller_data => ControllerData,
                       bindings => Bindings}
                 }
         end,
-    {ok, Req0#{resp_status_code => StatusCode}, Env0}.
+    {ok, Req0#{resp_status_code => StatusCode, controller_data => ControllerData}, Env0}.
 
 
 insert_opts(T) ->
@@ -830,7 +865,7 @@ storage_backend() ->
     case application:get_env(nova, dispatch_backend, persistent_term) of
         Backend when is_atom(Backend) -> Backend;
         Other ->
-            ?LOG_ERROR(#{reason => <<"dispatch_backend must be a module">>, value => Other}),
+            ?LOG_ERROR(#{msg => ~"dispatch_backend must be a module", value => Other}),
             persistent_term
     end.
 
@@ -853,7 +888,7 @@ insert_methods([Method|Tl], Host, Path, Value, Tree, Options, ToComparator) ->
         try ToComparator(Method)
         catch
             throw:{error, {invalid_method, _}} = Error ->
-                ?LOG_ERROR(#{reason => <<"Unknown HTTP method in the methods of a route. Use get, post, put, delete, options, head, connect, trace, patch or '_', or a binary or string for any other method.">>,
+                ?LOG_ERROR(#{msg => ~"Unknown HTTP method in the methods of a route. Use get, post, put, delete, options, head, connect, trace, patch or '_', or a binary or string for any other method.",
                              route => Path, method => Method}),
                 throw(Error)
         end,
@@ -866,15 +901,15 @@ insert(Host, Path, Combinator, Value, Tree, Options) ->
         {ok, Tree0} ->
             Tree0;
         {error, conflict, Conflict} ->
-            ?LOG_ERROR(#{reason => <<"Conflicting route">>, route => Path, combinator => Combinator,
+            ?LOG_ERROR(#{msg => ~"Conflicting route", route => Path, combinator => Combinator,
                          conflict => Conflict}),
             throw({error, {route_conflict, Conflict}})
     catch
         throw:Exception ->
-            ?LOG_ERROR(#{reason => <<"Error when inserting route">>, route => Path, combinator => Combinator}),
+            ?LOG_ERROR(#{msg => ~"Error when inserting route", route => Path, combinator => Combinator}),
             throw(Exception);
         Type:Exception ->
-            ?LOG_ERROR(#{reason => <<"Unexpected exit">>, type => Type, exception => Exception}),
+            ?LOG_ERROR(#{msg => ~"Unexpected exit", type => Type, exception => Exception}),
             throw(Exception)
     end.
 
@@ -899,33 +934,31 @@ normalize_secure({SMod, SFun}, RouterFile) when is_atom(SMod), is_atom(SFun) ->
 normalize_secure(SCallback, _RouterFile) when is_function(SCallback, 1) ->
     SCallback;
 normalize_secure(Invalid, RouterFile) ->
-    ?LOG_ERROR(#{reason => <<"A security value must be false, a fun/1 or {Mod, Fun}.">>,
+    ?LOG_ERROR(#{msg => ~"A security value must be false, a fun/1 or {Mod, Fun}.",
                  value => Invalid, router_file => RouterFile}),
     throw({error, {invalid_security, Invalid}}).
 
 %% An application mounted with `secure` has that callback in front of every
 %% route group, and a group that declares `security` has its own behind it:
-%% both have to allow a request, so neither the application that mounts nor
-%% the one that is mounted can take away what the other one asks for. Both
-%% values are checked here, also where only one ends up on the route, or
-%% neither because an `override_secure` replaces them: that is the explicit
+%% all of them have to allow a request, so neither the application that
+%% mounts nor the one that is mounted can take away what the other one asks
+%% for. The secure of the applications this one was mounted through, and
+%% the security of a group that lists it under `apps`, come first, outermost
+%% first. Every value is checked here, also where it does not end up on the
+%% route because an `override_secure` replaces them: that is the explicit
 %% way to replace a declared callback.
 resolve_secure(Options, RouteInfo, RouterFile) ->
     Overrides = override_callbacks(Options, RouterFile),
-    Mount = normalize_secure(maps:get(secure, Options, false), RouterFile),
-    Group = normalize_secure(maps:get(security, RouteInfo, false), RouterFile),
-    case Overrides of
-        [] ->
-            case {Mount, Group} of
-                {false, _} -> Group;
-                {_, false} -> Mount;
-                {Same, Same} -> Same;
-                _ -> [Mount, Group]
-            end;
-        [Override] ->
-            Override;
-        _Several ->
-            Overrides
+    Declared = [normalize_secure(Secure, RouterFile) || Secure <- secures_in_force(Options)] ++
+        [normalize_secure(maps:get(security, RouteInfo, false), RouterFile)],
+    Callbacks = case Overrides of
+                    [] -> without_repeats([Callback || Callback <- Declared, Callback =/= false]);
+                    _ -> Overrides
+                end,
+    case Callbacks of
+        [] -> false;
+        [Callback] -> Callback;
+        _Several -> Callbacks
     end.
 
 %% Every override_secure in force has to allow a request: those of the
@@ -960,7 +993,7 @@ resolve_plugins(global_only, _RouteInfo, _RouterFile) ->
 resolve_plugins({override, PluginList}, _RouteInfo, _RouterFile) when is_list(PluginList) ->
     PluginList;
 resolve_plugins(Strategy, RouteInfo, RouterFile) ->
-    ?LOG_ERROR(#{reason => <<"Unknown plugin_strategy, falling back to local_or_global">>,
+    ?LOG_ERROR(#{msg => ~"Unknown plugin_strategy, falling back to local_or_global",
                  plugin_strategy => Strategy, router_file => RouterFile}),
     resolve_plugins(local_or_global, RouteInfo, RouterFile).
 
@@ -969,29 +1002,40 @@ resolve_plugins(Strategy, RouteInfo, RouterFile) ->
 %% compiled again does not log again.
 warn_route_plugin_strategy(App, #{plugin_strategy := Strategy}, RouterFile) ->
     Key = {?MODULE, route_plugin_strategy_warned, App},
-    case persistent_term:get(Key, false) of
+    case nova_once:first(Key) of
         true ->
-            ok;
-        false ->
-            persistent_term:put(Key, true),
             ?LOG_WARNING(#{msg => ~"plugin_strategy on a route entry is ignored. Set it in the application's nova_apps options instead: {nova_apps, [{App, #{plugin_strategy => Strategy}}]}",
-                           app => App, plugin_strategy => Strategy, router_file => RouterFile})
+                           app => App, plugin_strategy => Strategy, router_file => RouterFile});
+        false ->
+            ok
     end;
 warn_route_plugin_strategy(_App, _RouteInfo, _RouterFile) ->
     ok.
 
-%% A route group is protected by its `security`. The same wish written as
-%% `secure` on the group, or as either key in the options of one route, is
-%% never read, and the route its author believes protected is public.
-warn_misplaced_security(App, Prefix, RouteInfo, RouterFile) ->
-    Misplaced = [{secure, Prefix} || is_map_key(secure, RouteInfo)] ++
-        [{Key, concat_strings(Prefix, Path)}
+%% A route group is protected by its `security`, and a mounted application
+%% by the `secure` of its entry. The same wish written as `secure` on the
+%% group, as either key in the options of one route, or as `security` on the
+%% entry, is never read. Written as a callback, the route its author
+%% believes protected would be public, so the routes are refused.
+misplaced_in_group(Prefix, RouteInfo) ->
+    [{secure, Value, Prefix} || secure := Value <- RouteInfo] ++
+        [{Key, maps:get(Key, RouteOptions), concat_strings(Prefix, Path)}
          || {Path, _Target, RouteOptions} <- maps:get(routes, RouteInfo, []), is_map(RouteOptions),
-            Key <- [security, secure], is_map_key(Key, RouteOptions)],
-    _ = [?LOG_WARNING(#{msg => ~"This key is not read here, so it protects nothing. Declare the callback as security on the route group",
+            Key <- [security, secure], is_map_key(Key, RouteOptions)].
+
+misplaced_security(Misplaced, App, RouterFile) ->
+    _ = [?LOG_WARNING(#{msg => ~"This key is not read here, so it protects nothing. Declare a callback as security on the route group, or as secure on the nova_apps entry of the application",
                         app => App, path => Path, key => Key, router_file => RouterFile})
-         || {Key, Path} <- Misplaced],
-    ok.
+         || {Key, false, Path} <- Misplaced],
+    case [{Key, Path} || {Key, Value, Path} <- Misplaced, Value =/= false] of
+        [] ->
+            ok;
+        [{Key, Path} | _] = Refused ->
+            _ = [?LOG_ERROR(#{msg => ~"This key is not read here, so the callback would protect nothing. Declare it as security on the route group, or as secure on the nova_apps entry of the application",
+                              app => App, path => RefusedPath, key => RefusedKey, router_file => RouterFile})
+                 || {RefusedKey, RefusedPath} <- Refused],
+            throw({error, {misplaced_security, App, Key, Path}})
+    end.
 
 local_plugins(RouteInfo) ->
     maps:get(plugins, RouteInfo, []).
@@ -1044,7 +1088,7 @@ plugins_after_security(RouteInfo, RouterFile) ->
         true ->
             Modules;
         false ->
-            ?LOG_ERROR(#{reason => <<"plugins_after_security must be a list of plugin modules">>,
+            ?LOG_ERROR(#{msg => ~"plugins_after_security must be a list of plugin modules",
                          value => Modules, router_file => RouterFile}),
             throw({error, {invalid_plugins_after_security, Modules}})
     end.

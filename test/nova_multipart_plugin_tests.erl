@@ -81,7 +81,7 @@ mock_cowboy_req(Parts) ->
     meck:new(cowboy_req, [passthrough]),
     Pid = spawn(fun() -> part_server(Parts) end),
     meck:expect(cowboy_req, read_part,
-                fun(Req) ->
+                fun(Req, _Opts) ->
                     case call(Pid, next_part) of
                         done -> {done, Req};
                         {part, {raise, Class, Reason}} -> erlang:Class(Reason);
@@ -311,6 +311,39 @@ multipart_cowboy_exit_mid_file_triggers_abort_test_() ->
           ?assertMatch({handler_init, _}, receive_one()),
           ?assertEqual({handler_abort, timeout}, receive_one())
       end).
+
+read_waits_no_longer_than_the_chunk_timeout_test_() ->
+    Parts = [{data_part(~"title"), ~"a picture"},
+             {file_part(~"upload", ~"big.bin", ~"application/octet-stream"), [~"one", ~"two"]}],
+    multipart_test_(
+      Parts,
+      fun(Owner) ->
+          #{handler => {nova_multipart_test_handler, handler_opts(Owner)}, chunk_timeout => 200}
+      end,
+      fun({ok, _Req, state}) ->
+          Waits = read_waits(),
+          ?assertEqual(6, length(Waits)),
+          ?assert(lists:all(fun({Timeout, Period}) -> Timeout =< 200 andalso Timeout > 100 andalso Period > Timeout end,
+                            Waits))
+      end).
+
+read_waits_no_longer_than_what_is_left_of_the_read_timeout_test_() ->
+    Parts = [{file_part(~"upload", ~"big.bin", ~"application/octet-stream"), [~"one", ~"two"]}],
+    multipart_test_(
+      Parts,
+      fun(Owner) ->
+          #{handler => {nova_multipart_test_handler, handler_opts(Owner)}, read_timeout => 150}
+      end,
+      fun({ok, _Req, state}) ->
+          Waits = read_waits(),
+          ?assertEqual(4, length(Waits)),
+          ?assert(lists:all(fun({Timeout, Period}) -> Timeout =< 150 andalso Period > Timeout end, Waits))
+      end).
+
+read_waits() ->
+    [{Timeout, Period} || {_Pid, {cowboy_req, Read, [_Req, #{timeout := Timeout, period := Period}]}, _Result}
+                              <- meck:history(cowboy_req),
+                          Read =:= read_part orelse Read =:= read_part_body].
 
 multipart_cowboy_exit_mid_field_test_() ->
     Parts = [{data_part(<<"title">>), [<<"partial">>, {raise, exit, timeout}]}],

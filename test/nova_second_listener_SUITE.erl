@@ -86,6 +86,9 @@ dispatch_key_is_not_looked_up_by_listener(Config) ->
 %% The url tag of a template finds an application by what nova:get_apps/0
 %% lists, whichever listener serves it.
 apps_of_every_listener_are_listed(_Config) ->
+    Keys = nova_router:dispatch_keys(),
+    ?assert(lists:member(nova_dispatch, Keys)),
+    ?assertMatch([_, _ | _], Keys),
     Apps = nova:get_apps(),
     ?assert(lists:keymember(nova_test_app, 1, Apps)),
     ?assert(lists:keymember(nova_test_sub_app, 1, Apps)),

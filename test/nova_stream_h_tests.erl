@@ -68,7 +68,10 @@ stream_test_() ->
       fun status_with_a_reason_phrase_carries_cookie/0,
       fun request_is_marked_for_nova_handler/0,
       fun tells_whether_the_response_has_begun/0,
-      fun second_response_is_left_to_cowboy/0,
+      fun second_response_is_dropped/0,
+      fun response_after_the_headers_is_dropped/0,
+      fun refused_headers_leave_room_for_the_answer_of_cowboy/0,
+      fun headers_cowboy_is_told_to_ignore_are_an_answer/0,
       fun sessions_disabled/0
      ]}.
 
@@ -263,7 +266,7 @@ status_with_a_reason_phrase_carries_cookie() ->
 
 request_is_marked_for_nova_handler() ->
     {Req, _State} = start(req()),
-    ?assertEqual(true, maps:get(nova_stream_h, Req)).
+    ?assertEqual(true, maps:get(nova_stream, Req)).
 
 tells_whether_the_response_has_begun() ->
     {_Req, State} = start(req()),
@@ -276,13 +279,43 @@ tells_whether_the_response_has_begun() ->
         nova_stream_h:info(1, {response, <<"200 OK">>, #{}, ~"whole"}, State),
     ?assertEqual(true, response_begun(Answered)).
 
-%% Cowboy answers 500 itself when it refuses the headers of a response, and
-%% that answer comes through here after the response it replaces.
-second_response_is_left_to_cowboy() ->
+%% Cowboy stops the connection process when a request is answered twice.
+second_response_is_dropped() ->
     {_Req, State} = start(req()),
-    {[{response, 200, _, ~"refused"}], State1} = nova_stream_h:info(1, {response, 200, #{}, ~"refused"}, State),
-    ?assertMatch({[{response, 500, #{~"content-length" := ~"0"}, <<>>}], _},
-                 nova_stream_h:info(1, {response, 500, #{~"content-length" => ~"0"}, <<>>}, State1)).
+    {[{response, 200, _, ~"first"}], Answered} = nova_stream_h:info(1, {response, 200, #{}, ~"first"}, State),
+    {{[], Dropped}, [{warning, {report, #{status := 403, method := ~"GET"}}}]} =
+        nova_test_log:collect(fun() -> nova_stream_h:info(1, {response, 403, #{}, ~"second"}, Answered) end),
+    ?assertEqual({{[], Dropped}, []},
+                 nova_test_log:collect(fun() -> nova_stream_h:info(1, {headers, 200, #{}}, Dropped) end)),
+    ?assertEqual(true, response_begun(Dropped)).
+
+response_after_the_headers_is_dropped() ->
+    {_Req, State} = start(req()),
+    {[{headers, 200, _}], Streaming} = nova_stream_h:info(1, {headers, 200, #{}}, State),
+    {{[], Dropped}, [{warning, _}]} =
+        nova_test_log:collect(fun() -> nova_stream_h:info(1, {response, 500, #{}, ~"page"}, Streaming) end),
+    ?assertEqual(headers, response_begun(Dropped)),
+    ?assertMatch({[{data, fin, ~"chunk"}], _}, nova_stream_h:info(1, {data, fin, ~"chunk"}, Dropped)).
+
+%% Cowboy sends nothing when it refuses the headers of a response and answers
+%% 500 itself, through here.
+refused_headers_leave_room_for_the_answer_of_cowboy() ->
+    {_Req, State} = start(req()),
+    Refused = #{~"location" => ~"/next\r\nset-cookie: a=b"},
+    [begin
+         {[_Forwarded], State1} = nova_stream_h:info(1, Response, State),
+         ?assertEqual(false, response_begun(State1)),
+         ?assertMatch({[{response, 500, #{~"content-length" := ~"0"}, <<>>}], _},
+                      nova_stream_h:info(1, {response, 500, #{~"content-length" => ~"0"}, <<>>}, State1))
+     end || Response <- [{response, 302, Refused, <<>>}, {headers, 302, Refused}]].
+
+%% With invalid_response_headers set to ignore Cowboy sends them as they are.
+headers_cowboy_is_told_to_ignore_are_an_answer() ->
+    {[{next_req, _Req}], State} =
+        nova_stream_h:init(1, req(), #{stream_handlers => [?MODULE], invalid_response_headers => ignore}),
+    {[_Forwarded], Answered} =
+        nova_stream_h:info(1, {response, 302, #{~"location" => ~"/next\r\nset-cookie: a=b"}, <<>>}, State),
+    ?assertEqual(true, response_begun(Answered)).
 
 response_begun(State) ->
     Ref = make_ref(),
@@ -304,7 +337,7 @@ sessions_disabled() ->
 %%====================================================================
 
 req() ->
-    #{scheme => ~"http", headers => #{}}.
+    #{scheme => ~"http", method => ~"GET", headers => #{}}.
 
 req(Cookie) ->
     #{scheme => ~"http", headers => #{~"cookie" => Cookie}}.
@@ -329,3 +362,8 @@ set_cookies(Headers) ->
 cookie_value(Cookie) ->
     [<<"session_id=", Value/binary>> | _] = binary:split(Cookie, ~";"),
     Value.
+
+%% Not a documented function of Cowboy, so a new Cowboy is checked for it here.
+cowboy_validates_response_headers_test() ->
+    {module, cowboy_http} = code:ensure_loaded(cowboy_http),
+    ?assert(erlang:function_exported(cowboy_http, validate_response_headers, 2)).

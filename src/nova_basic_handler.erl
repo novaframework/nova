@@ -18,14 +18,18 @@ return value does, and as examples of a handler.
          handle_websocket/3,
          handle_ws/2,
          location/1,
+         local_location/1,
          loggable_location/1,
          render_dtl/3
         ]).
 
 -include_lib("kernel/include/logger.hrl").
 
+-deprecated([{handle_websocket, 3,
+              "nothing in Nova calls it: a websocket route is one with protocol => ws, upgraded by nova_ws_handler"}]).
+
 -ifdef(TEST).
--export([maybe_inject_csrf_token/2, get_view_name/1]).
+-export([maybe_inject_csrf_token/2, get_view_name/1, websocket_upgrade/3]).
 -endif.
 
 -doc "The variables a template is rendered with, as a map or a list of pairs.".
@@ -73,13 +77,12 @@ handle_json({json, JSON}, Callback, Req = #{method := Method}) ->
 deprecated_json_order(Callback) ->
     {module, Module} = erlang:fun_info(Callback, module),
     Key = {?MODULE, json_order_warned, Module},
-    case persistent_term:get(Key, false) of
+    case nova_once:first(Key) of
         true ->
-            ok;
-        false ->
-            persistent_term:put(Key, true),
             ?LOG_WARNING(#{msg => ~"{json, Status, Headers, Req, JSON} is deprecated, return {json, Status, Headers, JSON, Req}",
-                           controller => Module})
+                           controller => Module});
+        false ->
+            ok
     end.
 
 
@@ -239,6 +242,7 @@ location(Url) ->
 
 %% A path on the site the request was made to. //host and /\host name
 %% another host to a browser, which also drops tabs before it reads the URL.
+-doc false.
 -spec local_location(binary() | string()) -> binary() | error.
 local_location(Url) ->
     case location(Url) of
@@ -319,8 +323,11 @@ handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _
                               {cowboy_websocket, Req :: cowboy_req:req(), Options :: map()} |
                               nova_handlers:handler_return().
 handle_websocket({websocket, ControllerData, Req0}, Callback, _Req) ->
-    handle_websocket({websocket, ControllerData}, Callback, Req0);
+    websocket_upgrade(ControllerData, Callback, Req0);
 handle_websocket({websocket, ControllerData}, Callback, Req) ->
+    websocket_upgrade(ControllerData, Callback, Req).
+
+websocket_upgrade(ControllerData, Callback, Req) ->
     {module, Module} = erlang:fun_info(Callback, module),
     case Module:init(ControllerData) of
         {ok, NewControllerData} ->
@@ -404,9 +411,7 @@ render_dtl(View, Variables, Options) ->
         false ->
             case code:load_file(View) of
                 {error, Reason} ->
-                    %% Cast a warning since the module could not be found
-                    ?LOG_ERROR(#{msg => <<"Nova could not render template">>, template => View, reason => Reason}),
-                    throw({404, {template_not_found, View}});
+                    template_not_found(View, Reason);
                 _ ->
                     View:render(Variables, Options)
             end;
@@ -440,6 +445,14 @@ view_module(Name) ->
         {ok, View} ->
             View;
         error ->
-            ?LOG_ERROR(#{msg => <<"Nova could not render template">>, template => Name, reason => nofile}),
-            throw({404, {template_not_found, Name}})
+            template_not_found(Name, nofile)
     end.
+
+%% The page is there and its template is not, which is the application's
+%% fault and not the client's. nova_handler renders the 500 status page for
+%% a thrown {Status, Reason}, and the page names the template in dev.
+-spec template_not_found(atom() | string(), term()) -> no_return().
+template_not_found(Template, Reason) ->
+    ?LOG_ERROR(#{msg => ~"Nova could not render template", template => Template, reason => Reason}),
+    throw({500, #{status_code => 500,
+                  extra_msg => unicode:characters_to_binary(io_lib:format("Template ~ts could not be loaded", [Template]))}}).

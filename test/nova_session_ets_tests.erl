@@ -1,5 +1,6 @@
 -module(nova_session_ets_tests).
 -include_lib("eunit/include/eunit.hrl").
+-include("../include/nova_pubsub.hrl").
 
 %%====================================================================
 %% Direct tests for the nova_session_ets gen_server backend.
@@ -73,11 +74,30 @@ cap_test_() ->
              application:unset_env(nova, session_max_age)
      end,
      [
-      fun new_sessions_are_refused_at_the_cap/0,
+      fun new_session_at_the_cap_replaces_the_one_nearest_its_expiry/0,
       fun existing_session_is_written_at_the_cap/0,
       fun deleted_session_makes_room/0,
-      fun expired_sessions_make_room/0,
-      fun cap_can_be_turned_off/0
+      fun expired_session_makes_room/0,
+      fun cap_can_be_turned_off/0,
+      fun provisional_session_goes_first/0,
+      fun provisional_session_replaces_the_provisional_one_nearest_its_expiry/0,
+      fun provisional_session_is_refused_when_every_session_is_kept/0,
+      fun written_provisional_session_is_kept/0,
+      fun provisional_write_leaves_a_session_kept/0,
+      fun replicated_session_does_not_grow_the_table_past_the_cap/0,
+      fun replicated_provisional_session_is_dropped_when_every_session_is_kept/0,
+      fun no_session_fits_a_cap_of_zero/0
+     ]}.
+
+provisional_test_() ->
+    {foreach,
+     fun setup/0,
+     fun(Pid) -> cleanup(Pid), application:unset_env(nova, session_max_age) end,
+     [
+      fun provisional_session_lives_a_day_at_most/0,
+      fun provisional_session_lives_no_longer_than_any_other/0,
+      fun written_provisional_session_lives_as_long_as_any_other/0,
+      fun every_session_is_in_the_expiry_index_once/0
      ]}.
 
 reads_test_() ->
@@ -96,10 +116,12 @@ fill(Count) ->
     [ok = nova_session_ets:set_value(integer_to_binary(N), ~"k", ~"v") || N <- lists:seq(1, Count)],
     ok.
 
-new_sessions_are_refused_at_the_cap() ->
+%% The first session written is the one nearest its expiry.
+new_session_at_the_cap_replaces_the_one_nearest_its_expiry() ->
     fill(10),
-    ?assertEqual({error, session_store_full}, nova_session_ets:set_value(~"eleventh", ~"k", ~"v")),
-    ?assertNot(nova_session_ets:session_exists(~"eleventh")),
+    ?assertEqual(ok, nova_session_ets:set_value(~"eleventh", ~"k", ~"v")),
+    ?assert(nova_session_ets:session_exists(~"eleventh")),
+    ?assertNot(nova_session_ets:session_exists(~"1")),
     ?assertEqual(10, ets:info(nova_session_ets_entries, size)).
 
 existing_session_is_written_at_the_cap() ->
@@ -111,20 +133,137 @@ deleted_session_makes_room() ->
     fill(10),
     ok = nova_session_ets:delete_value(~"3"),
     ?assertEqual(ok, nova_session_ets:set_value(~"eleventh", ~"k", ~"v")),
-    ?assertEqual({error, session_store_full}, nova_session_ets:set_value(~"twelfth", ~"k", ~"v")).
+    ?assert(nova_session_ets:session_exists(~"1")).
 
-%% Expired rows are only swept once a minute, so a full table is swept
-%% before a new session is refused.
-expired_sessions_make_room() ->
+%% An expired session goes before one that is in use. One is dropped for
+%% each new session, and the sweep drops the others.
+expired_session_makes_room() ->
     application:set_env(nova, session_max_age, 1),
-    fill(10),
+    fill(9),
     timer:sleep(1100),
+    application:set_env(nova, session_max_age, 3600),
+    ok = nova_session_ets:set_provisional_value(~"visitor", ~"k", ~"v"),
     ?assertEqual(ok, nova_session_ets:set_value(~"eleventh", ~"k", ~"v")),
-    ?assertEqual(1, ets:info(nova_session_ets_entries, size)).
+    ?assert(nova_session_ets:session_exists(~"visitor")),
+    ?assertEqual(10, ets:info(nova_session_ets_entries, size)),
+    whereis(nova_session_ets) ! sweep,
+    sync(),
+    ?assertEqual(2, ets:info(nova_session_ets_entries, size)).
 
 cap_can_be_turned_off() ->
     application:set_env(nova, max_sessions, infinity),
     ?assertEqual(ok, fill(25)).
+
+kept() ->
+    [integer_to_binary(N) || N <- lists:seq(1, 10), nova_session_ets:session_exists(integer_to_binary(N))].
+
+%% A session that only holds what every visitor gets makes room for one
+%% that is in use.
+provisional_session_goes_first() ->
+    fill(9),
+    ok = nova_session_ets:set_provisional_value(~"visitor", ~"k", ~"v"),
+    ?assertEqual(ok, nova_session_ets:set_value(~"10", ~"k", ~"v")),
+    ?assertNot(nova_session_ets:session_exists(~"visitor")),
+    ?assertEqual(10, length(kept())).
+
+provisional_session_replaces_the_provisional_one_nearest_its_expiry() ->
+    fill(8),
+    ok = nova_session_ets:set_provisional_value(~"first", ~"k", ~"v"),
+    timer:sleep(2),
+    ok = nova_session_ets:set_provisional_value(~"second", ~"k", ~"v"),
+    ?assertEqual(ok, nova_session_ets:set_provisional_value(~"third", ~"k", ~"v")),
+    ?assertEqual([false, true, true],
+                 [nova_session_ets:session_exists(Id) || Id <- [~"first", ~"second", ~"third"]]),
+    ?assertEqual(8, length(kept())).
+
+provisional_session_is_refused_when_every_session_is_kept() ->
+    fill(10),
+    ?assertEqual({error, session_store_full}, nova_session_ets:set_provisional_value(~"visitor", ~"k", ~"v")),
+    ?assertNot(nova_session_ets:session_exists(~"visitor")),
+    ?assertEqual(10, length(kept())).
+
+%% A write with set_value/3 is what tells a session that is in use from one
+%% that is not.
+written_provisional_session_is_kept() ->
+    ok = nova_session_ets:set_provisional_value(~"visitor", ~"token", ~"t"),
+    ok = nova_session_ets:set_value(~"visitor", ~"user", ~"alice"),
+    [ok = nova_session_ets:set_provisional_value(integer_to_binary(N), ~"k", ~"v") || N <- lists:seq(1, 30)],
+    ?assertEqual({ok, ~"alice"}, nova_session_ets:get_value(~"visitor", ~"user")),
+    ?assertEqual({ok, ~"t"}, nova_session_ets:get_value(~"visitor", ~"token")),
+    ?assertEqual(10, ets:info(nova_session_ets_entries, size)).
+
+provisional_write_leaves_a_session_kept() ->
+    ok = nova_session_ets:set_value(~"user", ~"user", ~"alice"),
+    ok = nova_session_ets:set_provisional_value(~"user", ~"token", ~"t"),
+    [ok = nova_session_ets:set_provisional_value(integer_to_binary(N), ~"k", ~"v") || N <- lists:seq(1, 30)],
+    ?assertEqual({ok, ~"alice"}, nova_session_ets:get_value(~"user", ~"user")),
+    ?assertEqual({ok, ~"t"}, nova_session_ets:get_value(~"user", ~"token")).
+
+%% What another node stores arrives without the check the writing node made.
+replicated_session_does_not_grow_the_table_past_the_cap() ->
+    fill(10),
+    [whereis(nova_session_ets) ! #nova_pubsub{channel = '__sessions', sender = self(), topic = "set_value",
+                                              payload = {<<"replicated", N>>, ~"k", ~"v"}}
+     || N <- lists:seq(1, 5)],
+    sync(),
+    ?assertEqual(10, ets:info(nova_session_ets_entries, size)),
+    ?assert(nova_session_ets:session_exists(<<"replicated", 5>>)).
+
+replicated_provisional_session_is_dropped_when_every_session_is_kept() ->
+    fill(10),
+    whereis(nova_session_ets) ! #nova_pubsub{channel = '__sessions', sender = self(),
+                                             topic = "set_provisional_value", payload = {~"visitor", ~"k", ~"v"}},
+    sync(),
+    ?assertNot(nova_session_ets:session_exists(~"visitor")),
+    ?assertEqual(10, length(kept())).
+
+no_session_fits_a_cap_of_zero() ->
+    application:set_env(nova, max_sessions, 0),
+    ?assertEqual({error, session_store_full}, nova_session_ets:set_value(~"s", ~"k", ~"v")),
+    ?assertEqual({error, session_store_full}, nova_session_ets:set_provisional_value(~"s", ~"k", ~"v")),
+    ?assertEqual(0, ets:info(nova_session_ets_entries, size)).
+
+expires_in(SessionId) ->
+    [Row] = ets:lookup(nova_session_ets_entries, SessionId),
+    (element(3, Row) - erlang:system_time(millisecond)) div 1000.
+
+provisional_session_lives_a_day_at_most() ->
+    ok = nova_session_ets:set_provisional_value(~"visitor", ~"k", ~"v"),
+    ok = nova_session_ets:set_value(~"user", ~"k", ~"v"),
+    ?assert(expires_in(~"visitor") =< 86400),
+    ?assert(expires_in(~"visitor") > 86000),
+    ?assert(expires_in(~"user") > 1209000),
+    application:set_env(nova, session_max_age, infinity),
+    ok = nova_session_ets:set_provisional_value(~"later", ~"k", ~"v"),
+    ?assert(expires_in(~"later") =< 86400).
+
+provisional_session_lives_no_longer_than_any_other() ->
+    application:set_env(nova, session_max_age, 60),
+    ok = nova_session_ets:set_provisional_value(~"visitor", ~"k", ~"v"),
+    ?assert(expires_in(~"visitor") =< 60).
+
+written_provisional_session_lives_as_long_as_any_other() ->
+    ok = nova_session_ets:set_provisional_value(~"visitor", ~"k", ~"v"),
+    ok = nova_session_ets:set_value(~"visitor", ~"user", ~"alice"),
+    ?assert(expires_in(~"visitor") > 1209000).
+
+%% The index is what a full table is cleared by, so a session that is missing
+%% from it would never make room and one that is there twice would be
+%% dropped for another.
+every_session_is_in_the_expiry_index_once() ->
+    ok = nova_session_ets:set_provisional_value(~"a", ~"k", ~"v"),
+    ok = nova_session_ets:set_provisional_value(~"a", ~"k2", ~"v"),
+    ok = nova_session_ets:set_value(~"a", ~"user", ~"alice"),
+    ok = nova_session_ets:set_value(~"b", ~"k", ~"v"),
+    ok = nova_session_ets:set_provisional_value(~"b", ~"k2", ~"v"),
+    ok = nova_session_ets:delete_value(~"b", ~"k"),
+    ok = nova_session_ets:set_provisional_value(~"c", ~"k", ~"v"),
+    ok = nova_session_ets:set_value(~"d", ~"k", ~"v"),
+    ok = nova_session_ets:delete_value(~"d"),
+    ok = nova_session_ets:delete_value(~"missing"),
+    ?assertEqual([~"a", ~"b", ~"c"],
+                 lists:sort([Id || {{_Rank, _ExpiresAt, Id}} <- ets:tab2list(nova_session_ets_expiry)])),
+    ?assertEqual(3, ets:info(nova_session_ets_entries, size)).
 
 %% Reads go to the table, so they do not queue behind the writes.
 get_value_does_not_wait_for_the_server() ->

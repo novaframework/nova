@@ -31,6 +31,7 @@ above.
 -export([
          get/2,
          set/3,
+         set_provisional/3,
          delete/1,
          delete/2,
          renew/1,
@@ -51,6 +52,8 @@ above.
 -include_lib("kernel/include/logger.hrl").
 
 -define(DEFAULT_MAX_AGE, 1209600).
+-define(KNOWN, {?MODULE, known}).
+-define(KNOWN_FOR, 1000).
 
 %%%===================================================================
 %%% Callbacks
@@ -69,11 +72,29 @@ Called by `get/2` for the value stored under `Key` in the session
 
 -doc """
 Called by `set/3` to store `Value` under `Key` in the session `SessionId`,
-which the backend creates when it does not have it. What it returns is
-returned from `set/3` as it is. After `{error, Reason}` no session cookie is
-issued for the write. Any other return counts as a write.
+which the backend creates when it does not have it. `Value` is any term, as
+it was given to `set/3`, and `c:get_value/2` has to return it as it was: a
+backend that stores binaries encodes it, for instance with
+`term_to_binary/1`, or returns `{error, Reason}` for a value it cannot store.
+
+What it returns is returned from `set/3` as it is. After `{error, Reason}`
+no session cookie is issued for the write. Any other return counts as a
+write.
 """.
 -callback set_value(SessionId, Key, Value) ->
+    ok |
+    {error, Reason :: atom()}
+        when SessionId :: binary(),
+             Key :: binary(),
+             Value :: term().
+
+-doc """
+Stores a value like `c:set_value/3`, for `set_provisional/3`. A session
+that only holds values written this way is not in use yet, and the backend
+may keep it for a shorter time and drop it first when it runs out of room.
+A backend without it gets the value through `c:set_value/3`.
+""".
+-callback set_provisional_value(SessionId, Key, Value) ->
     ok |
     {error, Reason :: atom()}
         when SessionId :: binary(),
@@ -113,13 +134,14 @@ listener.
 -doc """
 Tells whether the backend holds a session with this id. Nova calls it for the
 id a client presents and replaces ids that return `false`. It runs in the
-process calling `nova_session`, once for every `get/2`, `set/3` and `delete`
-on a request that presented a cookie, so keep it as cheap as a key lookup. A
-backend without it accepts every presented id.
+process calling `nova_session`, which keeps the answer for a second: a
+request that presented a cookie asks once however often it reads and writes
+its session, and again after it deleted or renewed it. A backend without it
+accepts every presented id.
 """.
 -callback session_exists(SessionId :: binary()) -> boolean().
 
--optional_callbacks([start_link/0, session_exists/1]).
+-optional_callbacks([start_link/0, session_exists/1, set_provisional_value/3]).
 
 %%%===================================================================
 %%% Public functions
@@ -145,10 +167,32 @@ can store, and returns `{error, Reason}` for a value it cannot.
 -spec set(Req :: cowboy_req:req(), Key :: binary(), Value :: term()) ->
           ok | {error, Reason :: atom()} | no_return().
 set(Req, Key, Value) ->
+    write(set_value, Req, Key, Value).
+
+-doc """
+Stores `Value` under `Key` like `set/3`, for a value that every visitor gets
+and that can be made again, such as a CSRF token. A session that holds
+nothing else is not in use yet. `nova_session_ets` drops such a session after
+a day and before any other when it is full, so requests without a cookie
+cannot fill it and keep clients from signing in. The first `set/3` on the
+session makes it an ordinary one. A backend of your own that does not have
+`c:set_provisional_value/3` stores the value as `set/3` does.
+""".
+-spec set_provisional(Req :: cowboy_req:req(), Key :: binary(), Value :: term()) ->
+          ok | {error, Reason :: atom()} | no_return().
+set_provisional(Req, Key, Value) ->
+    Mod = get_session_module(),
+    _ = code:ensure_loaded(Mod),
+    case erlang:function_exported(Mod, set_provisional_value, 3) of
+        true -> write(set_provisional_value, Req, Key, Value);
+        false -> write(set_value, Req, Key, Value)
+    end.
+
+write(Function, Req, Key, Value) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
             Mod = get_session_module(),
-            case Mod:set_value(SessionId, Key, Value) of
+            case Mod:Function(SessionId, Key, Value) of
                 {error, _} = Error ->
                     Error;
                 Result ->
@@ -164,13 +208,13 @@ Deletes the whole session and clears the session cookie. The returned
 request carries a fresh session id, so a `set/3` on it later in the same
 request starts a new session instead of reviving the deleted one.
 """.
--spec delete(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} |
-          {error, Reason :: atom()}.
+-spec delete(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} | no_return().
 delete(Req) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
             Mod = get_session_module(),
             Mod:delete_value(SessionId),
+            erase(?KNOWN),
             {ok, NewSessionId} = generate_session_id(),
             notify(Req, {deleted, NewSessionId}),
             Req0 = case stream_handled(Req) of
@@ -200,7 +244,8 @@ renew(Req) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
             Mod = get_session_module(),
-            Mod:delete_value(SessionId);
+            Mod:delete_value(SessionId),
+            erase(?KNOWN);
         _ ->
             ok
     end,
@@ -216,8 +261,7 @@ renew(Req) ->
 Deletes `Key` from the session of the request and returns `{ok, Req}` with
 the request as it was given, also when the request has no session.
 """.
--spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} |
-          {error, Reason :: atom()} | no_return().
+-spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} | no_return().
 delete(Req, Key) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
@@ -366,7 +410,21 @@ presented_session_id(Req) ->
 %%%===================================================================
 %%% Private functions
 %%%===================================================================
+%% What the backend said about a presented id is kept by the calling process,
+%% so a request asks once. For a second and no longer: the process of a
+%% websocket goes on with the request of its upgrade for as long as it lives.
 known(SessionId) ->
+    Now = erlang:monotonic_time(millisecond),
+    case get(?KNOWN) of
+        {SessionId, Known, At} when Now - At < ?KNOWN_FOR ->
+            Known;
+        _ ->
+            Known = backend_knows(SessionId),
+            put(?KNOWN, {SessionId, Known, Now}),
+            Known
+    end.
+
+backend_knows(SessionId) ->
     Mod = get_session_module(),
     _ = code:ensure_loaded(Mod),
     case erlang:function_exported(Mod, session_exists, 1) of
@@ -431,13 +489,12 @@ set_cookie(Value, Opts, Req) ->
 
 warn_ambiguous_cookie(Name) ->
     Key = {?MODULE, ambiguous_cookie_warned},
-    case persistent_term:get(Key, false) of
+    case nova_once:first(Key) of
         true ->
-            ok;
-        false ->
-            persistent_term:put(Key, true),
             ?LOG_WARNING(#{msg => ~"Request carried more than one session cookie, treated as no session. A cookie with the same name is probably set for a parent domain or path; a __Host- session_cookie_name prevents that",
-                           cookie => Name})
+                           cookie => Name});
+        false ->
+            ok
     end.
 
 %% Tells nova_stream_h which session id the response has to hand out. Only

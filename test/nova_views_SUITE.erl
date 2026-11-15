@@ -11,7 +11,8 @@
          status_code_and_headers_options_are_used/1,
          headers_option_without_a_content_type_keeps_the_default/1,
          request_from_the_controller_is_used/1,
-         missing_template_is_a_404/1,
+         missing_template_is_a_500/1,
+         missing_template_is_named_in_dev_only/1,
          unknown_view_name_does_not_become_an_atom/1,
          template_output_is_escaped/1,
          url_tag_adds_the_prefix_of_a_mounted_application/1,
@@ -29,7 +30,8 @@ all() ->
      status_code_and_headers_options_are_used,
      headers_option_without_a_content_type_keeps_the_default,
      request_from_the_controller_is_used,
-     missing_template_is_a_404,
+     missing_template_is_a_500,
+     missing_template_is_named_in_dev_only,
      unknown_view_name_does_not_become_an_atom,
      template_output_is_escaped,
      url_tag_adds_the_prefix_of_a_mounted_application,
@@ -111,14 +113,27 @@ request_from_the_controller_is_used(Config) ->
     ?assertEqual({200, ~"<h1>request</h1>"}, {Status, Body}),
     ?assertEqual(~"yes", maps:get(~"x-from-controller", Headers)).
 
-missing_template_is_a_404(Config) ->
-    ?assertMatch({404, _, _}, response(Config, "/views/no-template")).
+%% The template is the application's to have: the client asked for a page
+%% that is there.
+missing_template_is_a_500(Config) ->
+    ?assertMatch({500, _, _}, response(Config, "/views/no-template")).
+
+missing_template_is_named_in_dev_only(Config) ->
+    {500, _, Plain} = response(Config, "/views/no-template"),
+    ?assertEqual(nomatch, binary:match(Plain, ~"could not be loaded")),
+    application:set_env(nova, environment, dev),
+    try
+        {500, _, Detailed} = response(Config, "/views/no-template"),
+        ?assertMatch({_, _}, binary:match(Detailed, ~"_dtl could not be loaded"))
+    after
+        application:set_env(nova, environment, test)
+    end.
 
 %% A controller that takes the view from the request must not let a client
 %% add an atom for every name it thinks of.
 unknown_view_name_does_not_become_an_atom(Config) ->
     ?assertMatch({200, _, ~"<p>other: named in the request</p>"}, response(Config, "/views/named?view=nova_views_other")),
-    ?assertMatch({404, _, _}, response(Config, "/views/named?view=nova_views_unheard_of_91c2")),
+    ?assertMatch({500, _, _}, response(Config, "/views/named?view=nova_views_unheard_of_91c2")),
     ?assertError(badarg, binary_to_existing_atom(<<"nova_views_unheard_of_91c2", "_dtl">>)).
 
 template_output_is_escaped(Config) ->

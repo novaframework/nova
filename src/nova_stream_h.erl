@@ -26,7 +26,10 @@
                 session :: #session{} | undefined,
                 %% Whether the response has begun: with its headers alone, when
                 %% it is streamed, or in full
-                sent = false :: false | headers | true
+                sent = false :: false | headers | true,
+                %% What Cowboy does with a response whose headers it refuses
+                invalid_headers = error_terminate :: error_terminate | ignore,
+                dropped = false :: boolean()
                }).
 
 -type state() :: #state{}.
@@ -37,9 +40,13 @@ init(StreamID, Req, Opts) ->
     {Req0, Session} = init_session(Req),
     %% Set the correct server-header information. The marker tells
     %% nova_handler that this handler can be asked whether a response began.
-    Req1 = cowboy_req:set_resp_header(<<"server">>, <<"Cowboy/Nova">>, Req0#{nova_stream_h => true}),
+    Req1 = cowboy_req:set_resp_header(<<"server">>, <<"Cowboy/Nova">>, Req0#{nova_stream => true}),
     {Commands, Next} = cowboy_stream:init(StreamID, Req1, Opts),
-    {Commands, #state{req = Req0, next = Next, session = Session}}.
+    {Commands, #state{req = Req0, next = Next, session = Session,
+                      invalid_headers = invalid_headers(Opts)}}.
+
+invalid_headers(#{invalid_response_headers := ignore}) -> ignore;
+invalid_headers(_Opts)                                 -> error_terminate.
 
 -spec data(cowboy_stream:streamid(), cowboy_stream:fin(), binary(), State)
           -> {cowboy_stream:commands(), State} when State::state().
@@ -56,20 +63,22 @@ info(_StreamID, {nova_session, Event}, State = #state{session = Session}) ->
 info(_StreamID, {nova_response_begun, From, Ref}, State = #state{sent = Sent}) when is_pid(From) ->
     From ! {Ref, Sent},
     {[], State};
-info(StreamID, {response, _Code, _Headers, _Body} = Info, State) ->
-    respond(StreamID, Info, State#state{sent = true});
-info(StreamID, {headers, _Code, _Headers} = Info, State = #state{sent = false}) ->
-    respond(StreamID, Info, State#state{sent = headers});
+%% Cowboy stops the connection process, and every other request on it, when
+%% a request is answered twice, so the second answer ends here.
+info(_StreamID, {response, Code, _Headers, _Body}, State = #state{sent = Sent}) when Sent =/= false ->
+    {[], dropped(Code, State)};
+info(_StreamID, {headers, Code, _Headers}, State = #state{sent = Sent}) when Sent =/= false ->
+    {[], dropped(Code, State)};
 info(StreamID, Info, State) ->
     respond(StreamID, Info, State).
 
 %% Cowboy takes a status as an integer or as a binary with the reason phrase.
 respond(StreamID, {response, Code, Headers, Body}, State) when is_integer(Code); is_binary(Code) ->
     {Headers0, State0} = session_cookie(Headers, State),
-    forward(StreamID, {response, Code, Headers0, Body}, State0);
+    forward(StreamID, {response, Code, Headers0, Body}, begun(true, Headers0, State0));
 respond(StreamID, {headers, Code, Headers}, State) when is_integer(Code); is_binary(Code) ->
     {Headers0, State0} = session_cookie(Headers, State),
-    forward(StreamID, {headers, Code, Headers0}, State0);
+    forward(StreamID, {headers, Code, Headers0}, begun(headers, Headers0, State0));
 %% A websocket upgrade: a session written in nova_websocket:init/1 gets its
 %% cookie on the 101.
 respond(StreamID, {switch_protocol, Headers, Module, ModState}, State) when is_map(Headers) ->
@@ -77,6 +86,21 @@ respond(StreamID, {switch_protocol, Headers, Module, ModState}, State) when is_m
     forward(StreamID, {switch_protocol, Headers0, Module, ModState}, State0);
 respond(StreamID, Info, State) ->
     forward(StreamID, Info, State).
+
+%% Cowboy sends nothing when it refuses the headers of a response. It
+%% answers 500 through this handler instead, which has to get past.
+begun(Sent, Headers, State = #state{invalid_headers = Mode}) ->
+    case cowboy_http:validate_response_headers(Headers, #{invalid_response_headers => Mode}) of
+        ok -> State#state{sent = Sent};
+        error_terminate -> State
+    end.
+
+dropped(_Code, State = #state{dropped = true}) ->
+    State;
+dropped(Code, State = #state{req = Req}) ->
+    ?LOG_WARNING(#{msg => ~"The request was answered already, so this response is not sent. A controller, plugin or security callback that answers with cowboy_req has to hand back the request it got from it",
+                   status => Code, method => maps:get(method, Req, undefined)}),
+    State#state{dropped = true}.
 
 forward(StreamID, Info, State = #state{next = Next}) ->
     {Commands, Next0} = cowboy_stream:info(StreamID, Info, Next),
@@ -160,13 +184,12 @@ with_cookie(Value, Opts, Headers) ->
 
 log_invalid_cookie(Name) ->
     Key = {?MODULE, invalid_cookie_logged, Name},
-    case persistent_term:get(Key, false) of
+    case nova_once:first(Key) of
         true ->
-            ok;
-        false ->
-            persistent_term:put(Key, true),
             ?LOG_ERROR(#{msg => ~"Session cookie not set: session_cookie_name or session_cookie_opts is invalid",
-                         cookie => Name})
+                         cookie => Name});
+        false ->
+            ok
     end.
 
 add_cookie(Cookie, Headers) ->

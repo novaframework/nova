@@ -134,23 +134,53 @@ extra_state(Path) ->
     maps:get(extra_state, Req).
 
 %% A security callback is declared with `security` on a route group.
-%% Written on a single route, or as `secure` on the group, it is not read:
-%% the routes are added as before, and each misplaced key is named.
-misplaced_security_key_is_warned_about_test_() ->
+%% Written on a single route, or as `secure` on the group, it is not read.
+%% A callback there is refused, since the routes its author believes
+%% protected would be open, and none of the routes is added.
+misplaced_security_callback_is_refused_test_() ->
+    Callback = fun(_) -> {json, #{}} end,
+    Check = fun(_) -> false end,
+    Group = fun(Options, Routes) ->
+                    [maps:merge(#{prefix => "/admin", routes => [{"/open", Callback, #{methods => [get]}} | Routes]},
+                                Options)]
+            end,
+    {setup, fun setup/0, fun cleanup/1,
+     [fun() ->
+              {Result, Events} =
+                  nova_test_log:collect(fun() ->
+                                                try nova_router:add_routes(misplaced_app, Routes)
+                                                catch throw:Refusal -> Refusal
+                                                end
+                                        end),
+              ?assertEqual({error, {misplaced_security, misplaced_app, Key, Path}}, Result),
+              ?assertMatch([#{app := misplaced_app, key := Key, path := Path}], nova_test_log:errors(Events)),
+              ?assertEqual({error, not_found}, nova_router:lookup_url('_', ~"/admin/open", ~"GET"))
+      end || {Key, Path, Routes}
+                 <- [{secure, "/admin", Group(#{secure => Check}, [])},
+                     {security, "/admin/users",
+                      Group(#{}, [{"/users", Callback, #{methods => [get], security => Check}}])},
+                     {secure, "/admin/roles",
+                      Group(#{}, [{"/roles", Callback, #{methods => [get], secure => Check}}])},
+                     {security, "/admin/socket",
+                      Group(#{}, [{"/socket", nova_router_add_routes_tests_ws, #{protocol => ws, security => Check}}])},
+                     {secure, 404, Group(#{}, [{404, Callback, #{secure => Check}}])},
+                     {secure, "/admin", Group(#{secure => true}, [])}]]}.
+
+%% Written as false it asks for nothing, so the routes are added as before
+%% and each misplaced key is named.
+misplaced_security_key_that_is_false_is_warned_about_test_() ->
     {setup, fun setup/0, fun cleanup/1, fun() ->
         Callback = fun(_) -> {json, #{}} end,
         Check = fun(_) -> false end,
-        Routes = [#{prefix => "/admin", secure => Check,
-                    routes => [{"/users", Callback, #{methods => [get], security => Check}},
-                               {"/roles", Callback, #{methods => [get], secure => Check}},
-                               {"/socket", nova_router_add_routes_tests_ws, #{protocol => ws, security => Check}},
-                               {404, Callback, #{secure => Check}},
+        Routes = [#{prefix => "/admin", secure => false,
+                    routes => [{"/users", Callback, #{methods => [get], security => false}},
+                               {"/roles", Callback, #{methods => [get], secure => false}},
+                               {404, Callback, #{secure => false}},
                                {"/open", Callback, #{methods => [get]}}]},
                   #{prefix => "/guarded", security => Check,
                     routes => [{"/page", Callback, #{methods => [get]}}]}],
         {ok, Events} = nova_test_log:collect(fun() -> nova_router:add_routes(misplaced_app, Routes) end),
-        ?assertEqual([{secure, "/admin"}, {security, "/admin/users"}, {secure, "/admin/roles"},
-                      {security, "/admin/socket"}, {secure, 404}],
+        ?assertEqual([{secure, "/admin"}, {security, "/admin/users"}, {secure, "/admin/roles"}, {secure, 404}],
                      [{Key, Path} || {warning, {report, #{app := misplaced_app, key := Key, path := Path}}} <- Events]),
         ?assertMatch({ok, _, #nova_handler_value{secure = false}},
                      nova_router:lookup_url('_', ~"/admin/users", ~"GET")),

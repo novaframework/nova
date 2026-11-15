@@ -194,13 +194,12 @@ limit(Key, Options, Default, Min) ->
 %% Once per option value, so a misconfigured route does not log per request.
 invalid_limit(Key, Value, Default) ->
     Warned = {?MODULE, invalid_limit, Key, Value},
-    case persistent_term:get(Warned, false) of
+    case nova_once:first(Warned) of
         true ->
-            ok;
-        false ->
-            persistent_term:put(Warned, true),
             ?LOG_WARNING(#{msg => ~"Invalid nova_request_plugin option, using the default",
-                           option => Key, value => Value, default => Default})
+                           option => Key, value => Value, default => Default});
+        false ->
+            ok
     end,
     Default.
 

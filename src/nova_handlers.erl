@@ -55,13 +55,11 @@ A handler returns `{ok, Req}`; Nova replies with `resp_status_code` (200 if unse
 -define(HANDLERS_TABLE, nova_handlers_table).
 
 -doc """
-What a handler returns. Nova matches it against `{ok, Req}` and replies with
-the status, headers and body set on that `Req`. The other shapes of this type
-fail that match and are handled as a crash of the controller.
+What a handler returns: `{ok, Req}`. Nova replies with the status, headers
+and body set on that `Req`. Any other return fails the match in the
+controller step and is handled as a crash of the controller.
 """.
--type handler_return() :: {ok, State2 :: nova:state()} |
-                          {Module :: atom(), State :: nova:state()} |
-                          {error, Reason :: any()}.
+-type handler_return() :: {ok, Req :: cowboy_req:req()}.
 
 -export_type([handler_return/0]).
 
@@ -104,11 +102,10 @@ start_link() ->
 Registers a new handler. This can then be used in a nova controller by
 returning a tuple where the first element is the name of the handler.
 
-The handler is registered asynchronously and the return is always `ok`. A
-name that already has a handler keeps it, and an error is logged.
+The handler is registered asynchronously. A name that already has a handler
+keeps it, and an error is logged.
 """.
--spec register_handler(Handle :: atom(), Callback :: handler_callback()) ->
-                              ok | {error, Reason :: atom()}.
+-spec register_handler(Handle :: atom(), Callback :: handler_callback()) -> ok.
 register_handler(Handle, Callback) ->
     gen_server:cast(?SERVER, {register_handler, Handle, Callback}).
 

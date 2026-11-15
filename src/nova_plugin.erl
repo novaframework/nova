@@ -17,7 +17,7 @@ A plugin returns one of:
 
 `{error, Reason}` stops the execution and renders the 500 status page.
 
-`Reply` is `{reply, Body}`, `{reply, Status, Body}`, `{reply, Status, Headers, Body}`, `{redirect, Url}`, `{status, Status}` or `{status, Status, Headers}`. `Headers` is a map or a list of `{Name, Value}` pairs. Any other reply renders the 500 status page.
+`Reply` is `{reply, Body}`, `{reply, Status, Body}`, `{reply, Status, Headers, Body}`, `{redirect, Url}`, `{redirect_local, Path}`, `{status, Status}` or `{status, Status, Headers}`. `Headers` is a map or a list of `{Name, Value}` pairs. Any other reply renders the 500 status page.
 
 When a pre_request plugin stops the request, or the security function refuses it, the controller and the post_request plugins do not run.
 
@@ -43,6 +43,7 @@ status of `200` unless one is given. `{redirect, Url}` answers `302` with a
                  {reply, Status :: integer(), Headers :: cowboy:http_headers() | [{binary(), iodata()}],
                   Body :: iodata()} |
                  {redirect, Url :: binary() | string()} |
+                 {redirect_local, Path :: binary() | string()} |
                  {status, Status :: integer()} |
                  {status, Status :: integer(), Headers :: cowboy:http_headers() | [{binary(), iodata()}]}.
 

@@ -6,8 +6,7 @@ watcher_test_() ->
     {foreach,
      fun() ->
              {ok, Cwd} = file:get_cwd(),
-             Dir = filename:join(Cwd, "nova_watcher_tests_" ++ integer_to_list(erlang:unique_integer([positive]))),
-             ok = file:make_dir(Dir),
+             Dir = fresh_dir(Cwd),
              application:load(nova),
              {ok, _Pid} = nova_watcher:start_link(),
              {Cwd, Dir}
@@ -32,8 +31,7 @@ watcher_test_() ->
 
 configured_watchers_start_with_the_watcher_test() ->
     {ok, Cwd} = file:get_cwd(),
-    Dir = filename:join(Cwd, "nova_watcher_tests_" ++ integer_to_list(erlang:unique_integer([positive]))),
-    ok = file:make_dir(Dir),
+    Dir = fresh_dir(Cwd),
     application:load(nova),
     application:set_env(nova, bootstrap_application, nova),
     application:set_env(nova, watchers, [{"touch", [filename:join(Dir, "ran")]}]),
@@ -46,6 +44,14 @@ configured_watchers_start_with_the_watcher_test() ->
         application:unset_env(nova, bootstrap_application),
         ok = file:del_dir_r(Dir)
     end.
+
+%% The number is unique in this node only, so a directory a run that was
+%% stopped half way left behind can have the same name.
+fresh_dir(Cwd) ->
+    Dir = filename:join(Cwd, "nova_watcher_tests_" ++ integer_to_list(erlang:unique_integer([positive]))),
+    _ = file:del_dir_r(Dir),
+    ok = file:make_dir(Dir),
+    Dir.
 
 runs_in_the_workdir_and_leaves_the_node_where_it_was({Cwd, Dir}) ->
     ?_test(begin

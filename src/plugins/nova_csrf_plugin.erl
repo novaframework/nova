@@ -87,7 +87,7 @@ handle_safe_request(Req, SessionKey, State) ->
         {error, _} ->
             %% No session yet (first visit) — generate token and store it
             Token = generate_token(),
-            case nova_session:set(Req, SessionKey, Token) of
+            case nova_session:set_provisional(Req, SessionKey, Token) of
                 ok ->
                     {ok, Req#{csrf_token => Token}, State};
                 {error, _} ->

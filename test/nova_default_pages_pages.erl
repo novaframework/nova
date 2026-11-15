@@ -3,11 +3,17 @@
 -module(nova_default_pages_pages).
 -behaviour(nova_plugin).
 
--export([page/1, refuse/1]).
+-export([page/1, gone/1, crash/1, refuse/1]).
 -export([pre_request/4, post_request/4, plugin_info/0]).
 
 page(_Req) ->
     {status, 200, #{}, ~"page"}.
+
+gone(_Req) ->
+    throw({404, gone}).
+
+crash(_Req) ->
+    error(controller_failed_secretly).
 
 refuse(_Req) ->
     error(security_failed_secretly).

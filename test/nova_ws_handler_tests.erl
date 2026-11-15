@@ -9,7 +9,6 @@
 setup() ->
     Prev = nova_test_helper:setup_nova_env(),
     application:set_env(nova, dispatch_backend, persistent_term),
-    application:set_env(nova, render_error_pages, false),
     Tree = nova_routing_trie:new(#{use_strict => false, convert_to_binary => true}),
     persistent_term:put(nova_dispatch, Tree),
     persistent_term:put(nova_use_stacktrace, false),
@@ -290,6 +289,14 @@ controller_crash_returns_stop_test_() ->
         State = make_ws_state(),
         Result = nova_ws_handler:websocket_handle({text, <<"boom">>}, State),
         ?assertMatch({stop, _}, Result)
+    end}.
+
+controller_return_the_handler_cannot_take_stops_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        meck:expect(test_ws_mod, websocket_handle, fun(_Frame, CD) ->
+            {reply, {text, ~"one"}, {text, ~"two"}, CD}
+        end),
+        ?assertMatch({stop, _}, nova_ws_handler:websocket_handle({text, ~"boom"}, make_ws_state()))
     end}.
 
 %%====================================================================

@@ -11,7 +11,8 @@
          route_extra_state_reaches_the_controller/1,
          group_extra_state_reaches_the_controller/1,
          route_extra_state_wins_over_the_group/1,
-         catch_all_route_has_its_template_and_segments/1]).
+         catch_all_route_has_its_template_and_segments/1,
+         unsupported_return_closes_with_one_redacted_error/1]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
@@ -26,7 +27,8 @@ all() ->
      route_extra_state_reaches_the_controller,
      group_extra_state_reaches_the_controller,
      route_extra_state_wins_over_the_group,
-     catch_all_route_has_its_template_and_segments].
+     catch_all_route_has_its_template_and_segments,
+     unsupported_return_closes_with_one_redacted_error].
 
 init_per_suite(Config) ->
     Closing = [{post_ws_connection, nova_ws_lifecycle_pages, #{}}],
@@ -108,3 +110,20 @@ observations(Count) ->
     after 2000 ->
         []
     end.
+
+%% What the process of the connection would otherwise exit with holds the
+%% request of the upgrade, and Ranch logs it as a format string.
+unsupported_return_closes_with_one_redacted_error(Config) ->
+    {Texts, Events} = nova_test_log:collect(
+                        fun() ->
+                            nova_test_listener:websocket_texts(?config(port, Config), "/plain/ws", ~"unsupported", 1)
+                        end),
+    ?assertEqual([closed], Texts),
+    ?assertMatch([#{msg := ~"Websocket handler failed on what the controller returned",
+                    controller := nova_ws_lifecycle_pages, function := websocket_handle,
+                    reason := function_clause}],
+                 nova_test_log:errors(Events)),
+    ?assertEqual([], [Msg || {error, Msg} <- Events, not is_report(Msg)]).
+
+is_report({report, _Report}) -> true;
+is_report(_Msg) -> false.

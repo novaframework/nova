@@ -289,20 +289,19 @@ crash_page_outside_dev_follows_the_accept_header_test_() ->
          end
      end}.
 
-%% render_error_pages turns the HTML page off. A client that asks for JSON,
-%% or for nothing in particular, still gets the JSON body.
-server_error_without_error_pages_test_() ->
+%% render_error_pages turns the pages of Nova off for every client, whatever
+%% form it asks for.
+no_page_without_error_pages_test_() ->
     {setup, ?SETUP, ?CLEANUP,
      fun() ->
          application:set_env(nova, render_error_pages, false),
          try
              CrashInfo = #{status_code => 500, class => error, reason => boom},
+             Png = nova_test_helper:with_header(~"accept", ~"image/png", nova_test_helper:mock_req(~"GET", ~"/")),
              [begin
-                  {status, 500, Headers, Body} = nova_error_controller:server_error(Req#{crash_info => CrashInfo}),
-                  ?assertEqual(~"application/json", maps:get(~"content-type", Headers)),
-                  ?assertMatch(#{~"title" := ~"500 Internal Server Error"}, json:decode(iolist_to_binary(Body)))
-              end || Req <- [json_req(), nova_test_helper:mock_req(~"GET", ~"/")]],
-             ?assertEqual({status, 500}, nova_error_controller:server_error((browser_req())#{crash_info => CrashInfo}))
+                  ?assertEqual({status, 500}, nova_error_controller:server_error(Req#{crash_info => CrashInfo})),
+                  ?assertEqual({status, 404}, nova_error_controller:not_found(Req))
+              end || Req <- [json_req(), nova_test_helper:mock_req(~"GET", ~"/"), browser_req(), Png]]
          after
              application:unset_env(nova, render_error_pages)
          end

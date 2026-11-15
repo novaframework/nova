@@ -12,6 +12,8 @@
          invalid_security_of_a_mounted_application_fails_the_boot/1,
          invalid_security_of_a_mounted_application_fails_the_boot_next_to_a_group_callback/1,
          invalid_security_replaced_by_an_override_fails_the_boot/1,
+         misplaced_security_callback_fails_the_boot/1,
+         misplaced_security_that_is_false_is_warned_about/1,
          pubsub_scope_is_restarted/1,
          restarted_pubsub_scope_has_no_members/1,
          pubsub_scope_started_elsewhere_is_left_alone/1,
@@ -32,6 +34,8 @@ all() ->
      invalid_security_of_a_mounted_application_fails_the_boot,
      invalid_security_of_a_mounted_application_fails_the_boot_next_to_a_group_callback,
      invalid_security_replaced_by_an_override_fails_the_boot,
+     misplaced_security_callback_fails_the_boot,
+     misplaced_security_that_is_false_is_warned_about,
      pubsub_scope_is_restarted,
      restarted_pubsub_scope_has_no_members,
      pubsub_scope_started_elsewhere_is_left_alone,
@@ -118,6 +122,46 @@ invalid_security_replaced_by_an_override_fails_the_boot(_Config) ->
                  nova_test_listener:try_start(#{mounted => [#{routes => Routes}],
                                                 mounted_options => Override#{secure => yes}})),
     ?assertEqual(undefined, whereis(nova_sup)).
+
+%% A callback under a key that is not read where it is written would leave
+%% the routes its author believes protected open.
+misplaced_security_callback_fails_the_boot(_Config) ->
+    Allow = fun nova_boot_pages:allow/1,
+    Routes = [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}],
+    Route = fun(Key) -> [{"/page", fun nova_boot_pages:page/1, #{methods => [get], Key => Allow}}] end,
+    [begin
+         {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(Options) end),
+         ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
+                                                  {misplaced_security, App, Key, Path}}}, _}}},
+                      Result),
+         ?assertMatch([#{app := App, key := Key, path := Path} | _], nova_test_log:errors(Events)),
+         ?assertEqual(undefined, whereis(nova_sup))
+     end || {App, Key, Path, Options}
+                <- [{nova_test_sub_app, security, "/mounted",
+                     #{mounted => [#{routes => Routes}],
+                       mounted_options => #{prefix => "/mounted", security => Allow}}},
+                    {nova_test_app, secure, "/admin",
+                     #{host => [#{prefix => "/admin", secure => Allow, routes => Routes}]}},
+                    {nova_test_app, security, "/admin/page",
+                     #{host => [#{prefix => "/admin", routes => Route(security)}]}},
+                    {nova_test_app, secure, "/admin/page",
+                     #{host => [#{prefix => "/admin", routes => Route(secure)}]}}]].
+
+misplaced_security_that_is_false_is_warned_about(_Config) ->
+    Routes = [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}],
+    {Port, Events} =
+        nova_test_log:collect(fun() ->
+                                      nova_test_listener:start(#{host => [#{prefix => "/admin", secure => false,
+                                                                            routes => Routes}],
+                                                                 mounted => [#{routes => Routes}],
+                                                                 mounted_options => #{prefix => "/mounted",
+                                                                                      security => false}})
+                              end),
+    ?assertEqual([{nova_test_app, secure, "/admin"}, {nova_test_sub_app, security, "/mounted"}],
+                 lists:sort([{App, Key, Path}
+                             || {warning, {report, #{app := App, key := Key, path := Path}}} <- Events])),
+    ?assertMatch({200, _}, nova_test_listener:get(Port, "/admin/")),
+    ?assertMatch({200, _}, nova_test_listener:get(Port, "/mounted/")).
 
 pubsub_scope_is_restarted(_Config) ->
     _Port = nova_test_listener:start(#{}),
