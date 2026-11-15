@@ -1162,21 +1162,18 @@ warn_about_order(RouteInfo, Plugins, Order = #{secured := Secured}, Named) ->
 %% a form for nova_csrf_plugin, which is the setup the guides give.
 -spec body_behind_security(RouteInfo :: map(), Readers :: [{module(), Options :: term()}],
                            HasCsrfPlugin :: boolean(), Named :: map()) -> ok.
-body_behind_security(RouteInfo, Readers, HasCsrfPlugin, Named) ->
-    case maps:find(security_reads_body, RouteInfo) of
-        {ok, false} ->
-            ok;
-        {ok, true} when Readers =:= [] ->
-            ok;
-        {ok, true} ->
-            invalid_security_reads_body({requires, plugins_before_security}, Named);
-        {ok, Value} ->
-            invalid_security_reads_body(Value, Named);
-        error ->
-            warn_once(body_behind_security,
-                      [Module || {Module, Options} <- Readers, not (HasCsrfPlugin andalso reads_a_form_alone(Options))],
-                      Named)
-    end.
+body_behind_security(#{security_reads_body := false}, _Readers, _HasCsrfPlugin, _Named) ->
+    ok;
+body_behind_security(#{security_reads_body := true}, [], _HasCsrfPlugin, _Named) ->
+    ok;
+body_behind_security(#{security_reads_body := true}, _Readers, _HasCsrfPlugin, Named) ->
+    invalid_security_reads_body({requires, plugins_before_security}, Named);
+body_behind_security(#{security_reads_body := Value}, _Readers, _HasCsrfPlugin, Named) ->
+    invalid_security_reads_body(Value, Named);
+body_behind_security(_RouteInfo, Readers, HasCsrfPlugin, Named) ->
+    warn_once(body_behind_security,
+              [Module || {Module, Options} <- Readers, not (HasCsrfPlugin andalso reads_a_form_alone(Options))],
+              Named).
 
 -spec invalid_security_reads_body(term(), Named :: map()) -> no_return().
 invalid_security_reads_body(Value, Named) ->

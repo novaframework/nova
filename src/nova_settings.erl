@@ -72,10 +72,10 @@ checked(secret_key_base, undefined) ->
     {ok, []};
 checked(secret_key_base, Secret) when is_binary(Secret) ->
     checked(secret_key_base, [Secret]);
-checked(secret_key_base, Secrets) ->
-    case is_list_of_secrets(Secrets) of
-        true -> {ok, [nova_secret:derived(Secret) || Secret <- Secrets, is_binary(Secret)]};
-        false -> {error, redacted}
+checked(secret_key_base, Value) ->
+    case secrets(Value) of
+        {ok, Secrets} -> {ok, [nova_secret:derived(Secret) || Secret <- Secrets]};
+        error -> {error, redacted}
     end;
 checked(max_sessions, Value) when Value =:= infinity; is_integer(Value), Value > 0 ->
     {ok, Value};
@@ -196,17 +196,16 @@ string_as_binary(String) ->
 
 %% Written without a call that raises on what the setting holds: a reason
 %% that is raised carries the value into the report of the boot that failed.
--spec is_list_of_secrets(term()) -> boolean().
-is_list_of_secrets([Secret]) ->
-    is_secret(Secret);
-is_list_of_secrets([Secret | Secrets]) ->
-    is_secret(Secret) andalso is_list_of_secrets(Secrets);
-is_list_of_secrets(_NotAList) ->
-    false.
-
--spec is_secret(term()) -> boolean().
-is_secret(Secret) ->
-    is_binary(Secret) andalso byte_size(Secret) >= ?MIN_SECRET_BYTES.
+-spec secrets(term()) -> {ok, [binary()]} | error.
+secrets([Secret]) when is_binary(Secret), byte_size(Secret) >= ?MIN_SECRET_BYTES ->
+    {ok, [Secret]};
+secrets([Secret | Rest]) when is_binary(Secret), byte_size(Secret) >= ?MIN_SECRET_BYTES ->
+    case secrets(Rest) of
+        {ok, Secrets} -> {ok, [Secret | Secrets]};
+        error -> error
+    end;
+secrets(_NotSecrets) ->
+    error.
 
 %% A name that is not a plugin moves nothing ahead of the security callback,
 %% so a misspelt one, or `all` written inside a list, is refused.

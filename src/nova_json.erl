@@ -104,8 +104,11 @@ object_of_distinct_keys(Members, Outer) ->
 -spec kind(Reason :: term()) -> atom().
 kind(Reason) when is_atom(Reason) ->
     Reason;
-kind(Reason) when is_tuple(Reason), tuple_size(Reason) > 0, is_atom(element(1, Reason)) ->
-    element(1, Reason);
+kind(Reason) when is_tuple(Reason), tuple_size(Reason) > 0 ->
+    case element(1, Reason) of
+        Name when is_atom(Name) -> Name;
+        _NotAName -> invalid_json
+    end;
 kind(_Reason) ->
     invalid_json.
 

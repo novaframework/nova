@@ -21,7 +21,7 @@ verifies. Empty when no secret is set.
 -spec keys(Purpose :: purpose()) -> [binary()].
 keys(Purpose) ->
     case nova_settings:value(secret_key_base) of
-        Derived when is_list(Derived) -> [Key || #{Purpose := Key} <- Derived];
+        Derived when is_list(Derived) -> [Key || #{Purpose := Key} <- Derived, is_binary(Key)];
         _NoSecret -> []
     end.
 
