@@ -54,9 +54,7 @@ A handler returns `{ok, Req}`; Nova replies with `resp_status_code` (200 if unse
 
 -define(HANDLERS_TABLE, nova_handlers_table).
 
--type handler_return() :: {ok, State2 :: nova:state()} |
-                          {Module :: atom(), State :: nova:state()} |
-                          {error, Reason :: any()}.
+-type handler_return() :: {ok, Req :: cowboy_req:req()}.
 
 -export_type([handler_return/0]).
 
