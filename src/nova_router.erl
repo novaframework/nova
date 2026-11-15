@@ -672,7 +672,7 @@ parse_url(Host,
                   app = App,
                   handler = nova_ws_handler,
                   arguments = websocket_arguments(Mod, App, Options, T),
-                  plugins = with_route(RealPath, Value#nova_handler_value.plugins),
+                  plugins = with_route(RealPath, with_origin_check(Value#nova_handler_value.plugins)),
                   secure = Secure},
 
     ?LOG_DEBUG(#{action => <<"Adding route">>, protocol => <<"ws">>, route => Path, app => App,
@@ -1031,6 +1031,23 @@ with_checked_options({Type, Plugin, Options = #{allowed_origins := Value}}, Name
     end;
 with_checked_options(Plugin, _Named) ->
     Plugin.
+
+%% A browser sends the cookies of a site with a websocket upgrade from any
+%% page, so the Origin is checked before anything else of a websocket route
+%% runs: no plugin and no security callback acts on a request that is
+%% refused for it. The check goes by the options the route group gave
+%% nova_ws_origin_plugin, wherever in its plugins the group lists it.
+with_origin_check(Phased) ->
+    Check = fun nova_ws_origin_plugin:pre_security/4,
+    Options = case [Options || {_Phase, Callbacks} <- Phased, {Callback, Options} <- Callbacks, Callback =:= Check] of
+                  [OfTheGroup | _] -> OfTheGroup;
+                  [] -> #{}
+              end,
+    Others = [{Phase, [Entry || Entry = {Callback, _Options} <- Callbacks, Callback =/= Check]}
+              || {Phase, Callbacks} <- Phased],
+    add_plugin(nova_ws_origin_plugin),
+    lists:keystore(pre_request, 1, Others,
+                   {pre_request, [{Check, Options} | proplists:get_value(pre_request, Others, [])]}).
 
 %% The plugins of a route by the phase they run in, each phase in the order
 %% the plugins are listed. `pre_request` is the phase ahead of the security

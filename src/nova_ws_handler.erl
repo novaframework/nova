@@ -23,26 +23,13 @@
 %% Public functions      %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
 init(Req = #{method := _Method, plugins := Plugins}, State = #{module := Module}) ->
-    case origin_allowed(Req) of
-        true ->
-            %% Call the http-handler in order to correctly handle potential plugins for the http-request
-            ControllerData = maps:get(controller_data, State, #{}),
-            State0 = State#{mod => Module,
-                            plugins => Plugins,
-                            route => maps:get(nova_route, Req, undefined)},
-            ControllerData2 = ControllerData#{req => Req},
-            upgrade_ws(Module, Req, State0, ControllerData2);
-        false ->
-            ?LOG_DEBUG(#{msg => ~"Websocket upgrade from an origin that is not allowed", handler => Module}),
-            {status, 403, Req, State}
-    end.
-
-
-%% A request nova_ws_origin_plugin has let through is not checked again.
-origin_allowed(#{nova_ws_origin := decided}) ->
-    true;
-origin_allowed(Req) ->
-    nova_origin:is_allowed(cowboy_req:header(~"origin", Req), Req, nova_settings:value(allowed_origins)).
+    %% Call the http-handler in order to correctly handle potential plugins for the http-request
+    ControllerData = maps:get(controller_data, State, #{}),
+    State0 = State#{mod => Module,
+                    plugins => Plugins,
+                    route => maps:get(nova_route, Req, undefined)},
+    ControllerData2 = ControllerData#{req => Req},
+    upgrade_ws(Module, Req, State0, ControllerData2).
 
 upgrade_ws(Module, Req, State, ControllerData) ->
     case Module:init(ControllerData) of

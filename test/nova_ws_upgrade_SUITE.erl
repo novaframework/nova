@@ -14,6 +14,8 @@
          unlisted_origin_is_refused/1,
          origin_plugin_leaves_other_requests_alone/1,
          route_without_the_plugin_checks_the_host/1,
+         route_without_the_plugin_checks_a_request_that_is_no_upgrade/1,
+         refused_upgrade_runs_nothing_of_the_route/1,
          configured_origins_replace_the_default/1,
          any_origin_when_the_check_is_off/1,
          plugin_of_the_route_decides_alone/1,
@@ -45,6 +47,8 @@ all() ->
      unlisted_origin_is_refused,
      origin_plugin_leaves_other_requests_alone,
      route_without_the_plugin_checks_the_host,
+     route_without_the_plugin_checks_a_request_that_is_no_upgrade,
+     refused_upgrade_runs_nothing_of_the_route,
      configured_origins_replace_the_default,
      any_origin_when_the_check_is_off,
      plugin_of_the_route_decides_alone,
@@ -80,7 +84,17 @@ init_per_suite(Config) ->
                 routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]},
               #{prefix => "/open",
                 plugins => [{pre_request, nova_ws_origin_plugin, #{allowed_origins => any}}],
+                routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]},
+              #{prefix => "/guarded",
+                security => fun nova_ws_upgrade_pages:allow/1,
+                plugins => [{pre_request, nova_ws_upgrade_pages, #{}}, {pre_request, nova_csrf_plugin, #{}}],
+                routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]},
+              #{prefix => "/guarded-by-plugin",
+                security => fun nova_ws_upgrade_pages:allow/1,
+                plugins => [{pre_request, nova_ws_upgrade_pages, #{}}, {pre_request, nova_csrf_plugin, #{}},
+                            {pre_request, nova_ws_origin_plugin, #{allowed_origins => same_origin}}],
                 routes => [{"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]}],
+    nova_ws_upgrade_pages:count(),
     [{port, nova_test_listener:start(#{host => Routes, cowboy_options => #{enable_connect_protocol => true}})}
      | Config].
 
@@ -133,6 +147,25 @@ route_without_the_plugin_checks_the_host(Config) ->
     ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/plain/ws", "https://localhost")),
     ?assertMatch(<<"HTTP/1.1 101", _/binary>>,
                  nova_test_listener:websocket_handshake(?config(port, Config), "/plain/ws")).
+
+route_without_the_plugin_checks_a_request_that_is_no_upgrade(Config) ->
+    ?assertMatch({403, _}, nova_test_listener:get(?config(port, Config), "/plain/ws",
+                                                  [{"origin", "https://evil.example"}])).
+
+%% The check is the first thing a websocket route does, whether its route
+%% group lists the plugin or not, and wherever in its plugins it does. A
+%% page of another site gets nothing done with the cookies of a visitor: no
+%% security callback, no plugin and no session started for it.
+refused_upgrade_runs_nothing_of_the_route(Config) ->
+    [begin
+         Before = nova_ws_upgrade_pages:ran(),
+         Refused = handshake(Config, Path, "https://evil.example"),
+         ?assertMatch(<<"HTTP/1.1 403", _/binary>>, Refused),
+         ?assertEqual({Path, nomatch}, {Path, binary:match(string:lowercase(Refused), ~"set-cookie")}),
+         ?assertEqual({Path, Before}, {Path, nova_ws_upgrade_pages:ran()}),
+         ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, Path, "http://localhost")),
+         ?assertEqual({Path, #{Key => Count + 1 || Key := Count <- Before}}, {Path, nova_ws_upgrade_pages:ran()})
+     end || Path <- ["/guarded/ws", "/guarded-by-plugin/ws"]].
 
 configured_origins_replace_the_default(Config) ->
     nova_test_settings:set(allowed_origins, [~"https://app.example.com"]),

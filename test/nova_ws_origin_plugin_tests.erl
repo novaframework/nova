@@ -95,13 +95,27 @@ any_origin_test() ->
     ?assertMatch({ok, _Req, undefined}, pre_request(http3_connect(#{~"origin" => ?EVIL}), #{allowed_origins => any})).
 
 plugin_without_origins_of_its_own_test_() ->
+    Accepted = http3_connect(#{~"origin" => ~"https://only.example.com"}),
     {setup,
      fun() -> nova_test_settings:set(allowed_origins, [~"https://only.example.com"]) end,
      fun(_) -> nova_test_settings:unset(allowed_origins) end,
      [?_assertMatch({stop, {reply, 403, _Body}, _Req, undefined},
                     pre_request(http3_connect(#{~"origin" => ~"https://example.com"}), #{})),
-      ?_assertMatch({ok, #{nova_ws_origin := decided}, undefined},
-                    pre_request(http3_connect(#{~"origin" => ~"https://only.example.com"}), #{})),
-      ?_assertMatch({ok, #{nova_ws_origin := decided}, undefined},
+      ?_assertEqual({ok, Accepted, undefined}, pre_request(Accepted, #{})),
+      ?_assertMatch({ok, _Req, undefined},
                     pre_request(http3_connect(#{~"origin" => ~"https://example.com"}),
                                 #{allowed_origins => same_host}))]}.
+
+%% Nova lists the plugin first on every websocket route, where it checks
+%% every request and not only the ones that ask for an upgrade.
+request_to_a_websocket_route_that_is_no_upgrade_test_() ->
+    Get = #{version => 'HTTP/1.1', method => ~"GET", scheme => ~"http", host => ~"example.com", port => 80,
+            path => ~"/ws", headers => #{~"host" => ~"example.com", ~"origin" => ?EVIL}},
+    Websocket = #{cowboy_handler => nova_ws_handler},
+    [?_assertMatch({stop, {reply, 403, _Body}, _Req, undefined},
+                   nova_ws_origin_plugin:pre_security(Get, Websocket, #{}, undefined)),
+     ?_assertMatch({ok, _Req, undefined},
+                   nova_ws_origin_plugin:pre_security(Get, Websocket, #{allowed_origins => [?EVIL]}, undefined)),
+     ?_assertMatch({ok, _Req, undefined},
+                   nova_ws_origin_plugin:pre_security(Get, #{cowboy_handler => nova_handler}, #{}, undefined)),
+     ?_assertMatch({ok, _Req, undefined}, nova_ws_origin_plugin:pre_security(Get, #{}, #{}, undefined))].
