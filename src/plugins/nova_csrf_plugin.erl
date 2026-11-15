@@ -10,7 +10,7 @@ The plugin needs sessions: the token is kept in the session of a client or signe
 
 ## Where the token comes from
 
-With `secret_key_base` set in the `nova` environment the token is signed and nothing is stored for it. It is an HMAC-SHA256 over the id in the session cookie of the client and 16 random bytes, under a key made from the secret for this plugin alone, so every response carries another token and each of them is good for as long as the client holds that cookie and the secret is in use. A visitor without a session cookie is handed one by the response; no session is started, and what the visitor first writes to the session is stored under the id of that cookie, so the tokens of the pages that are open stay good. A request that changes state is refused when it does not send the cookie the token was signed for. `nova_session:sign_in/3`, which is how a user is signed in, moves a visitor to another session id, as `nova_session:renew/1` does. A token made for the id before is refused from then on, the one in `csrf_token` of the request that signs in included, and the pages the client loads after that carry tokens for the new id: answer a sign-in with a redirect, not with a page that holds a form.
+With `secret_key_base` set in the `nova` environment the token is signed and nothing is stored for it. It is an HMAC-SHA256 over the id in the session cookie of the client and 16 random bytes, under a key made from the secret for this plugin alone, so every response carries another token and each of them is good for as long as the client holds that cookie and the secret is in use. A visitor without a session cookie is handed one by the response; no session is started, and what the visitor first writes to the session is stored under the id of that cookie, so the tokens of the pages that are open stay good. A request that changes state is refused when it does not send the cookie the token was signed for. A token is the characters a page was given: the same bytes written another way, with whitespace in them or other bits to spare in the last character, are refused, with either kind of token. `nova_session:sign_in/3`, which is how a user is signed in, moves a visitor to another session id, as `nova_session:renew/1` does. A token made for the id before is refused from then on, the one in `csrf_token` of the request that signs in included, and the pages the client loads after that carry tokens for the new id: answer a sign-in with a redirect, not with a page that holds a form.
 
 ```erlang
 {nova, [
@@ -254,11 +254,19 @@ unmasked(Submitted) ->
     end.
 
 %% What a client sent as a token, which may be anything. The decoder skips
-%% whitespace, so the bytes cannot be counted from the characters.
+%% whitespace and ignores the bits of the last character that belong to no
+%% byte, so the bytes cannot be counted from the characters, and the same
+%% bytes can be written in many ways. A token is the characters a page was
+%% given: what does not encode back to what was sent is none.
 -spec decoded(Submitted :: term()) -> binary() | undefined.
 decoded(Submitted) when is_binary(Submitted) ->
-    try
-        base64:decode(Submitted, #{mode => urlsafe, padding => false})
+    Encoding = #{mode => urlsafe, padding => false},
+    try base64:decode(Submitted, Encoding) of
+        Decoded ->
+            case constant_time_compare(base64:encode(Decoded, Encoding), Submitted) of
+                true -> Decoded;
+                false -> undefined
+            end
     catch
         error:_NotBase64 -> undefined
     end;

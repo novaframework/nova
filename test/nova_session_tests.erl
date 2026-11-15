@@ -130,6 +130,7 @@ nova_session_ets_test_() ->
       fun id_that_was_handed_out_without_a_secret_is_replaced/0,
       fun id_nobody_handed_out_is_replaced_with_a_secret_set/0,
       fun id_of_a_secret_that_is_gone_is_replaced/0,
+      fun id_in_another_spelling_is_replaced/0,
       fun handed_out_id_is_not_kept_for_another_process/0,
       fun handed_out_id_that_was_deleted_is_not_written_again/0,
       fun handed_out_id_another_process_deleted_is_not_written_again/0,
@@ -422,6 +423,40 @@ id_nobody_handed_out_is_replaced_with_a_secret_set() ->
                          end || Chosen <- [~"attacker-chosen", Changed, base64:encode(crypto:strong_rand_bytes(32)),
                                            base64:encode(crypto:strong_rand_bytes(16)), ~"", ~"!!!!"]]
                 end).
+
+%% The decoder skips whitespace, takes an id without its padding when told
+%% to and ignores the bits of the last character that belong to no byte, so
+%% one signed id can be written in any number of ways. Each of them would be
+%% another session to the backend, and to whatever counts or blocks by the
+%% cookie. Only the spelling Nova hands out is the id.
+id_in_another_spelling_is_replaced() ->
+    with_secret(?SECRET,
+                fun() ->
+                        {ok, Id} = nova_session:generate_session_id(),
+                        [begin
+                             ?assertEqual({Spelling, base64:decode(Id)},
+                                          {Spelling, base64:decode(Spelling, #{padding => false})}),
+                             ok = nova_session:set(presented_req(Spelling, ~"pending"), ~"k", ~"v"),
+                             ?assertEqual({Spelling, {written, ~"pending"}}, {Spelling, stream_event()}),
+                             ?assertNot(nova_session_ets:session_exists(Spelling))
+                         end || Spelling <- other_spellings(Id)],
+                        ok = nova_session:set(presented_req(Id, ~"pending"), ~"k", ~"v"),
+                        ?assertEqual({written, Id}, stream_event())
+                end).
+
+%% Whitespace in front, inside and behind, the padding left out, and every
+%% other value of the two bits the last character of 32 bytes has to spare.
+other_spellings(<<Half:22/binary, Rest/binary>> = Id) ->
+    <<Front:42/binary, Last, "=">> = Id,
+    [<<" ", Id/binary>>, <<Half/binary, " ", Rest/binary>>, <<Half/binary, "\t", Rest/binary>>,
+     <<Half/binary, "\r\n", Rest/binary>>, <<Id/binary, "\n">>, <<Front/binary, Last>>
+     | [<<Front/binary, Spare, "=">> || Spare <- same_bytes_as(Last), Spare =/= Last]].
+
+same_bytes_as(Character) ->
+    Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+    Values = lists:zip(Alphabet, lists:seq(0, 63)),
+    {Character, Value} = lists:keyfind(Character, 1, Values),
+    [Other || {Other, OtherValue} <- Values, OtherValue bsr 2 =:= Value bsr 2].
 
 id_of_a_secret_that_is_gone_is_replaced() ->
     Id = with_secret(?SECRET, fun() -> {ok, Id} = nova_session:generate_session_id(), Id end),

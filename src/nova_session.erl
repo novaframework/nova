@@ -31,7 +31,10 @@ an application that writes who is signed in with `set/3` alone signs in
 whoever holds the id, also somebody who put it in the browser of the user. An id that is
 not signed by a secret in use is replaced as above. So is one whose session
 the request has read, deleted or renewed before it writes: what brought a
-session back that another request ended would not be a new one.
+session back that another request ended would not be a new one. A signed id
+is the 44 characters Nova handed out and nothing else: the same bytes
+written another way, with whitespace in it or other bits to spare in its
+last character, are an id nobody signed.
 
 Session changes reach the cookie only when they are made from the process
 serving the request (where controllers, plugins and `c:nova_websocket:init/1`
@@ -75,6 +78,7 @@ above.
 -define(HAD_A_SESSION, {?MODULE, had_a_session}).
 -define(ID_RANDOM_BYTES, 16).
 -define(ID_SIGNATURE_BYTES, 16).
+-define(ID_CHARACTERS, 44).
 
 %%%===================================================================
 %%% Callbacks
@@ -571,21 +575,28 @@ may_start_under(SessionId, #{nova_session_owner := Owner}) when Owner =:= self()
 may_start_under(_SessionId, _Req) ->
     false.
 
+%% The decoder skips whitespace and ignores the bits of the last character
+%% that belong to no byte, so the bytes of one id can be written in many
+%% ways, each of them another session to the backend. The id is the one
+%% spelling generate_session_id/0 gives those bytes.
 -spec is_signed(SessionId :: binary()) -> boolean().
-is_signed(SessionId) ->
+is_signed(<<SessionId:?ID_CHARACTERS/binary>>) ->
     case nova_secret:keys(session_id) of
         [] ->
             false;
         Keys ->
             try base64:decode(SessionId) of
-                <<Random:?ID_RANDOM_BYTES/binary, Signature:?ID_SIGNATURE_BYTES/binary>> ->
-                    [] =/= [Key || Key <- Keys, crypto:hash_equals(Signature, id_signature(Key, Random))];
+                <<Random:?ID_RANDOM_BYTES/binary, Signature:?ID_SIGNATURE_BYTES/binary>> = Decoded ->
+                    crypto:hash_equals(base64:encode(Decoded), SessionId) andalso
+                        [] =/= [Key || Key <- Keys, crypto:hash_equals(Signature, id_signature(Key, Random))];
                 _AnotherLength ->
                     false
             catch
                 error:_NotBase64 -> false
             end
-    end.
+    end;
+is_signed(_AnotherLength) ->
+    false.
 
 -spec id_signature(Key :: binary(), Random :: binary()) -> binary().
 id_signature(Key, Random) ->

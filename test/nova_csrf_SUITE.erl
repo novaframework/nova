@@ -8,6 +8,7 @@
          token_is_masked_anew_in_every_response/1,
          token_without_a_mask_is_accepted/1,
          masked_token_of_another_session_is_refused/1,
+         masked_token_in_another_spelling_is_refused/1,
          view_receives_the_token/1,
          post_without_a_token_is_refused/1,
          post_without_a_session_is_refused/1,
@@ -31,6 +32,7 @@
          planted_id_is_not_signed_in_after_sign_in/1,
          first_write_of_a_visitor_keeps_the_cookie_and_the_token/1,
          id_nobody_handed_out_is_replaced_by_the_first_write/1,
+         id_in_another_spelling_is_replaced_by_the_first_write/1,
          token_stays_good_while_the_session_is_written/1,
          session_token_of_an_open_form_is_accepted/1]).
 
@@ -75,6 +77,7 @@ groups() ->
                     token_is_masked_anew_in_every_response,
                     token_without_a_mask_is_accepted,
                     masked_token_of_another_session_is_refused,
+                    masked_token_in_another_spelling_is_refused,
                     post_without_a_session_is_refused,
                     post_with_the_token_of_another_session_is_refused
                     | Either]},
@@ -90,6 +93,7 @@ groups() ->
                       planted_id_is_not_signed_in_after_sign_in,
                       first_write_of_a_visitor_keeps_the_cookie_and_the_token,
                       id_nobody_handed_out_is_replaced_by_the_first_write,
+                      id_in_another_spelling_is_replaced_by_the_first_write,
                       token_stays_good_while_the_session_is_written,
                       session_token_of_an_open_form_is_accepted
                       | Either]}].
@@ -181,6 +185,21 @@ masked_token_of_another_session_is_refused(Config) ->
                              #{mode => urlsafe, padding => false}),
     [?assertMatch({403, _}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Wrong}], <<>>))
      || Wrong <- [OtherToken, Remasked, binary:part(Token, 0, 117), <<Token/binary, "A">>, binary:copy(~"!", 118)]].
+
+%% The decoder skips whitespace and ignores the bits of the last character
+%% that belong to no byte: the one that follows it in the alphabet has the
+%% same bits of the token and another one to spare. A token is the
+%% characters a page was given.
+masked_token_in_another_spelling_is_refused(Config) ->
+    {Cookie, <<Half:59/binary, Rest/binary>> = Token} = session(Config),
+    <<Front:117/binary, Last>> = Token,
+    [begin
+         ?assertEqual({Spelling, unmasked(Token)}, {Spelling, unmasked(Spelling)}),
+         ?assertMatch({Spelling, {403, _}},
+                      {Spelling, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Spelling}], <<>>)})
+     end || Spelling <- [<<Half/binary, " ", Rest/binary>>, <<Half/binary, "\t", Rest/binary>>,
+                         <<Front/binary, (Last + 1)>>]],
+    ?assertEqual({200, ~"submitted"}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Token}], <<>>)).
 
 unmasked(Token) ->
     <<Mask:44/binary, Masked:44/binary>> = base64:decode(Token, #{mode => urlsafe, padding => false}),
@@ -373,6 +392,29 @@ id_nobody_handed_out_is_replaced_by_the_first_write(Config) ->
          ?assertNot(nova_session_ets:session_exists(iolist_to_binary(Planted))),
          ?assertEqual({ok, ~"1"}, nova_session_ets:get_value(Issued, ~"basket"))
      end || Planted <- ["planted-by-somebody-else", base64:encode(crypto:strong_rand_bytes(32))]].
+
+%% One signed id can be written in other ways that decode to the same
+%% bytes: with a space in it, which a Cookie header keeps, or with the
+%% character after its last one, which differs in a bit that belongs to no
+%% byte. None of them is the id.
+id_in_another_spelling_is_replaced_by_the_first_write(Config) ->
+    {{"cookie", <<"session_id=", Id/binary>>}, _Token} = session(Config),
+    <<Half:22/binary, Rest/binary>> = Id,
+    <<Front:42/binary, Last, "=">> = Id,
+    [begin
+         ?assertEqual({Spelling, base64:decode(Id)}, {Spelling, base64:decode(Spelling)}),
+         Cookie = {"cookie", ["session_id=", Spelling]},
+         {200, Token} = request(Config, "GET", "/csrf/token", [Cookie], <<>>),
+         {200, Headers, ~"written"} =
+             nova_test_listener:response(?config(port, Config), "POST", "/csrf/write", [Cookie, {"x-csrf-token", Token}],
+                                         <<>>),
+         {"cookie", <<"session_id=", Issued/binary>>} = cookie(Headers),
+         ?assertNot(lists:member(Issued, [Spelling, Id])),
+         ?assertNot(nova_session_ets:session_exists(Spelling)),
+         ?assertEqual({ok, ~"1"}, nova_session_ets:get_value(Issued, ~"basket"))
+     end || Spelling <- [<<Half/binary, " ", Rest/binary>>, <<" ", Id/binary>>,
+                         <<Front/binary, (Last + 1), "=">>]],
+    ?assertNot(nova_session_ets:session_exists(Id)).
 
 token_stays_good_while_the_session_is_written(Config) ->
     {Cookie, Token} = session(Config),
