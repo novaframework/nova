@@ -94,9 +94,24 @@ plugin module, shared by every request, see below.
 | `{break, Req, State}`, `{break, Reply, Req, State}` | Deprecated aliases of the matching `stop` returns, removed in 1.0. They log a warning, once per plugin module. |
 | `{error, Reason}` | End the request with the 500 status page. |
 
-`Reply` is one of `{reply, Body}`, `{reply, Status, Body}`, `{reply, Status, Headers, Body}`, `{redirect, Url}`, `{status, Status}` or `{status, Status, Headers}`. `Headers` is a map or a list of `{Name, Value}` pairs. `{status, ...}` sends the bare status without rendering a status-code route. Any other reply renders the 500 status page.
+`Reply` is one of `{reply, Body}`, `{reply, Status, Body}`, `{reply, Status, Headers, Body}`, `{redirect, Url}`, `{redirect_local, Path}`, `{status, Status}` or `{status, Status, Headers}`. `Headers` is a map or a list of `{Name, Value}` pairs. `{status, ...}` sends the bare status without rendering a status-code route. Any other reply renders the 500 status page.
+
+`{redirect, Url}` answers `302` to any location, another site included. `{redirect_local, Path}` answers `302` only to a path on the site the request was made to. Anything else, such as `https://example.com/` or `//example.com/`, is answered with a bare `400` and logged as the warning `Plugin refused to redirect to a location that is not a local path`. Use it for a target that comes from the request:
+
+```erlang
+pre_request(Req, _Env, _Options, State) ->
+    case nova_session:get(Req, ~"user_id") of
+        {ok, _} ->
+            {ok, Req, State};
+        {error, _} ->
+            #{next := Next} = cowboy_req:match_qs([{next, [], ~"/"}], Req),
+            {stop, {redirect_local, Next}, Req, State}
+    end.
+```
 
 A `post_request` plugin runs after the controller has answered, so a `Reply` it returns with `stop` is dropped, with one warning per plugin in the log.
+
+A request is answered once. A plugin that answers with `cowboy_req:reply/4` returns `{stop, Req1, State}` with the request that call gave back. When it hands back the request it was called with, Nova answers a second time: that response is dropped, the client keeps the first one, and the warning `The request was answered already, so this response is not sent ...` is logged, once per request.
 
 With `ok` the controller still runs and answers, so a redirect or a bare status set there would be overwritten. `{ok, {redirect, ...}, Req, State}` and `{ok, {status, ...}, Req, State}` therefore render the 500 status page and log that `stop` is needed. To send them, return `{stop, Reply, Req, State}`:
 
@@ -248,7 +263,7 @@ controller that passes it on to other services.
 |Option|Description|
 |------|-----------|
 |request_correlation_header|The request header to take the id from. Without the option the request is not looked at and an id is always generated.|
-|logger_metadata_key|The key of the id in the logger metadata. Defaults to the binary `<<"correlation-id">>`.|
+|logger_metadata_key|The key of the id in the logger metadata, an atom. Defaults to the atom `'correlation-id'`. A binary is taken as the atom of that name when the node knows such an atom. When it does not, the default is used and an error is logged once.|
 
 A generated id is a version 4 UUID. The response header is always
 `x-correlation-id`, whatever `request_correlation_header` is.
@@ -449,33 +464,53 @@ bounded by `max_field_size`. When a form is protected by `nova_csrf_plugin`,
 |max_part_size|Reply 413 past this many bytes in a single file part (default 8 000 000).|
 |max_field_size|Reply 413 past this many bytes in a single non-file field (default 65 536).|
 |max_total_size|Reply 413 past this many bytes across all parts (default 64 000 000).|
-|read_timeout|Reply 408 if the whole body is not read within this many ms (default 60 000).|
+|read_timeout|Reply 408 if the body is not fully read within this many ms (default 60 000).|
+|chunk_timeout|Reply 408 if the next 64 000 bytes of the body, or its end, do not arrive within this many ms (default 15 000).|
 
 A malformed part gets a 400 and a handler error a 500. In every case the
 controller is never called and the handler's `handle_abort/2` has run.
+
+The two timeouts work together. `read_timeout` bounds the whole upload,
+however fast it arrives. `chunk_timeout` ends an upload that stalls or
+trickles before that: with the defaults a client has to send at least 64 000
+bytes every 15 seconds, about 4.3 kB a second, until the body ends. The
+handler gets the data 64 000 bytes at a time, and what is left when the body
+ends. A `408` sent over HTTP/1.0 or HTTP/1.1 carries `connection: close`,
+since the rest of the body is not read.
+
+These limits hold for one request. Nova does not share them out between
+clients: several clients, or one client with several connections, can each
+send a body up to `max_total_size` for up to `read_timeout`, and together
+fill the spool described below. Limit the number of concurrent uploads per
+client in the proxy in front of the node if that matters.
 
 The files and bytes spooled at one time, over all requests being served, are
 bounded as well. Set the bounds under `multipart_spool` in the `nova`
 environment:
 
 ```erlang
-{nova, [{multipart_spool, #{max_files => 1024, max_bytes => 8000000000}}]}
+{nova, [{multipart_spool, #{max_files => infinity, max_bytes => 8000000000}}]}
 ```
 
 |Key|Description|
 |---|-----------|
-|max_files|Files spooled at one time (default 1024), or `infinity`.|
+|max_files|Files spooled at one time (default `infinity`), or an integer.|
 |max_bytes|Bytes spooled at one time (default 8 000 000 000), or `infinity`.|
 
 A part that would pass a bound gets a 503. Files a controller kept do not
 count. With the default part limits a request spools at most 32 files and
-64 MB, so the defaults leave room for at least 32 uploads at once; raise them
-together with `max_part_size` and `max_total_size` when single uploads are
-larger than the bound.
+64 MB, so `max_bytes` leaves room for 125 uploads of the largest size at
+once; raise it together with `max_part_size` and `max_total_size` when
+single uploads are larger. The number of files is not bounded by default: a
+request spools at most `max_parts` of them, and a count across the node is
+one that a few slow uploads can use up.
 
-By default the upload is read before the route's security callback runs. See
-[Running a plugin after the security callback](#running-a-plugin-after-the-security-callback)
-to read it only for requests that were let through.
+By default the upload is read before the route's security callback runs, so
+a client that is not signed in can spool up to the limits above. List
+`nova_multipart_plugin` under `plugins_after_security` on every upload route
+that has a security callback: a request the callback refuses is then answered
+at once and nothing of its body is read or spooled. See
+[Running a plugin after the security callback](#running-a-plugin-after-the-security-callback).
 
 To read the parts yourself, leave `nova_multipart_plugin` off the route and use
 [cowboy_req:read_part/1](https://ninenines.eu/docs/en/cowboy/2.21/manual/cowboy_req.read_part/)
