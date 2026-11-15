@@ -13,7 +13,10 @@ json_lib_test_() ->
              nova_test_helper:cleanup_nova_env(Prev)
      end,
      [
-      fun defaults_to_thoas/0,
+      fun defaults_to_otp_json/0,
+      fun default_encodes_a_proplist_as_an_object/0,
+      fun default_leaves_other_lists_as_arrays/0,
+      fun default_refuses_what_json_cannot_represent/0,
       fun otp_json_decodes/0,
       fun otp_json_rejects_bad_input/0,
       fun otp_json_encodes/0,
@@ -21,9 +24,27 @@ json_lib_test_() ->
       fun read_from_bootstrap_app/0
      ]}.
 
-defaults_to_thoas() ->
+%% thoas reports an empty body as unexpected_end_of_input.
+defaults_to_otp_json() ->
     ?assertEqual({ok, #{~"a" => 1}}, nova_json:decode(~"{\"a\":1}")),
+    ?assertEqual({error, unexpected_end}, nova_json:decode(~"")),
     ?assertEqual(~"{\"a\":1}", iolist_to_binary(nova_json:encode(#{a => 1}))).
+
+%% thoas encoded a list of pairs as an object and controllers rely on it.
+default_encodes_a_proplist_as_an_object() ->
+    ?assertEqual(~"{\"a\":1,\"b\":\"c\"}", iolist_to_binary(nova_json:encode([{a, 1}, {~"b", ~"c"}]))),
+    ?assertEqual(
+        ~"{\"outer\":{\"inner\":[{\"k\":true}]}}",
+        iolist_to_binary(nova_json:encode(#{outer => [{inner, [[{k, true}]]}]}))
+    ).
+
+default_leaves_other_lists_as_arrays() ->
+    ?assertEqual(~"[]", iolist_to_binary(nova_json:encode([]))),
+    ?assertEqual(~"[1,\"a\",null]", iolist_to_binary(nova_json:encode([1, ~"a", null]))).
+
+default_refuses_what_json_cannot_represent() ->
+    ?assertError({unsupported_type, {a, b, c}}, nova_json:encode(#{k => {a, b, c}})),
+    ?assertError({unsupported_type, 2}, nova_json:encode([{a, 1}, 2])).
 
 otp_json_decodes() ->
     application:set_env(nova, json_lib, json),

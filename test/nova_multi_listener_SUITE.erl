@@ -203,8 +203,7 @@ get(Port, Path) ->
     {Status, Body}.
 
 json(Body) ->
-    {ok, Decoded} = thoas:decode(Body),
-    Decoded.
+    json:decode(Body).
 
 connect(Port) ->
     case gen_tcp:connect("localhost", Port, [{active, false}], 1000) of

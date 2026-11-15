@@ -132,7 +132,7 @@ modulate_state_decode_json_post_test_() ->
 modulate_state_decode_json_with_otp_json_test_() ->
     {setup,
      fun() -> Prev = nova_test_helper:setup_nova_env(), application:set_env(nova, json_lib, json), Prev end,
-     fun(Prev) -> application:set_env(nova, json_lib, thoas), nova_test_helper:cleanup_nova_env(Prev) end,
+     fun(Prev) -> application:unset_env(nova, json_lib), nova_test_helper:cleanup_nova_env(Prev) end,
      fun() ->
          Req = nova_test_helper:with_json_body(~"{\"name\":\"test\"}",
                                                nova_test_helper:mock_req(~"POST", ~"/")),
