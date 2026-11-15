@@ -30,6 +30,17 @@ in or sign anybody out. The first `nova_session:set/3` makes it an ordinary
 session. A provisional write that would start a session when every session in
 a full table is an ordinary one returns `{error, session_store_full}`.
 
+A session that was deleted, which is what signing out and
+`nova_session:renew/1` do, stays deleted: the id is remembered for five
+minutes, on every node, and a write to it in that time stores nothing and
+returns `{error, session_ended}`. A request that was on its way when its
+client signed out so cannot bring the session back under an id that somebody
+else may hold. `nova_session` stores what such a request writes in a session
+of its own. At most as many ended ids are remembered as the table may hold
+sessions (1 000 000 when `max_sessions` is `infinity`), and the one that
+ended first is forgotten first. A request that takes longer than five
+minutes is not covered.
+
 Sessions do not survive a restart, and a node that starts or joins later only
 has the sessions written after it joined. During a rolling deploy or behind a
 load balancer without sticky sessions, a client whose id the serving node does
@@ -53,7 +64,8 @@ converts both on a hot upgrade, to ordinary sessions.
          set_provisional_value/3,
          delete_value/1,
          delete_value/2,
-         session_exists/1
+         session_exists/1,
+         session_ended/1
         ]).
 
 %% gen_server callbacks
@@ -65,6 +77,14 @@ converts both on a hot upgrade, to ordinary sessions.
 %% {Rank, ExpiresAt, SessionId} for every row, so the session to drop from a
 %% full table and the expired ones are found without walking the table.
 -define(EXPIRY, nova_session_ets_expiry).
+%% {SessionId, Until, Order} for every id that was deleted a while ago, and
+%% {Order, SessionId, Until} to find the one that was deleted first. Until
+%% is in monotonic time, which the node that owns the tables does not see
+%% jump, and Order a number that grows with every id that ends.
+-define(ENDED, nova_session_ets_ended).
+-define(ENDED_ORDER, nova_session_ets_ended_order).
+-define(ENDED_FOR, 300000).
+-define(MAX_ENDED, 1000000).
 -define(CHANNEL, '__sessions').
 -define(SWEEP_INTERVAL, 60000).
 -define(PROVISIONAL_MAX_AGE, 86400).
@@ -100,28 +120,40 @@ get_value(SessionId, Key) ->
 
 %% Every write waits for the local copy, so the next request on this node,
 %% which may arrive as soon as the response is out, already sees it.
--spec set_value(SessionId :: binary(), Key :: binary(), Value :: term()) -> ok | {error, session_store_full}.
+-spec set_value(SessionId :: binary(), Key :: binary(), Value :: term()) ->
+          ok | {error, session_store_full | session_ended}.
 set_value(SessionId, Key, Value) ->
     write(kept, "set_value", SessionId, Key, Value).
 
 -spec set_provisional_value(SessionId :: binary(), Key :: binary(), Value :: term()) ->
-          ok | {error, session_store_full}.
+          ok | {error, session_store_full | session_ended}.
 set_provisional_value(SessionId, Key, Value) ->
     write(provisional, "set_provisional_value", SessionId, Key, Value).
 
 %% The session is looked up after the write: another node's session may have
-%% taken the room that was made for this one.
+%% taken the room that was made for this one, and the session may have been
+%% deleted while the write was on its way to the server, which then stored
+%% nothing. An id that has ended is not asked room for, nor sent on.
 write(Class, Topic, SessionId, Key, Value) ->
-    case has_room(SessionId, Class) of
+    case not session_ended(SessionId) andalso has_room(SessionId, Class) of
         true ->
             nova_pubsub:broadcast(?CHANNEL, Topic, {SessionId, Key, Value}),
             sync(),
-            case session_exists(SessionId) of
-                true -> ok;
-                false -> {error, session_store_full}
-            end;
+            written(SessionId);
         false ->
-            {error, session_store_full}
+            written(SessionId)
+    end.
+
+-spec written(SessionId :: binary()) -> ok | {error, session_store_full | session_ended}.
+written(SessionId) ->
+    case session_exists(SessionId) of
+        true ->
+            ok;
+        false ->
+            case session_ended(SessionId) of
+                true -> {error, session_ended};
+                false -> {error, session_store_full}
+            end
     end.
 
 -spec delete_value(SessionId :: binary()) -> ok.
@@ -141,6 +173,17 @@ session_exists(SessionId) ->
     try ets:lookup(?TABLE, SessionId) of
         [{SessionId, _Session, ExpiresAt, _Class}] -> not expired(ExpiresAt);
         _ -> false
+    catch
+        error:badarg -> false
+    end.
+
+%% Read straight from the table, like session_exists/1: nova_session asks
+%% before it starts a session under an id that no session is stored under.
+-spec session_ended(SessionId :: binary()) -> boolean().
+session_ended(SessionId) ->
+    try ets:lookup(?ENDED, SessionId) of
+        [{SessionId, Until, _Order}] -> Until > erlang:monotonic_time(millisecond);
+        [] -> false
     catch
         error:badarg -> false
     end.
@@ -182,6 +225,8 @@ init([]) ->
     process_flag(trap_exit, true),
     ets:new(?TABLE, [set, named_table, {read_concurrency, true}]),
     ets:new(?EXPIRY, [ordered_set, named_table]),
+    ets:new(?ENDED, [set, named_table, {read_concurrency, true}]),
+    ets:new(?ENDED_ORDER, [ordered_set, named_table]),
     nova_pubsub:join(?CHANNEL),
     schedule_sweep(),
     {ok, #state{}}.
@@ -240,9 +285,11 @@ handle_info(#nova_pubsub{topic = "delete_value", payload = {SessionId, Key}}, St
     {noreply, State};
 handle_info(#nova_pubsub{topic = "delete_value", payload = SessionId}, State) ->
     drop(SessionId),
+    ended(SessionId),
     {noreply, State};
 handle_info(sweep, State) ->
     sweep(),
+    sweep_ended(erlang:monotonic_time(millisecond)),
     schedule_sweep(),
     {noreply, State};
 handle_info(_Info, State) ->
@@ -275,6 +322,8 @@ terminate(_Reason, _State) ->
 %% the first to go until they expire.
 code_change(_OldVsn, _State, _Extra) ->
     _ = ets:whereis(?EXPIRY) =:= undefined andalso ets:new(?EXPIRY, [ordered_set, named_table]),
+    _ = ets:whereis(?ENDED) =:= undefined andalso ets:new(?ENDED, [set, named_table, {read_concurrency, true}]),
+    _ = ets:whereis(?ENDED_ORDER) =:= undefined andalso ets:new(?ENDED_ORDER, [ordered_set, named_table]),
     Old = ets:select(?TABLE, [{{'$1', '$2'}, [], [{{'$1', '$2', infinity}}]},
                               {{'$1', '$2', '$3'}, [], ['$_']}]),
     _ = [insert(SessionId, Session, ExpiresAt, kept) || {SessionId, Session, ExpiresAt} <- Old],
@@ -306,8 +355,16 @@ live_session(SessionId) ->
 
 %% A session keeps the expiry it was created with. A provisional one that is
 %% written with set_value/3 becomes one to keep, with the expiry of a
-%% session created at that point.
+%% session created at that point. Nothing is stored under an id that has
+%% ended: the write is one that was on its way when the session was deleted,
+%% here or on another node.
 store(Class, SessionId, Key, Value, State) ->
+    case session_ended(SessionId) of
+        true -> State;
+        false -> store_live(Class, SessionId, Key, Value, State)
+    end.
+
+store_live(Class, SessionId, Key, Value, State) ->
     case live_session(SessionId) of
         {ok, Session, _ExpiresAt, provisional} when Class =:= kept ->
             drop(SessionId),
@@ -341,6 +398,52 @@ drop(SessionId) ->
 
 rank(provisional) -> 0;
 rank(kept)        -> 1.
+
+%% The id of a session that was deleted is remembered for longer than a
+%% request is on its way, so one that began before cannot write the session
+%% back. Every sign-out adds one, so they are counted like the sessions,
+%% and the one that ended first makes room.
+ended(SessionId) ->
+    forget_ended(SessionId),
+    Until = erlang:monotonic_time(millisecond) + ?ENDED_FOR,
+    Order = erlang:unique_integer([monotonic]),
+    ets:insert(?ENDED_ORDER, {Order, SessionId, Until}),
+    ets:insert(?ENDED, {SessionId, Until, Order}),
+    forget_first_ended(max_ended()).
+
+forget_ended(SessionId) ->
+    case ets:lookup(?ENDED, SessionId) of
+        [{SessionId, _Until, Order}] ->
+            ets:delete(?ENDED_ORDER, Order),
+            ets:delete(?ENDED, SessionId);
+        [] ->
+            true
+    end.
+
+forget_first_ended(Max) ->
+    case ets:info(?ENDED, size) > Max andalso ets:first_lookup(?ENDED_ORDER) of
+        {_Order, [{_, SessionId, _Until}]} ->
+            forget_ended(SessionId),
+            forget_first_ended(Max);
+        _Room ->
+            ok
+    end.
+
+sweep_ended(Now) ->
+    case ets:first_lookup(?ENDED_ORDER) of
+        {_Order, [{_, SessionId, Until}]} when Until =< Now ->
+            forget_ended(SessionId),
+            sweep_ended(Now);
+        _NoneDue ->
+            ok
+    end.
+
+-spec max_ended() -> pos_integer().
+max_ended() ->
+    case max_sessions() of
+        infinity -> ?MAX_ENDED;
+        Max -> Max
+    end.
 
 %% The session of a class that is nearest its expiry. No session expires
 %% at 0 and no session id is a number, so the key asked for comes before

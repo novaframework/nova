@@ -36,6 +36,13 @@ is the 44 characters Nova handed out and nothing else: the same bytes
 written another way, with whitespace in it or other bits to spare in its
 last character, are an id nobody signed.
 
+A session that was deleted, by `delete/1`, `renew/1` or `sign_in/3`, does
+not come back. A request that was on its way when another one ended its
+session writes to a session of its own, under another id, and never under
+the one the client was moved off. `nova_session_ets` sees to that for five
+minutes after a session was deleted, and a backend of your own does with
+`c:session_ended/1`.
+
 Session changes reach the cookie only when they are made from the process
 serving the request (where controllers, plugins and `c:nova_websocket:init/1`
 run). A process spawned with the request can read and write the session data,
@@ -147,7 +154,28 @@ A backend without it accepts every presented id.
 """.
 -callback session_exists(SessionId :: binary()) -> boolean().
 
--optional_callbacks([start_link/0, session_exists/1, set_provisional_value/3]).
+-doc """
+Tells whether the session with this id was deleted with `c:delete_value/1` a
+short while ago: at least for as long as a request to the application can
+take. Nova asks before it starts a session under a signed id that no session
+is stored under, so that a request that was on its way when its client
+signed out, or signed in, does not start one under the id the client was
+moved off. Such a request writes to a session of its own instead.
+
+A backend that has it should also refuse to store under such an id, and
+answer `{error, session_ended}` from `c:set_value/3` and
+`c:set_provisional_value/3`: the session may be deleted between the moment
+Nova asks `c:session_exists/1` and the write, and Nova stores what a backend
+refuses this way in a session of its own as well. `nova_session_ets`
+remembers a deleted id for five minutes, on every node.
+
+A backend without it relies on what the process of the request knows: a
+session it has read, deleted or renewed itself is not written again, and one
+that another request ended before this one touched it can be.
+""".
+-callback session_ended(SessionId :: binary()) -> boolean().
+
+-optional_callbacks([start_link/0, session_exists/1, session_ended/1, set_provisional_value/3]).
 
 %%%===================================================================
 %%% Public functions
@@ -194,20 +222,29 @@ set_provisional(Req, Key, Value) ->
         false -> write(set_value, Req, Key, Value)
     end.
 
+%% A backend answers {error, session_ended} for a session that was deleted
+%% after it said the session was there. What is written then goes where it
+%% would have gone a moment later: to the session the request starts.
 write(Function, Req, Key, Value) ->
     case get_session_id(Req, write) of
         {ok, SessionId} ->
             Mod = get_session_module(),
-            case Mod:Function(SessionId, Key, Value) of
-                {error, _} = Error ->
-                    Error;
-                Result ->
-                    notify(Req, {written, SessionId}),
-                    Result
+            case {Mod:Function(SessionId, Key, Value), Req} of
+                {{error, session_ended}, #{nova_session_pending := Pending}} when Pending =/= SessionId ->
+                    ended(SessionId),
+                    written(Mod:Function(Pending, Key, Value), Pending, Req);
+                {Result, _Req} ->
+                    written(Result, SessionId, Req)
             end;
         _ ->
             {error, session_id_not_set}
     end.
+
+written({error, _} = Error, _SessionId, _Req) ->
+    Error;
+written(Result, SessionId, Req) ->
+    notify(Req, {written, SessionId}),
+    Result.
 
 -doc """
 Signs a user out: deletes the whole session and clears the session cookie.
@@ -531,6 +568,25 @@ backend_knows(SessionId) ->
             true
     end.
 
+%% Whether the backend says the session of this id was deleted a while ago.
+%% One that cannot say is taken to say it was: the answer decides whether a
+%% session is started under an id the client presented.
+backend_ended(SessionId) ->
+    Mod = get_session_module(),
+    _ = code:ensure_loaded(Mod),
+    case erlang:function_exported(Mod, session_ended, 1) of
+        true ->
+            try Mod:session_ended(SessionId) =/= false
+            catch
+                Class:Reason ->
+                    ?LOG_WARNING(#{msg => ~"Session backend failed to say whether a session has ended",
+                                   backend => Mod, class => Class, reason => nova_redact:term(Reason)}),
+                    true
+            end;
+        false ->
+            false
+    end.
+
 get_session_module() ->
     application:get_env(nova, session_manager, nova_session_ets).
 
@@ -569,9 +625,11 @@ session_id(Req, _Access) ->
 %% for. Nova handed the id out, as its signature says, and no session was
 %% stored then: a visitor got it with a page. The process serving the
 %% request is the one that can keep the cookie as it is, and it must not
-%% have seen a session under the id, which then was ended by somebody.
+%% have seen a session under the id, which then was ended by somebody. Nor
+%% must the backend have: a request that was on its way when another one
+%% signed its client out, or in, has seen nothing of the session itself.
 may_start_under(SessionId, #{nova_session_owner := Owner}) when Owner =:= self() ->
-    get(?HAD_A_SESSION) =/= SessionId andalso is_signed(SessionId);
+    get(?HAD_A_SESSION) =/= SessionId andalso is_signed(SessionId) andalso not backend_ended(SessionId);
 may_start_under(_SessionId, _Req) ->
     false.
 

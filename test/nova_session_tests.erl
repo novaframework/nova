@@ -134,6 +134,9 @@ nova_session_ets_test_() ->
       fun handed_out_id_is_not_kept_for_another_process/0,
       fun handed_out_id_that_was_deleted_is_not_written_again/0,
       fun handed_out_id_another_process_deleted_is_not_written_again/0,
+      fun handed_out_id_that_ended_elsewhere_is_not_written/0,
+      fun write_that_arrives_behind_the_delete_starts_another_session/0,
+      fun backend_without_ended_ids_is_not_asked_about_them/0,
       fun session_ids_have_one_length/0,
       fun renew_drops_presented_id/0,
       fun spawned_process_does_not_notify/0,
@@ -555,6 +558,69 @@ handed_out_id_another_process_deleted_is_not_written_again() ->
                         ?assertEqual({written, ~"pending"}, stream_event()),
                         ?assertNot(nova_session_ets:session_exists(Id))
                 end).
+
+%% The request has not touched its session before another one ends it, so
+%% nothing in its own process says the id is over. The backend does.
+handed_out_id_that_ended_elsewhere_is_not_written() ->
+    with_secret(?SECRET,
+                fun() ->
+                        [begin
+                             {ok, Id} = nova_session:generate_session_id(),
+                             {ok, Pending} = nova_session:generate_session_id(),
+                             _ = Stored andalso nova_session_ets:set_value(Id, ~"user", ~"alice"),
+                             Req = presented_req(Id, Pending),
+                             {Pid, Ref} = spawn_monitor(fun() -> {ok, _} = Drop(req_with_session(Id)) end),
+                             receive {'DOWN', Ref, process, Pid, Reason} -> ?assertEqual(normal, Reason)
+                             after 1000 -> error(timeout)
+                             end,
+                             ok = nova_session:set(Req, ~"note", ~"late"),
+                             ?assertEqual({written, Pending}, stream_event()),
+                             ?assertNot(nova_session_ets:session_exists(Id)),
+                             ?assertEqual({ok, ~"late"}, nova_session:get(Req, ~"note"))
+                         end || Stored <- [true, false], Drop <- [fun nova_session:delete/1, fun nova_session:renew/1]]
+                end).
+
+%% The backend said the session was there, and it is deleted before the
+%% write gets to it. What the backend refuses for an id that has ended is
+%% stored as it would have been a moment later: in a session of its own.
+write_that_arrives_behind_the_delete_starts_another_session() ->
+    ok = nova_session_ets:set_value(~"ends-meanwhile", ~"user", ~"alice"),
+    Req = presented_req(~"ends-meanwhile", ~"pending"),
+    meck:new(nova_session_ets, [passthrough]),
+    try
+        meck:expect(nova_session_ets, session_exists,
+                    fun(~"ends-meanwhile") -> ok =:= nova_session_ets:delete_value(~"ends-meanwhile");
+                       (SessionId) -> meck:passthrough([SessionId])
+                    end),
+        ?assertEqual(ok, nova_session:set(Req, ~"note", ~"late")),
+        ?assertEqual({written, ~"pending"}, stream_event())
+    after
+        meck:unload(nova_session_ets)
+    end,
+    ?assertNot(nova_session_ets:session_exists(~"ends-meanwhile")),
+    ?assertEqual({ok, ~"late"}, nova_session_ets:get_value(~"pending", ~"note")),
+    ?assertEqual({ok, ~"late"}, nova_session:get(Req, ~"note")).
+
+%% session_ended/1 is for a backend to have or not.
+backend_without_ended_ids_is_not_asked_about_them() ->
+    meck:new(fake_session_backend, [non_strict]),
+    application:set_env(nova, session_manager, fake_session_backend),
+    try
+        with_secret(?SECRET,
+                    fun() ->
+                            {ok, Id} = nova_session:generate_session_id(),
+                            meck:expect(fake_session_backend, session_exists, fun(_SessionId) -> false end),
+                            meck:expect(fake_session_backend, set_value, fun(_SessionId, _Key, _Value) -> ok end),
+                            ?assertEqual(ok, nova_session:set(presented_req(Id, ~"pending"), ~"k", ~"v")),
+                            ?assertEqual({written, Id}, stream_event()),
+                            meck:expect(fake_session_backend, session_ended, fun(_SessionId) -> true end),
+                            ?assertEqual(ok, nova_session:set(presented_req(Id, ~"pending"), ~"k", ~"v")),
+                            ?assertEqual({written, ~"pending"}, stream_event())
+                    end)
+    after
+        application:set_env(nova, session_manager, nova_session_ets),
+        meck:unload(fake_session_backend)
+    end.
 
 session_ids_have_one_length() ->
     {ok, Plain} = nova_session:generate_session_id(),
