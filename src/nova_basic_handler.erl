@@ -397,9 +397,7 @@ render_dtl(View, Variables, Options) ->
         false ->
             case code:load_file(View) of
                 {error, Reason} ->
-                    %% Cast a warning since the module could not be found
-                    ?LOG_ERROR(#{msg => <<"Nova could not render template">>, template => View, reason => Reason}),
-                    throw({404, {template_not_found, View}});
+                    template_not_found(View, Reason);
                 _ ->
                     View:render(Variables, Options)
             end;
@@ -433,6 +431,14 @@ view_module(Name) ->
         {ok, View} ->
             View;
         error ->
-            ?LOG_ERROR(#{msg => <<"Nova could not render template">>, template => Name, reason => nofile}),
-            throw({404, {template_not_found, Name}})
+            template_not_found(Name, nofile)
     end.
+
+%% The page is there and its template is not, which is the application's
+%% fault and not the client's. nova_handler renders the 500 status page for
+%% a thrown {Status, Reason}, and the page names the template in dev.
+-spec template_not_found(atom() | string(), term()) -> no_return().
+template_not_found(Template, Reason) ->
+    ?LOG_ERROR(#{msg => ~"Nova could not render template", template => Template, reason => Reason}),
+    throw({500, #{status_code => 500,
+                  extra_msg => unicode:characters_to_binary(io_lib:format("Template ~ts could not be loaded", [Template]))}}).
