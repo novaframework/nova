@@ -89,6 +89,12 @@
 -type dispatch_key() :: term().
 -export_type([dispatch_key/0]).
 
+-type plugin() :: {Type :: atom(), Module :: module(), Options :: term()}.
+-type callback() :: {Callback :: fun(), Options :: term()}.
+-type phased() :: [{Phase :: atom(), [callback()]}].
+-type order() :: #{before := all | [module()], 'after' := [module()], secured := boolean()}.
+-type order_warning() :: body_behind_security | pre_request_behind_security | pre_request_not_for_preflight.
+
 -doc "The key of the routing table of every listener Nova has started, for the functions that take a `DispatchKey`.".
 -spec dispatch_keys() -> [dispatch_key()].
 dispatch_keys() ->
@@ -173,6 +179,7 @@ execute(Req0 = #{path := Path}, Env) ->
 %% HTTP/2 lets a client send a path that does not start with a slash. It is
 %% not one to resolve: nothing that decides by how a path starts could tell
 %% where it leads. `*` is the target of a server-wide OPTIONS.
+-spec is_origin_form(Path :: binary()) -> boolean().
 is_origin_form(~"*") -> true;
 is_origin_form(<<"/", _/binary>>) -> true;
 is_origin_form(_Path) -> false.
@@ -1034,6 +1041,7 @@ plugin_key(Plugin)                       -> Plugin.
 %% allowed_origins is an option of these two plugins as well as a setting.
 %% It is checked by the rule of the setting, when the routes are compiled
 %% and not by the first request that goes by it, and kept as that keeps it.
+-spec with_checked_options(Plugin :: plugin(), Named :: map()) -> plugin().
 with_checked_options({Type, Plugin, Options = #{allowed_origins := Value}}, Named)
   when Plugin =:= nova_csrf_plugin; Plugin =:= nova_ws_origin_plugin ->
     case nova_settings:checked(allowed_origins, Value) of
@@ -1052,6 +1060,7 @@ with_checked_options(Plugin, _Named) ->
 %% runs: no plugin and no security callback acts on a request that is
 %% refused for it. The check goes by the options the route group gave
 %% nova_ws_origin_plugin, wherever in its plugins the group lists it.
+-spec with_origin_check(phased()) -> phased().
 with_origin_check(Phased) ->
     Check = fun nova_ws_origin_plugin:pre_security/4,
     Options = case [Options || {_Phase, Callbacks} <- Phased, {Callback, Options} <- Callbacks, Callback =:= Check] of
@@ -1061,8 +1070,8 @@ with_origin_check(Phased) ->
     Others = [{Phase, [Entry || Entry = {Callback, _Options} <- Callbacks, Callback =/= Check]}
               || {Phase, Callbacks} <- Phased],
     add_plugin(nova_ws_origin_plugin),
-    lists:keystore(pre_request, 1, Others,
-                   {pre_request, [{Check, Options} | proplists:get_value(pre_request, Others, [])]}).
+    Ahead = lists:append([Callbacks || {pre_request, Callbacks} <- Others]),
+    lists:keystore(pre_request, 1, Others, {pre_request, [{Check, Options} | Ahead]}).
 
 %% The plugins of a route by the phase they run in, each phase in the order
 %% the plugins are listed. `pre_request` is the phase ahead of the security
@@ -1078,6 +1087,7 @@ normalize_plugins(Plugins, Order) ->
 %% refused. plugins_before_security names the modules whose pre_request/4
 %% runs ahead of security as it did in earlier releases, and
 %% plugins_after_security those of which nothing does, which wins.
+-spec phased(plugin(), order()) -> [{Phase :: atom(), callback()}].
 phased({pre_request, PluginName, Options}, Order = #{'after' := After}) ->
     add_plugin(PluginName),
     HasPreSecurity = exports(PluginName, pre_security),
@@ -1088,13 +1098,16 @@ phased({Type, PluginName, Options}, _Order) ->
     add_plugin(PluginName),
     [{Type, {fun PluginName:Type/4, Options}}].
 
+-spec phase(AheadOfSecurity :: boolean()) -> pre_request | after_security.
 phase(true) -> pre_request;
 phase(false) -> after_security.
 
 %% Whether pre_request/4 of a plugin runs ahead of the security callback.
+-spec is_ahead(module(), order()) -> boolean().
 is_ahead(PluginName, #{before := Before, 'after' := After}) ->
     not lists:member(PluginName, After) andalso (Before =:= all orelse lists:member(PluginName, Before)).
 
+-spec exports(module(), Function :: atom()) -> boolean().
 exports(Module, Function) ->
     _ = code:ensure_loaded(Module),
     erlang:function_exported(Module, Function, 4).
@@ -1106,6 +1119,7 @@ exports(Module, Function) ->
 %% refused. Each is said once for a route group, when its routes are
 %% compiled. A plugin from outside Nova is named unless it has
 %% pre_security/4, which is how its author says what runs first.
+-spec warn_about_order(RouteInfo :: map(), [plugin()], order(), Named :: map()) -> ok.
 warn_about_order(RouteInfo, Plugins, Order = #{secured := Secured}, Named) ->
     Behind = [{Module, Options} || {pre_request, Module, Options} <- Plugins, not is_ahead(Module, Order)],
     ok = warn_once(body_behind_security,
@@ -1118,6 +1132,7 @@ warn_about_order(RouteInfo, Plugins, Order = #{secured := Secured}, Named) ->
         false -> ok
     end.
 
+-spec warn_once(order_warning(), [module()], Named :: map()) -> ok.
 warn_once(_About, [], _Named) ->
     ok;
 warn_once(About, Listed, Named = #{app := App, prefix := Prefix}) ->
@@ -1127,6 +1142,7 @@ warn_once(About, Listed, Named = #{app := App, prefix := Prefix}) ->
         false -> ok
     end.
 
+-spec order_warning(order_warning()) -> binary().
 order_warning(body_behind_security) ->
     ~"The security callback of this route group runs before nova_request_plugin reads the body, so it finds no json or params in the request. Earlier releases read the body first. List nova_request_plugin under plugins_before_security of the route group if the callback reads them";
 order_warning(pre_request_behind_security) ->
@@ -1134,6 +1150,7 @@ order_warning(pre_request_behind_security) ->
 order_warning(pre_request_not_for_preflight) ->
     ~"pre_request/4 of these plugins does not run for a CORS preflight to a route of this group that does not take OPTIONS. A plugin that answers preflights has to do it in pre_security/4".
 
+-spec reads_body(module(), Options :: term()) -> boolean().
 reads_body(nova_request_plugin, Options) when is_map(Options) ->
     maps:get(decode_json_body, Options, false) =:= true orelse
         maps:get(read_urlencoded_body, Options, false) =:= true;
@@ -1142,13 +1159,16 @@ reads_body(_Module, _Options) ->
 
 %% A preflight to such a route is answered by pre_security/4 of the plugins
 %% of the route for the method it asks about, and by nothing else.
+-spec has_route_without_options(RouteInfo :: map()) -> boolean().
 has_route_without_options(RouteInfo) ->
     [] =/= [Path || {Path, _Target, #{methods := Methods}} <- maps:get(routes, RouteInfo, []),
                     not is_integer(Path), is_list(Methods), not takes_options(Methods)].
 
+-spec takes_options(Methods :: [term()]) -> boolean().
 takes_options(Methods) ->
     [] =/= [Method || Method <- Methods, Method =:= '_' orelse is_options(Method)].
 
+-spec is_options(Method :: term()) -> boolean().
 is_options(Method) when is_atom(Method) ->
     string:uppercase(atom_to_binary(Method)) =:= ~"OPTIONS";
 is_options(Method) ->
@@ -1156,6 +1176,7 @@ is_options(Method) ->
 
 %% The routes of an application can be compiled by a tool that has not
 %% loaded Nova, which is what tells the modules of an application.
+-spec is_plugin_of_nova(module()) -> boolean().
 is_plugin_of_nova(PluginName) ->
     _ = application:load(nova),
     application:get_application(PluginName) =:= {ok, nova}.

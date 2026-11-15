@@ -111,6 +111,7 @@ pre_security(Req = #{method := Method, path := Path}, _Env, Options, State) ->
 %% add, so only an origin that is listed is let in. A browser that does not
 %% send it is taken by its `Origin`, and a client that sends neither is not
 %% a page that some other site could have made send the request.
+-spec is_sent_by_the_site(Req :: cowboy_req:req(), Options :: map()) -> boolean().
 is_sent_by_the_site(Req, Options) ->
     Allowed = case Options of
                   #{allowed_origins := Origins} -> Origins;
@@ -220,6 +221,7 @@ handle_unsafe_request(Req, SessionKey, FieldName, HeaderName, State) ->
 %% time to somebody who can make the client ask again and again and choose
 %% part of what the page says (BREACH). Every response gets it under a pad
 %% of its own instead.
+-spec masked(Token :: term()) -> term().
 masked(Token) when is_binary(Token) ->
     Pad = crypto:strong_rand_bytes(byte_size(Token)),
     base64:encode(<<Pad/binary, (crypto:exor(Pad, Token))/binary>>, #{mode => urlsafe, padding => false});
@@ -227,9 +229,11 @@ masked(Token) ->
     Token.
 
 %% A page rendered by a release that did not mask holds the token itself.
+-spec is_token(SessionToken :: term(), Submitted :: term()) -> boolean().
 is_token(SessionToken, Submitted) ->
     constant_time_compare(SessionToken, Submitted) orelse constant_time_compare(SessionToken, unmasked(Submitted)).
 
+-spec unmasked(Submitted :: term()) -> binary() | undefined.
 unmasked(Submitted) ->
     case decoded(Submitted) of
         Decoded when is_binary(Decoded), byte_size(Decoded) rem 2 =:= 0 ->
@@ -252,6 +256,8 @@ decoded(Submitted) when is_binary(Submitted) ->
 decoded(_Submitted) ->
     undefined.
 
+-spec with_signed_token(SessionId :: {ok, term()} | {error, term()}, Secrets :: [binary()], Req) -> Req
+              when Req :: cowboy_req:req().
 with_signed_token({ok, SessionId}, [Secret | _], Req) when is_binary(SessionId) ->
     Nonce = crypto:strong_rand_bytes(?NONCE_BYTES),
     Signed = <<Nonce/binary, (signature(Secret, SessionId, Nonce))/binary>>,
@@ -261,11 +267,13 @@ with_signed_token(_NoSessionId, _Secrets, Req) ->
 
 %% The nonce has a fixed length and comes last, so the session id is what is
 %% between it and the label whatever bytes a client put in its cookie.
+-spec signature(Secret :: binary(), SessionId :: binary(), Nonce :: binary()) -> binary().
 signature(Secret, SessionId, Nonce) ->
     crypto:mac(hmac, sha256, Secret, [~"nova_csrf_plugin", SessionId, Nonce]).
 
 %% 64 characters are the 16 bytes of a nonce and the 32 of its signature,
 %% when every one of them is a character of the encoding.
+-spec is_signed_for(SessionId :: term(), Submitted :: term(), Secrets :: [binary()]) -> boolean().
 is_signed_for(SessionId, <<Token:64/binary>>, Secrets) when is_binary(SessionId) ->
     case decoded(Token) of
         <<Nonce:?NONCE_BYTES/binary, Signature:?SIGNATURE_BYTES/binary>> ->
@@ -278,6 +286,7 @@ is_signed_for(_SessionId, _Submitted, _Secrets) ->
     false.
 
 %% The token of a form that was rendered before csrf_secret was set.
+-spec is_session_token(Req :: cowboy_req:req(), SessionKey :: binary(), Submitted :: term()) -> boolean().
 is_session_token(Req, SessionKey, Submitted) ->
     case nova_session:get(Req, SessionKey) of
         {ok, SessionToken} -> is_token(SessionToken, Submitted);
