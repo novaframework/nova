@@ -61,7 +61,7 @@ end_per_group(_Group, _Config) ->
     ok.
 
 start(Configuration, Config) ->
-    Port = free_port(),
+    Port = nova_test_listener:free_port(),
     application:set_env(nova, cowboy_configuration, Configuration#{port => Port}),
     {ok, _} = application:ensure_all_started(nova_test_app),
     [{base, "http://localhost:" ++ integer_to_list(Port)} | Config].
@@ -222,12 +222,6 @@ session_id(Headers) ->
     [Cookie] = session_cookies(Headers),
     "session_id=" ++ Rest = hd(string:split(Cookie, ";")),
     Rest.
-
-free_port() ->
-    {ok, Socket} = gen_tcp:listen(0, [{reuseaddr, true}]),
-    {ok, Port} = inet:port(Socket),
-    ok = gen_tcp:close(Socket),
-    Port.
 
 log(#{msg := Msg}, #{config := #{test_pid := Pid}}) ->
     Pid ! {logged, Msg},

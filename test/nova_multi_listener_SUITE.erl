@@ -39,7 +39,7 @@ all() ->
     ].
 
 init_per_suite(Config) ->
-    Port = free_port(),
+    Port = nova_test_listener:free_port(),
     application:load(nova),
     application:set_env(nova, bootstrap_application, nova_test_app),
     application:set_env(nova, cowboy_configuration, #{port => Port}),
@@ -65,7 +65,7 @@ bootstrap_listener_is_registered(Config) ->
     ?assert(lists:member(nova_listener, nova_sup:listeners())).
 
 second_application_gets_its_own_port(_Config) ->
-    Port = free_port(),
+    Port = nova_test_listener:free_port(),
     {ok, nova_test_sub_app, _Host, Port} =
         nova_sup:add_application(nova_test_sub_app, #{port => Port}),
     try
@@ -79,7 +79,7 @@ second_application_gets_its_own_port(_Config) ->
 %% table, so neither answers for the other.
 listeners_do_not_serve_each_others_routes(Config) ->
     BootstrapPort = ?config(port, Config),
-    Port = free_port(),
+    Port = nova_test_listener:free_port(),
     {ok, _App, _Host, Port} = nova_sup:add_application(nova_test_sub_app, #{port => Port}),
     try
         %% The second listener serves its own route ...
@@ -117,7 +117,7 @@ second_application_on_a_bound_port_shares_the_listener(Config) ->
 %% Listeners key on {Host, Port}, so an explicit host is part of a
 %% listener's identity: registered, found and removed under that key.
 an_explicit_host_is_part_of_the_listener_identity(_Config) ->
-    Port = free_port(),
+    Port = nova_test_listener:free_port(),
     Host = {127, 0, 0, 1},
     Before = length(nova_sup:listeners()),
     {ok, nova_test_sub_app, Host, Port} =
@@ -178,7 +178,7 @@ adding_a_started_application_again_is_an_error(Config) ->
 
 removing_an_application_stops_only_its_listener(Config) ->
     BootstrapPort = ?config(port, Config),
-    Port = free_port(),
+    Port = nova_test_listener:free_port(),
     {ok, _App, _Host, Port} = nova_sup:add_application(nova_test_sub_app, #{port => Port}),
     ?assertEqual(2, length(nova_sup:listeners())),
 
@@ -213,9 +213,3 @@ connect(Port) ->
         {error, Reason} ->
             {error, Reason}
     end.
-
-free_port() ->
-    {ok, Socket} = gen_tcp:listen(0, [{reuseaddr, true}]),
-    {ok, Port} = inet:port(Socket),
-    ok = gen_tcp:close(Socket),
-    Port.

@@ -180,7 +180,7 @@ groups() ->
 %%====================================================================
 
 init_per_suite(Config) ->
-    Port = free_port(),
+    Port = nova_test_listener:free_port(),
     application:load(nova),
     application:set_env(nova, bootstrap_application, nova_test_app),
     application:set_env(nova, cowboy_configuration, #{port => Port}),
@@ -814,12 +814,6 @@ header(Name, Headers) ->
 
 json(Body) ->
     json:decode(Body).
-
-free_port() ->
-    {ok, Socket} = gen_tcp:listen(0, [{reuseaddr, true}]),
-    {ok, Port} = inet:port(Socket),
-    ok = gen_tcp:close(Socket),
-    Port.
 
 %%====================================================================
 %% Minimal WebSocket client

@@ -12,9 +12,26 @@ start(Options) ->
     {ok, Port} = try_start(Options),
     Port.
 
+%% A port that free_port/0 found free can be taken before the listener binds
+%% it, by another suite on the machine. A boot that fails for that is tried
+%% again on another port, unless the test asked for the port.
 -spec try_start(map()) -> {ok, inet:port_number()} | {error, term()}.
+try_start(Options = #{port := Port}) ->
+    boot(Options, Port);
 try_start(Options) ->
-    Port = maps:get(port, Options, free_port()),
+    try_start(Options, 3).
+
+try_start(Options, Attempts) ->
+    case boot(Options, free_port()) of
+        {error, {nova, {{shutdown, {failed_to_start_child, nova_listener, {listener_not_started, eaddrinuse}}},
+                        _Start}}} when Attempts > 1 ->
+            ok = stop(),
+            try_start(Options, Attempts - 1);
+        Result ->
+            Result
+    end.
+
+boot(Options, Port) ->
     ok = configure(Options#{port => Port}),
     case application:ensure_all_started(nova_test_app) of
         {ok, _Started} -> {ok, Port};
@@ -246,9 +263,20 @@ send_and_close(Port, Data) ->
     timer:sleep(100),
     gen_tcp:close(Socket).
 
+%% A port nothing listens on, from below the range the kernel takes the
+%% ports of outgoing connections and of a listen on port 0 from. A port out
+%% of that range is given to another process between this call and the
+%% listener that binds it, when several suites run on the machine.
 -spec free_port() -> inet:port_number().
 free_port() ->
-    {ok, Socket} = gen_tcp:listen(0, [{reuseaddr, true}]),
-    {ok, Port} = inet:port(Socket),
-    ok = gen_tcp:close(Socket),
-    Port.
+    free_port(50).
+
+free_port(Attempts) when Attempts > 0 ->
+    Port = 20000 + rand:uniform(9999),
+    case gen_tcp:listen(Port, [{reuseaddr, true}]) of
+        {ok, Socket} ->
+            ok = gen_tcp:close(Socket),
+            Port;
+        {error, eaddrinuse} ->
+            free_port(Attempts - 1)
+    end.
