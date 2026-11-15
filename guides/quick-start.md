@@ -70,6 +70,17 @@ and reloads modules when a source file changes. Open
 [http://localhost:8080](http://localhost:8080) to see the page the main
 controller renders.
 
+Nova reads an `environment` that is not set as `prod`. Crash details on error
+pages, a session cookie that is stored over plain HTTP and the output of
+watchers need `dev`, so check that `config/dev_sys.config.src` has it under
+`nova`:
+
+```erlang
+{nova, [
+    {environment, dev}
+]}
+```
+
 > #### File watching {: .info}
 >
 > On Linux `rebar3 nova serve` uses `inotifywait` to watch for changes. It is
