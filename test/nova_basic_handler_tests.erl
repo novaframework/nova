@@ -368,7 +368,7 @@ csrf_token_map_no_token_test() ->
     ?assertEqual(#{key => value}, Result).
 
 %%====================================================================
-%% handle_websocket/3
+%% handle_websocket/3, which is deprecated, through what it calls
 %%====================================================================
 
 handle_websocket_success_test_() ->
@@ -377,8 +377,7 @@ handle_websocket_success_test_() ->
         meck:expect(test_ws_ctrl, init, fun(CD) -> {ok, CD#{initialized => true}} end),
         Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
         Callback = fun test_ws_ctrl:handle/1,
-        {cowboy_websocket, Req1, _State} = nova_basic_handler:handle_websocket(
-            {websocket, #{data => test}}, Callback, Req),
+        {cowboy_websocket, Req1, _State} = nova_basic_handler:websocket_upgrade(#{data => test}, Callback, Req),
         ?assertEqual(#{data => test, initialized => true}, maps:get(controller_data, Req1)),
         meck:unload(test_ws_ctrl)
     end}.
@@ -389,22 +388,8 @@ handle_websocket_error_test_() ->
         meck:expect(test_ws_ctrl2, init, fun(_CD) -> {error, bad_init} end),
         Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
         Callback = fun test_ws_ctrl2:handle/1,
-        {ok, _Req1} = nova_basic_handler:handle_websocket(
-            {websocket, #{}}, Callback, Req),
+        {ok, _Req1} = nova_basic_handler:websocket_upgrade(#{}, Callback, Req),
         meck:unload(test_ws_ctrl2)
-    end}.
-
-handle_websocket_req_passthrough_test_() ->
-    {setup, ?SETUP, ?CLEANUP, fun() ->
-        meck:new(test_ws_ctrl3, [non_strict, no_link]),
-        meck:expect(test_ws_ctrl3, init, fun(CD) -> {ok, CD} end),
-        Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
-        CustomReq = Req#{custom => yes},
-        Callback = fun test_ws_ctrl3:handle/1,
-        {cowboy_websocket, Req1, _State} = nova_basic_handler:handle_websocket(
-            {websocket, #{}, CustomReq}, Callback, Req),
-        ?assertEqual(yes, maps:get(custom, Req1)),
-        meck:unload(test_ws_ctrl3)
     end}.
 
 %%====================================================================

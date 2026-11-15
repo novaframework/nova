@@ -17,8 +17,11 @@
 
 -include_lib("kernel/include/logger.hrl").
 
+-deprecated([{handle_websocket, 3,
+              "nothing in Nova calls it: a websocket route is one with protocol => ws, upgraded by nova_ws_handler"}]).
+
 -ifdef(TEST).
--export([maybe_inject_csrf_token/2, get_view_name/1]).
+-export([maybe_inject_csrf_token/2, get_view_name/1, websocket_upgrade/3]).
 -endif.
 
 -type erlydtl_vars() :: map() | [{Key :: atom() | binary() | string(), Value :: any()}].
@@ -304,7 +307,7 @@ handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _
 
 
 %%--------------------------------------------------------------------
--doc "Handles upgrading to websocket. This is a special handler in regards to arguments. The tuple-object for websocket only takes two arguments; What the initial state of the websocket handler should be and the request object.".
+-doc false.
 -spec handle_websocket({websocket, ControllerData :: any()} |
                        {websocket, ControllerData :: any(), Req0 :: cowboy_req:req()},
                        Callback :: function(), Req :: cowboy_req:req()) ->
@@ -312,8 +315,11 @@ handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _
                               {cowboy_websocket, Req :: cowboy_req:req(), Options :: map()} |
                               nova_handlers:handler_return().
 handle_websocket({websocket, ControllerData, Req0}, Callback, _Req) ->
-    handle_websocket({websocket, ControllerData}, Callback, Req0);
+    websocket_upgrade(ControllerData, Callback, Req0);
 handle_websocket({websocket, ControllerData}, Callback, Req) ->
+    websocket_upgrade(ControllerData, Callback, Req).
+
+websocket_upgrade(ControllerData, Callback, Req) ->
     {module, Module} = erlang:fun_info(Callback, module),
     case Module:init(ControllerData) of
         {ok, NewControllerData} ->
