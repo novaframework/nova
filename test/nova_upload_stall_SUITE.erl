@@ -23,8 +23,8 @@ all() ->
      refused_upload_holds_nothing_when_the_plugin_runs_after_security].
 
 init_per_suite(Config) ->
-    Dir = filename:join(?config(priv_dir, Config), "spool"),
-    ok = file:make_dir(Dir),
+    Dir = filename:join(?config(priv_dir, Config), "stalled"),
+    ok = filelib:ensure_path(Dir),
     Handler = {nova_multipart_file_handler, #{dir => Dir}},
     Upload = [{"/upload", fun nova_upload_cleanup_pages:leave/1, #{methods => [post]}}],
     Routes = [#{prefix => "/open",
