@@ -9,7 +9,8 @@
          override_secure_of_a_nested_application_is_added/1,
          override_secure_reaches_through_an_application_without_one/1,
          nested_application_without_an_override_around_it_keeps_its_own/1,
-         first_entry_of_an_application_is_the_one_used/1,
+         application_mounted_twice_with_different_security_is_refused/1,
+         application_mounted_twice_with_the_same_security_is_mounted_once/1,
          secure_covers_a_nested_application_but_prefix_and_plugins_do_not/1,
          secure_of_every_application_around_a_nested_one_has_to_allow/1,
          override_secure_replaces_the_secure_around_a_nested_application/1,
@@ -32,7 +33,8 @@ all() ->
      override_secure_of_a_nested_application_is_added,
      override_secure_reaches_through_an_application_without_one,
      nested_application_without_an_override_around_it_keeps_its_own,
-     first_entry_of_an_application_is_the_one_used,
+     application_mounted_twice_with_different_security_is_refused,
+     application_mounted_twice_with_the_same_security_is_mounted_once,
      secure_covers_a_nested_application_but_prefix_and_plugins_do_not,
      secure_of_every_application_around_a_nested_one_has_to_allow,
      override_secure_replaces_the_secure_around_a_nested_application,
@@ -105,15 +107,28 @@ nested_application_without_an_override_around_it_keeps_its_own(_Config) ->
     ?assertEqual({200, ~"none", [inner]}, get(Port, "/nested/?group=deny")),
     ?assertEqual({403, ~"inner", [inner]}, get(Port, "/nested/?inner=deny")).
 
-%% An application is compiled once, for the first entry that names it.
-first_entry_of_an_application_is_the_one_used(_Config) ->
-    Port = nova_test_listener:start(#{nova_apps => [nova_test_nested_app,
-                                                    {nova_test_sub_app, #{override_secure => ?OUTER}}],
-                                      mounted => [#{prefix => "/own", routes => ?PAGE}],
+%% An application is compiled once, for the first entry that names it. Two
+%% entries that ask for different callbacks leave it open which of them
+%% protects the application, so Nova does not start.
+application_mounted_twice_with_different_security_is_refused(_Config) ->
+    Nested = [#{prefix => "/nested", routes => ?PAGE}],
+    [?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
+                                              {nova_app_mounted_twice, nova_test_nested_app}}}, _}}},
+                  nova_test_listener:try_start(#{nova_apps => NovaApps,
+                                                 mounted_nova_apps => [nova_test_nested_app],
+                                                 nested => Nested}))
+     || NovaApps <- [[nova_test_nested_app, {nova_test_sub_app, #{override_secure => ?OUTER}}],
+                     [nova_test_nested_app, {nova_test_sub_app, #{secure => ?OUTER}}],
+                     [nova_test_sub_app, {nova_test_nested_app, #{secure => ?OUTER}}]]].
+
+%% The secure an entry inherits and the one it declares are the same wish.
+application_mounted_twice_with_the_same_security_is_mounted_once(_Config) ->
+    Port = nova_test_listener:start(#{nova_apps => [{nova_test_nested_app, #{prefix => "/first", secure => ?OUTER}},
+                                                    {nova_test_sub_app, #{secure => ?OUTER}}],
                                       mounted_nova_apps => [nova_test_nested_app],
                                       nested => [#{prefix => "/nested", routes => ?PAGE}]}),
-    ?assertEqual({403, ~"outer", [outer]}, get(Port, "/own/?outer=deny")),
-    ?assertEqual({200, ~"none", []}, get(Port, "/nested/?outer=deny")).
+    ?assertEqual({403, ~"outer", [outer]}, get(Port, "/first/nested/?outer=deny")),
+    ?assertMatch({404, _Body, []}, get(Port, "/nested/")).
 
 secure_covers_a_nested_application_but_prefix_and_plugins_do_not(_Config) ->
     Plugins = [{pre_request, nova_test_app_plugin, #{}}],
