@@ -17,6 +17,7 @@
          crashing_security_callback_renders_the_500_page/1,
          crashing_security_callback_does_not_upgrade/1,
          crashing_plugin_renders_the_500_page/1,
+         crashing_page_of_a_refused_request_runs_once/1,
          page_gets_the_same_request_on_every_path/1,
          page_after_a_failed_page_gets_its_own_status/1,
          pages_of_the_application_run_with_error_pages_off/1]).
@@ -41,6 +42,7 @@ all() ->
      crashing_security_callback_renders_the_500_page,
      crashing_security_callback_does_not_upgrade,
      crashing_plugin_renders_the_500_page,
+     crashing_page_of_a_refused_request_runs_once,
      page_gets_the_same_request_on_every_path,
      page_after_a_failed_page_gets_its_own_status,
      pages_of_the_application_run_with_error_pages_off].
@@ -105,11 +107,12 @@ crashing_404_page_renders_the_500_page(Config) ->
     ?assertEqual({500, ~"page 500"}, nova_test_listener:get(?config(port, Config), "/nowhere", [{"x-404", "crash"}])),
     ?assertEqual([{page, 404}, {page, 500}], observations()).
 
-%% When no route matches, the 404 page is the controller of the request, so
-%% the status it throws asks for the 404 page once more.
+%% When no route matches, the 404 page is what answers the request, and it
+%% is a status page there too: the status it throws does not ask for it once
+%% more.
 throwing_404_page_ends_in_the_500_page(Config) ->
     ?assertEqual({500, ~"page 500"}, nova_test_listener:get(?config(port, Config), "/nowhere", [{"x-404", "throw"}])),
-    ?assertEqual([{page, 404}, {page, 404}, {page, 500}], observations()).
+    ?assertEqual([{page, 404}, {page, 500}], observations()).
 
 thrown_404_with_a_throwing_page_renders_the_500_page(Config) ->
     ?assertEqual({500, ~"page 500"}, nova_test_listener:get(?config(port, Config), "/gone", [{"x-404", "throw"}])),
@@ -143,6 +146,19 @@ crashing_security_callback_does_not_upgrade(Config) ->
 crashing_plugin_renders_the_500_page(Config) ->
     ?assertEqual({500, ~"page 500"}, nova_test_listener:get(?config(port, Config), "/failing-plugin/page")),
     ?assertEqual([{page, 500}], observations()).
+
+%% The page the router, a plugin or the security callback asked for is a
+%% status page as well.
+crashing_page_of_a_refused_request_runs_once(Config) ->
+    Port = ?config(port, Config),
+    [begin
+         ?assertMatch({500, _}, nova_test_listener:get(Port, Path, Headers)),
+         ?assertEqual({Path, Pages}, {Path, observations()})
+     end || {Path, Headers, Pages} <- [{"/guarded/page", [{"x-500", "crash"}], [{page, 500}]},
+                                       {"/failing-plugin/page", [{"x-500", "throw"}], [{page, 500}]},
+                                       {"/nowhere", [{"x-404", "crash"}, {"x-500", "crash"}],
+                                        [{page, 404}, {page, 500}]},
+                                       {"/nowhere", [{"x-404", "throw"}], [{page, 404}, {page, 500}]}]].
 
 %% Whichever way a status page is reached, its controller finds the status
 %% in resp_status_code and in controller_data, and crash_info when something

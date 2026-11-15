@@ -51,7 +51,9 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) when is
             render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 500)
     end;
 execute(Req, Env = #{callback := _Callback}) ->
-    execute_controller(Req, Env, false).
+    %% nova_router:render_status_page/5 says which status the page it put in
+    %% place of the controller is for.
+    execute_controller(Req, Env, maps:get(status_page, Env, false)).
 
 -spec terminate(any(), Req :: cowboy_req:req() | undefined, function()) -> ok.
 terminate(Reason, Req, Callback) ->

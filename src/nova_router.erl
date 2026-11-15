@@ -723,7 +723,7 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
                       bindings => Bindings}
                 }
         end,
-    {ok, status_page_request(StatusCode, Data, Req0), Env0}.
+    {ok, status_page_request(StatusCode, Data, Req0), Env0#{status_page => StatusCode}}.
 
 %% What the controller of a status page finds in its request, however the
 %% page was reached. It is called with the request alone, so the status and
