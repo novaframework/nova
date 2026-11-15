@@ -21,7 +21,7 @@ routes(_Environment) ->
   }].
 ```
 
-A `GET` request to `/admin` calls `my_controller:main/1`. The argument of `routes/1` is the value of `nova:get_environment/0`, which lets a router return different routes for different environments. Set it with `{environment, Env}` under the `nova` application in *sys.config*. When it is not set it is read as `dev`.
+A `GET` request to `/admin` calls `my_controller:main/1`. The argument of `routes/1` is the value of `nova:get_environment/0`, which lets a router return different routes for different environments. Set it with `{environment, Env}` under the `nova` application in *sys.config*. When it is not set it is read as `prod`, so routes a router only returns for `dev` are not served.
 
 ### Route groups
 
@@ -32,7 +32,8 @@ A route group is a map. Its keys are all optional:
 | `prefix` | A path put in front of every route of the group |
 | `security` | The security callback of the group, `false` or a `fun/1`. A group without the key has none, see [Secure routing](#secure-routing) |
 | `plugins` | The plugins of the group, see [Using plugins local to a set of endpoints](#using-plugins-local-to-a-set-of-endpoints) |
-| `plugins_after_security` | Plugin modules that wait for the security callback, see [Plugins](plugins.md#running-a-plugin-after-the-security-callback) |
+| `plugins_before_security` | Plugin modules whose `pre_request/4` runs ahead of the security callback, see [Plugins](plugins.md#running-a-plugin-ahead-of-the-security-callback) |
+| `plugins_after_security` | Plugin modules of which nothing runs ahead of the security callback, see [Plugins](plugins.md#keeping-a-plugin-behind-the-security-callback) |
 | `routes` | The routes |
 | `host` | Serve the group only for requests to this host, a string or a binary. A host that has groups of its own is served by those alone: groups without `host` are not consulted for it |
 | `extra_state` | A term handed to the controllers of the routes of the group that set no `extra_state` themselves |
@@ -126,7 +127,7 @@ A websocket route takes `extra_state` like an HTTP route does, and falls back to
 
 The `init/1` callback of a websocket controller returns `{ok, State}` to accept the connection. Any other return refuses the upgrade with a `500`. It can return `{ok, State, Options}` to also set the options of the connection, where `Options` is a `nova_websocket:opts()` map such as `#{max_frame_size => 65536, idle_timeout => 30000}`. It takes the options of [cowboy_websocket](https://ninenines.eu/docs/en/cowboy/2.21/manual/cowboy_websocket/).
 
-A browser sends the cookies of your site with a websocket upgrade started by any page. When the connection relies on a session cookie, add `nova_ws_origin_plugin` as a `pre_request` plugin to refuse upgrades from other origins, in the global `plugins` or on the route group together with the other plugins the group needs. It is not on by default.
+A browser sends the cookies of your site with a websocket upgrade started by any page. Nova therefore checks the `Origin` header of every request to a websocket route against `allowed_origins`, and answers one from another origin with `403`. See [The origin check](websockets.md#the-origin-check).
 
 The [Websockets](websockets.md) guide describes the controller.
 
@@ -217,11 +218,11 @@ routes(_Environment) ->
     }].
 ```
 
-The callback runs after the `pre_request` plugins of the route and before the controller. The [request pipeline](plugins.md#request-pipeline) section of the plugins guide has the whole order.
+The callback runs after `pre_security/4` of the `pre_request` plugins of the route, and before their `pre_request/4` and the controller. The [request pipeline](plugins.md#request-pipeline) section of the plugins guide has the whole order.
 
 `security` takes `false`, a `fun/1` or the deprecated `{Module, Function}`. Any other value, `true` included, is logged as an error and stops the application from starting with `{invalid_security, Value}`. The same goes for `secure` and `override_secure` in `nova_apps`.
 
-The security function runs after the group's `pre_request` plugins, so a plugin that reads the body has read it before the request is checked. `plugins_after_security => [Module]` in the route group makes the listed plugins wait for the security function; see [Running a plugin after the security callback](plugins.md#running-a-plugin-after-the-security-callback).
+The security function runs before a plugin reads the body, so `json`, `params` and `files` are not in the request it gets. `plugins_before_security => [Module]` in the route group runs `pre_request/4` of the listed plugins ahead of the security function; see [Running a plugin ahead of the security callback](plugins.md#running-a-plugin-ahead-of-the-security-callback).
 
 ### The security-function callback
 
@@ -368,26 +369,65 @@ Matching backtracks, so a route is only skipped if nothing below it can match.
 `/users/new` and `/users/:id` can therefore both be declared: `/users/new`
 serves the literal path and `/users/:id` serves everything else.
 
-A request path is matched after empty segments are dropped and `.` and `..`
-are resolved, so `/public/../admin//users` is routed as `/admin/users`. The
-`path` in the request map is still what the client sent. A plugin or security
-callback that decides by path must use `nova_router:canonical_path(Req)`, and
-compare whole segments: `/api` is not a prefix of `/apikeys`. The
-`excluded_paths` of `nova_csrf_plugin` are matched this way. Earlier releases
-matched them as a byte prefix of the raw path.
-
 Once a path matches, the method is resolved. An exact method wins over a route
 declared with `'_'`. If the path matches but the method does not, Nova answers
 `405` with an `allow` header listing the methods that path does accept. No
-plugin runs for such a request, with one exception: a CORS preflight runs the
-plugins of the route for the method it asks about before the `405`, so that
-`nova_cors_plugin` can answer it.
+plugin runs for such a request, with one exception: a CORS preflight runs
+`pre_security/4` of the plugins of the route for the method it asks about
+before the `405`, so that `nova_cors_plugin` can answer it.
 
 If two routes declare the same path *and* the same method, the first one
 registered wins and the second is logged and ignored. Set
 `use_strict_routing` to `true` in the `nova` application environment to make
 Nova refuse to start on a conflict instead, which also reports overlapping
 literal and binding routes.
+
+## Paths that are not canonical
+
+A request whose path is not written the way it is routed is answered with
+`400` before a route is looked up. No plugin and no security callback runs
+for it. The answer is the `400` status-code route of the application when it
+has one, and a `400` without a body otherwise.
+
+| Path | Answer |
+|---|---|
+| `//a`, `/a//b`, `/a//` | `400`: an empty segment ahead of the last one |
+| `/a/./b`, `/a/../b`, `/a/..` | `400`: a `.` or `..` segment |
+| `/a/%2e%2e/b`, `/a/%2E/b` | `400`: the same, percent-encoded |
+| `/a/` | Routed as `/a`. One trailing slash is not refused |
+| `/a/...`, `/.well-known/a`, `/a%2fb`, `/a%5cb` | Routed as written |
+| `a`, a path without a leading slash, which HTTP/2 lets a client send | `400`, whatever the setting is |
+
+A proxy, a cache or a filter in front of Nova may read such a path another
+way than Nova does. Refusing it leaves nothing to disagree about.
+
+`non_canonical_paths` in the `nova` environment takes `reject`, the default,
+and `resolve`:
+
+```erlang
+{nova, [{non_canonical_paths, resolve}]}
+```
+
+With `resolve` a path is routed after empty segments are dropped and `.` and
+`..` are resolved, as in earlier releases: `/public/../admin//users` is
+routed as `/admin/users`. Any other value stops the boot with
+`{invalid_setting, non_canonical_paths, Value}`.
+
+The `path` in the request map is what the client sent, in both modes. With
+`reject` it still differs from the routed path by a trailing slash. A plugin
+or security callback that decides by path must use
+`nova_router:canonical_path/1`, and compare whole segments: `/api` is not a
+prefix of `/apikeys`.
+
+```erlang
+is_admin_path(Req) ->
+    case binary:split(nova_router:canonical_path(Req), ~"/", [global, trim_all]) of
+        [~"admin" | _] -> true;
+        _ -> false
+    end.
+```
+
+The `excluded_paths` of `nova_csrf_plugin` are matched this way.
 
 ## Status-code routes
 
@@ -398,7 +438,7 @@ A route whose path is an integer handles that status code:
              {500, fun my_error_controller:server_error/1, #{}}]}
 ```
 
-Nova registers its own 404 and 500 handlers; an application's routes for the same codes replace them. A status-code route is rendered when no route matches (404), when the method is not allowed (405), when a controller, a plugin or the security function crashes or a plugin returns `{error, Reason}` (500), when a controller throws `{Status, Reason}`, and when a controller returns something no handler understands. It is *not* rendered for a `{status, Code}` returned by a controller, nor for a request the security function refuses or a plugin stops.
+Nova registers its own 404 and 500 handlers; an application's routes for the same codes replace them. A status-code route is rendered when a path is not canonical (400), when no route matches (404), when the method is not allowed (405), when a controller, a plugin or the security function crashes or a plugin returns `{error, Reason}` (500), when a controller throws `{Status, Reason}`, and when a controller returns something no handler understands. It is *not* rendered for a `{status, Code}` returned by a controller, nor for a request the security function refuses or a plugin stops.
 
 A status-code route that crashes, or throws `{Status, Reason}` itself, is not rendered a second time. The request gets the 500 page; when it was the application's 500 page that failed, Nova's own; and a `500` without a body should that fail as well.
 
