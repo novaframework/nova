@@ -54,6 +54,7 @@ A request with neither header is let through: it is not from a browser, or from 
 -include_lib("kernel/include/logger.hrl").
 
 -define(NONCE_BYTES, 16).
+-define(SIGNATURE_BYTES, 32).
 -define(MIN_SECRET_BYTES, 32).
 
 -ifdef(TEST).
@@ -257,18 +258,26 @@ masked(Token) ->
 is_token(SessionToken, Submitted) ->
     constant_time_compare(SessionToken, Submitted) orelse constant_time_compare(SessionToken, unmasked(Submitted)).
 
-unmasked(Submitted) when is_binary(Submitted) ->
-    try base64:decode(Submitted, #{mode => urlsafe, padding => false}) of
-        Decoded when byte_size(Decoded) rem 2 =:= 0 ->
+unmasked(Submitted) ->
+    case decoded(Submitted) of
+        Decoded when is_binary(Decoded), byte_size(Decoded) rem 2 =:= 0 ->
             Size = byte_size(Decoded) div 2,
             <<Pad:Size/binary, Masked:Size/binary>> = Decoded,
             crypto:exor(Pad, Masked);
-        _Odd ->
+        _NotMasked ->
             undefined
+    end.
+
+%% What a client sent as a token, which may be anything. The decoder skips
+%% whitespace, so the bytes cannot be counted from the characters.
+-spec decoded(Submitted :: term()) -> binary() | undefined.
+decoded(Submitted) when is_binary(Submitted) ->
+    try
+        base64:decode(Submitted, #{mode => urlsafe, padding => false})
     catch
         error:_NotBase64 -> undefined
     end;
-unmasked(_Submitted) ->
+decoded(_Submitted) ->
     undefined.
 
 with_signed_token({ok, SessionId}, [Secret | _], Req) when is_binary(SessionId) ->
@@ -283,14 +292,15 @@ with_signed_token(_NoSessionId, _Secrets, Req) ->
 signature(Secret, SessionId, Nonce) ->
     crypto:mac(hmac, sha256, Secret, [~"nova_csrf_plugin", SessionId, Nonce]).
 
-%% 64 characters are the 16 bytes of a nonce and the 32 of its signature.
+%% 64 characters are the 16 bytes of a nonce and the 32 of its signature,
+%% when every one of them is a character of the encoding.
 is_signed_for(SessionId, <<Token:64/binary>>, Secrets) when is_binary(SessionId) ->
-    try base64:decode(Token, #{mode => urlsafe, padding => false}) of
-        <<Nonce:?NONCE_BYTES/binary, Signature/binary>> ->
+    case decoded(Token) of
+        <<Nonce:?NONCE_BYTES/binary, Signature:?SIGNATURE_BYTES/binary>> ->
             [] =/= [Secret || Secret <- Secrets,
-                              constant_time_compare(Signature, signature(Secret, SessionId, Nonce))]
-    catch
-        error:_NotBase64 -> false
+                              constant_time_compare(Signature, signature(Secret, SessionId, Nonce))];
+        _NotSigned ->
+            false
     end;
 is_signed_for(_SessionId, _Submitted, _Secrets) ->
     false.

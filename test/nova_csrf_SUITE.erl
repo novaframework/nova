@@ -24,6 +24,7 @@
          post_without_the_cookie_is_refused/1,
          post_with_the_token_of_another_client_is_refused/1,
          token_that_was_changed_is_refused/1,
+         token_that_decodes_short_is_refused_without_a_crash/1,
          token_of_another_secret_is_refused/1,
          token_of_the_previous_secret_is_accepted_while_it_is_listed/1,
          signing_in_moves_the_token_to_the_new_session/1,
@@ -77,6 +78,7 @@ groups() ->
                       post_without_the_cookie_is_refused,
                       post_with_the_token_of_another_client_is_refused,
                       token_that_was_changed_is_refused,
+                      token_that_decodes_short_is_refused_without_a_crash,
                       token_of_another_secret_is_refused,
                       token_of_the_previous_secret_is_accepted_while_it_is_listed,
                       signing_in_moves_the_token_to_the_new_session,
@@ -255,6 +257,23 @@ token_that_was_changed_is_refused(Config) ->
                   {Changed, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Changed}], <<>>)})
      || Changed <- [Flipped, binary:part(Token, 0, 63), <<Token/binary, "A">>, binary:copy(~"!", 64),
                     binary:copy(~"A", 64), base64:encode(crypto:strong_rand_bytes(32))]].
+
+%% base64 skips whitespace, so 64 characters need not hold the bytes of a
+%% token. The header keeps the spaces a client puts inside it, and a `+` in
+%% a form is a space.
+token_that_decodes_short_is_refused_without_a_crash(Config) ->
+    {Cookie, _Token} = session(Config),
+    Spaced = fun(Space) -> [binary:copy(~"A", 10), binary:copy(Space, 44), binary:copy(~"A", 10)] end,
+    {Answers, Events} =
+        nova_test_log:collect(
+          fun() ->
+                  [request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Spaced(~" ")}], <<>>),
+                   request(Config, "POST", "/csrf/submit",
+                           [Cookie, {"content-type", "application/x-www-form-urlencoded"}],
+                           ["_csrf_token=", Spaced(~"+")])]
+          end),
+    ?assertMatch([{403, _}, {403, _}], Answers),
+    ?assertEqual([], nova_test_log:errors(Events)).
 
 token_of_another_secret_is_refused(Config) ->
     {Cookie, Token} = session(Config),
