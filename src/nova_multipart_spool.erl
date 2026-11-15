@@ -51,8 +51,11 @@ Either takes `infinity`. A part that would pass a limit is refused with `{error,
 
 -type path() :: file:filename_all().
 
+%% The files of an owner are kept with it, so that the end of a request and
+%% a file that is kept or discarded cost the same however many files other
+%% requests have spooled: every chunk written waits for this server.
 -record(state, {files = #{} :: #{binary() => {Owner :: pid(), Bytes :: non_neg_integer()}},
-                owners = #{} :: #{pid() => reference()},
+                owners = #{} :: #{pid() => {reference(), #{binary() => []}}},
                 bytes = 0 :: non_neg_integer()}).
 
 -doc false.
@@ -120,15 +123,11 @@ init([]) ->
 
 -doc false.
 -spec handle_call(term(), gen_server:from(), #state{}) -> {reply, term(), #state{}}.
-handle_call({track, Path, Owner}, _From, State = #state{files = Files, owners = Owners})
+handle_call({track, Path, Owner}, _From, State = #state{files = Files})
   when is_binary(Path), is_pid(Owner) ->
     case within(max_files, map_size(Files) + 1) of
         true ->
-            Owners1 = case Owners of
-                          #{Owner := _Monitor} -> Owners;
-                          _ -> Owners#{Owner => erlang:monitor(process, Owner)}
-                      end,
-            {reply, ok, State#state{files = Files#{Path => {Owner, 0}}, owners = Owners1}};
+            {reply, ok, own(Path, Owner, 0, State)};
         false ->
             {reply, {error, spool_full}, State}
     end;
@@ -145,11 +144,13 @@ handle_call({grow, Path, Bytes}, _From, State = #state{files = Files, bytes = To
         _ ->
             {reply, {error, not_tracked}, State}
     end;
-handle_call({renamed, Path, NewPath}, _From, State = #state{files = Files})
-  when is_binary(Path), is_binary(NewPath) ->
-    case Files of
-        #{Path := Entry} -> {reply, ok, State#state{files = (maps:remove(Path, Files))#{NewPath => Entry}}};
-        _ -> {reply, {error, not_tracked}, State}
+handle_call({renamed, Path, NewPath}, _From, State) when is_binary(Path), is_binary(NewPath) ->
+    case State#state.files of
+        #{Path := {Owner, Bytes}} ->
+            {ok, State1} = forget(Path, State),
+            {reply, ok, own(NewPath, Owner, Bytes, State1)};
+        _ ->
+            {reply, {error, not_tracked}, State}
     end;
 handle_call({discard, Path}, _From, State) when is_binary(Path) ->
     case forget(Path, State) of
@@ -176,12 +177,18 @@ handle_cast(_Request, State) ->
 
 -doc false.
 -spec handle_info(term(), #state{}) -> {noreply, #state{}}.
-handle_info({'DOWN', _Monitor, process, Owner, _Reason}, State = #state{files = Files, owners = Owners}) ->
-    Left = [{Path, Bytes} || Path := {FileOwner, Bytes} <- Files, FileOwner =:= Owner],
-    [file:delete(Path) || {Path, _Bytes} <- Left],
-    {noreply, State#state{files = maps:without([Path || {Path, _Bytes} <- Left], Files),
-                          owners = maps:remove(Owner, Owners),
-                          bytes = State#state.bytes - lists:sum([Bytes || {_Path, Bytes} <- Left])}};
+handle_info({'DOWN', Monitor, process, Owner, _Reason}, State = #state{files = Files, owners = Owners}) ->
+    case Owners of
+        #{Owner := {Monitor, Paths}} ->
+            Left = maps:keys(Paths),
+            [file:delete(Path) || Path <- Left],
+            Bytes = lists:sum([Size || Path <- Left, {_Owner, Size} <- [maps:get(Path, Files)]]),
+            {noreply, State#state{files = maps:without(Left, Files),
+                                  owners = maps:remove(Owner, Owners),
+                                  bytes = State#state.bytes - Bytes}};
+        _ ->
+            {noreply, State}
+    end;
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -191,20 +198,33 @@ terminate(_Reason, #state{files = Files}) ->
     [file:delete(Path) || Path <- maps:keys(Files)],
     ok.
 
+%% A path that is tracked already starts over with its new owner.
+-spec own(binary(), pid(), non_neg_integer(), #state{}) -> #state{}.
+own(Path, Owner, Bytes, State) ->
+    #state{files = Files, owners = Owners, bytes = Total} = case forget(Path, State) of
+                                                                {ok, Forgotten} -> Forgotten;
+                                                                error -> State
+                                                            end,
+    Owned = case Owners of
+                #{Owner := {Monitor, Paths}} -> {Monitor, Paths#{Path => []}};
+                _ -> {erlang:monitor(process, Owner), #{Path => []}}
+            end,
+    #state{files = Files#{Path => {Owner, Bytes}}, owners = Owners#{Owner => Owned}, bytes = Total + Bytes}.
+
 -spec forget(binary(), #state{}) -> {ok, #state{}} | error.
 forget(Path, State = #state{files = Files, owners = Owners, bytes = Total}) ->
     case Files of
         #{Path := {Owner, Bytes}} ->
-            Files1 = maps:remove(Path, Files),
-            Owners1 = case [true || _Path := {FileOwner, _Bytes} <- Files1, FileOwner =:= Owner] of
-                          [] ->
-                              #{Owner := Monitor} = Owners,
+            #{Owner := {Monitor, Paths}} = Owners,
+            Paths1 = maps:remove(Path, Paths),
+            Owners1 = case map_size(Paths1) of
+                          0 ->
                               erlang:demonitor(Monitor, [flush]),
                               maps:remove(Owner, Owners);
                           _ ->
-                              Owners
+                              Owners#{Owner => {Monitor, Paths1}}
                       end,
-            {ok, State#state{files = Files1, owners = Owners1, bytes = Total - Bytes}};
+            {ok, State#state{files = maps:remove(Path, Files), owners = Owners1, bytes = Total - Bytes}};
         _ ->
             error
     end.
