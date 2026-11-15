@@ -382,6 +382,23 @@ handle_websocket_success_test_() ->
         meck:unload(test_ws_ctrl)
     end}.
 
+%% The request a controller hands back with {websocket, ControllerData, Req}
+%% is the one that is upgraded. Called by name, since a call to a deprecated
+%% function is a lint finding.
+handle_websocket_req_passthrough_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        meck:new(test_ws_ctrl3, [non_strict, no_link]),
+        meck:expect(test_ws_ctrl3, init, fun(CD) -> {ok, CD} end),
+        Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
+        Own = Req#{custom => true},
+        Return = {websocket, #{data => test}, Own},
+        {cowboy_websocket, Req1, _State} =
+            apply(nova_basic_handler, handle_websocket, [Return, fun test_ws_ctrl3:handle/1, Req]),
+        ?assertEqual(true, maps:get(custom, Req1)),
+        ?assertEqual(#{data => test}, maps:get(controller_data, Req1)),
+        meck:unload(test_ws_ctrl3)
+    end}.
+
 handle_websocket_error_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         meck:new(test_ws_ctrl2, [non_strict, no_link]),
