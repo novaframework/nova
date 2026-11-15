@@ -13,7 +13,7 @@ on:
 
 jobs:
   run_nra:
-    uses: novaframework/nova_request_app/.github/workflows/run_nra.yml@main
+    uses: novaframework/nova_request_app/.github/workflows/run_nra.yml@473779b13d285cc0dcad5aec9aecabc394b1ce5c # main
     with:
         nova_branch: "${{ inputs.branch }}"
         nova_repo: "${{ inputs.repo }}"
