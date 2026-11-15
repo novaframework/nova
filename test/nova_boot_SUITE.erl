@@ -20,7 +20,7 @@
          unset_environment_is_prod_and_said_once/1,
          set_environment_is_not_mentioned/1,
          unknown_non_canonical_paths_fails_the_boot/1,
-         unknown_ws_allowed_origins_fails_the_boot/1,
+         unknown_allowed_origins_fails_the_boot/1,
          session_store_for_no_session_fails_the_boot/1,
          plugins_of_an_earlier_run_are_forgotten/1
         ]).
@@ -45,7 +45,7 @@ all() ->
      unset_environment_is_prod_and_said_once,
      set_environment_is_not_mentioned,
      unknown_non_canonical_paths_fails_the_boot,
-     unknown_ws_allowed_origins_fails_the_boot,
+     unknown_allowed_origins_fails_the_boot,
      session_store_for_no_session_fails_the_boot,
      plugins_of_an_earlier_run_are_forgotten
     ].
@@ -241,16 +241,16 @@ unknown_non_canonical_paths_fails_the_boot(_Config) ->
         application:unset_env(nova, non_canonical_paths)
     end.
 
-unknown_ws_allowed_origins_fails_the_boot(_Config) ->
+unknown_allowed_origins_fails_the_boot(_Config) ->
     [begin
-         application:set_env(nova, ws_allowed_origins, Value),
+         application:set_env(nova, allowed_origins, Value),
          try
              ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
-                                                      {invalid_ws_allowed_origins, Value}}}, _}}},
+                                                      {invalid_allowed_origins, Value}}}, _}}},
                           nova_test_listener:try_start(#{})),
              ?assertEqual(undefined, whereis(nova_sup))
          after
-             application:unset_env(nova, ws_allowed_origins),
+             application:unset_env(nova, allowed_origins),
              nova_test_listener:stop()
          end
      end || Value <- [none, ~"https://example.com", [same_host]]].

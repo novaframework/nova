@@ -147,7 +147,7 @@ compile_fresh(Apps, DispatchKey) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
     StorageBackend = storage_backend(),
     _ = non_canonical_paths(),
-    _ = nova_ws_origin_plugin:allowed_origins(application:get_env(nova, ws_allowed_origins, same_host)),
+    _ = nova_origin:configured(),
     StorageBackend:put(apps_key(DispatchKey), []),
     Dispatch = compile(Apps, nova_routing_trie:new(#{strict => UseStrict}),
                        #{dispatch_key => DispatchKey}),
