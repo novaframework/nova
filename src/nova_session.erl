@@ -115,10 +115,10 @@ A backend without it gets the value through `c:set_value/3`.
 -doc """
 Tells whether the backend holds a session with this id. Nova calls it for the
 id a client presents and replaces ids that return `false`. It runs in the
-process calling `nova_session`, which keeps the answer for a second: a
-request that presented a cookie asks once however often it reads and writes
-its session, and again after it deleted or renewed it. A backend without it
-accepts every presented id.
+process calling `nova_session`, which keeps the answer for a second for
+reads: a request that presented a cookie asks once however often it reads
+its session, and again for every write and after it deleted or renewed it.
+A backend without it accepts every presented id.
 """.
 -callback session_exists(SessionId :: binary()) -> boolean().
 
@@ -170,7 +170,7 @@ set_provisional(Req, Key, Value) ->
     end.
 
 write(Function, Req, Key, Value) ->
-    case get_session_id(Req) of
+    case get_session_id(Req, write) of
         {ok, SessionId} ->
             Mod = get_session_module(),
             case Mod:Function(SessionId, Key, Value) of
@@ -240,7 +240,7 @@ renew(Req) ->
 
 -spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} | no_return().
 delete(Req, Key) ->
-    case get_session_id(Req) of
+    case get_session_id(Req, write) of
         {ok, SessionId} ->
             Mod = get_session_module(),
             Mod:delete_value(SessionId, Key),
@@ -388,18 +388,22 @@ presented_session_id(Req) ->
 %%% Private functions
 %%%===================================================================
 %% What the backend said about a presented id is kept by the calling process,
-%% so a request asks once. For a second and no longer: the process of a
-%% websocket goes on with the request of its upgrade for as long as it lives.
-known(SessionId) ->
+%% so a request that reads its session asks once. For a second and no longer:
+%% the process of a websocket goes on with the request of its upgrade for as
+%% long as it lives. A write always asks, or it would bring back a session
+%% that another process deleted in the meantime.
+known(SessionId, read) ->
     Now = erlang:monotonic_time(millisecond),
     case get(?KNOWN) of
         {SessionId, Known, At} when Now - At < ?KNOWN_FOR ->
             Known;
         _ ->
-            Known = backend_knows(SessionId),
-            put(?KNOWN, {SessionId, Known, Now}),
-            Known
-    end.
+            known(SessionId, write)
+    end;
+known(SessionId, write) ->
+    Known = backend_knows(SessionId),
+    put(?KNOWN, {SessionId, Known, erlang:monotonic_time(millisecond)}),
+    Known.
 
 backend_knows(SessionId) ->
     Mod = get_session_module(),
@@ -421,9 +425,12 @@ get_session_module() ->
     application:get_env(nova, session_manager, nova_session_ets).
 
 get_session_id(Req) ->
+    get_session_id(Req, read).
+
+get_session_id(Req, Access) ->
     case enabled() of
         true ->
-            session_id(Req);
+            session_id(Req, Access);
         _ ->
             ?LOG_ERROR(#{msg => ~"Session called but the 'use_sessions' option is set to false"}),
             throw({nova_session, unsupported_session_used})
@@ -434,14 +441,14 @@ get_session_id(Req) ->
 %% and the presented one is used only while the backend knows it, so a client
 %% cannot choose its own id. The check runs here, in the process calling
 %% nova_session, and not in the connection process.
-session_id(#{nova_session_id := SessionId}) ->
+session_id(#{nova_session_id := SessionId}, _Access) ->
     {ok, SessionId};
-session_id(#{nova_session_presented := Presented, nova_session_pending := Pending}) ->
-    case known(Presented) of
+session_id(#{nova_session_presented := Presented, nova_session_pending := Pending}, Access) ->
+    case known(Presented, Access) of
         true -> {ok, Presented};
         false -> {ok, Pending}
     end;
-session_id(Req) ->
+session_id(Req, _Access) ->
     %% Without nova_stream_h there is only the cookie.
     case presented_session_id(Req) of
         SessionId when is_binary(SessionId) -> {ok, SessionId};

@@ -110,6 +110,7 @@ nova_session_ets_test_() ->
       fun renew_tells_stream_handler/0,
       fun backend_is_asked_once_about_a_presented_id/0,
       fun deleted_session_is_asked_about_again/0,
+      fun session_deleted_by_another_process_is_not_written_again/0,
       fun renew_without_session/0,
       fun renew_sets_cookie_without_stream_handler/0,
       fun delete_expires_cookie_without_stream_handler/0,
@@ -352,12 +353,26 @@ backend_is_asked_once_about_a_presented_id() ->
     try
         ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")),
         ?assertEqual({error, not_found}, nova_session:get(Req, ~"other")),
-        ok = nova_session:set(Req, ~"k2", ~"v2"),
-        {ok, _Req} = nova_session:delete(Req, ~"k2"),
         ?assertEqual(1, meck:num_calls(nova_session_ets, session_exists, [~"asked-once"]))
     after
         meck:unload(nova_session_ets)
     end.
+
+%% The process of a websocket, or a request that takes its time, may have
+%% read the session before another request signed the client out.
+session_deleted_by_another_process_is_not_written_again() ->
+    ok = nova_session_ets:set_value(~"signed-out-elsewhere", ~"user", ~"alice"),
+    Req = presented_req(~"signed-out-elsewhere", ~"pending"),
+    ?assertEqual({ok, ~"alice"}, nova_session:get(Req, ~"user")),
+    {Pid, Ref} = spawn_monitor(fun() ->
+                                       {ok, _} = nova_session:delete(req_with_session(~"signed-out-elsewhere"))
+                               end),
+    receive {'DOWN', Ref, process, Pid, Reason} -> ?assertEqual(normal, Reason) after 1000 -> error(timeout) end,
+    ok = nova_session:set(Req, ~"k", ~"v"),
+    ?assertEqual({written, ~"pending"}, stream_event()),
+    ?assertNot(nova_session_ets:session_exists(~"signed-out-elsewhere")),
+    {ok, _Req} = nova_session:delete(Req, ~"k"),
+    ?assertNot(nova_session_ets:session_exists(~"signed-out-elsewhere")).
 
 %% A controller that goes on with the request it had before the delete must
 %% not bring the deleted session back under the id the client still holds.
