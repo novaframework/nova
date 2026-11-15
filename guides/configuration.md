@@ -50,14 +50,13 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 | `use_strict_routing`    | If the routing module should work under the strict mode. Using strict mode will cause errors if non-deterministic paths are detected. This is a beta-function so use with caution. | `boolean()` | `false` |
 | `environment` | The environment Nova runs in. It is passed to the `routes/1` callback of every router and returned by `nova:get_environment/0`. When it is not set it is read as `prod`: routers are asked for `routes(prod)`, and Nova logs one notice when it starts. Only `dev` turns on what is meant for development (`nova:is_dev_environment/0`): crash details on error pages, a session cookie without `Secure` over plain HTTP and the output of watchers. Set `{environment, dev}` in the development configuration. | `atom()` | not set, read as `prod` |
 | `non_canonical_paths` | What happens to a request whose path is not written the way it is routed, such as `/a//b` or `/a/../b`. `reject` answers it with `400`. `resolve` routes it as earlier releases did. See [Routing](routing.md#paths-that-are-not-canonical). *Checked at boot.* | `reject \| resolve` | `reject` |
-| `allowed_origins` | The origins a browser may open a websocket from, or send a request that changes state from. See [Allowed origins](#allowed-origins). *Checked at boot.* | `same_host \| same_origin \| any \| [binary() \| string()]` | `same_host` |
-| `csrf_secret` | The secret `nova_csrf_plugin` signs its tokens with: a binary of at least 32 bytes, or a list of such, where the first signs and all of them verify. See [Plugins](plugins.md#csrf-token-modes). *Checked at boot.* | `binary() \| [binary()]` | not set |
-| `csrf_token` | How `nova_csrf_plugin` makes its tokens: `stateless` or `session`. When it is not set, tokens are `stateless` with a `csrf_secret` and `session` without one. `stateless` without a `csrf_secret` stops the boot. See [Plugins](plugins.md#csrf-token-modes). *Checked at boot.* | `stateless \| session` | not set |
+| `trusted_origins` | The origins a browser may open a websocket from, or send a request that changes state from. `any` opens websockets alone. See [Trusted origins](#trusted-origins). *Checked at boot.* | `same_host \| same_origin \| any \| [binary() \| string()]` | `same_host` |
+| `secret_key_base` | The one secret of the node, from which Nova makes a key for the tokens of `nova_csrf_plugin` and a key for session ids. A binary of at least 32 bytes out of a random source, or a list of such, where the first signs and all of them verify. See [The secret of the node](#the-secret-of-the-node). *Checked at boot.* | `binary() \| [binary()]` | not set |
+| `csrf_token` | How `nova_csrf_plugin` makes its tokens: `stateless` or `session`. When it is not set, tokens are `stateless` with a `secret_key_base` and `session` without one. `stateless` stops the boot without a `secret_key_base`, and with `use_sessions` set to `false`. See [Plugins](plugins.md#csrf-token-modes). *Checked at boot.* | `stateless \| session` | not set |
 | `bootstrap_application` | Define which application to bootstrap with Nova. This should be the name of your application. | `atom()` | *Will crash if not defined* |
 | `cowboy_configuration` | The listener configuration, see *Cowboy configuration* above. | `map()` | `#{}` |
 | `plugins` | The global plugins, a list of `{Phase, Module, Options}`. They run for every route group that declares no `plugins` of its own. See the [Plugins](plugins.md) guide. | `[{atom(), module(), map()}]` | `[]` |
 | `plugins_before_security` | Plugin modules whose `pre_request/4` runs ahead of the security callback, as it did up to 0.18, for route groups that do not set the key themselves. `all`, or a list of modules that export `pre_request/4`. See [Plugins](plugins.md#running-a-plugin-ahead-of-the-security-callback). *Checked at boot.* | `all \| [module()]` | `[]` |
-| `plugins_after_security` | Plugin modules of which nothing runs ahead of the security callback, for route groups that do not set the key themselves. Read when routes are compiled. A value that is not a list of module names stops the boot with `{invalid_plugins_after_security, Value}`. See [Plugins](plugins.md#keeping-a-plugin-behind-the-security-callback). | `[module()]` | `[]` |
 | `multipart_spool` | Bounds on the upload files spooled at one time by `nova_multipart_file_handler`: `max_files` and `max_bytes`, each an integer or `infinity`. A part past a bound gets a `503`. See the [Plugins](plugins.md#nova-multipart) guide. | `map()` | `#{max_files => infinity, max_bytes => 8000000000}` |
 | `telemetry_request_fields` | Request fields to add to the controller telemetry metadata. `path` (the raw request path) and `peer` (the client's address) are the only ones accepted and are left out by default. See the [Telemetry](telemetry.md) guide. | `[path \| peer]` | `[]` |
 | `shutdown_delay` | Milliseconds to wait before suspending the listener during shutdown. Useful for letting load balancers drain traffic. See the [Graceful shutdown](graceful-shutdown.md) guide. | `integer()` | `0` |
@@ -93,8 +92,10 @@ A value that cannot be used stops the boot. Nova logs an error that says what th
 | `Reason` | When |
 |---|---|
 | The value that was refused | Every setting but the secret |
-| `redacted` | The secret is not a binary of at least 32 bytes or a list of such. The value is not logged |
-| `not_set` | `csrf_token` is `stateless` and there is no secret to sign with. The key in the error is `csrf_secret` |
+| `redacted` | `secret_key_base` cannot be used, see [The secret of the node](#the-secret-of-the-node). The value is not logged |
+| `not_set` | `csrf_token` is `stateless` and there is no secret to sign with. The key in the error is `secret_key_base` |
+| `{requires, Setting}` | The setting cannot be used without another one. `{invalid_setting, csrf_token, {requires, use_sessions}}` is `csrf_token` set to `stateless` on a node without sessions |
+| `{replaced_by, Setting}` | The key is one that was in no release and is gone: `allowed_origins` is now `trusted_origins`, `csrf_secret` is now `secret_key_base`, and `plugins_after_security` gave way to `plugins_before_security`. Nova does not start while one of them is set, see [Deprecations](deprecations.md) |
 
 ```erlang
 {nova, [{max_sessions, 0}]}
@@ -103,22 +104,83 @@ A value that cannot be used stops the boot. Nova logs an error that says what th
 
 What a request reads is the value that was checked. `application:set_env(nova, Key, Value)` on a running node has no effect on these settings until Nova is restarted.
 
-### Allowed origins
+Three checks are made when the routes of an application are compiled, and stop the application from starting with the same kind of error:
 
-`allowed_origins` is one setting with two readers. Nova checks the `Origin` header of every request to a websocket route against it, and `nova_csrf_plugin` checks the `Origin` of a request that changes state. A request without an `Origin` header passes every value.
+| Error | When |
+|---|---|
+| `{invalid_setting, use_sessions, {required_by, nova_csrf_plugin}}` | A route group lists `nova_csrf_plugin` and `use_sessions` is `false` |
+| `{invalid_setting, security_reads_body, {requires, plugins_before_security}}` | A route group says `security_reads_body => true` and its body is decoded behind the security callback, see [Plugins](plugins.md#saying-whether-the-security-callback-reads-the-body) |
+| `{invalid_setting, Key, Value}` or `{invalid_setting, Key, {replaced_by, Setting}}` | A route group has `plugins_before_security`, `security_reads_body` or the `trusted_origins` option of a plugin with a value that cannot be used, or still has `plugins_after_security` or the plugin option `allowed_origins` |
+
+### The secret of the node
+
+`secret_key_base` is one secret for the whole node. Nova never signs with it as it is. It makes a key of 32 bytes for each purpose from it, so what is signed for one purpose says nothing for another:
+
+| Key for | Used by |
+|---|---|
+| CSRF tokens | `nova_csrf_plugin`, which signs its tokens and stores nothing for them, see [Plugins](plugins.md#csrf-token-modes) |
+| Session ids | `nova_session`, which signs the ids it makes, so a visitor keeps the id a page handed out, see [Sessions](sessions.md#the-session-cookie) |
 
 ```erlang
 {nova, [
-    {allowed_origins, [~"https://app.example.com", ~"https://admin.example.com"]}
+    {secret_key_base, ~"${SECRET_KEY_BASE}"}
+]}
+```
+
+That is a line of `sys.config.src`: the release puts the environment variable `SECRET_KEY_BASE` in when the node starts, see [Building releases](building-releases.md). Give every node the same secret and keep it across restarts. It does not belong in a file that is committed. Use it for Nova alone: an application that signs things of its own has a secret of its own.
+
+The secret has to come out of a random source. Whoever sees a signed session id or token can try secrets against it on a machine of their own, as fast as HMAC runs, so a word or a sentence does not do, however long. Make one in an Erlang shell:
+
+```erlang
+base64:encode(crypto:strong_rand_bytes(48)).
+```
+
+or with `openssl`:
+
+```sh
+openssl rand -base64 48
+```
+
+Both give 64 characters.
+
+Nova does not start, with `{invalid_setting, secret_key_base, redacted}`, when the secret, or one secret of a list, is any of these:
+
+| Refused | Example |
+|---|---|
+| Not a binary, or an empty list | `"a string in double quotes"`, `[]` |
+| Shorter than 32 bytes | `~"too short"` |
+| Fewer than 8 different bytes | A letter or a short word repeated |
+| An example out of this documentation | The sample secrets earlier versions of these guides printed |
+| A variable that nothing filled in | `~"${SECRET_KEY_BASE}"` reaching Nova as it is written, because the release did not replace it |
+
+Nova cannot tell a sentence from a random value, so a secret that passes these checks is not shown to be a good one. The secret is never logged, and what Nova keeps of it once it has started is the keys made from it.
+
+To change the secret, set a list. The first one signs and every one of them verifies:
+
+```erlang
+{nova, [
+    {secret_key_base, [~"${SECRET_KEY_BASE}", ~"${SECRET_KEY_BASE_OLD}"]}
+]}
+```
+
+Put the new secret in front of the old one, on every node, and take the old one out once the pages that were open have been sent. A session that is stored is not touched by the change. A visitor whose session cookie was signed with a secret that is gone, and who has no session yet, gets a new id with the first write to the session.
+
+### Trusted origins
+
+`trusted_origins` is one setting with two readers. Nova checks every request to a websocket route against it, and `nova_csrf_plugin` checks a request that changes state. A request with neither an `Origin` nor a `Sec-Fetch-Site` header passes every value: it is not from a page.
+
+```erlang
+{nova, [
+    {trusted_origins, [~"https://app.example.com", ~"https://admin.example.com"]}
 ]}
 ```
 
 | Value | An origin passes when |
 |---|---|
-| `same_host` | It names the host and the port the request was sent to. The scheme is not compared. This is the default |
+| `same_host` | It names the host and the port the request was sent to. On a request that came in over TLS it also has to be an `https` origin. On a listener without TLS the scheme is not compared. This is the default |
 | `same_origin` | It has the scheme, the host and the port of the request as Nova received it |
 | A list of origins | It is in the list. Letter case is ignored, nothing else is: `https://app.example.com:443` is not `https://app.example.com` |
-| `any` | Always |
+| `any` | Always, on a websocket route. `nova_csrf_plugin` reads `any` of the `nova` environment as `same_host` |
 
 With `same_host` the host and port come from the `Host` header of the request, or from the authority of an HTTP/2 or HTTP/3 request that has no such header. Ports are compared like this:
 
@@ -131,11 +193,15 @@ With `same_host` the host and port come from the `Host` header of the request, o
 | `app.example.com:8443` | `https://app.example.com:8443` | Passes |
 | `app.example.com:8443` | `https://app.example.com` | Refused |
 
+The scheme is compared with `same_host` only where Nova can see it. A listener with TLS refuses an origin of any other scheme than `https`, `http://app.example.com` and `wss://app.example.com` included. A listener without TLS takes an origin of either scheme, since a proxy in front of it may have taken the TLS off. Nova reads no `X-Forwarded-Proto` or `Forwarded` header to find out: it has no setting that says which proxy to believe.
+
 A list takes the place of `same_host`. An origin that is not in it is refused, the origin of the site itself included, so list that one too. `[]` passes no origin.
 
-`same_origin` compares with what Nova received. Behind a proxy that terminates TLS that is `http`, so every `https` origin is refused. Use `same_host` or a list there. See [Security](security.md#behind-a-proxy-that-terminates-tls).
+`same_origin` compares with what Nova received. Behind a proxy that terminates TLS that is `http`, so every `https` origin is refused. Use a list of the `https` origins of the site there. `same_host` passes them too, with the risk described in [Security](security.md#behind-a-proxy-that-terminates-tls).
 
-`any` turns the check off for both readers. Do not set it to get websockets through a proxy that rewrites the `Host` header: it also turns off the origin check of `nova_csrf_plugin`. List the origins instead. To open one route group, give the plugin of that group its own option, see [Plugins](plugins.md#csrf-allowed-origins).
+A browser also says where the page that sends a request is, in the `Sec-Fetch-Site` header, which no page can set. When the header is there and says the page is elsewhere, with any value but `same-origin` and `none`, comparing the origin with the host has nothing to add, so `same_host` and `same_origin` pass nothing: the origin has to be in a list, or the value has to be `any`. Not every browser sends the header with a websocket upgrade, see [Websockets](websockets.md#the-origin-check). What `nova_csrf_plugin` does with each combination of the two headers is in [Plugins](plugins.md#csrf-trusted-origins).
+
+`any` in the `nova` environment opens websocket upgrades to every origin and nothing else. `nova_csrf_plugin` then checks by `same_host`. Do not set it to get websockets through a proxy that rewrites the `Host` header: list the origins instead. To turn the origin check of `nova_csrf_plugin` off and leave a request to its token alone, give the plugin of that route group the option `#{trusted_origins => any}`, see [Plugins](plugins.md#csrf-trusted-origins).
 
 ### Redaction in logs and error pages
 
@@ -169,7 +235,7 @@ Nova writes a key `apps` to the environment of the bootstrap application for its
 
 ### Configure json_lib
 
-Nova encodes and decodes JSON with the `json` module that ships with Erlang/OTP 27 and later, so it needs no JSON dependency. With this default a non-empty list whose first element is a pair is encoded as an object: `[{a, 1}]` becomes `{"a":1}`. An object that has a key twice does not decode: `decode_json_body` answers such a body with `400`.
+Nova encodes and decodes JSON with the `json` module that ships with Erlang/OTP 27 and later, so it needs no JSON dependency. With this default a non-empty list whose first element is a pair is encoded as an object: `[{a, 1}]` becomes `{"a":1}`. An object that has a key twice does not decode, and neither does a value that is followed by anything but whitespace: `decode_json_body` answers such a body with `400`. A `json_lib` of your own decides both itself.
 
 To use another library, add it to your application's dependencies and set `json_lib` in your bootstrap application's environment; Nova also reads it from the `nova` environment when the bootstrap application does not set it.
 
