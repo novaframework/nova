@@ -16,6 +16,7 @@
          compile/2,
          compile_fresh/2,
          overrides_in_force/1,
+         secures_in_force/1,
          lookup_url/1,
          lookup_url/2,
          lookup_url/3,
@@ -423,12 +424,14 @@ compile([App|Tl], Dispatch, Options) ->
 
     compile(Tl, Dispatch1, Options).
 
-%% An override_secure that is in force around an application is the one
-%% option its own entry does not replace. It stays in force, in front of the
-%% override_secure of the entry.
+%% The secure and the override_secure that are in force around an
+%% application are the options its own entry does not replace. They stay in
+%% force, in front of those of the entry.
 mount_options(GlobalOptions, AppOptions) ->
     Options = maps:merge(GlobalOptions, AppOptions),
-    Options#{override_secure => maps:get(override_secure, AppOptions, false),
+    Options#{secure => maps:get(secure, AppOptions, false),
+             inherited_secure => secures_in_force(GlobalOptions) ++ maps:get(inherited_secure, AppOptions, []),
+             override_secure => maps:get(override_secure, AppOptions, false),
              inherited_override_secure => overrides_in_force(GlobalOptions) ++
                  maps:get(inherited_override_secure, AppOptions, [])}.
 
@@ -437,6 +440,16 @@ mount_path(GlobalOptions, AppOptions) ->
         "" -> "/";
         Path -> Path
     end.
+
+%%--------------------------------------------------------------------
+%% The secure values that apply to an application mounted with Options,
+%% outermost first, as they were written. For nova_sup, which hands them to
+%% the applications that one mounts in turn.
+-doc false.
+-spec secures_in_force(Options :: map()) -> [term()].
+secures_in_force(Options) ->
+    maps:get(inherited_secure, Options, []) ++
+        [Secure || Secure <- [maps:get(secure, Options, false)], Secure =/= false].
 
 %%--------------------------------------------------------------------
 %% The override_secure values that apply to an application mounted with
@@ -532,7 +545,11 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
                                        insert_opts => maps:get(insert_opts, Options, #{})},
                                 Value, Dispatch),
 
-    Dispatch2 = compile(SubApps, Dispatch1, Options#{value => Value, prefix => Prefix}),
+    %% The applications the group lists are behind its security as well.
+    Dispatch2 = compile(SubApps, Dispatch1,
+                        Options#{value => Value, prefix => Prefix, secure => false,
+                                 inherited_secure => secures_in_force(Options) ++
+                                     [Security || security := Security <- RouteInfo, Security =/= false]}),
 
     compile_paths(Tl, Dispatch2, Options).
 
@@ -849,27 +866,25 @@ normalize_secure(Invalid, RouterFile) ->
 
 %% An application mounted with `secure` has that callback in front of every
 %% route group, and a group that declares `security` has its own behind it:
-%% both have to allow a request, so neither the application that mounts nor
-%% the one that is mounted can take away what the other one asks for. Both
-%% values are checked here, also where only one ends up on the route, or
-%% neither because an `override_secure` replaces them: that is the explicit
+%% all of them have to allow a request, so neither the application that
+%% mounts nor the one that is mounted can take away what the other one asks
+%% for. The secure of the applications this one was mounted through, and
+%% the security of a group that lists it under `apps`, come first, outermost
+%% first. Every value is checked here, also where it does not end up on the
+%% route because an `override_secure` replaces them: that is the explicit
 %% way to replace a declared callback.
 resolve_secure(Options, RouteInfo, RouterFile) ->
     Overrides = override_callbacks(Options, RouterFile),
-    Mount = normalize_secure(maps:get(secure, Options, false), RouterFile),
-    Group = normalize_secure(maps:get(security, RouteInfo, false), RouterFile),
-    case Overrides of
-        [] ->
-            case {Mount, Group} of
-                {false, _} -> Group;
-                {_, false} -> Mount;
-                {Same, Same} -> Same;
-                _ -> [Mount, Group]
-            end;
-        [Override] ->
-            Override;
-        _Several ->
-            Overrides
+    Declared = [normalize_secure(Secure, RouterFile) || Secure <- secures_in_force(Options)] ++
+        [normalize_secure(maps:get(security, RouteInfo, false), RouterFile)],
+    Callbacks = case Overrides of
+                    [] -> without_repeats([Callback || Callback <- Declared, Callback =/= false]);
+                    _ -> Overrides
+                end,
+    case Callbacks of
+        [] -> false;
+        [Callback] -> Callback;
+        _Several -> Callbacks
     end.
 
 %% Every override_secure in force has to allow a request: those of the

@@ -10,9 +10,11 @@
          override_secure_reaches_through_an_application_without_one/1,
          nested_application_without_an_override_around_it_keeps_its_own/1,
          first_entry_of_an_application_is_the_one_used/1,
-         prefix_secure_and_plugins_are_not_inherited/1,
+         secure_covers_a_nested_application_but_prefix_and_plugins_do_not/1,
+         secure_of_every_application_around_a_nested_one_has_to_allow/1,
+         override_secure_replaces_the_secure_around_a_nested_application/1,
          override_secure_covers_the_apps_of_a_route_group/1,
-         apps_of_a_route_group_inherit_the_mount_but_not_the_group/1,
+         apps_of_a_route_group_inherit_the_mount_and_the_security_of_the_group/1,
          own_entry_of_the_bootstrap_application_carries_its_options/1
         ]).
 
@@ -31,9 +33,11 @@ all() ->
      override_secure_reaches_through_an_application_without_one,
      nested_application_without_an_override_around_it_keeps_its_own,
      first_entry_of_an_application_is_the_one_used,
-     prefix_secure_and_plugins_are_not_inherited,
+     secure_covers_a_nested_application_but_prefix_and_plugins_do_not,
+     secure_of_every_application_around_a_nested_one_has_to_allow,
+     override_secure_replaces_the_secure_around_a_nested_application,
      override_secure_covers_the_apps_of_a_route_group,
-     apps_of_a_route_group_inherit_the_mount_but_not_the_group,
+     apps_of_a_route_group_inherit_the_mount_and_the_security_of_the_group,
      own_entry_of_the_bootstrap_application_carries_its_options
     ].
 
@@ -111,7 +115,7 @@ first_entry_of_an_application_is_the_one_used(_Config) ->
     ?assertEqual({403, ~"outer", [outer]}, get(Port, "/own/?outer=deny")),
     ?assertEqual({200, ~"none", []}, get(Port, "/nested/?outer=deny")).
 
-prefix_secure_and_plugins_are_not_inherited(_Config) ->
+secure_covers_a_nested_application_but_prefix_and_plugins_do_not(_Config) ->
     Plugins = [{pre_request, nova_test_app_plugin, #{}}],
     Port = nova_test_listener:start(#{mounted_options => #{prefix => "/mounted", secure => ?OUTER,
                                                            plugin_strategy => {override, Plugins}},
@@ -120,9 +124,31 @@ prefix_secure_and_plugins_are_not_inherited(_Config) ->
                                       nested => [#{prefix => "/nested", routes => ?PAGE}]}),
     ?assertMatch({403, #{~"x-nova-pre-request" := ~"1"}, ~"outer"}, response(Port, "/mounted/own/?outer=deny")),
     ?assertMatch({404, _Headers, _Body}, response(Port, "/mounted/nested/")),
-    {200, Headers, ~"none"} = response(Port, "/nested/?outer=deny"),
+    {403, Headers, ~"outer"} = response(Port, "/nested/?outer=deny"),
     ?assertNot(is_map_key(~"x-nova-pre-request", Headers)),
-    ?assertEqual([outer], nova_nested_app_pages:calls()).
+    ?assertEqual([outer, outer], nova_nested_app_pages:calls()).
+
+%% Outermost first, and the security of the route group last.
+secure_of_every_application_around_a_nested_one_has_to_allow(_Config) ->
+    Port = nova_test_listener:start(#{mounted_options => #{prefix => "/mounted", secure => ?OUTER},
+                                      mounted_nova_apps => [{nova_test_nested_app, #{secure => ?INNER}}],
+                                      nested_nova_apps => [{nova_test_deep_app, #{prefix => "/deep"}}],
+                                      nested => [#{prefix => "/nested", security => ?GROUP, routes => ?PAGE}],
+                                      deep => [#{routes => ?PAGE}]}),
+    ?assertEqual({200, ~"none", [outer, inner, group]}, get(Port, "/nested/")),
+    ?assertEqual({403, ~"group", [outer, inner, group]}, get(Port, "/nested/?group=deny")),
+    ?assertEqual({200, ~"none", [outer, inner]}, get(Port, "/deep/")),
+    ?assertEqual({403, ~"inner", [outer, inner]}, get(Port, "/deep/?inner=deny")),
+    ?assertEqual({403, ~"outer", [outer]}, get(Port, "/deep/?outer=deny&inner=deny")).
+
+%% override_secure is the one way to replace a callback, an inherited secure
+%% included.
+override_secure_replaces_the_secure_around_a_nested_application(_Config) ->
+    Port = nova_test_listener:start(#{mounted_options => #{prefix => "/mounted", secure => ?OUTER},
+                                      mounted_nova_apps => [{nova_test_nested_app, #{override_secure => ?INNER}}],
+                                      nested => [#{prefix => "/nested", security => ?GROUP, routes => ?PAGE}]}),
+    ?assertEqual({200, ~"none", [inner]}, get(Port, "/nested/?outer=deny&group=deny")),
+    ?assertEqual({403, ~"inner", [inner]}, get(Port, "/nested/?inner=deny")).
 
 override_secure_covers_the_apps_of_a_route_group(_Config) ->
     Plugins = [{pre_request, nova_test_app_plugin, #{}}],
@@ -141,9 +167,9 @@ override_secure_covers_the_apps_of_a_route_group(_Config) ->
     ?assertEqual({403, ~"inner", [outer, inner]}, get(Port, "/mounted/added/deep/?inner=deny")).
 
 %% The applications in the `apps` of a route group are compiled with the
-%% options their parent was mounted with and the prefix of the group. The
-%% `security` and `plugins` of the group are its own.
-apps_of_a_route_group_inherit_the_mount_but_not_the_group(_Config) ->
+%% options their parent was mounted with and the prefix of the group, behind
+%% the `security` of the group. The `plugins` of the group are its own.
+apps_of_a_route_group_inherit_the_mount_and_the_security_of_the_group(_Config) ->
     Plugins = [{pre_request, nova_test_app_plugin, #{}}],
     Port = nova_test_listener:start(#{mounted_options => #{prefix => "/mounted", secure => ?OUTER},
                                       mounted => [#{prefix => "/group", security => ?GROUP, plugins => Plugins,
@@ -151,17 +177,19 @@ apps_of_a_route_group_inherit_the_mount_but_not_the_group(_Config) ->
                                                              {nova_test_deep_app, #{prefix => "/elsewhere"}}]}],
                                       nested => [#{prefix => "/nested", routes => ?PAGE}],
                                       deep => [#{prefix => "/deep", routes => ?PAGE}]}),
-    {200, Headers, ~"none"} = response(Port, "/mounted/group/nested/?group=deny"),
+    {200, Headers, ~"none"} = response(Port, "/mounted/group/nested/"),
     ?assertNot(is_map_key(~"x-nova-pre-request", Headers)),
-    ?assertEqual([outer], nova_nested_app_pages:calls()),
+    ?assertEqual([outer, group], nova_nested_app_pages:calls()),
+    ?assertEqual({403, ~"group", [outer, group]}, get(Port, "/mounted/group/nested/?group=deny")),
     ?assertEqual({403, ~"outer", [outer]}, get(Port, "/mounted/group/nested/?outer=deny")),
     ?assertMatch({404, _Body, []}, get(Port, "/nested/")),
     ?assertEqual({403, ~"outer", [outer]}, get(Port, "/elsewhere/deep/?outer=deny")),
-    ?assertEqual({200, ~"none", [outer]}, get(Port, "/elsewhere/deep/?group=deny")),
+    ?assertEqual({403, ~"group", [outer, group]}, get(Port, "/elsewhere/deep/?group=deny")),
     ?assertMatch({404, _Body, []}, get(Port, "/mounted/group/deep/")).
 
 %% The application that starts the listener has no entry that mounts it. One
-%% it writes for itself in its own nova_apps gives it its options.
+%% it writes for itself in its own nova_apps gives it its options, and the
+%% secure of that entry covers the applications it mounts.
 own_entry_of_the_bootstrap_application_carries_its_options(_Config) ->
     Plugins = [{pre_request, nova_test_app_plugin, #{}}],
     Port = nova_test_listener:start(#{nova_apps => [{nova_test_sub_app, #{prefix => "/mounted"}},
@@ -172,9 +200,9 @@ own_entry_of_the_bootstrap_application_carries_its_options(_Config) ->
     ?assertMatch({200, #{~"x-nova-pre-request" := ~"1"}, ~"none"}, response(Port, "/host/")),
     ?assertEqual([outer], nova_nested_app_pages:calls()),
     ?assertEqual({403, ~"outer", [outer]}, get(Port, "/host/?outer=deny")),
-    {200, Headers, ~"none"} = response(Port, "/mounted/own/?outer=deny"),
+    {403, Headers, ~"outer"} = response(Port, "/mounted/own/?outer=deny"),
     ?assertNot(is_map_key(~"x-nova-pre-request", Headers)),
-    ?assertEqual([], nova_nested_app_pages:calls()).
+    ?assertEqual([outer], nova_nested_app_pages:calls()).
 
 response(Port, Path) ->
     nova_test_listener:response(Port, "GET", Path, []).

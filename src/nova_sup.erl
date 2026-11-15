@@ -511,18 +511,27 @@ with_nova_apps(App) ->
         []        -> [App | Mounted]
     end.
 
-%% The nova_apps of a mounted application. An override_secure covers every
-%% route the application brings in, so one that is in force for it is
-%% handed on to the applications it mounts. Nothing else is: they are
+%% The callbacks an entry puts in front of the routes of its application:
+%% those it inherits from the applications it is mounted through and its
+%% own, which are the same wish wherever they are written.
+-spec security_in_force(nova_app()) -> {[term()], [term()]}.
+security_in_force(App) ->
+    Options = nova_app_options(App),
+    {nova_router:secures_in_force(Options), nova_router:overrides_in_force(Options)}.
+
+%% The nova_apps of a mounted application. A secure and an override_secure
+%% cover every route the application brings in, so those in force for it
+%% are handed on to the applications it mounts. Nothing else is: they are
 %% mounted with the options of their own entry.
 -spec nested_nova_apps(nova_app()) -> [nova_app()].
 nested_nova_apps(App) ->
     Nested = configured_nova_apps(nova_app_name(App)),
-    case nova_router:overrides_in_force(nova_app_options(App)) of
-        [] ->
+    case security_in_force(App) of
+        {[], []} ->
             Nested;
-        Overrides ->
-            [{nova_app_name(NestedApp), (nova_app_options(NestedApp))#{inherited_override_secure => Overrides}}
+        {Secures, Overrides} ->
+            [{nova_app_name(NestedApp), (nova_app_options(NestedApp))#{inherited_secure => Secures,
+                                                                        inherited_override_secure => Overrides}}
              || NestedApp <- Nested]
     end.
 
