@@ -97,8 +97,9 @@ Plugins and the security callback are outside it.
 - A request error that `cowboy_req` exits with in a controller, such as a
   query string it cannot parse, ends the span with `stop` and the `400`,
   `408` or `413` it is answered with.
-- `status_page` is `true` for the span of an error page Nova renders after a
-  controller failed, and `false` otherwise. Those spans have `app => nova`.
+- `status_page` is `true` for the span of a status page, and `false` for the
+  span of the controller of a route. A page rendered after a controller
+  failed has `app => nova`.
   - A crash emits `exception` for the controller, followed by a `stop` for
     the `500` page with `status_page => true`.
   - A status raised as `{Status, Reason}` emits `stop` for the controller,
@@ -110,11 +111,14 @@ Plugins and the security callback are outside it.
     `exception`. Nova then renders the `500` page, or its own `500` page
     when the one that raised was the application's.
 
-  One request can therefore produce two controller spans. To count requests,
-  filter out `status_page => true`.
-- A `404` or `405` rendered by the router and the `500` after a plugin crash
-  are the only controller span of their request. They have
-  `status_page => false`, and `route` is `undefined` for `404` and `405`.
+  One request can therefore produce two controller spans. Filtering out
+  `status_page => true` leaves one span for every request that reached a
+  controller.
+- A `400`, `404` or `405` rendered by the router and the `500` after a crash
+  in a plugin or in a security callback are the only controller span of their
+  request. They have `status_page => true`, so the filter above leaves these
+  requests out. `route` is `undefined` for `400`, `404` and `405`. Earlier
+  releases emitted them with `status_page => false`.
   A request the security callback rejects never reaches a controller and
   emits no controller span.
 
@@ -122,7 +126,8 @@ Plugins and the security callback are outside it.
 
 `[nova, plugin, start | stop | exception]`
 
-A span around each `pre_request` and `post_request` plugin call.
+A span around each `pre_security/4`, `pre_request/4` and `post_request/4`
+call of a plugin.
 
 | Event | Measurements | Metadata |
 |-------|--------------|----------|
@@ -131,7 +136,14 @@ A span around each `pre_request` and `post_request` plugin call.
 | `exception` | `duration`, `monotonic_time` | start metadata, `kind`, `reason`, `stacktrace` |
 
 - `plugin` is the plugin module.
-- `callback` is `pre_request` or `post_request`.
+- `callback` is `pre_security`, `pre_request` or `post_request`. A plugin
+  that has both `pre_security/4` and `pre_request/4` emits a span for each.
+  Earlier releases had no `pre_security`: the spans of `nova_cors_plugin`,
+  `nova_correlation_plugin` and `nova_ws_origin_plugin` had
+  `callback => pre_request`.
+- Every request to a websocket route emits a span for
+  `nova_ws_origin_plugin` with `callback => pre_security`, whether or not the
+  route group lists the plugin.
 - `result` names what the plugin returned:
   - `ok` for `{ok, Req, State}` and `{ok, {reply, ...}, Req, State}`
   - `stop` for `{stop, Req, State}`, `{stop, Reply, Req, State}` and
