@@ -19,6 +19,21 @@ Sets a session value. It takes three arguments: the request, the key and the val
 ok = nova_session:set(Req, ~"name", ~"John Doe").
 ```
 
+Use it for what a signed-in client stores. For a visitor who is not signed in, use `set_provisional/3`.
+
+### `nova_session:set_provisional/3`
+
+```erlang
+-spec set_provisional(Req :: cowboy_req:req(), Key :: binary(), Value :: term()) ->
+          ok | {error, Reason :: atom()} | no_return().
+```
+
+Sets a session value like `set/3`, for a value that any visitor gets and that can be made again, such as a flash message, a cart or a CSRF token. See [Data for visitors who are not signed in](#data-for-visitors-who-are-not-signed-in).
+
+```erlang
+ok = nova_session:set_provisional(Req, ~"flash", ~"Saved").
+```
+
 ### `nova_session:get/2`
 
 ```erlang
@@ -35,8 +50,7 @@ Gets a session value. It takes two arguments: the request and the key. It return
 ### `nova_session:delete/2`
 
 ```erlang
--spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} |
-                                                          {error, Reason :: atom()} | no_return().
+-spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} | no_return().
 ```
 
 Deletes a value. It takes two arguments: the request and the key. The rest of the session is kept.
@@ -48,8 +62,7 @@ Deletes a value. It takes two arguments: the request and the key. The rest of th
 ### `nova_session:delete/1`
 
 ```erlang
--spec delete(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} |
-                                           {error, Reason :: atom()}.
+-spec delete(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} | no_return().
 ```
 
 This function deletes the whole session and clears the session cookie. The returned request carries a fresh session id, so a later `set/3` on it in the same request starts a new session instead of reviving the deleted one.
@@ -114,8 +127,6 @@ With a `__Host-` name Nova always sends `Secure` and `Path=/` and drops `domain`
 
 `session_max_age` (seconds, 14 days by default) limits how long a session lives from the moment it was created, whatever happens in between. It sets `Max-Age` on the cookie, and the default `nova_session_ets` backend drops the session once it has passed. With `infinity` the cookie has no `Max-Age` and sessions live until they are deleted or the node restarts.
 
-`max_sessions` (1 000 000 by default) limits how many sessions the default `nova_session_ets` backend holds. A request without a session cookie that writes to the session starts a new one, and `nova_csrf_plugin` does that on every such request, so without a limit any client could fill the memory of every node. When the table is full, expired sessions are dropped first. If that leaves no room, `nova_session:set/3` returns `{error, session_store_full}` for a session that does not exist yet and a warning is logged, at most once a minute. Sessions that exist are read and written as before. `infinity` turns the limit off.
-
 The default `nova_session_ets` backend keeps sessions in memory, replicated to the nodes connected at the time of the write. They do not survive a restart, and a node that joins later does not have the sessions written before it joined. Because unknown ids are replaced, a client that reaches such a node gets a fresh, empty session and is signed out. That happens:
 
 - behind a load balancer without sticky sessions;
@@ -123,6 +134,49 @@ The default `nova_session_ets` backend keeps sessions in memory, replicated to t
 - after a restart.
 
 To run several nodes without sticky sessions, or to keep sessions across restarts, use a shared session store: a `nova_session` backend over a database or cache, set with `session_manager` (see [Backend](#backend)).
+
+## Data for visitors who are not signed in
+
+A request without a session cookie that writes to the session starts a new one. Anyone can send such requests, so sessions that are started for visitors who are not signed in must not be able to push out the sessions of users who are. `nova_session` has two ways to write for that reason:
+
+| Written with | The session is | Lives | In a full store |
+|---|---|---|---|
+| `nova_session:set_provisional/3` only | provisional | One day, or `session_max_age` when that is shorter | Dropped first. A new one only takes the place of an expired or another provisional session |
+| `nova_session:set/3`, once or more | in use | `session_max_age` | Dropped only for another session in use, when there is no expired and no provisional session left |
+
+The lifetimes and the order are those of the default backend, `nova_session_ets`. A [backend](#backend) of your own decides what it does with the two kinds of write.
+
+Store what a visitor gets before signing in with `set_provisional/3`: a flash message, a cart, a language choice. `nova_csrf_plugin` stores its token that way.
+
+```erlang
+add_to_cart(#{bindings := #{~"id" := Id}} = Req) ->
+    Cart = case nova_session:get(Req, ~"cart") of
+               {ok, Items} -> Items;
+               {error, _} -> []
+           end,
+    case nova_session:set_provisional(Req, ~"cart", [Id | Cart]) of
+        ok -> {redirect, "/cart"};
+        {error, _} -> {status, 503}
+    end.
+```
+
+The first `set/3` on a provisional session makes it a session in use, with the lifetime of a session created at that point. The values written before stay. A `set_provisional/3` on a session in use writes the value and leaves the session in use. Call `set/3` when the client signs in, after `renew/1`, as in the example of `renew/1` above. `renew/1` starts an empty session, so copy what is to survive the sign-in, such as the cart, to the request it returns.
+
+An application that calls `set/3` for visitors who are not signed in starts a session in use for each of them. When the store is full, a flood of requests without a cookie to such a route drops the oldest sessions in use, and signs users out.
+
+## When the session store is full
+
+`max_sessions` (1 000 000 by default) limits how many sessions the default `nova_session_ets` backend holds on a node. Without a limit any client could fill the memory of every node. In a full table a write that starts a session drops another one to make room:
+
+1. a session that has expired,
+2. a provisional session, the one nearest its expiry first,
+3. for a `set/3` only, the session in use that is nearest its expiry.
+
+A `set_provisional/3` that would start a session returns `{error, session_store_full}` when the table holds nothing but sessions in use, and no cookie is issued. `set/3` returns it when the session is not in the table of the node after the write, which happens with `{max_sessions, 0}`. Sessions that exist are read and written as before. A warning is logged when a session that has not expired is dropped or a write is refused, at most once a minute. `infinity` turns the limit off.
+
+Every node keeps to the limit for the sessions the other nodes send it as well, and each node chooses what it drops on its own, so under pressure the nodes do not hold the same sessions.
+
+What a flood of requests without a cookie can still do with these rules is listed in the [Security](security.md#when-the-session-store-is-full) guide.
 
 ## Enabling Sessions
 
@@ -134,9 +188,11 @@ It's also possible to set the backend for the session data. By default, the sess
 
 You can implement your own backend by creating a module that implements the `nova_session` behaviour. This behaviour has four functions that need to be implemented: `get_value/2`, `set_value/3`, `delete_value/1` and `delete_value/2`.
 
-Implement the optional `session_exists/1` too. Nova calls it for the session id a client presents and replaces ids it returns `false` for. It is called on every `get/2`, `set/3` and `delete` of a request that presented a cookie, so keep it as cheap as a key lookup. A backend without it accepts any id a client sends, and Nova logs a warning at boot.
+Implement the optional `session_exists/1` too. Nova calls it for the session id a client presents and replaces ids it returns `false` for. The answer is kept for one second in the process that calls `nova_session`, so a request that presented a cookie asks once however often it reads and writes its session, and again after it deleted or renewed it. A backend without it accepts any id a client sends, and Nova logs a warning at boot.
 
-`set_value/3` should return `ok` or `{error, Reason}`. Anything other than an error counts as a successful write.
+`set_value/3` should return `ok` or `{error, Reason}`. Anything other than an error counts as a successful write. The value is any term, as it was given to `nova_session:set/3`, and `get_value/2` has to return it as it was.
+
+The optional `set_provisional_value/3` gets what is written with `nova_session:set_provisional/3`. A session that only holds such values is not in use yet, so the backend can keep it for a shorter time and drop it first when it runs out of room. A backend without the callback gets those values through `set_value/3`, and then has no way to tell the sessions of visitors from those of signed-in users.
 
 Optionally you can also implement `start_link/0`, which will start a process under nova's supervisor for handling infrastructure of your handler, if it is necessary. For example, in default `nova_session_ets` module it starts a `gen_server` for managing underlying *ETS* table.
 
