@@ -66,6 +66,20 @@ same_origin_test_() ->
      {"a request without an origin is accepted",
       ?_assertMatch({ok, _Req, undefined}, pre_request(http3_connect(#{}), SameOrigin))}].
 
+%% What a proxy that sends `$host:$server_port` makes of the upgrade.
+host_header_with_the_port_of_the_scheme_test_() ->
+    Upgrade = fun(Host, Origin) ->
+                      pre_request(#{version => 'HTTP/1.1', method => ~"GET", scheme => ~"http",
+                                    host => ~"example.com", port => 8080, path => ~"/ws",
+                                    headers => #{~"host" => Host, ~"connection" => ~"upgrade",
+                                                 ~"upgrade" => ~"websocket", ~"origin" => Origin}},
+                                  #{})
+              end,
+    [?_assertMatch({ok, _Req, undefined}, Upgrade(~"example.com:443", ~"https://example.com")),
+     ?_assertMatch({ok, _Req, undefined}, Upgrade(~"Example.com:80", ~"http://example.com")),
+     ?_assertMatch({stop, {reply, 403, _Body}, _Req, undefined}, Upgrade(~"example.com:443", ~"http://example.com")),
+     ?_assertMatch({stop, {reply, 403, _Body}, _Req, undefined}, Upgrade(~"example.com:443", ~"https://evil.example"))].
+
 unparseable_upgrade() ->
     #{version => 'HTTP/1.1', method => ~"GET", host => ~"localhost", port => 80, path => ~"/ws",
       headers => #{~"host" => ~"localhost", ~"connection" => ~"upgrade, \"", ~"upgrade" => ~"websocket",
