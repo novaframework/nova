@@ -89,6 +89,9 @@ to a log, or shows them on an error page, it:
 `redact_keys` adds key fragments of your own. The rules are listed in
 [Configuration](configuration.md#redaction-in-logs-and-error-pages).
 
+A `csrf_secret` that Nova refuses at boot is not written anywhere: the log
+entry and the reason `nova_sup` fails with have `redacted` in its place.
+
 This covers what Nova logs. What your application and other libraries log is
 only covered when the handler uses `nova_jsonlogger` with `redact => true`.
 The formatter then applies the rules to:
@@ -128,7 +131,15 @@ for.
 |---|---|---|
 | `Starting nova` | notice | Nova is starting, with the `environment` it uses |
 | `Nova is running` | notice | The listener is accepting connections |
-| `The nova environment is not set and is read as dev ...` | warning | `environment` is not set. Routers get `dev`. Set it in every release |
+| `The environment key of the nova application is not set and is read as prod: ...` | notice | `environment` is not set. Routers get `prod` and nothing meant for development is on. The report has `key` and `read_as`. Set `{environment, dev}` for development |
+| `non_canonical_paths must be reject or resolve`, `allowed_origins must be same_host, same_origin, any or a list of origins`, `csrf_token must be stateless or session`, `csrf_secret must be a binary of at least 32 bytes, or a list of such`, `max_sessions must be infinity or an integer above 0`, `plugins_before_security must be all or a list of plugin modules that have pre_request/4` | error | A [setting checked at boot](configuration.md#settings-checked-at-boot) has a value that cannot be used. The report has the `setting` and the `value`, which is `redacted` for `csrf_secret`. Nova does not start. The one for `allowed_origins` is also logged for the option of `nova_csrf_plugin` and `nova_ws_origin_plugin`, with the `app`, the `prefix` and the `plugin` |
+| `csrf_token is stateless and csrf_secret is not set` | error | Signed tokens are asked for and there is no secret. Nova does not start |
+| `plugins_before_security of a route group must be all or a list of its pre_request plugins that have pre_request/4` | error | The key of a route group names a module that is not one of its `pre_request` plugins or has no `pre_request/4`. The report has the `app`, the `prefix` and the `value`. Nova does not start |
+| `plugins_after_security must be a list of plugin modules` | error | The key of a route group or of the `nova` environment is not a list of module names. Nova does not start |
+| `csrf_secret is not set, so nova_csrf_plugin keeps its tokens in the session store and starts a session for every visitor. ...` | notice | `nova_csrf_plugin` is used and neither `csrf_secret` nor `csrf_token` is set. See [CSRF token modes](plugins.md#csrf-token-modes) |
+| `The security callback of this route group runs before nova_request_plugin reads the body, ...` | warning | See [Warnings about the order](plugins.md#warnings-about-the-order). The report has the `app`, the `prefix` and the `plugins` |
+| `pre_request/4 of these plugins runs once the security callback of this route group has let a request through, ...` | warning | The same |
+| `pre_request/4 of these plugins does not run for a CORS preflight to a route of this group that does not take OPTIONS. ...` | warning | The same |
 | `You need to define bootstrap_application option in configuration` | error | `bootstrap_application` is missing. Nova does not start |
 | `Cowboy could not start` | error | The listener could not be started, for instance because the port is in use. Nova does not start |
 | `Could not start cowboy with SSL` | error | The TLS listener could not be started, for instance because a certificate cannot be read. Nova does not start |
@@ -156,6 +167,7 @@ for.
 | `Status page crashed` | error | A status code route raised an exception |
 | `Plugin crashed` | error | A plugin raised an exception. The request got the `500` page |
 | `Security handler crashed` | error | A security callback raised an exception. The request got the `500` page |
+| `Request path is not canonical` | debug | The path has an empty, `.` or `..` segment, or no leading slash. The request got `400`. See [Routing](routing.md#paths-that-are-not-canonical) |
 | `Request error in controller`, `Request error in plugin` | warning | The client sent something that could not be parsed, or sent the body too slowly. The request got `400`, `408` or `413` |
 | `Controller refused to redirect to a location that is not a local path`, `Security callback refused to redirect ...`, `Plugin refused to redirect ...` | warning | `{redirect_local, Path}` was given something that is not a path on the site. The request got `400` |
 | `Controller redirected to an invalid location` | error | `{redirect, Location}` was given something that cannot be a `location` header |
