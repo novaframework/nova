@@ -29,7 +29,7 @@ A token is asked for whatever else the request says. On top of that, a request t
 - `Sec-Fetch-Site` is `cross-site` or `same-site`, unless its `Origin` is one of a list of allowed origins. `same-origin` and `none`, which is what a request the user made by hand has, are let through.
 - Without `Sec-Fetch-Site`, which browsers send to `https` and `localhost` only, the `Origin` is not an allowed one.
 
-A request with neither header is let through: it is not from a browser, or from one too old to say. The allowed origins are `allowed_origins` of the `nova` environment, the setting websocket upgrades go by, unless the plugin is given its own: `same_host` (the default), `same_origin`, a list such as `[~"https://app.example.com"]` for pages elsewhere that may post here, or `any`, which turns this check off and leaves the token.
+A request with neither header is let through: it is not from a browser, or from one too old to say. The allowed origins are `allowed_origins` of the `nova` environment, the setting websocket upgrades go by, unless the plugin is given its own: `same_host` (the default), `same_origin`, a list such as `[~"https://app.example.com"]` for pages elsewhere that may post here, or `any`, which turns this check off and leaves the token. A list takes the place of `same_host`: a request that has an `Origin` and no `Sec-Fetch-Site` is let through only when that origin is in the list, also when a page of the site itself sent it, so put the origin of the site in the list.
 
 ### Options
 
