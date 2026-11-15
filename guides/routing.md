@@ -33,7 +33,7 @@ A route group is a map. Its keys are all optional:
 | `security` | The security callback of the group, `false` or a `fun/1`. A group without the key has none, see [Secure routing](#secure-routing) |
 | `plugins` | The plugins of the group, see [Using plugins local to a set of endpoints](#using-plugins-local-to-a-set-of-endpoints) |
 | `plugins_before_security` | Plugin modules whose `pre_request/4` runs ahead of the security callback, see [Plugins](plugins.md#running-a-plugin-ahead-of-the-security-callback) |
-| `plugins_after_security` | Plugin modules of which nothing runs ahead of the security callback, see [Plugins](plugins.md#keeping-a-plugin-behind-the-security-callback) |
+| `security_reads_body` | Whether the security callback of the group reads the body that `nova_request_plugin` decodes. `false` says that it does not, and ends the warning and the notice about a body that is decoded behind the callback. It answers for the callback the group declares as its `security` only, not for one the application is mounted behind. `true` says that it does, and the routes then only compile with the plugin listed under `plugins_before_security`. See [Plugins](plugins.md#saying-whether-the-security-callback-reads-the-body) |
 | `routes` | The routes |
 | `host` | Serve the group only for requests to this host, a string or a binary. A host that has groups of its own is served by those alone: groups without `host` are not consulted for it |
 | `extra_state` | A term handed to the controllers of the routes of the group that set no `extra_state` themselves |
@@ -127,7 +127,7 @@ A websocket route takes `extra_state` like an HTTP route does, and falls back to
 
 The `init/1` callback of a websocket controller returns `{ok, State}` to accept the connection. Any other return refuses the upgrade with a `500`. It can return `{ok, State, Options}` to also set the options of the connection, where `Options` is a `nova_websocket:opts()` map such as `#{max_frame_size => 65536, idle_timeout => 30000}`. It takes the options of [cowboy_websocket](https://ninenines.eu/docs/en/cowboy/2.21/manual/cowboy_websocket/).
 
-A browser sends the cookies of your site with a websocket upgrade started by any page. Nova therefore checks the `Origin` header of every request to a websocket route against `allowed_origins`, and answers one from another origin with `403`. See [The origin check](websockets.md#the-origin-check).
+A browser sends the cookies of your site with a websocket upgrade started by any page. Nova therefore checks where every request to a websocket route comes from, by its `Origin` and `Sec-Fetch-Site` headers, against `trusted_origins`, and answers one from another origin with `403`. See [The origin check](websockets.md#the-origin-check).
 
 The [Websockets](websockets.md) guide describes the controller.
 
@@ -222,7 +222,7 @@ The callback runs after `pre_security/4` of the `pre_request` plugins of the rou
 
 `security` takes `false`, a `fun/1` or the deprecated `{Module, Function}`. Any other value, `true` included, is logged as an error and stops the application from starting with `{invalid_security, Value}`. The same goes for `secure` and `override_secure` in `nova_apps`.
 
-The security function runs before a plugin reads the body, so `json`, `params` and `files` are not in the request it gets. `plugins_before_security => [Module]` in the route group runs `pre_request/4` of the listed plugins ahead of the security function; see [Running a plugin ahead of the security callback](plugins.md#running-a-plugin-ahead-of-the-security-callback).
+The security function runs before a plugin reads the body, so `json`, `params` and `files` are not in the request it gets. `plugins_before_security => [Module]` in the route group runs `pre_request/4` of the listed plugins ahead of the security function; see [Running a plugin ahead of the security callback](plugins.md#running-a-plugin-ahead-of-the-security-callback). A route group whose callback does not read them says so with `security_reads_body => false`, see [Saying whether the security callback reads the body](plugins.md#saying-whether-the-security-callback-reads-the-body).
 
 ### The security-function callback
 
@@ -265,7 +265,7 @@ get_user(Req) ->
     end.
 ```
 
-Once the security function has been called, the data will be available in the `Req` object under the `auth_data` key. A websocket controller gets it under `auth_data` in its controller data, and in the upgrade request under `req` there. A [plugin](plugins.md#before-and-after-the-security-callback) cannot put something else in its place.
+Once the security function has been called, the data will be available in the `Req` object under the `auth_data` key. A websocket controller gets it under `auth_data` in its controller data, and in the upgrade request under `req` there. A [plugin](plugins.md#before-and-after-the-security-callback) cannot put something else in its place. What a plugin writes under `auth_data` stays only when the callback returns a plain `true`, and on a route without a callback.
 
 A route group of an [included application](multi-app.md#security-of-a-mounted-application) can have several callbacks: the `secure` of every `nova_apps` entry its application is mounted through, and its own `security`. They run in that order and all have to allow the request. The controller gets the data of the last callback that returned some.
 
