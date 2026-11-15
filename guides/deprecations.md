@@ -112,6 +112,16 @@ These changes are part of the release that follows 0.18.3.
   `Origin`. Responses carry `vary: origin`, appended to any `vary` already
   set. Header names are lowercase.
 
+- **`handle_websocket/3` of `nova_basic_handler` is deprecated.** Nothing in Nova
+  calls it: a websocket route is one with `protocol => ws`, upgraded by
+  `nova_ws_handler`. It is removed in 1.0.
+
+- **Cowboy 2.21.** The requirement moved from `2.18.0` to `~> 2.21.0`, with
+  Cowlib 2.22. Over HTTP/2, a request whose headers decode to more than
+  32 768 bytes is reset with `enhance_your_calm`; earlier releases had no
+  limit on the decoded list. Set `max_header_list_size` in the `options` of
+  `cowboy_configuration` for clients that send more.
+
 - **Static files are sent with `x-content-type-options: nosniff`** (200 and
   206). `.json`, `.txt`, `.woff2` and `.webp` files now get their real
   content type instead of `application/octet-stream`. XML, HTML and `+xml`
@@ -262,24 +272,95 @@ These changes are part of the release that follows 0.18.3.
   logged, with a warning that no error page is sent, and the client keeps
   what it was sent. See [Handlers](handlers.md#long-lived-responses).
 
-- **A request is answered once.** A controller or a fallback controller that
-  answered with `cowboy_req:reply/4` and returned without the request that
-  call gave back was answered a second time. What it returned is now not
-  sent, and a warning names the controller, the function and the form of the
-  return. A reply a plugin returns with `stop` for a request that was
-  answered already is dropped the same way, with one warning per plugin.
+- **A request is answered once.** A controller, a plugin or a security
+  callback that answered with `cowboy_req:reply/4` and did not hand back the
+  request that call returned was answered a second time. The second response
+  is now dropped: the client keeps the first one, the connection stays open,
+  and the warning `The request was answered already, so this response is not
+  sent ...` is logged once per request, with the status of the dropped
+  response and the method. It does not name the controller. A reply a plugin
+  returns with `stop` for a request that was answered already is dropped as
+  well, with one warning per plugin.
 
 - **The application that starts a listener reads its own `nova_apps`
   entry.** An entry an application wrote for itself in its own `nova_apps`
   was skipped. The `prefix`, `secure`, `override_secure` and
   `plugin_strategy` of that entry now apply to the routes of the application
   named in `bootstrap_application`, and of one started with
-  `nova_sup:add_application/2`. Remove the entry if they are not meant to.
+  `nova_sup:add_application/2`. Its `secure` and `override_secure` also
+  cover the applications it mounts. A notice names the application and the
+  keys of the entry when the routes are compiled. Remove the entry if the
+  options are not meant to apply.
 
-- **A security key that is not read is logged.** A `secure` key in a route
-  group, and a `security` or `secure` key in the options of a single route,
-  are not read and never were. Each now logs a warning when the routes are
-  compiled. Declare the callback as `security` on the route group.
+- **A security callback under a key that is not read stops the boot.** A
+  `secure` key in a route group, a `security` or `secure` key in the options
+  of a single route, and a `security` key in a `nova_apps` entry are not
+  read and never were. With any value but `false`, each is now logged as an
+  error and the start fails with `{misplaced_security, App, Key, Path}`;
+  `nova_router:add_routes/2,3` throw
+  `{error, {misplaced_security, App, Key, Path}}`. With `false` the key logs
+  a warning. Declare the callback as `security` on the route group, or as
+  `secure` on the `nova_apps` entry.
+
+- **`secure` and the `security` of a route group cover nested
+  applications.** The `secure` of a `nova_apps` entry did not reach the
+  applications the included application includes, and the `security` of a
+  route group did not reach the applications under its `apps` key. Both now
+  run for those routes, outermost first, in front of the callbacks those
+  applications declare, and every one has to allow the request. A request
+  that reached such a route without passing them is now refused.
+  `override_secure` still replaces all of them.
+
+- **An application mounted twice with different security stops the boot.**
+  An application that two `nova_apps` entries mount is compiled once, for
+  the entry that comes first. When the entries ask for different `secure` or
+  `override_secure` callbacks, counting the inherited ones, the start now
+  fails with `{nova_app_mounted_twice, App}`.
+
+- **Security callbacks and plugins take `{redirect_local, Path}`.** It
+  answers `302` to a path on the site the request was made to and `400` for
+  anything else, as it does for a controller.
+
+- **A plugin is initialised when its first route is compiled.** A plugin
+  that first appeared in routes added with `nova_router:add_routes/2` or
+  `nova_sup:add_application/2` was called with `undefined` as its state.
+  `init/0` now runs when the router compiles the route, and the caller waits
+  for it. It must not call into `nova_sup`.
+
+- **`post_ws_connection` plugins always run.** They ran only for a
+  controller that exports `terminate/3`, and not when that callback
+  crashed.
+
+- **A websocket callback that returns something unknown closes the
+  connection.** It crashed the connection process. It is now logged as
+  `Websocket handler failed on what the controller returned`.
+
+- **`nova:get_apps/0` lists the applications of every listener**, those of
+  the default listener first. `nova_router:dispatch_keys/0` lists the
+  routing tables there are.
+
+- **Watcher arguments that are not strings skip the watcher.** They stopped
+  `nova_watcher`. `Could not start watcher` is logged and the other watchers
+  run.
+
+- **A status code route finds its data in the request.** What
+  `nova_router:render_status_page/3,5` is given is in the request of the
+  page, as `#{status => StatusCode, data => Data}` under `controller_data`.
+
+- **Router error reports have their text under `msg`.** Thirteen reports
+  had it under `reason`.
+
+- **The default logger key of `nova_correlation_plugin` is an atom.** The id
+  was put in the logger metadata under the binary `<<"correlation-id">>`,
+  and is now under the atom `'correlation-id'`. A binary given as
+  `logger_metadata_key` is used as the atom of that name when the node knows
+  one; otherwise an error is logged and the default is used.
+
+- **`nova_jsonlogger` redacts the arguments of a format string.** With
+  `redact => true`, an event logged as a format string with arguments has
+  its arguments redacted before they are put into the text. Arguments that
+  no longer fit the format string are printed as a term next to it. A
+  message logged as a plain string is not changed.
 
 - **A route takes the `extra_state` of its route group.** A route without
   `extra_state` had `undefined` in the request, whatever its group declared,
@@ -302,8 +383,18 @@ These changes are part of the release that follows 0.18.3.
 - **Nova's `500` page has a body in every environment.** Outside `dev`, a
   crash in a plugin was answered with a bare `500`.
   It now gets the generic page, without the class, the reason or the
-  stacktrace. With `render_error_pages` set to `false`, only the HTML form
-  of that page is left out.
+  stacktrace.
+
+- **`render_error_pages` only turns Nova's own pages off.** With `false`, a
+  controller that crashed or threw a status was answered with the bare
+  status code and no page was looked up, also not a status code route of
+  the application, while Nova's `404` page was still sent. The status code
+  routes of the application now run whatever the setting is, and with
+  `false` Nova's `404` and `500` pages send the bare status code to every
+  client. See [Error handling](error-handling.md#the-default-pages).
+
+- **A view without a template is a `500`.** It was a `404`. The `500` page
+  names the template in `dev`.
 
 - **The router of an Elixir application is found by either name.** An
   application named `:my_app` had its router looked up as `my_app.Router`.
@@ -367,5 +458,40 @@ These changes are part of the release that follows 0.18.3.
   request they return.** Return that request from the controller.
 
 - **A session manager without `session_exists/1` gets a warning at boot.**
+
+- **`nova_session_ets` holds at most `max_sessions` sessions**, 1 000 000 by
+  default, on each node. In a full table a write that starts a session drops
+  another one: an expired one, then a provisional one, then, for
+  `nova_session:set/3` only, the session nearest its expiry.
+
+- **`nova_session:set_provisional/3` is new.** It writes a value for a
+  visitor who is not signed in. With `nova_session_ets`, a session that only
+  holds such values lives one day, is dropped first from a full table, and
+  is refused with `{error, session_store_full}` when the table holds nothing
+  but sessions written with `set/3`. `nova_csrf_plugin` stores its token
+  this way. A backend takes these writes in the new optional callback
+  `set_provisional_value/3`, and in `set_value/3` without it.
+
+- **`session_exists/1` is asked once per request.** The answer is kept for
+  one second by the process that calls `nova_session`.
+
+- **Session values are typed as `term()`.** The typespecs said `binary()`,
+  while any term was passed through to the backend.
+
+### Uploads
+
+- **Spooled uploads belong to the request.** `nova_multipart_file_handler`
+  left every file in its directory. They are now deleted when the request is
+  over, unless the controller calls `nova_multipart_spool:keep/1` or moves
+  the file.
+
+- **The spool is bounded.** `multipart_spool` limits the bytes spooled at
+  one time to `max_bytes`, 8 000 000 000 by default, and a part past it gets
+  a `503`. `max_files` is `infinity` by default.
+
+- **A stalled upload gets a `408`.** `nova_multipart_plugin` has the new
+  option `chunk_timeout`, 15 000 ms by default: the next 64 000 bytes of the
+  body, or its end, have to arrive within it. `read_timeout` still bounds
+  the whole body. A `408` over HTTP/1 carries `connection: close`.
 
 - Use `nova_session:renew/1` at sign-in.
