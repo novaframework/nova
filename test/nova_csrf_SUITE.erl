@@ -35,7 +35,8 @@
          request_of_the_site_itself_is_accepted/1,
          request_of_another_origin_is_refused/1,
          request_of_a_listed_origin_is_accepted/1,
-         any_origin_still_needs_the_token/1,
+         any_origin_of_the_node_is_for_websockets_alone/1,
+         any_origin_of_the_plugin_still_needs_the_token/1,
          origins_of_the_plugin_are_the_ones_that_count/1,
          reading_and_excluded_paths_are_open_to_other_sites/1,
          request_of_another_site_does_not_reach_the_security_callback/1]).
@@ -62,7 +63,8 @@ groups() ->
               request_of_the_site_itself_is_accepted,
               request_of_another_origin_is_refused,
               request_of_a_listed_origin_is_accepted,
-              any_origin_still_needs_the_token,
+              any_origin_of_the_node_is_for_websockets_alone,
+              any_origin_of_the_plugin_still_needs_the_token,
               origins_of_the_plugin_are_the_ones_that_count,
               reading_and_excluded_paths_are_open_to_other_sites,
               request_of_another_site_does_not_reach_the_security_callback],
@@ -98,7 +100,12 @@ init_per_suite(Config) ->
                            {"/submit", fun nova_csrf_pages:submit/1, #{methods => [post, put, patch, delete]}},
                            {"/sign-in", fun nova_csrf_pages:sign_in/1, #{methods => [post]}},
                            {"/hooks/incoming", fun nova_csrf_pages:submit/1, #{methods => [post]}},
-                           {"/hooks-admin", fun nova_csrf_pages:submit/1, #{methods => [post]}}]},
+                           {"/hooks-admin", fun nova_csrf_pages:submit/1, #{methods => [post]}},
+                           {"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]},
+              #{prefix => "/open",
+                plugins => [{pre_request, nova_csrf_plugin, #{trusted_origins => any}}],
+                routes => [{"/submit", fun nova_csrf_pages:submit/1, #{methods => [post]}},
+                           {"/ws", nova_ws_upgrade_pages, #{protocol => ws}}]},
               #{prefix => "/partners",
                 plugins => [{pre_request, nova_csrf_plugin, #{trusted_origins => [~"https://partner.example.com"]}}],
                 routes => [{"/submit", fun nova_csrf_pages:submit/1, #{methods => [post]}}]},
@@ -358,12 +365,27 @@ request_of_a_listed_origin_is_accepted(Config) ->
                     [{"sec-fetch-site", "cross-site"}],
                     [{"origin", "http://localhost"}]]].
 
-any_origin_still_needs_the_token(Config) ->
+%% `any` in the nova environment opens the websockets. A request that
+%% changes state is checked as it is without the setting.
+any_origin_of_the_node_is_for_websockets_alone(Config) ->
     nova_test_settings:set(trusted_origins, any),
-    Other = [{"sec-fetch-site", "cross-site"}, {"origin", "https://evil.example"}],
-    ?assertEqual({200, ~"submitted"}, submit(Config, Other)),
-    {Cookie, _Token} = session(Config),
-    ?assertMatch({403, _}, request(Config, "POST", "/csrf/submit", [Cookie | Other], <<>>)).
+    Elsewhere = "https://evil.example",
+    ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/csrf/ws", Elsewhere)),
+    ?assertMatch({403, _}, submit(Config, [{"sec-fetch-site", "cross-site"}, {"origin", Elsewhere}])),
+    ?assertMatch({403, _}, submit(Config, [{"origin", Elsewhere}])),
+    ?assertEqual({200, ~"submitted"}, submit(Config, [{"origin", "http://localhost"}])),
+    ?assertEqual({200, ~"submitted"}, submit(Config, [{"sec-fetch-site", "same-origin"}])).
+
+%% The plugin is told to trust any origin for its route group, which leaves
+%% the token. The websockets of the group are not its to open.
+any_origin_of_the_plugin_still_needs_the_token(Config) ->
+    {Cookie, Token} = session(Config),
+    Elsewhere = [{"sec-fetch-site", "cross-site"}, {"origin", "https://evil.example"}],
+    ?assertEqual({200, ~"submitted"},
+                 request(Config, "POST", "/open/submit", [Cookie, {"x-csrf-token", Token} | Elsewhere], <<>>)),
+    ?assertMatch({403, _}, request(Config, "POST", "/open/submit", [Cookie | Elsewhere], <<>>)),
+    ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/open/ws", "https://evil.example")),
+    ?assertMatch(<<"HTTP/1.1 101", _/binary>>, handshake(Config, "/open/ws", "http://localhost")).
 
 origins_of_the_plugin_are_the_ones_that_count(Config) ->
     {Cookie, Token} = session(Config),
@@ -406,6 +428,9 @@ observed() ->
     after 200 ->
         []
     end.
+
+handshake(Config, Path, Origin) ->
+    nova_test_listener:websocket_handshake(?config(port, Config), Path, [{"origin", Origin}]).
 
 submit(Config, Headers) ->
     {Cookie, Token} = session(Config),

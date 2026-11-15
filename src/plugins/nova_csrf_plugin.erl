@@ -26,17 +26,21 @@ After a secret is set, a form that was rendered before still sends the token of 
 
 A token is asked for whatever else the request says. On top of that, a request that changes state is answered `403` ahead of the security callback, and before anything of its body is read, when the browser says that a page of another site sent it:
 
-- `Sec-Fetch-Site` is `cross-site` or `same-site`, unless its `Origin` is one of a list of allowed origins. `same-origin` and `none`, which is what a request the user made by hand has, are let through.
-- Without `Sec-Fetch-Site`, which browsers send to `https` and `localhost` only, the `Origin` is not an allowed one.
+- `Sec-Fetch-Site` is `cross-site` or `same-site`, unless its `Origin` is one of a list of trusted origins. `same-origin` and `none`, which is what a request the user made by hand has, are let through.
+- Without `Sec-Fetch-Site`, which browsers send to `https` and `localhost` only, the `Origin` is not a trusted one.
 
-A request with neither header is let through: it is not from a browser, or from one too old to say. The allowed origins are `trusted_origins` of the `nova` environment, the setting websocket upgrades go by, unless the plugin is given its own: `same_host` (the default), `same_origin`, a list such as `[~"https://app.example.com"]` for pages elsewhere that may post here, or `any`, which turns this check off and leaves the token. A list takes the place of `same_host`: a request that has an `Origin` and no `Sec-Fetch-Site` is let through only when that origin is in the list, also when a page of the site itself sent it, so put the origin of the site in the list.
+A request with neither header is let through: it is not from a browser, or from one too old to say. The trusted origins are `trusted_origins` of the `nova` environment, the setting websocket upgrades go by, unless the plugin is given its own: `same_host` (the default), `same_origin`, or a list such as `[~"https://app.example.com"]` for pages elsewhere that may post here. A list takes the place of `same_host`: a request that has an `Origin` and no `Sec-Fetch-Site` is let through only when that origin is in the list, also when a page of the site itself sent it, so put the origin of the site in the list.
+
+`any` in the `nova` environment opens websocket upgrades to every origin and nothing else: this plugin then checks by `same_host`. To turn the check off and leave a request to its token alone, give the plugin the option itself, `#{trusted_origins => any}`, in the route groups that are meant to be posted to from anywhere.
+
+This is not `allow_origins` of `nova_cors_plugin`, which says which pages may read a response. An origin that is to post here from a browser has to be in both.
 
 ### Options
 
 * `field_name` - form field name (default `<<"_csrf_token">>`)
 * `header_name` - header name (default `<<"x-csrf-token">>`)
 * `session_key` - session storage key (default `<<"_csrf_token">>`)
-* `trusted_origins` - the origins a request that changes state may come from, when not those of the `nova` environment. A value that is none of the above stops the boot with `{invalid_setting, trusted_origins, Value}`
+* `trusted_origins` - the origins a request that changes state may come from, when not those of the `nova` environment: `same_host`, `same_origin`, a list of origins, or `any`, which turns the check off. Any other value stops the boot with `{invalid_setting, trusted_origins, Value}`
 * `excluded_paths` - list of path prefixes to skip (default `[]`). A prefix covers whole segments of the path the request is routed on: `<<"/api">>` skips `/api` and `/api/hooks`, not `/apikeys`, and `/api/../admin` is checked as `/admin`
 """.
 -behaviour(nova_plugin).
@@ -113,18 +117,27 @@ pre_security(Req = #{method := Method, path := Path}, _Env, Options, State) ->
 %% a page that some other site could have made send the request.
 -spec is_sent_by_the_site(Req :: cowboy_req:req(), Options :: map()) -> boolean().
 is_sent_by_the_site(Req, Options) ->
-    Allowed = case Options of
-                  #{trusted_origins := Origins} -> Origins;
-                  _ -> nova_settings:value(trusted_origins)
-              end,
+    Trusted = trusted_origins(Options),
     Origin = cowboy_req:header(~"origin", Req),
     case cowboy_req:header(~"sec-fetch-site", Req) of
-        Site when Site =:= ~"same-origin"; Site =:= ~"none"; Allowed =:= any ->
+        Site when Site =:= ~"same-origin"; Site =:= ~"none"; Trusted =:= any ->
             true;
         undefined ->
-            nova_origin:is_allowed(Origin, Req, Allowed);
+            nova_origin:is_allowed(Origin, Req, Trusted);
         _ElseWhere ->
-            is_binary(Origin) andalso is_list(Allowed) andalso nova_origin:is_allowed(Origin, Req, Allowed)
+            is_binary(Origin) andalso is_list(Trusted) andalso nova_origin:is_allowed(Origin, Req, Trusted)
+    end.
+
+%% `any` of the nova environment is there to open websockets to pages
+%% elsewhere. It takes the option of this plugin to leave a request that
+%% changes state to its token alone.
+-spec trusted_origins(Options :: map()) -> term().
+trusted_origins(#{trusted_origins := Origins}) ->
+    Origins;
+trusted_origins(_Options) ->
+    case nova_settings:value(trusted_origins) of
+        any -> same_host;
+        Origins -> Origins
     end.
 
 %%--------------------------------------------------------------------
