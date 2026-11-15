@@ -122,22 +122,18 @@ refuse(Status, Reason, Req, State) ->
     ?LOG_WARNING(#{msg => ~"Request refused", reason => Reason, status_code => Status}),
     {stop, {status, Status}, Req, State}.
 
+%% The body is left out of the log line, and so is the reason of the JSON
+%% library, which can hold bytes of the body.
 decode_json(Req, <<>>, _Tl, State) ->
-    Req400 = cowboy_req:reply(400, Req),
-    logger:warning(#{status_code => 400,
-                     msg => "Failed to decode json.",
-                     error => "No body to decode."}),
-    {stop, Req400, State};
+    ?LOG_WARNING(#{msg => ~"Request refused", reason => ~"Empty JSON body", status_code => 400}),
+    {stop, cowboy_req:reply(400, Req), State};
 decode_json(Req, Body, Tl, State) ->
-    case nova_json:decode(Body) of
+    case nova_json:try_decode(Body) of
         {ok, JSON} ->
             modulate_state(Req#{json => JSON}, Tl, State);
-        Error ->
-            Req400 = cowboy_req:reply(400, Req),
-            logger:warning(#{status_code => 400,
-                             msg => "Failed to decode json.",
-                             error => Error}),
-            {stop, Req400, State}
+        {error, _Reason, Why} ->
+            ?LOG_WARNING(Why#{msg => ~"Request refused", reason => ~"Malformed JSON body", status_code => 400}),
+            {stop, cowboy_req:reply(400, Req), State}
     end.
 
 %% application/json, or any application type with the +json structured
