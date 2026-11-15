@@ -371,14 +371,14 @@ plugins_empty_test_() ->
 
 normalize_plugins_empty_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        ?assertEqual([], nova_router:normalize_plugins([], order([], [])))
+        ?assertEqual([], nova_router:normalize_plugins([], order([])))
     end}.
 
 %% pre_request/4 waits for the security callback, and pre_security/4 of a
 %% plugin that has it runs ahead of it.
 normalize_plugins_single_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        Result = nova_router:normalize_plugins([{pre_request, nova_request_plugin, #{}}], order([], [])),
+        Result = nova_router:normalize_plugins([{pre_request, nova_request_plugin, #{}}], order([])),
         ?assertEqual([{after_security, [{fun nova_request_plugin:pre_request/4, #{}}]},
                       {pre_request, [{fun nova_request_plugin:pre_security/4, #{}}]}], Result),
         %% Verify the plugin was added to the global store
@@ -392,7 +392,7 @@ normalize_plugins_keep_their_order_test_() ->
             {pre_request, nova_request_plugin, #{}},
             {pre_request, nova_cors_plugin, #{}},
             {pre_request, nova_csrf_plugin, #{}}
-        ], order([], [])),
+        ], order([])),
         ?assertEqual([{after_security, [{fun nova_request_plugin:pre_request/4, #{}},
                                         {fun nova_csrf_plugin:pre_request/4, #{}}]},
                       {pre_request, [{fun nova_request_plugin:pre_security/4, #{}},
@@ -405,7 +405,7 @@ normalize_plugins_different_types_test_() ->
         Result = nova_router:normalize_plugins([
             {pre_request, nova_csrf_plugin, #{}},
             {post_request, nova_cors_plugin, #{}}
-        ], order([], [])),
+        ], order([])),
         ?assertEqual([{after_security, [{fun nova_csrf_plugin:pre_request/4, #{}}]},
                       {post_request, [{fun nova_cors_plugin:post_request/4, #{}}]},
                       {pre_request, [{fun nova_csrf_plugin:pre_security/4, #{}}]}], Result)
@@ -418,25 +418,12 @@ normalize_plugins_before_security_test_() ->
                       {pre_request, [{fun nova_request_plugin:pre_security/4, #{}},
                                      {fun nova_request_plugin:pre_request/4, #{}},
                                      {fun nova_csrf_plugin:pre_security/4, #{}}]}],
-                     nova_router:normalize_plugins(Plugins, order([nova_request_plugin], []))),
+                     nova_router:normalize_plugins(Plugins, order([nova_request_plugin]))),
         ?assertEqual([{pre_request, [{fun nova_request_plugin:pre_security/4, #{}},
                                      {fun nova_request_plugin:pre_request/4, #{}},
                                      {fun nova_csrf_plugin:pre_security/4, #{}},
                                      {fun nova_csrf_plugin:pre_request/4, #{}}]}],
-                     nova_router:normalize_plugins(Plugins, order(all, [])))
-    end}.
-
-normalize_plugins_after_security_test_() ->
-    {setup, ?SETUP, ?CLEANUP, fun() ->
-        Plugins = [{pre_request, nova_cors_plugin, #{}},
-                   {pre_request, nova_request_plugin, #{}},
-                   {post_request, nova_request_plugin, #{}}],
-        Expected = [{after_security, [{fun nova_request_plugin:pre_security/4, #{}},
-                                      {fun nova_request_plugin:pre_request/4, #{}}]},
-                    {post_request, [{fun nova_request_plugin:post_request/4, #{}}]},
-                    {pre_request, [{fun nova_cors_plugin:pre_security/4, #{}}]}],
-        ?assertEqual(Expected, nova_router:normalize_plugins(Plugins, order([], [nova_request_plugin]))),
-        ?assertEqual(Expected, nova_router:normalize_plugins(Plugins, order(all, [nova_request_plugin])))
+                     nova_router:normalize_plugins(Plugins, order(all)))
     end}.
 
 %% What is logged as a warning about the plugins of a route group when its
@@ -463,9 +450,6 @@ body_read_behind_the_security_callback_is_warned_about_once_test_() ->
         ?assertEqual([], order_warnings(Secured("/json", #{plugins => [Json]}))),
         ?assertEqual(Warned("/form"),
                      order_warnings(Secured("/form", #{plugins => [Request(#{read_urlencoded_body => true})]}))),
-        ?assertEqual(Warned("/postponed"),
-                     order_warnings(Secured("/postponed", #{plugins => [Json], plugins_before_security => all,
-                                                            plugins_after_security => [nova_request_plugin]}))),
         [?assertEqual({Prefix, []}, {Prefix, order_warnings(Quiet)})
          || {Prefix, Quiet} <- [{"/open", Group("/open", #{plugins => [Json]})},
                                 {"/qs", Secured("/qs", #{plugins => [Request(#{parse_qs => true})]})},
@@ -475,7 +459,7 @@ body_read_behind_the_security_callback_is_warned_about_once_test_() ->
                                 {"/all", Secured("/all", #{plugins => [Json], plugins_before_security => all})},
                                 {"/none", Secured("/none", #{plugins => []})}]],
         [nova_once:forget({nova_router, body_behind_security, route_app, Prefix, [nova_request_plugin]})
-         || Prefix <- ["/json", "/form", "/postponed"]]
+         || Prefix <- ["/json", "/form"]]
     end}.
 
 %% A plugin from outside Nova that only has pre_request/4 no longer runs for
@@ -504,9 +488,6 @@ plugin_with_pre_request_alone_is_warned_about_once_test_() ->
         try
             ?assertEqual(Warned("/secured"), order_warnings(Secured("/secured", #{plugins => Moved}))),
             ?assertEqual([], order_warnings(Secured("/secured", #{plugins => Moved}))),
-            ?assertEqual(Warned("/after"),
-                         order_warnings(Secured("/after", #{plugins => Moved,
-                                                            plugins_after_security => [moved_plugin]}))),
             ?assertEqual([#{app => route_app, prefix => "/one", plugins => [other_moved_plugin]}],
                          order_warnings(Secured("/one", #{plugins => Moved,
                                                           plugins_before_security => [moved_plugin]}))),
@@ -526,7 +507,7 @@ plugin_with_pre_request_alone_is_warned_about_once_test_() ->
         after
             [nova_once:forget({nova_router, About, route_app, Prefix, Plugins})
              || About <- [pre_request_behind_security, pre_request_not_for_preflight],
-                Prefix <- ["/secured", "/after", "/one", "/post", "/get"],
+                Prefix <- ["/secured", "/one", "/post", "/get"],
                 Plugins <- [[moved_plugin, other_moved_plugin], [other_moved_plugin]]],
             [meck:unload(Module) || Module <- [moved_plugin, other_moved_plugin, early_plugin]]
         end
@@ -576,8 +557,27 @@ plugins_before_security_that_is_refused_names_the_route_group_test() ->
                     prefix := "/admin", router_file := "router.erl"}],
                  nova_test_log:errors(Events)).
 
-order(Before, After) ->
-    #{before => Before, 'after' => After, secured => false}.
+order(Before) ->
+    #{before => Before, secured => false}.
+
+%% plugins_after_security was in no release. A route group that has it is
+%% refused, and told what changes the order now.
+plugins_after_security_of_a_route_group_is_refused_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Group = #{prefix => "/after", plugins => [{pre_request, nova_request_plugin, #{}}],
+                  plugins_after_security => [nova_request_plugin],
+                  routes => [{"/page", fun(_) -> {json, #{}} end, #{methods => [post]}}]},
+        {_, Events} = nova_test_log:collect(
+                        fun() ->
+                                ?assertThrow({error, {invalid_setting, plugins_after_security,
+                                                      {replaced_by, plugins_before_security}}},
+                                             nova_router:add_routes(route_app, Group))
+                        end),
+        ?assertMatch([#{setting := plugins_after_security, replaced_by := plugins_before_security,
+                        app := route_app, prefix := "/after"}],
+                     nova_test_log:errors(Events)),
+        ?assertEqual({error, not_found}, nova_router:lookup_url('_', ~"/after/page", ~"POST"))
+    end}.
 
 %% allowed_origins is an option of two plugins as well as a setting. The
 %% option is checked as the setting is, when the routes are compiled.
@@ -672,13 +672,6 @@ websocket_route_checks_the_origin_first_test_() ->
         ?assertEqual([{pre_request, [{fun nova_cors_plugin:pre_security/4, #{}}, {Check, Origins}]}],
                      Plugins(~"/last/page")),
 
-        ok = nova_router:add_routes(route_app,
-                                    Routes("/after", #{plugins => [{pre_request, nova_cors_plugin, #{}},
-                                                                   {pre_request, nova_ws_origin_plugin, Origins}],
-                                                       plugins_after_security => [nova_ws_origin_plugin]})),
-        ?assertEqual([{after_security, []},
-                      {pre_request, [{Check, Origins}, {fun nova_cors_plugin:pre_security/4, #{}}]}],
-                     Plugins(~"/after/socket")),
         ?assert(lists:member(nova_ws_origin_plugin, nova_router:plugins()))
     end}.
 

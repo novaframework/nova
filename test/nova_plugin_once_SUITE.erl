@@ -47,7 +47,6 @@ init_per_suite(Config) ->
               #{prefix => "/late",
                 security => fun ?PLUGIN:allow/1,
                 plugins => Chain(crash),
-                plugins_after_security => [?PLUGIN],
                 routes => [{"/ws", ?PLUGIN, #{protocol => ws}}]},
               #{prefix => "/pass",
                 plugins => Chain(pass),

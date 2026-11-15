@@ -49,8 +49,7 @@
 
 -ifdef(TEST).
 -export([add_plugin/1, apply_callback/3, concat_strings/2, insert/6, method_to_binary/1, normalize_plugins/2,
-         normalize_secure/2, plugins_after_security/2, plugins_before_security/3, resolve_secure/3,
-         router_module/1]).
+         normalize_secure/2, plugins_before_security/3, resolve_secure/3, router_module/1]).
 -endif.
 
 -include_lib("kernel/include/logger.hrl").
@@ -92,7 +91,7 @@
 -type plugin() :: {Type :: atom(), Module :: module(), Options :: term()}.
 -type callback() :: {Callback :: fun(), Options :: term()}.
 -type phased() :: [{Phase :: atom(), [callback()]}].
--type order() :: #{before := all | [module()], 'after' := [module()], secured := boolean()}.
+-type order() :: #{before := all | [module()], secured := boolean()}.
 -type order_warning() :: body_behind_security | pre_request_behind_security | pre_request_not_for_preflight.
 
 -doc "The key of the routing table of every listener Nova has started, for the functions that take a `DispatchKey`.".
@@ -564,9 +563,8 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
 
     Secure = resolve_secure(Options, RouteInfo, RouterFile),
 
-    Order = #{before => plugins_before_security(RouteInfo, Plugins, Named),
-              'after' => plugins_after_security(RouteInfo, RouterFile),
-              secured => Secure =/= false},
+    ok = removed_keys(RouteInfo, Named),
+    Order = #{before => plugins_before_security(RouteInfo, Plugins, Named), secured => Secure =/= false},
     ok = warn_about_order(RouteInfo, Plugins, Order, Named),
     Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins, Order),
                                 extra_state = maps:get(extra_state, RouteInfo, #{})},
@@ -1085,13 +1083,12 @@ normalize_plugins(Plugins, Order) ->
 %% pre_security/4 ahead of the security callback, and its pre_request/4 once
 %% the request is let through, so that nothing is read from a client that is
 %% refused. plugins_before_security names the modules whose pre_request/4
-%% runs ahead of security as it did in earlier releases, and
-%% plugins_after_security those of which nothing does, which wins.
+%% runs ahead of security as it did in earlier releases.
 -spec phased(plugin(), order()) -> [{Phase :: atom(), callback()}].
-phased({pre_request, PluginName, Options}, Order = #{'after' := After}) ->
+phased({pre_request, PluginName, Options}, Order) ->
     add_plugin(PluginName),
     HasPreSecurity = exports(PluginName, pre_security),
-    [{phase(not lists:member(PluginName, After)), {fun PluginName:pre_security/4, Options}} || HasPreSecurity] ++
+    [{phase(true), {fun PluginName:pre_security/4, Options}} || HasPreSecurity] ++
         [{phase(is_ahead(PluginName, Order)), {fun PluginName:pre_request/4, Options}}
          || not HasPreSecurity orelse exports(PluginName, pre_request)];
 phased({Type, PluginName, Options}, _Order) ->
@@ -1104,8 +1101,8 @@ phase(false) -> after_security.
 
 %% Whether pre_request/4 of a plugin runs ahead of the security callback.
 -spec is_ahead(module(), order()) -> boolean().
-is_ahead(PluginName, #{before := Before, 'after' := After}) ->
-    not lists:member(PluginName, After) andalso (Before =:= all orelse lists:member(PluginName, Before)).
+is_ahead(PluginName, #{before := Before}) ->
+    Before =:= all orelse lists:member(PluginName, Before).
 
 -spec exports(module(), Function :: atom()) -> boolean().
 exports(Module, Function) ->
@@ -1207,17 +1204,16 @@ invalid_plugins_before_security(Value, Group) ->
                       setting => plugins_before_security, value => Value}),
     throw({error, {invalid_setting, plugins_before_security, Value}}).
 
-plugins_after_security(RouteInfo, RouterFile) ->
-    Modules = maps:get(plugins_after_security, RouteInfo,
-                       application:get_env(nova, plugins_after_security, [])),
-    case is_list(Modules) andalso lists:all(fun erlang:is_atom/1, Modules) of
-        true ->
-            Modules;
-        false ->
-            ?LOG_ERROR(#{msg => ~"plugins_after_security must be a list of plugin modules",
-                         value => Modules, router_file => RouterFile}),
-            throw({error, {invalid_plugins_after_security, Modules}})
-    end.
+%% plugins_after_security was in no release. A route group that still has it
+%% is refused with the name of what took its place, as the nova environment is.
+-spec removed_keys(RouteInfo :: map(), Named :: map()) -> ok.
+removed_keys(#{plugins_after_security := _}, Named) ->
+    {plugins_after_security, Replacement} = lists:keyfind(plugins_after_security, 1, nova_settings:removed()),
+    ?LOG_ERROR(Named#{msg => nova_settings:removed_notice(plugins_after_security),
+                      setting => plugins_after_security, replaced_by => Replacement}),
+    throw({error, {invalid_setting, plugins_after_security, {replaced_by, Replacement}}});
+removed_keys(_RouteInfo, _Named) ->
+    ok.
 
 %% A method that is not recognised stops the route table from compiling.
 %% It used to become the wildcard, which opened the route to every method.

@@ -15,8 +15,8 @@ execute(Req, Env = #{secure := Secure}) ->
         {answered, Answer} -> Answer
     end.
 
-%% Whether the request may go on. The plugins listed under
-%% plugins_after_security run once, after every callback has allowed it.
+%% Whether the request may go on. pre_request/4 of the plugins runs once,
+%% after every callback has allowed it.
 check(false, Req, Env) ->
     {allowed, Req, Env};
 check([_ | _] = Callbacks, Req, Env) ->

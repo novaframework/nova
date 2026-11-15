@@ -16,10 +16,8 @@
          pre_security_of_a_plugin_runs_ahead_of_security/1,
          plugin_listed_before_security_runs_ahead_of_it/1,
          every_plugin_runs_ahead_of_security_with_all/1,
-         plugin_listed_after_security_runs_nothing_ahead_of_it/1,
-         plugin_listed_both_ways_runs_after_security/1,
          plugin_after_security_can_stop_the_request/1,
-         plugins_after_security_are_skipped_once_an_earlier_one_failed/1,
+         plugins_behind_security_are_skipped_once_an_earlier_one_failed/1,
          plugin_that_fails_after_security_ends_the_request/1,
          list_from_the_environment_applies/1,
          route_group_list_wins_over_the_environment/1]).
@@ -48,10 +46,8 @@ groups() ->
                                pre_security_of_a_plugin_runs_ahead_of_security,
                                plugin_listed_before_security_runs_ahead_of_it,
                                every_plugin_runs_ahead_of_security_with_all,
-                               plugin_listed_after_security_runs_nothing_ahead_of_it,
-                               plugin_listed_both_ways_runs_after_security,
                                plugin_after_security_can_stop_the_request,
-                               plugins_after_security_are_skipped_once_an_earlier_one_failed,
+                               plugins_behind_security_are_skipped_once_an_earlier_one_failed,
                                plugin_that_fails_after_security_ends_the_request]},
      {environment_option, [], [list_from_the_environment_applies,
                                route_group_list_wins_over_the_environment]}].
@@ -69,12 +65,6 @@ init_per_group(route_group_option, Config) ->
                                            plugins_before_security => all}),
               (group("/takes-options", #{plugins => [Own(#{early => mark})]}))
               #{routes => [{"/echo", fun nova_security_order_pages:echo/1, #{methods => [post, options]}}]},
-              group("/after", #{plugins => plugins() ++ [Own(#{early => mark})],
-                                plugins_after_security => [nova_correlation_plugin, nova_request_plugin,
-                                                           nova_security_order_pages]}),
-              group("/both", #{plugins => [request()],
-                               plugins_before_security => [nova_request_plugin],
-                               plugins_after_security => [nova_request_plugin]}),
               group("/stopping", #{plugins => [Own(#{action => stop})]}),
               group("/failing", #{plugins => [Own(#{early => crash}), request()]}),
               group("/failing-late", #{plugins => [Own(#{action => crash}), request()]})],
@@ -194,26 +184,12 @@ plugin_listed_before_security_runs_ahead_of_it(Config) ->
 every_plugin_runs_ahead_of_security_with_all(Config) ->
     ?assertMatch({401, #{~"body" := true, ~"late" := true}}, refused(Config, "/all/echo", [?JSON], ~"{\"a\":1}")).
 
-plugin_listed_after_security_runs_nothing_ahead_of_it(Config) ->
-    {401, Headers, _} = post(Config, "/after/echo?token=t", [{"origin", "https://app.example"}], <<>>),
-    ?assertNot(is_map_key(~"x-correlation-id", Headers)),
-    ?assertNot(is_map_key(~"x-early", Headers)),
-    ?assertEqual(~"https://app.example", maps:get(~"access-control-allow-origin", Headers)),
-    ?assertMatch({401, #{~"qs" := false, ~"early" := false}}, refused(Config, "/after/echo?token=t", [], <<>>)),
-    {200, Allowed, Body} = post(Config, "/after/echo?b=2", [?ALLOWED], <<>>),
-    ?assert(is_map_key(~"x-correlation-id", Allowed)),
-    ?assertEqual(~"ran", maps:get(~"x-early", Allowed)),
-    ?assertMatch(#{~"controller_qs" := #{~"b" := ~"2"}}, json:decode(Body)).
-
-plugin_listed_both_ways_runs_after_security(Config) ->
-    ?assertMatch({401, #{~"body" := false, ~"qs" := false}}, refused(Config, "/both/echo?a=1", [?JSON], ~"{\"a\":1}")).
-
 plugin_after_security_can_stop_the_request(Config) ->
     ?assertMatch({401, _, _}, post(Config, "/stopping/echo", [], <<>>)),
     ?assertMatch({403, _, _}, post(Config, "/stopping/echo", [?ALLOWED], <<>>)).
 
 %% The malformed body would be a 400 if the plugin reading it still ran.
-plugins_after_security_are_skipped_once_an_earlier_one_failed(Config) ->
+plugins_behind_security_are_skipped_once_an_earlier_one_failed(Config) ->
     ?assertMatch({500, _, _}, post(Config, "/failing/echo", [?JSON, ?ALLOWED], ~"{")).
 
 plugin_that_fails_after_security_ends_the_request(Config) ->

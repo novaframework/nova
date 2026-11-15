@@ -71,28 +71,34 @@ Once a `pre_request` plugin stops the request or the security function refuses i
 
 The state a plugin returns is stored per plugin module, not per request, and is shared by every request. Nova only writes it when it changed, and concurrent requests overwrite each other's writes: the last writer wins. Keep per-request data in `Req`, and keep shared data that has to add up (counters, rate-limit buckets) in `ets` or `counters`.
 
-## Running a plugin after the security callback
+## Before and after the security callback
 
-Every `pre_request` plugin runs before the route's security callback. A plugin that reads the request body, such as `nova_request_plugin` or `nova_multipart_plugin`, therefore reads, decodes and (for uploads) spools what an unauthenticated client sent. List the plugin modules that should wait for the security callback under `plugins_after_security`, in the route group:
+A plugin listed as `{pre_request, Module, Options}` takes part twice before the controller, with the same options:
+
+- `pre_security/4`, when the module has it, runs ahead of the route's security callback, for every request to the route. It must not read the request body.
+- `pre_request/4` runs once the security callback has let the request through, and at once on a route without one. A plugin that reads the request body, such as `nova_request_plugin` or `nova_multipart_plugin`, does it here, so nothing is read, decoded or spooled for a client that is refused.
+
+The security callback finds in the request what `pre_security/4` put there: the correlation id, the CORS headers and `parsed_qs`, and not `json`, `params` or `files`.
+
+### Running a plugin ahead of the security callback
+
+Releases up to 0.18 ran `pre_request/4` ahead of the security callback. `plugins_before_security` puts it back there for the modules it names, in the route group:
 
 ```erlang
-#{prefix => "/files",
-  security => fun my_auth:check/1,
-  plugins => [{pre_request, nova_cors_plugin, #{allow_origins => [<<"https://app.example.com">>]}},
-              {pre_request, nova_multipart_plugin, #{handler => {nova_multipart_file_handler, #{dir => <<"/var/uploads">>}}}}],
-  plugins_after_security => [nova_multipart_plugin],
-  routes => [{"/upload", fun upload_controller:upload/1, #{methods => [post]}}]}
+#{prefix => "/hooks",
+  security => fun my_auth:signed_body/1,
+  plugins => [{pre_request, nova_request_plugin, #{decode_json_body => true}}],
+  plugins_before_security => [nova_request_plugin],
+  routes => [{"/payment", fun hook_controller:payment/1, #{methods => [post]}}]}
 ```
 
 or for every route group that does not set the key, in `sys.config`:
 
 ```erlang
-{nova, [{plugins_after_security, [nova_request_plugin, nova_multipart_plugin]}]}
+{nova, [{plugins_before_security, all}]}
 ```
 
-The default is `[]`, which is the order Nova has always had. A listed plugin keeps its options and its place among the other listed plugins, and runs once the security callback has let the request through. It does not run for a request the callback refuses, nor after an earlier plugin failed. Plugins that are not listed still run first, so CORS preflights are still answered before the security callback.
-
-The security callback of such a route cannot read what a listed plugin produces: `json`, `params`, `parsed_qs` and `files` are not in `Req` yet. A callback that needs the body, for instance to check a signature over it, has to keep the body-reading plugin out of the list. A plugin that depends on a listed one, such as `nova_csrf_plugin` reading the token from a multipart form, has to be listed too, after it.
+`all` names every plugin of the route group, and `all` in the `nova` environment is the order of 0.18 everywhere. A list has to name plugins that have `pre_request/4`, and the list of a route group plugins the group lists as `pre_request`. Any other value stops the boot with `{invalid_setting, plugins_before_security, Value}`. The default is `[]`. Nothing moves `pre_security/4` behind the security callback.
 
 A websocket route runs its `pre_request` plugins on the upgrade request. For the time after the upgrade it has the phases `pre_ws_request` and `post_ws_request`, which run around every callback of the controller, and `post_ws_connection`, which runs once when the connection goes away: after `terminate/3` if the controller exports it, and also when it does not or when it crashes. `post_ws_connection` does not run for an upgrade that was refused. See the `nova_websocket` documentation.
 
@@ -256,7 +262,7 @@ A correlation ID from the request is used when it is 1 to 255 visible ASCII char
 
 This plugin answers CORS preflights (an `OPTIONS` request with both `Origin` and `Access-Control-Request-Method`) itself with a `204` and the CORS headers, so the controller never sees them. Any other request, including a plain `OPTIONS`, goes on to the application with the CORS headers added to the response.
 
-The route does not have to accept `OPTIONS` for that. A preflight names the method of the request it is about, in `Access-Control-Request-Method`, and Nova runs the `pre_request` and `post_request` plugins of the route for that method on it. `{"/orders", fun orders:create/1, #{methods => [post]}}` in a route group with this plugin therefore answers the preflight for a `POST`. Without a plugin that answers, the preflight gets the `405` it always got, as does a preflight for a method the path has no route for, and a plain `OPTIONS`. The security callback of the route does not run for a preflight, and neither do plugins listed in `plugins_after_security`.
+The route does not have to accept `OPTIONS` for that. A preflight names the method of the request it is about, in `Access-Control-Request-Method`, and Nova runs `pre_security/4` of the `pre_request` plugins of the route for that method on it, and its `post_request` plugins. `{"/orders", fun orders:create/1, #{methods => [post]}}` in a route group with this plugin therefore answers the preflight for a `POST`. Without a plugin that answers, the preflight gets the `405` it always got, as does a preflight for a method the path has no route for, and a plain `OPTIONS`. The security callback of the route does not run for a preflight, and neither does `pre_request/4` of any plugin.
 
 The plugin never sends `access-control-allow-credentials`, so a browser does not expose a response to a request made with cookies or HTTP authentication.
 
@@ -421,9 +427,8 @@ count. With the default part limits a request spools at most 32 files and
 together with `max_part_size` and `max_total_size` when single uploads are
 larger than the bound.
 
-By default the upload is read before the route's security callback runs. See
-[Running a plugin after the security callback](#running-a-plugin-after-the-security-callback)
-to read it only for requests that were let through.
+The upload is read once the route's security callback has let the request
+through. See [Before and after the security callback](#before-and-after-the-security-callback).
 
 To read the parts yourself, leave `nova_multipart_plugin` off the route and use
 [cowboy_req:read_part/1](https://ninenines.eu/docs/en/cowboy/2.13/manual/cowboy_req.read_part/)

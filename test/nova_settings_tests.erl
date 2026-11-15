@@ -124,6 +124,34 @@ secret_that_cannot_be_used_is_not_told_test_() ->
                            {one_too_short, [New, binary:part(Old, 0, 31)]},
                            {empty_list, []}]].
 
+%% A setting that was in no release and is gone stops the boot, and what is
+%% raised and logged names the one that took its place and not the value.
+removed_settings_stop_the_boot_test_() ->
+    [{atom_to_list(Key),
+      fun() ->
+              application:set_env(nova, Key, Value),
+              try
+                  {Raised, Events} = nova_test_log:collect(fun() ->
+                                                                   try nova_settings:validate()
+                                                                   catch error:Reason -> {stopped, Reason}
+                                                                   end
+                                                           end),
+                  ?assertEqual({stopped, {invalid_setting, Key, {replaced_by, Replacement}}}, Raised),
+                  ?assertMatch([#{setting := Key, replaced_by := Replacement, msg := _}],
+                               nova_test_log:errors(Events)),
+                  [#{msg := Notice} = Report] = nova_test_log:errors(Events),
+                  ?assertNotEqual(nomatch, binary:match(Notice, atom_to_binary(Replacement))),
+                  ?assertNot(is_map_key(value, Report))
+              after
+                  application:unset_env(nova, Key),
+                  nova_settings:validate()
+              end
+      end}
+     || {Key, Value, Replacement} <- removed()].
+
+removed() ->
+    [{plugins_after_security, [nova_request_plugin], plugins_before_security}].
+
 invalid_setting_is_logged_with_what_it_may_be_test() ->
     application:set_env(nova, non_canonical_paths, allow),
     try

@@ -155,11 +155,11 @@ routes(_Environment) ->
     }].
 ```
 
-The callback runs after the `pre_request` plugins of the route and before the controller. The [request pipeline](plugins.md#request-pipeline) section of the plugins guide has the whole order.
+The callback runs after `pre_security/4` of the `pre_request` plugins of the route, and before their `pre_request/4` and the controller. The [request pipeline](plugins.md#request-pipeline) section of the plugins guide has the whole order.
 
 `security` takes `false`, a `fun/1` or the deprecated `{Module, Function}`. Any other value, `true` included, is logged as an error and stops the application from starting with `{invalid_security, Value}`. The same goes for `secure` and `override_secure` in `nova_apps`.
 
-The security function runs after the group's `pre_request` plugins, so a plugin that reads the body has read it before the request is checked. `plugins_after_security => [Module]` in the route group makes the listed plugins wait for the security function; see [Running a plugin after the security callback](plugins.md#running-a-plugin-after-the-security-callback).
+The security function runs before a plugin reads the body, so `json`, `params` and `files` are not in the request it gets. `plugins_before_security => [Module]` in the route group runs `pre_request/4` of the listed plugins ahead of the security function; see [Running a plugin ahead of the security callback](plugins.md#running-a-plugin-ahead-of-the-security-callback).
 
 ### The security-function callback
 

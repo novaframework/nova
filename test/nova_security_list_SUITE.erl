@@ -1,5 +1,5 @@
 %%% A route with the `secure` of its mount and the `security` of its route
-%%% group, and a plugin listed under `plugins_after_security`: the plugin runs
+%%% group, and a plugin that has `pre_request/4` alone: the plugin runs
 %%% once, after both callbacks have allowed the request, and not at all for a
 %%% request one of them refuses or crashes on.
 -module(nova_security_list_SUITE).
@@ -32,7 +32,6 @@ init_per_suite(Config) ->
                mounted => [#{prefix => "/both",
                              security => fun nova_secure_layers_pages:group/1,
                              plugins => [{pre_request, nova_security_list_pages, #{}}],
-                             plugins_after_security => [nova_security_list_pages],
                              routes => Routes}]}),
     [{port, Port} | Config].
 

@@ -7,7 +7,7 @@
 %%% nobody has looked at. They are read from `nova` alone, whichever
 %%% application is the bootstrap one.
 
--export([validate/0, value/1, checked/2, expected/1]).
+-export([validate/0, value/1, checked/2, expected/1, removed/0, removed_notice/1]).
 
 -include_lib("kernel/include/logger.hrl").
 
@@ -22,10 +22,12 @@
 Checks every setting and keeps what `value/1` returns from then on. Raises
 `{invalid_setting, Key, Reason}` for the first one that cannot be used.
 `Reason` is the value that was refused, `redacted` where that is a secret,
-or `not_set`. For `nova_sup`, which calls it before it starts anything.
+`not_set`, or `{replaced_by, Replacement}` for a setting of `removed/0`. For
+`nova_sup`, which calls it before it starts anything.
 """.
 -spec validate() -> ok.
 validate() ->
+    ok = no_removed_setting(removed()),
     Settings = #{Key => valid(Key) || Key <- keys()},
     ok = secret_to_sign_with(Settings),
     persistent_term:put(?MODULE, Settings).
@@ -94,6 +96,32 @@ expected(csrf_secret) -> ~"csrf_secret must be a binary of at least 32 bytes, or
 expected(max_sessions) -> ~"max_sessions must be infinity or an integer above 0";
 expected(plugins_before_security) ->
     ~"plugins_before_security must be all or a list of plugin modules that have pre_request/4".
+
+-doc """
+The settings that were in no release and are gone, each with the one that
+took its place. One that is still set stops the boot with
+`{invalid_setting, Key, {replaced_by, Replacement}}`.
+""".
+-spec removed() -> [{Key :: atom(), Replacement :: key()}].
+removed() ->
+    [{plugins_after_security, plugins_before_security}].
+
+-doc "What is logged for a setting of `removed/0` that is still set.".
+-spec removed_notice(Key :: atom()) -> binary().
+removed_notice(plugins_after_security) ->
+    ~"plugins_after_security is gone. pre_security/4 of a plugin always runs ahead of the security callback and pre_request/4 behind it, and plugins_before_security is the one setting that changes that".
+
+-spec no_removed_setting([{atom(), key()}]) -> ok.
+no_removed_setting([]) ->
+    ok;
+no_removed_setting([{Key, Replacement} | Rest]) ->
+    case application:get_env(nova, Key) of
+        undefined ->
+            no_removed_setting(Rest);
+        {ok, _Value} ->
+            ?LOG_ERROR(#{msg => removed_notice(Key), setting => Key, replaced_by => Replacement}),
+            erlang:error({invalid_setting, Key, {replaced_by, Replacement}})
+    end.
 
 -spec keys() -> [key()].
 keys() ->
