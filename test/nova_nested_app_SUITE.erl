@@ -207,11 +207,17 @@ apps_of_a_route_group_inherit_the_mount_and_the_security_of_the_group(_Config) -
 %% secure of that entry covers the applications it mounts.
 own_entry_of_the_bootstrap_application_carries_its_options(_Config) ->
     Plugins = [{pre_request, nova_test_app_plugin, #{}}],
-    Port = nova_test_listener:start(#{nova_apps => [{nova_test_sub_app, #{prefix => "/mounted"}},
-                                                    {nova_test_app, #{secure => ?OUTER,
-                                                                      plugin_strategy => {override, Plugins}}}],
-                                      host => [#{prefix => "/host", routes => ?PAGE}],
-                                      mounted => [#{prefix => "/own", routes => ?PAGE}]}),
+    {Port, Events} =
+        nova_test_log:collect(
+          fun() ->
+              nova_test_listener:start(#{nova_apps => [{nova_test_sub_app, #{prefix => "/mounted"}},
+                                                       {nova_test_app, #{secure => ?OUTER,
+                                                                         plugin_strategy => {override, Plugins}}}],
+                                         host => [#{prefix => "/host", routes => ?PAGE}],
+                                         mounted => [#{prefix => "/own", routes => ?PAGE}]})
+          end),
+    ?assertMatch([#{app := nova_test_app, options := [plugin_strategy, secure]}],
+                 [Report || {notice, {report, #{msg := ~"Application has an entry for itself in its nova_apps, and is compiled with its options"} = Report}} <- Events]),
     ?assertMatch({200, #{~"x-nova-pre-request" := ~"1"}, ~"none"}, response(Port, "/host/")),
     ?assertEqual([outer], nova_nested_app_pages:calls()),
     ?assertEqual({403, ~"outer", [outer]}, get(Port, "/host/?outer=deny")),

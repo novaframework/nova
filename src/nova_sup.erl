@@ -527,9 +527,20 @@ security_in_force(App) ->
 -spec with_nova_apps(atom()) -> [nova_app()].
 with_nova_apps(App) ->
     case [Entry || Entry <- configured_nova_apps(App), nova_app_name(Entry) =:= App] of
-        [Own | _] -> [Own];
-        []        -> [App]
+        [Own | _] ->
+            notice_own_entry(App, nova_app_options(Own)),
+            [Own];
+        [] ->
+            [App]
     end.
+
+%% For years such an entry was ignored. One with a prefix now moves every
+%% route of the application, so it is said when the routes are compiled.
+notice_own_entry(App, Options) when map_size(Options) > 0 ->
+    ?LOG_NOTICE(#{msg => ~"Application has an entry for itself in its nova_apps, and is compiled with its options",
+                  app => App, options => lists:sort(maps:keys(Options))});
+notice_own_entry(_App, _Options) ->
+    ok.
 
 %% The nova_apps of a mounted application. A secure and an override_secure
 %% cover every route the application brings in, so those in force for it
