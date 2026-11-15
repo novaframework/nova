@@ -76,3 +76,26 @@ unparseable_upgrade_is_checked_test() ->
     ?assertExit({request_error, _Header, _Text}, cowboy_websocket:is_upgrade_request(Req)),
     ?assertMatch({stop, {reply, 403, _Body}, _Req, undefined}, pre_request(Req, #{})),
     ?assertMatch({ok, _Req, undefined}, pre_request(Req, #{allowed_origins => [?EVIL]})).
+
+any_origin_test() ->
+    ?assertMatch({ok, _Req, undefined}, pre_request(http3_connect(#{~"origin" => ?EVIL}), #{allowed_origins => any})).
+
+allowed_origins_test_() ->
+    [[?_assertEqual(Value, nova_ws_origin_plugin:allowed_origins(Value))
+      || Value <- [same_host, same_origin, any, [], [~"https://example.com"]]],
+     ?_assertEqual([~"https://example.com", ~"https://other.example.com"],
+                   nova_ws_origin_plugin:allowed_origins([~"https://example.com", "https://other.example.com"])),
+     [?_assertThrow({error, {invalid_ws_allowed_origins, Value}}, nova_ws_origin_plugin:allowed_origins(Value))
+      || Value <- [none, true, ~"https://example.com", [same_host], [[same_host]]]]].
+
+decided_by_the_plugin_test_() ->
+    {setup,
+     fun() -> application:set_env(nova, ws_allowed_origins, [~"https://only.example.com"]) end,
+     fun(_) -> application:unset_env(nova, ws_allowed_origins) end,
+     fun(_) ->
+             Req = http3_connect(#{~"origin" => ~"https://example.com"}),
+             {ok, Decided, undefined} = pre_request(Req, #{}),
+             [?_assertNot(nova_ws_origin_plugin:allows(Req)),
+              ?_assert(nova_ws_origin_plugin:allows(Decided)),
+              ?_assert(nova_ws_origin_plugin:allows(http3_connect(#{})))]
+     end}.
