@@ -115,7 +115,7 @@ listeners() ->
     [Ref || #nova_listener{ref = Ref} <- all_listeners()].
 
 %%--------------------------------------------------------------------
--doc "The key of the routing table of every listener Nova has started, for the `nova_router` functions that take a `DispatchKey`.".
+-doc false.
 -spec dispatch_keys() -> [nova_router:dispatch_key()].
 dispatch_keys() ->
     [Key || #nova_listener{dispatch_key = Key} <- all_listeners()].

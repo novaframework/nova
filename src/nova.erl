@@ -30,7 +30,7 @@ get_main_app() ->
 -spec get_apps() -> [{App :: atom(), Prefix :: list()}].
 get_apps() ->
     Default = nova_router:compiled_apps(),
-    Others = [Entry || Key <- nova_sup:dispatch_keys(), Entry <- nova_router:compiled_apps(Key)],
+    Others = [Entry || Key <- nova_router:dispatch_keys(), Entry <- nova_router:compiled_apps(Key)],
     Default ++ [{App, Prefix} || {App, Prefix} <- lists:ukeysort(1, Others),
                                  is_atom(App), is_list(Prefix), not lists:keymember(App, 1, Default)].
 

@@ -35,6 +35,7 @@
          forget_plugins/0,
          compiled_apps/0,
          compiled_apps/1,
+         dispatch_keys/0,
 
          %% Modulates the routes-table
          add_routes/1,
@@ -85,6 +86,11 @@
 %% every stored dispatch table already uses.
 -type dispatch_key() :: term().
 -export_type([dispatch_key/0]).
+
+-doc "The key of the routing table of every listener Nova has started, for the functions that take a `DispatchKey`.".
+-spec dispatch_keys() -> [dispatch_key()].
+dispatch_keys() ->
+    nova_sup:dispatch_keys().
 
 -spec compiled_apps() -> [{App :: atom(), Prefix :: list()}].
 compiled_apps() ->
