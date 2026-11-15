@@ -184,6 +184,8 @@ unparsable_cookie_header_never_sets_cookie() ->
     {Req, State} = start(req(~"session_id=abc; =x")),
     #{nova_session_id := Id} = Req,
     ?assertNot(maps:is_key(nova_session_presented, Req)),
+    ?assertEqual({ok, Id}, nova_session:client_id(Req)),
+    ?assertEqual([], set_cookies(respond(event({issued, Id}, State)))),
     ?assertEqual([], set_cookies(respond(event({written, Id}, State)))),
     ?assertEqual([], set_cookies(respond(event({renewed, ~"renewed"}, State)))),
     ?assertEqual([], set_cookies(respond(event({deleted, ~"fresh"}, State)))).

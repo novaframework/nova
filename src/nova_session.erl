@@ -247,9 +247,15 @@ cookie. Nothing is stored, and the id is not the one `set/3` writes under
 when the backend has no session for it.
 
 It is for what is tied to the browser and not to what a session holds, as the
-signed token of `nova_csrf_plugin` is. `{error, not_found}` means there is
-no id to give: the `Cookie` header did not parse, or the request has no
-session cookie and `nova_stream_h` is not there to hand one out.
+signed token of `nova_csrf_plugin` is.
+
+A request whose `Cookie` header does not parse gets the id of the request as
+well, but no cookie is handed out for it, since the client may hold a session
+cookie Nova could not read. That id is not seen again, so what was tied to it
+is refused when it comes back.
+
+`{error, not_found}` means there is no id to give: the request has no session
+cookie Nova can read and `nova_stream_h` is not there to hand one out.
 """.
 -spec client_id(Req :: cowboy_req:req()) -> {ok, SessionId :: binary()} | {error, not_found} | no_return().
 client_id(Req) ->
