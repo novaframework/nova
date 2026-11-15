@@ -396,7 +396,8 @@ normalize_plugins_keep_their_order_test_() ->
         ?assertEqual([{after_security, [{fun nova_request_plugin:pre_request/4, #{}},
                                         {fun nova_csrf_plugin:pre_request/4, #{}}]},
                       {pre_request, [{fun nova_request_plugin:pre_security/4, #{}},
-                                     {fun nova_cors_plugin:pre_security/4, #{}}]}], Result)
+                                     {fun nova_cors_plugin:pre_security/4, #{}},
+                                     {fun nova_csrf_plugin:pre_security/4, #{}}]}], Result)
     end}.
 
 normalize_plugins_different_types_test_() ->
@@ -406,7 +407,8 @@ normalize_plugins_different_types_test_() ->
             {post_request, nova_cors_plugin, #{}}
         ], order([], [])),
         ?assertEqual([{after_security, [{fun nova_csrf_plugin:pre_request/4, #{}}]},
-                      {post_request, [{fun nova_cors_plugin:post_request/4, #{}}]}], Result)
+                      {post_request, [{fun nova_cors_plugin:post_request/4, #{}}]},
+                      {pre_request, [{fun nova_csrf_plugin:pre_security/4, #{}}]}], Result)
     end}.
 
 normalize_plugins_before_security_test_() ->
@@ -414,10 +416,12 @@ normalize_plugins_before_security_test_() ->
         Plugins = [{pre_request, nova_request_plugin, #{}}, {pre_request, nova_csrf_plugin, #{}}],
         ?assertEqual([{after_security, [{fun nova_csrf_plugin:pre_request/4, #{}}]},
                       {pre_request, [{fun nova_request_plugin:pre_security/4, #{}},
-                                     {fun nova_request_plugin:pre_request/4, #{}}]}],
+                                     {fun nova_request_plugin:pre_request/4, #{}},
+                                     {fun nova_csrf_plugin:pre_security/4, #{}}]}],
                      nova_router:normalize_plugins(Plugins, order([nova_request_plugin], []))),
         ?assertEqual([{pre_request, [{fun nova_request_plugin:pre_security/4, #{}},
                                      {fun nova_request_plugin:pre_request/4, #{}},
+                                     {fun nova_csrf_plugin:pre_security/4, #{}},
                                      {fun nova_csrf_plugin:pre_request/4, #{}}]}],
                      nova_router:normalize_plugins(Plugins, order(all, [])))
     end}.

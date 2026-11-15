@@ -22,17 +22,28 @@ Without `csrf_secret` the token is a random value kept in the session, as in ear
 
 After a secret is set, a form that was rendered before still sends the token of its session. It is accepted for as long as that session is there.
 
+## Where the request comes from
+
+A token is asked for whatever else the request says. On top of that, a request that changes state is answered `403` ahead of the security callback, and before anything of its body is read, when the browser says that a page of another site sent it:
+
+- `Sec-Fetch-Site` is `cross-site` or `same-site`, unless its `Origin` is one of a list of allowed origins. `same-origin` and `none`, which is what a request the user made by hand has, are let through.
+- Without `Sec-Fetch-Site`, which browsers send to `https` and `localhost` only, the `Origin` is not an allowed one.
+
+A request with neither header is let through: it is not from a browser, or from one too old to say. The allowed origins are `allowed_origins` of the `nova` environment, the setting websocket upgrades go by, unless the plugin is given its own: `same_host` (the default), `same_origin`, a list such as `[~"https://app.example.com"]` for pages elsewhere that may post here, or `any`, which turns this check off and leaves the token.
+
 ### Options
 
 * `field_name` - form field name (default `<<"_csrf_token">>`)
 * `header_name` - header name (default `<<"x-csrf-token">>`)
 * `session_key` - session storage key (default `<<"_csrf_token">>`)
+* `allowed_origins` - the origins a request that changes state may come from, when not those of the `nova` environment
 * `excluded_paths` - list of path prefixes to skip (default `[]`). A prefix covers whole segments of the path the request is routed on: `<<"/api">>` skips `/api` and `/api/hooks`, not `/apikeys`, and `/api/../admin` is checked as `/admin`
 """.
 -behaviour(nova_plugin).
 
 -export([
          init/0,
+         pre_security/4,
          pre_request/4,
          post_request/4,
          plugin_info/0
@@ -107,6 +118,42 @@ invalid_secret() ->
     throw({error, invalid_csrf_secret}).
 
 %%--------------------------------------------------------------------
+-doc "Stops a request that changes state and that the browser says another site sent with a 403, ahead of the security callback and before anything of its body is read.".
+-spec pre_security(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
+          {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
+          {stop, nova_plugin:reply(), Req0 :: cowboy_req:req(), NewState :: any()}.
+pre_security(Req = #{method := Method, path := Path}, _Env, Options, State) ->
+    case is_safe_method(Method) orelse is_excluded_path(Path, maps:get(excluded_paths, Options, []))
+        orelse is_sent_by_the_site(Req, Options) of
+        true ->
+            {ok, Req, State};
+        false ->
+            {stop, {reply, 403, [{~"content-type", ~"text/plain"}], ~"Forbidden - request from another origin"},
+             Req, State}
+    end.
+
+%% `Sec-Fetch-Site` is the browser saying where the page that sends the
+%% request is, and no page can set it. When it says the page is somewhere
+%% else, comparing the origin with the host of the request has nothing to
+%% add, so only an origin that is listed is let in. A browser that does not
+%% send it is taken by its `Origin`, and a client that sends neither is not
+%% a page that some other site could have made send the request.
+is_sent_by_the_site(Req, Options) ->
+    Allowed = case Options of
+                  #{allowed_origins := Origins} -> Origins;
+                  _ -> nova_origin:configured()
+              end,
+    Origin = cowboy_req:header(~"origin", Req),
+    case cowboy_req:header(~"sec-fetch-site", Req) of
+        Site when Site =:= ~"same-origin"; Site =:= ~"none"; Allowed =:= any ->
+            true;
+        undefined ->
+            nova_origin:is_allowed(Origin, Req, Allowed);
+        _ElseWhere ->
+            is_binary(Origin) andalso is_list(Allowed) andalso nova_origin:is_allowed(Origin, Req, Allowed)
+    end.
+
+%%--------------------------------------------------------------------
 -doc "Pre-request callback. On safe methods, puts a CSRF token into the Req map. On unsafe methods, validates the submitted token.".
 -spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
     {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
@@ -158,6 +205,7 @@ plugin_info() ->
                   {field_name, <<"Form field name for CSRF token (default: _csrf_token)">>},
                   {header_name, <<"Header name for CSRF token (default: x-csrf-token)">>},
                   {session_key, <<"Session key for CSRF token (default: _csrf_token)">>},
+                  {allowed_origins, <<"same_host, same_origin, any, or the list of origins that may send unsafe requests">>},
                   {excluded_paths, <<"List of path prefixes to exclude from CSRF protection">>}
                  ]}.
 

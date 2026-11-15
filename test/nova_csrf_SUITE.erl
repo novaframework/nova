@@ -30,6 +30,15 @@
          token_stays_good_while_the_session_is_written/1,
          session_token_of_an_open_form_is_accepted/1]).
 
+-export([request_of_another_site_is_refused/1,
+         request_of_the_site_itself_is_accepted/1,
+         request_of_another_origin_is_refused/1,
+         request_of_a_listed_origin_is_accepted/1,
+         any_origin_still_needs_the_token/1,
+         origins_of_the_plugin_are_the_ones_that_count/1,
+         reading_and_excluded_paths_are_open_to_other_sites/1,
+         request_of_another_site_does_not_reach_the_security_callback/1]).
+
 -define(SECRET, ~"a secret of thirty-two bytes or more, for the tests").
 -define(OTHER_SECRET, ~"another secret of thirty-two bytes or more, for them").
 
@@ -47,7 +56,15 @@ groups() ->
               post_with_a_wrong_token_is_refused,
               other_unsafe_methods_are_refused_too,
               excluded_path_needs_no_token,
-              path_next_to_an_excluded_one_needs_a_token],
+              path_next_to_an_excluded_one_needs_a_token,
+              request_of_another_site_is_refused,
+              request_of_the_site_itself_is_accepted,
+              request_of_another_origin_is_refused,
+              request_of_a_listed_origin_is_accepted,
+              any_origin_still_needs_the_token,
+              origins_of_the_plugin_are_the_ones_that_count,
+              reading_and_excluded_paths_are_open_to_other_sites,
+              request_of_another_site_does_not_reach_the_security_callback],
     [{session, [], [first_visit_starts_a_session_with_a_token,
                     token_is_masked_anew_in_every_response,
                     token_without_a_mask_is_accepted,
@@ -79,7 +96,14 @@ init_per_suite(Config) ->
                            {"/submit", fun nova_csrf_pages:submit/1, #{methods => [post, put, patch, delete]}},
                            {"/sign-in", fun nova_csrf_pages:sign_in/1, #{methods => [post]}},
                            {"/hooks/incoming", fun nova_csrf_pages:submit/1, #{methods => [post]}},
-                           {"/hooks-admin", fun nova_csrf_pages:submit/1, #{methods => [post]}}]}],
+                           {"/hooks-admin", fun nova_csrf_pages:submit/1, #{methods => [post]}}]},
+              #{prefix => "/partners",
+                plugins => [{pre_request, nova_csrf_plugin, #{allowed_origins => [~"https://partner.example.com"]}}],
+                routes => [{"/submit", fun nova_csrf_pages:submit/1, #{methods => [post]}}]},
+              #{prefix => "/members",
+                security => fun nova_csrf_pages:secure/1,
+                plugins => [{pre_request, nova_csrf_plugin, #{}}],
+                routes => [{"/submit", fun nova_csrf_pages:submit/1, #{methods => [post]}}]}],
     [{port, nova_test_listener:start(#{host => Routes})} | Config].
 
 end_per_suite(_Config) ->
@@ -105,6 +129,7 @@ init_per_testcase(_Case, Config) ->
     Config.
 
 end_per_testcase(_Case, _Config) ->
+    application:unset_env(nova, allowed_origins),
     application:unset_env(nova, csrf_secret).
 
 first_visit_starts_a_session_with_a_token(Config) ->
@@ -280,6 +305,91 @@ session_token_of_an_open_form_is_accepted(Config) ->
     [?assertEqual({200, ~"submitted"}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Token}], <<>>))
      || Token <- [SessionToken, unmasked(SessionToken)]],
     ?assertMatch({403, _}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", ~"wrong"}], <<>>)).
+
+%% A browser says with Sec-Fetch-Site where the page that sends a request
+%% is, and with Origin which one it is. The token is asked for as well.
+request_of_another_site_is_refused(Config) ->
+    [?assertMatch({Site, {403, _}}, {Site, submit(Config, [{"sec-fetch-site", Site}])})
+     || Site <- ["cross-site", "same-site"]],
+    ?assertMatch({403, _}, submit(Config, [{"sec-fetch-site", "cross-site"}, {"origin", "http://localhost"}])).
+
+request_of_the_site_itself_is_accepted(Config) ->
+    [?assertEqual({Headers, {200, ~"submitted"}}, {Headers, submit(Config, Headers)})
+     || Headers <- [[{"sec-fetch-site", "same-origin"}],
+                    [{"sec-fetch-site", "same-origin"}, {"origin", "http://localhost"}],
+                    [{"sec-fetch-site", "none"}],
+                    [{"origin", "http://localhost"}],
+                    []]].
+
+%% What a browser without Sec-Fetch-Site sends.
+request_of_another_origin_is_refused(Config) ->
+    [?assertMatch({Origin, {403, _}}, {Origin, submit(Config, [{"origin", Origin}])})
+     || Origin <- ["https://evil.example", "http://localhost.evil.example", "null"]].
+
+request_of_a_listed_origin_is_accepted(Config) ->
+    application:set_env(nova, allowed_origins, [~"https://app.example.com"]),
+    [?assertEqual({Headers, {200, ~"submitted"}}, {Headers, submit(Config, Headers)})
+     || Headers <- [[{"sec-fetch-site", "cross-site"}, {"origin", "https://app.example.com"}],
+                    [{"sec-fetch-site", "same-site"}, {"origin", "https://app.example.com"}],
+                    [{"origin", "https://app.example.com"}],
+                    [{"sec-fetch-site", "same-origin"}]]],
+    [?assertMatch({Headers, {403, _}}, {Headers, submit(Config, Headers)})
+     || Headers <- [[{"sec-fetch-site", "cross-site"}, {"origin", "https://evil.example"}],
+                    [{"sec-fetch-site", "cross-site"}],
+                    [{"origin", "http://localhost"}]]].
+
+any_origin_still_needs_the_token(Config) ->
+    application:set_env(nova, allowed_origins, any),
+    Other = [{"sec-fetch-site", "cross-site"}, {"origin", "https://evil.example"}],
+    ?assertEqual({200, ~"submitted"}, submit(Config, Other)),
+    {Cookie, _Token} = session(Config),
+    ?assertMatch({403, _}, request(Config, "POST", "/csrf/submit", [Cookie | Other], <<>>)).
+
+origins_of_the_plugin_are_the_ones_that_count(Config) ->
+    {Cookie, Token} = session(Config),
+    Partner = fun(Origin) ->
+                      request(Config, "POST", "/partners/submit",
+                              [Cookie, {"x-csrf-token", Token}, {"sec-fetch-site", "cross-site"}, {"origin", Origin}],
+                              <<>>)
+              end,
+    ?assertEqual({200, ~"submitted"}, Partner("https://partner.example.com")),
+    ?assertMatch({403, _}, Partner("https://app.example.com")),
+    application:set_env(nova, allowed_origins, [~"https://app.example.com"]),
+    ?assertEqual({200, ~"submitted"}, Partner("https://partner.example.com")),
+    ?assertMatch({403, _}, Partner("https://app.example.com")).
+
+reading_and_excluded_paths_are_open_to_other_sites(Config) ->
+    Other = [{"sec-fetch-site", "cross-site"}, {"origin", "https://evil.example"}],
+    ?assertMatch({200, _}, request(Config, "GET", "/csrf/token", Other, <<>>)),
+    ?assertEqual({200, ~"submitted"}, request(Config, "POST", "/csrf/hooks/incoming", Other, <<>>)).
+
+%% The headers are all it takes, so the request is turned away ahead of the
+%% security callback and before anything of its body is read.
+request_of_another_site_does_not_reach_the_security_callback(Config) ->
+    {Cookie, Token} = session(Config),
+    Submit = fun(Headers) ->
+                     request(Config, "POST", "/members/submit", [Cookie, {"x-csrf-token", Token} | Headers], <<>>)
+             end,
+    register(nova_csrf_observer, self()),
+    try
+        ?assertMatch({403, _}, Submit([{"sec-fetch-site", "cross-site"}])),
+        ?assertEqual([], observed()),
+        ?assertEqual({200, ~"submitted"}, Submit([{"sec-fetch-site", "same-origin"}])),
+        ?assertEqual([security], observed())
+    after
+        unregister(nova_csrf_observer)
+    end.
+
+observed() ->
+    receive
+        {observed, What} -> [What | observed()]
+    after 200 ->
+        []
+    end.
+
+submit(Config, Headers) ->
+    {Cookie, Token} = session(Config),
+    request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Token} | Headers], <<>>).
 
 session(Config) ->
     {200, Headers, Token} = nova_test_listener:response(?config(port, Config), "GET", "/csrf/token", []),
