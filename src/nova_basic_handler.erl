@@ -10,6 +10,7 @@
          handle_websocket/3,
          handle_ws/2,
          location/1,
+         local_location/1,
          loggable_location/1,
          render_dtl/3
         ]).
@@ -230,6 +231,7 @@ location(Url) ->
 
 %% A path on the site the request was made to. //host and /\host name
 %% another host to a browser, which also drops tabs before it reads the URL.
+-doc false.
 -spec local_location(binary() | string()) -> binary() | error.
 local_location(Url) ->
     case location(Url) of

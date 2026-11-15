@@ -104,6 +104,16 @@ handle_response({redirect, Route}, Req, Env) when is_binary(Route); is_list(Rout
             Req1 = cowboy_req:reply(302, Req0),
             {answered, {stop, Req1}}
     end;
+handle_response({redirect_local, Route}, Req, _Env) when is_binary(Route); is_list(Route) ->
+    case nova_basic_handler:local_location(Route) of
+        error ->
+            ?LOG_WARNING(#{msg => ~"Security callback refused to redirect to a location that is not a local path",
+                           location => nova_basic_handler:loggable_location(Route)}),
+            {answered, {stop, cowboy_req:reply(400, Req)}};
+        Location ->
+            Req0 = cowboy_req:set_resp_headers(#{~"location" => Location}, Req),
+            {answered, {stop, cowboy_req:reply(302, Req0)}}
+    end;
 handle_response(_, Req = #{host := Host}, Env) ->
     {ok, Req0, _Env0} = nova_router:render_status_page(Host, 401, #{}, Req, Env),
     Req1 = cowboy_req:reply(401, Req0),
