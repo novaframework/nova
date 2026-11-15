@@ -84,7 +84,7 @@ serve_file(Filepath, Size, MimeType, Headers) ->
                                     ~"x-content-type-options" => ~"nosniff"},
                     {sendfile, 206, RespHeaders, {Start, Length, Filepath}, MimeType};
                 error ->
-                    {sendfile, 200, #{}, {0, Size, Filepath}, MimeType};
+                    {sendfile, 200, #{~"x-content-type-options" => ~"nosniff"}, {0, Size, Filepath}, MimeType};
                 _ ->
                     {status, 416, #{<<"content-range">> => <<"bytes */", (integer_to_binary(Size))/binary>>}}
             end

@@ -303,7 +303,9 @@ static_file_is_nosniff(Config) ->
     {200, Headers, _} = get(Config, "/assets/hello.txt"),
     ?assertEqual(~"nosniff", header(~"x-content-type-options", Headers)),
     {206, RangeHeaders, ~"hello"} = get(Config, "/assets/hello.txt", [{"range", "bytes=0-4"}]),
-    ?assertEqual(~"nosniff", header(~"x-content-type-options", RangeHeaders)).
+    ?assertEqual(~"nosniff", header(~"x-content-type-options", RangeHeaders)),
+    {200, WholeHeaders, _} = get(Config, "/assets/hello.txt", [{"range", "bytes=one-two"}]),
+    ?assertEqual(~"nosniff", header(~"x-content-type-options", WholeHeaders)).
 
 %% Served as a document these would run scripts on the application's origin.
 static_document_types_are_octet_stream(Config) ->
