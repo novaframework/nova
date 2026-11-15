@@ -11,6 +11,7 @@
          nested_application_without_an_override_around_it_keeps_its_own/1,
          application_mounted_twice_with_different_security_is_refused/1,
          application_mounted_twice_with_the_same_security_is_mounted_once/1,
+         callback_written_as_a_fun_and_as_a_tuple_is_the_same_security/1,
          secure_covers_a_nested_application_but_prefix_and_plugins_do_not/1,
          secure_of_every_application_around_a_nested_one_has_to_allow/1,
          override_secure_replaces_the_secure_around_a_nested_application/1,
@@ -35,6 +36,7 @@ all() ->
      nested_application_without_an_override_around_it_keeps_its_own,
      application_mounted_twice_with_different_security_is_refused,
      application_mounted_twice_with_the_same_security_is_mounted_once,
+     callback_written_as_a_fun_and_as_a_tuple_is_the_same_security,
      secure_covers_a_nested_application_but_prefix_and_plugins_do_not,
      secure_of_every_application_around_a_nested_one_has_to_allow,
      override_secure_replaces_the_secure_around_a_nested_application,
@@ -129,6 +131,14 @@ application_mounted_twice_with_the_same_security_is_mounted_once(_Config) ->
                                       nested => [#{prefix => "/nested", routes => ?PAGE}]}),
     ?assertEqual({403, ~"outer", [outer]}, get(Port, "/first/nested/?outer=deny")),
     ?assertMatch({404, _Body, []}, get(Port, "/nested/")).
+
+callback_written_as_a_fun_and_as_a_tuple_is_the_same_security(_Config) ->
+    Port = nova_test_listener:start(#{nova_apps => [{nova_test_nested_app,
+                                                     #{prefix => "/first", secure => {nova_nested_app_pages, outer}}},
+                                                    {nova_test_sub_app, #{secure => ?OUTER}}],
+                                      mounted_nova_apps => [nova_test_nested_app],
+                                      nested => [#{prefix => "/nested", routes => ?PAGE}]}),
+    ?assertEqual({403, ~"outer", [outer]}, get(Port, "/first/nested/?outer=deny")).
 
 secure_covers_a_nested_application_but_prefix_and_plugins_do_not(_Config) ->
     Plugins = [{pre_request, nova_test_app_plugin, #{}}],

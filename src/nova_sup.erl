@@ -501,13 +501,13 @@ resolve_nova_apps([App | Rest], Acc, Seen, Around) ->
             resolve_nova_apps(Rest, Acc0, Seen0, Around);
         {Name, Mounted} when Mounted =:= Security ->
             resolve_nova_apps(Rest, Acc, Seen, Around);
-        {Name, _Mounted} ->
+        {Name, Mounted} ->
             case lists:member(Name, Around) of
                 true ->
                     resolve_nova_apps(Rest, Acc, Seen, Around);
                 false ->
                     ?LOG_ERROR(#{msg => ~"Application is mounted by two nova_apps entries that ask for different security callbacks. Mount it once, or give both entries the same secure and override_secure",
-                                 app => Name}),
+                                 app => Name, mounted_with => in_words(Mounted), also_asked_for => in_words(Security)}),
                     throw({error, {nova_app_mounted_twice, Name}})
             end
     end.
@@ -518,7 +518,15 @@ resolve_nova_apps([App | Rest], Acc, Seen, Around) ->
 -spec security_in_force(nova_app()) -> {[term()], [term()]}.
 security_in_force(App) ->
     Options = nova_app_options(App),
-    {nova_router:secures_in_force(Options), nova_router:overrides_in_force(Options)}.
+    {[callback(Secure) || Secure <- nova_router:secures_in_force(Options)],
+     [callback(Override) || Override <- nova_router:overrides_in_force(Options)]}.
+
+%% {Mod, Fun} and fun Mod:Fun/1 are one callback.
+callback({Mod, Fun}) when is_atom(Mod), is_atom(Fun) -> fun Mod:Fun/1;
+callback(Other) -> Other.
+
+in_words({Secures, Overrides}) ->
+    #{secure => Secures, override_secure => Overrides}.
 
 %% An application that starts on a listener. No entry mounts it, so the
 %% options it is compiled with are those of the entry it has written for
