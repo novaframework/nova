@@ -101,17 +101,27 @@ tokens() ->
             throw({error, {invalid_csrf_token, Other}})
     end.
 
+%% No clause may raise on what the setting holds: a reason that is raised
+%% carries the value, and ends up in the report of the boot that failed.
 secrets(undefined) ->
     [];
 secrets(Secret) when is_binary(Secret) ->
     secrets([Secret]);
-secrets([_ | _] = Secrets) ->
-    case [Secret || Secret <- Secrets, is_binary(Secret), byte_size(Secret) >= ?MIN_SECRET_BYTES] of
-        Usable when length(Usable) =:= length(Secrets) -> Usable;
-        _TooShort -> invalid_secret()
-    end;
-secrets(_Other) ->
-    invalid_secret().
+secrets(Secrets) ->
+    case is_list_of_secrets(Secrets) of
+        true -> Secrets;
+        false -> invalid_secret()
+    end.
+
+is_list_of_secrets([Secret]) ->
+    is_secret(Secret);
+is_list_of_secrets([Secret | Secrets]) ->
+    is_secret(Secret) andalso is_list_of_secrets(Secrets);
+is_list_of_secrets(_NotAList) ->
+    false.
+
+is_secret(Secret) ->
+    is_binary(Secret) andalso byte_size(Secret) >= ?MIN_SECRET_BYTES.
 
 -spec invalid_secret() -> no_return().
 invalid_secret() ->

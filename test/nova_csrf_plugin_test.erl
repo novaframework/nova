@@ -329,20 +329,37 @@ tokens_test_() ->
                                       {unset, "a string of thirty-two characters or more", {error, invalid_csrf_secret}},
                                       {session, Short, {error, invalid_csrf_secret}}]].
 
-secret_is_not_logged_test() ->
-    Short = ~"too-short-to-sign-with",
-    application:set_env(nova, csrf_secret, Short),
-    try
-        {Thrown, Events} = nova_test_log:collect(fun() ->
-                                                         try nova_csrf_plugin:tokens()
-                                                         catch throw:Reason -> Reason
-                                                         end
-                                                 end),
-        ?assertEqual({error, invalid_csrf_secret}, Thrown),
-        ?assertEqual(nomatch, binary:match(iolist_to_binary(io_lib:format("~0p", [Events])), Short))
-    after
-        application:unset_env(nova, csrf_secret)
-    end.
+%% A value that is not a secret, or not a list of them, is refused whatever
+%% it is, and what it holds is in nothing that is raised or logged.
+secret_that_cannot_be_used_is_not_told_test_() ->
+    Old = ~"the-secret-in-use-of-32-bytes-or-more",
+    New = ~"the-secret-to-come-of-32-bytes-or-more",
+    [{lists:flatten(io_lib:format("~0p", [Shape])),
+      fun() ->
+              application:set_env(nova, csrf_secret, Value),
+              try
+                  {Raised, Events} = nova_test_log:collect(fun() ->
+                                                                   try nova_csrf_plugin:tokens()
+                                                                   catch Class:Reason:Stacktrace ->
+                                                                           {Class, Reason, Stacktrace}
+                                                                   end
+                                                           end),
+                  ?assertMatch({throw, {error, invalid_csrf_secret}, _}, Raised),
+                  Told = iolist_to_binary(io_lib:format("~0p", [{Raised, Events}])),
+                  [?assertEqual({Secret, nomatch}, {Secret, binary:match(Told, Secret)}) || Secret <- [Old, New]]
+              after
+                  application:unset_env(nova, csrf_secret)
+              end
+      end}
+     || {Shape, Value} <- [{too_short, binary:part(Old, 0, 31)},
+                           {improper_list, [New | Old]},
+                           {improper_tail, [New, Old | New]},
+                           {nested_list, [[New, Old]]},
+                           {pair, {New, Old}},
+                           {map, #{New => Old}},
+                           {string, binary_to_list(Old)},
+                           {one_too_short, [New, binary:part(Old, 0, 31)]},
+                           {empty_list, []}]].
 
 %% base64 skips whitespace, so 64 characters can hold fewer bytes than a
 %% nonce and its signature are.

@@ -23,6 +23,7 @@
          unknown_allowed_origins_fails_the_boot/1,
          session_store_for_no_session_fails_the_boot/1,
          csrf_settings_nothing_can_go_by_fail_the_boot/1,
+         csrf_secret_that_fails_the_boot_is_not_told/1,
          csrf_tokens_kept_in_the_session_store_are_said_once/1,
          plugins_of_an_earlier_run_are_forgotten/1
         ]).
@@ -50,6 +51,7 @@ all() ->
      unknown_allowed_origins_fails_the_boot,
      session_store_for_no_session_fails_the_boot,
      csrf_settings_nothing_can_go_by_fail_the_boot,
+     csrf_secret_that_fails_the_boot_is_not_told,
      csrf_tokens_kept_in_the_session_store_are_said_once,
      plugins_of_an_earlier_run_are_forgotten
     ].
@@ -285,6 +287,27 @@ csrf_settings_nothing_can_go_by_fail_the_boot(_Config) ->
                                    {[{csrf_token, signed}], {invalid_csrf_token, signed}},
                                    {[{csrf_secret, ~"short"}], invalid_csrf_secret},
                                    {[{csrf_token, session}, {csrf_secret, [~"short"]}], invalid_csrf_secret}]].
+
+%% `[New | Old]` is what "put the new secret in front of the old one" looks
+%% like to somebody who writes it as a cons. Neither that nor any other value
+%% that is refused ends up in what the boot returns, logs or reports.
+csrf_secret_that_fails_the_boot_is_not_told(_Config) ->
+    Old = ~"the-secret-in-use-of-32-bytes-or-more",
+    New = ~"the-secret-to-come-of-32-bytes-or-more",
+    [begin
+         application:set_env(nova, csrf_secret, Value),
+         try
+             {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{}) end),
+             ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener, invalid_csrf_secret}}, _}}},
+                          Result),
+             ?assertEqual(undefined, whereis(nova_sup)),
+             Told = iolist_to_binary(io_lib:format("~0p", [{Result, Events}])),
+             [?assertEqual({Secret, nomatch}, {Secret, binary:match(Told, Secret)}) || Secret <- [Old, New]]
+         after
+             application:unset_env(nova, csrf_secret),
+             nova_test_listener:stop()
+         end
+     end || Value <- [[New | Old], [New, Old | New], {New, Old}, [[New, Old]], binary:part(Old, 0, 31)]].
 
 %% Without a secret the tokens of nova_csrf_plugin are kept in the session
 %% store, as before there were signed ones. An application that has the
