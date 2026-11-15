@@ -205,6 +205,7 @@ h2_statuses(Socket, Buffer, Requests, Decoder, Statuses) ->
 %% when the first request left the connection process alive. Returns the
 %% reports logged at warning level.
 answered_once(Config, Path) ->
+    persistent_term:erase({nova_stream_h, dropped}),
     {Received, Events} = nova_test_log:collect(fun() -> two_requests(?config(port, Config), Path) end),
     ?assertEqual(2, length(binary:matches(Received, ~"HTTP/1.1 "))),
     ?assertEqual(2, length(binary:matches(Received, ~"HTTP/1.1 200"))),

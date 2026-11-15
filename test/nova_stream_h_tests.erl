@@ -27,6 +27,7 @@ setup() ->
     application:set_env(nova, use_sessions, true),
     application:set_env(nova, session_manager, nova_session_ets),
     {ok, Pid} = nova_session_ets:start_link(),
+    persistent_term:erase({nova_stream_h, dropped}),
     Pid.
 
 cleanup(Pid) ->
@@ -70,6 +71,7 @@ stream_test_() ->
       fun tells_whether_the_response_has_begun/0,
       fun second_response_is_dropped/0,
       fun response_after_the_headers_is_dropped/0,
+      fun responses_dropped_within_a_second_are_one_warning/0,
       fun refused_headers_leave_room_for_the_answer_of_cowboy/0,
       fun headers_cowboy_is_told_to_ignore_are_an_answer/0,
       fun sessions_disabled/0
@@ -288,6 +290,15 @@ second_response_is_dropped() ->
     ?assertEqual({{[], Dropped}, []},
                  nova_test_log:collect(fun() -> nova_stream_h:info(1, {headers, 200, #{}}, Dropped) end)),
     ?assertEqual(true, response_begun(Dropped)).
+
+%% A controller that answers twice does it on every request, and the
+%% connection process is where the warning is logged from.
+responses_dropped_within_a_second_are_one_warning() ->
+    {_Req, State} = start((req())#{path => ~"/"}),
+    {[{response, 200, _, ~"first"}], Answered} = nova_stream_h:info(1, {response, 200, #{}, ~"first"}, State),
+    Again = fun() -> nova_stream_h:info(1, {response, 403, #{}, ~"second"}, Answered) end,
+    {{[], _}, [{warning, {report, #{status := 403, path := ~"/", not_logged := 0}}}]} = nova_test_log:collect(Again),
+    ?assertMatch({{[], _}, []}, nova_test_log:collect(fun() -> Again(), Again() end)).
 
 response_after_the_headers_is_dropped() ->
     {_Req, State} = start(req()),
