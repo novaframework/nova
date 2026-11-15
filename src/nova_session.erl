@@ -35,6 +35,7 @@ above.
          delete/1,
          delete/2,
          renew/1,
+         client_id/1,
          generate_session_id/0
         ]).
 
@@ -237,6 +238,39 @@ renew(Req) ->
                false -> set_cookie(NewSessionId, cookie_opts(Req), Req)
            end,
     {ok, with_session_id(NewSessionId, Req0)}.
+
+-doc """
+The session id the client of the request holds: the one in the session
+cookie it sent, whether or not there is a session for it, or, when it sent
+none, the id of the request, which the response then hands out in the session
+cookie. Nothing is stored, and the id is not the one `set/3` writes under
+when the backend has no session for it.
+
+It is for what is tied to the browser and not to what a session holds, as the
+signed token of `nova_csrf_plugin` is. `{error, not_found}` means there is
+no id to give: the `Cookie` header did not parse, or the request has no
+session cookie and `nova_stream_h` is not there to hand one out.
+""".
+-spec client_id(Req :: cowboy_req:req()) -> {ok, SessionId :: binary()} | {error, not_found} | no_return().
+client_id(Req) ->
+    case enabled() of
+        true ->
+            held_id(Req);
+        _ ->
+            ?LOG_ERROR(#{msg => ~"Session called but the 'use_sessions' option is set to false"}),
+            throw({nova_session, unsupported_session_used})
+    end.
+
+held_id(#{nova_session_presented := Presented}) ->
+    {ok, Presented};
+held_id(#{nova_session_id := SessionId} = Req) ->
+    notify(Req, {issued, SessionId}),
+    {ok, SessionId};
+held_id(Req) ->
+    case presented_session_id(Req) of
+        SessionId when is_binary(SessionId) -> {ok, SessionId};
+        _ -> {error, not_found}
+    end.
 
 -spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} | no_return().
 delete(Req, Key) ->

@@ -159,6 +159,10 @@ session_event(_Event, undefined) ->
     undefined;
 session_event({written, SessionId}, Session = #session{presented = Presented}) ->
     Session#session{current = SessionId, issue = SessionId =/= Presented, expire = false};
+%% nova_session:client_id/1 for a client that sent no cookie. A request
+%% whose Cookie header did not parse has no session here and gets none.
+session_event({issued, SessionId}, Session = #session{presented = undefined, current = SessionId}) ->
+    Session#session{issue = true};
 session_event({renewed, SessionId}, Session) ->
     Session#session{current = SessionId, issue = true, expire = false};
 session_event({deleted, SessionId}, Session = #session{presented = Presented}) ->
