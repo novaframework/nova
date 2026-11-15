@@ -11,8 +11,8 @@
 
 -include_lib("kernel/include/logger.hrl").
 
--type key() :: trusted_origins | csrf_secret | csrf_token | max_sessions | non_canonical_paths |
-               plugins_before_security.
+-type key() :: trusted_origins | csrf_token | max_sessions | non_canonical_paths | plugins_before_security |
+               secret_key_base.
 -export_type([key/0]).
 
 -define(MIN_SECRET_BYTES, 32).
@@ -33,9 +33,10 @@ validate() ->
     persistent_term:put(?MODULE, Settings).
 
 -doc """
-The checked value of a setting, or its default. `csrf_secret` is the list
-of secrets, empty when none is set, and the origins of an `trusted_origins`
-list are binaries. On a node where Nova was not started, the settings are
+The checked value of a setting, or its default. `secret_key_base` is the keys
+made from each of its secrets (`nova_secret:derived/1`), empty when none is
+set, and never a secret itself. The origins of a `trusted_origins` list are
+binaries. On a node where Nova was not started, the settings are
 checked the first time one is read.
 """.
 -spec value(Key :: key()) -> term().
@@ -66,13 +67,13 @@ checked(trusted_origins, Value) ->
     end;
 checked(csrf_token, Value) when Value =:= undefined; Value =:= stateless; Value =:= session ->
     {ok, Value};
-checked(csrf_secret, undefined) ->
+checked(secret_key_base, undefined) ->
     {ok, []};
-checked(csrf_secret, Secret) when is_binary(Secret) ->
-    checked(csrf_secret, [Secret]);
-checked(csrf_secret, Secrets) ->
+checked(secret_key_base, Secret) when is_binary(Secret) ->
+    checked(secret_key_base, [Secret]);
+checked(secret_key_base, Secrets) ->
     case is_list_of_secrets(Secrets) of
-        true -> {ok, Secrets};
+        true -> {ok, [nova_secret:derived(Secret) || Secret <- Secrets, is_binary(Secret)]};
         false -> {error, redacted}
     end;
 checked(max_sessions, Value) when Value =:= infinity; is_integer(Value), Value > 0 ->
@@ -92,7 +93,7 @@ checked(_Key, Value) ->
 expected(non_canonical_paths) -> ~"non_canonical_paths must be reject or resolve";
 expected(trusted_origins) -> ~"trusted_origins must be same_host, same_origin, any or a list of origins";
 expected(csrf_token) -> ~"csrf_token must be stateless or session";
-expected(csrf_secret) -> ~"csrf_secret must be a binary of at least 32 bytes, or a list of such";
+expected(secret_key_base) -> ~"secret_key_base must be a binary of at least 32 bytes, or a list of such";
 expected(max_sessions) -> ~"max_sessions must be infinity or an integer above 0";
 expected(plugins_before_security) ->
     ~"plugins_before_security must be all or a list of plugin modules that have pre_request/4".
@@ -105,12 +106,15 @@ took its place. One that is still set stops the boot with
 -spec removed() -> [{Key :: atom(), Replacement :: key()}].
 removed() ->
     [{plugins_after_security, plugins_before_security},
-     {allowed_origins, trusted_origins}].
+     {allowed_origins, trusted_origins},
+     {csrf_secret, secret_key_base}].
 
 -doc "What is logged for a setting of `removed/0` that is still set.".
 -spec removed_notice(Key :: atom()) -> binary().
 removed_notice(allowed_origins) ->
     ~"allowed_origins is now trusted_origins, with the values it had";
+removed_notice(csrf_secret) ->
+    ~"csrf_secret is now secret_key_base: one secret for the node, from which nova_csrf_plugin has a key of its own";
 removed_notice(plugins_after_security) ->
     ~"plugins_after_security is gone. pre_security/4 of a plugin always runs ahead of the security callback and pre_request/4 behind it, and plugins_before_security is the one setting that changes that".
 
@@ -128,13 +132,13 @@ no_removed_setting([{Key, Replacement} | Rest]) ->
 
 -spec keys() -> [key()].
 keys() ->
-    [non_canonical_paths, trusted_origins, csrf_token, csrf_secret, max_sessions, plugins_before_security].
+    [non_canonical_paths, trusted_origins, csrf_token, secret_key_base, max_sessions, plugins_before_security].
 
 -spec default(key()) -> term().
 default(non_canonical_paths) -> reject;
 default(trusted_origins) -> same_host;
 default(csrf_token) -> undefined;
-default(csrf_secret) -> undefined;
+default(secret_key_base) -> undefined;
 default(max_sessions) -> ?DEFAULT_MAX_SESSIONS;
 default(plugins_before_security) -> [].
 
@@ -149,10 +153,10 @@ valid(Key) ->
     end.
 
 -spec secret_to_sign_with(map()) -> ok.
-secret_to_sign_with(#{csrf_token := stateless, csrf_secret := []}) ->
-    ?LOG_ERROR(#{msg => ~"csrf_token is stateless and csrf_secret is not set", setting => csrf_secret,
-                 value => not_set}),
-    erlang:error({invalid_setting, csrf_secret, not_set});
+secret_to_sign_with(#{csrf_token := stateless, secret_key_base := []}) ->
+    ?LOG_ERROR(#{msg => ~"csrf_token is stateless and secret_key_base, which signs the tokens, is not set",
+                 setting => secret_key_base, value => not_set}),
+    erlang:error({invalid_setting, secret_key_base, not_set});
 secret_to_sign_with(_Settings) ->
     ok.
 

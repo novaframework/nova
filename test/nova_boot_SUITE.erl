@@ -29,7 +29,7 @@
          setting_that_is_gone_fails_the_boot/1,
          plugins_after_security_of_a_route_group_fails_the_boot/1,
          csrf_settings_nothing_can_go_by_fail_the_boot/1,
-         csrf_secret_that_fails_the_boot_is_not_told/1,
+         secret_key_base_that_fails_the_boot_is_not_told/1,
          csrf_tokens_kept_in_the_session_store_are_said_once/1,
          body_decoded_behind_a_security_callback_is_warned_about/1,
          plugins_of_an_earlier_run_are_forgotten/1
@@ -64,7 +64,7 @@ all() ->
      setting_that_is_gone_fails_the_boot,
      plugins_after_security_of_a_route_group_fails_the_boot,
      csrf_settings_nothing_can_go_by_fail_the_boot,
-     csrf_secret_that_fails_the_boot_is_not_told,
+     secret_key_base_that_fails_the_boot_is_not_told,
      csrf_tokens_kept_in_the_session_store_are_said_once,
      body_decoded_behind_a_security_callback_is_warned_about,
      plugins_of_an_earlier_run_are_forgotten
@@ -318,7 +318,8 @@ plugins_before_security_of_a_route_group_that_names_none_of_its_plugins_fails_th
 setting_that_is_gone_fails_the_boot(_Config) ->
     [?assertEqual({invalid_setting, Key, {replaced_by, Replacement}}, stopped_by([{Key, Value}]))
      || {Key, Value, Replacement} <- [{plugins_after_security, [nova_request_plugin], plugins_before_security},
-                                      {allowed_origins, any, trusted_origins}]].
+                                      {allowed_origins, any, trusted_origins},
+                                      {csrf_secret, binary:copy(~"s", 32), secret_key_base}]].
 
 plugins_after_security_of_a_route_group_fails_the_boot(_Config) ->
     Group = #{prefix => "/admin", plugins => [{pre_request, nova_request_plugin, #{}}],
@@ -336,32 +337,51 @@ plugins_after_security_of_a_route_group_fails_the_boot(_Config) ->
 
 csrf_settings_nothing_can_go_by_fail_the_boot(_Config) ->
     [?assertEqual({Settings, Reason}, {Settings, stopped_by(Settings)})
-     || {Settings, Reason} <- [{[{csrf_token, stateless}], {invalid_setting, csrf_secret, not_set}},
+     || {Settings, Reason} <- [{[{csrf_token, stateless}], {invalid_setting, secret_key_base, not_set}},
                                {[{csrf_token, signed}], {invalid_setting, csrf_token, signed}},
-                               {[{csrf_secret, ~"short"}], {invalid_setting, csrf_secret, redacted}},
-                               {[{csrf_token, session}, {csrf_secret, [~"short"]}],
-                                {invalid_setting, csrf_secret, redacted}}]].
+                               {[{secret_key_base, ~"short"}], {invalid_setting, secret_key_base, redacted}},
+                               {[{csrf_token, session}, {secret_key_base, [~"short"]}],
+                                {invalid_setting, secret_key_base, redacted}}]].
 
 %% `[New | Old]` is what "put the new secret in front of the old one" looks
 %% like to somebody who writes it as a cons. Neither that nor any other value
 %% that is refused ends up in what the boot returns, logs or reports.
-csrf_secret_that_fails_the_boot_is_not_told(_Config) ->
+secret_key_base_that_fails_the_boot_is_not_told(_Config) ->
     Old = ~"the-secret-in-use-of-32-bytes-or-more",
     New = ~"the-secret-to-come-of-32-bytes-or-more",
     [begin
-         application:set_env(nova, csrf_secret, Value),
+         application:set_env(nova, secret_key_base, Value),
          try
              {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{}) end),
-             ?assertMatch({error, {nova, {{{invalid_setting, csrf_secret, redacted}, _Stacktrace}, _}}}, Result),
+             ?assertMatch({error, {nova, {{{invalid_setting, secret_key_base, redacted}, _Stacktrace}, _}}}, Result),
              ?assertEqual(undefined, whereis(nova_sup)),
              Told = iolist_to_binary(io_lib:format("~0p", [{Result, Events}])),
              [?assertEqual({Secret, nomatch}, {Secret, binary:match(Told, Secret)}) || Secret <- [Old, New]]
          after
-             application:unset_env(nova, csrf_secret),
+             application:unset_env(nova, secret_key_base),
              nova_test_listener:stop()
          end
      end || Value <- [nova_test_helper:improper_list([New], Old), nova_test_helper:improper_list([New, Old], New),
                       {New, Old}, [[New, Old]], binary:part(Old, 0, 31)]].
+
+%% The secret under the name it had before any release is in a boot that
+%% stops, and under its own name in one that goes on. Neither says it.
+secret_is_not_told_by_a_boot(_Config) ->
+    Secret = ~"the-secret-in-use-of-32-bytes-or-more",
+    Csrf = [#{plugins => [{pre_request, nova_csrf_plugin, #{}}],
+              routes => [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}]}],
+    [begin
+         application:set_env(nova, Key, Secret),
+         try
+             {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => Csrf}) end),
+             ?assertMatch({Key, {Outcome, _}}, {Key, Result}),
+             Told = iolist_to_binary(io_lib:format("~0p", [{Result, Events}])),
+             ?assertEqual({Key, nomatch}, {Key, binary:match(Told, Secret)})
+         after
+             application:unset_env(nova, Key),
+             nova_test_listener:stop()
+         end
+     end || {Key, Outcome} <- [{csrf_secret, error}, {secret_key_base, ok}]].
 
 %% Without a secret the tokens of nova_csrf_plugin are kept in the session
 %% store, as before there were signed ones. An application that has the
@@ -376,16 +396,16 @@ csrf_tokens_kept_in_the_session_store_are_said_once(_Config) ->
          try
              {{ok, _Port}, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => Routes}) end),
              ?assertEqual({Settings, Notices},
-                          {Settings, length([Report || {notice, {report, #{key := csrf_secret} = Report}} <- Events])})
+                          {Settings, length([Report || {notice, {report, #{key := secret_key_base} = Report}} <- Events])})
          after
              application:unset_env(nova, csrf_token),
-             application:unset_env(nova, csrf_secret),
+             application:unset_env(nova, secret_key_base),
              nova_test_listener:stop()
          end
      end || {Routes, Settings, Notices} <- [{Csrf, [], 1},
                                             {Csrf, [{csrf_token, session}], 0},
-                                            {Csrf, [{csrf_secret, Secret}], 0},
-                                            {Csrf, [{csrf_token, stateless}, {csrf_secret, Secret}], 0},
+                                            {Csrf, [{secret_key_base, Secret}], 0},
+                                            {Csrf, [{csrf_token, stateless}, {secret_key_base, Secret}], 0},
                                             {[], [], 0}]].
 
 body_decoded_behind_a_security_callback_is_warned_about(_Config) ->

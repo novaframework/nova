@@ -299,8 +299,8 @@ masked_token_is_accepted_test() ->
 %% nonce and its signature are.
 signed_token_that_decodes_short_is_refused_test_() ->
     {setup,
-     fun() -> nova_test_settings:set(csrf_secret, ?SECRET) end,
-     fun(_) -> nova_test_settings:unset(csrf_secret) end,
+     fun() -> nova_test_settings:set(secret_key_base, ?SECRET) end,
+     fun(_) -> nova_test_settings:unset(secret_key_base) end,
      [{Name, ?_assertMatch({stop, {reply, 403, _, _}, _, _}, submitted_with(Token))}
       || {Name, Token} <- [{"spaces inside", <<(binary:copy(~"A", 10))/binary, (binary:copy(~" ", 44))/binary,
                                               (binary:copy(~"A", 10))/binary>>},

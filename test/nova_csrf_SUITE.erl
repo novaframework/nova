@@ -122,7 +122,7 @@ end_per_suite(_Config) ->
     ok.
 
 init_per_group(stateless, Config) ->
-    [{csrf_secret, ?SECRET} | Config];
+    [{secret_key_base, ?SECRET} | Config];
 init_per_group(session, Config) ->
     Config.
 
@@ -132,15 +132,15 @@ end_per_group(_Group, _Config) ->
 %% The settings are read when Nova starts, which nova_test_settings does
 %% over for a case that changes one.
 init_per_testcase(_Case, Config) ->
-    case proplists:get_value(csrf_secret, Config) of
+    case proplists:get_value(secret_key_base, Config) of
         undefined -> ok;
-        Secret -> nova_test_settings:set(csrf_secret, Secret)
+        Secret -> nova_test_settings:set(secret_key_base, Secret)
     end,
     Config.
 
 end_per_testcase(_Case, _Config) ->
     nova_test_settings:unset(trusted_origins),
-    nova_test_settings:unset(csrf_secret).
+    nova_test_settings:unset(secret_key_base).
 
 first_visit_starts_a_session_with_a_token(Config) ->
     {{"cookie", <<"session_id=", SessionId/binary>>}, Token} = session(Config),
@@ -285,17 +285,17 @@ token_that_decodes_short_is_refused_without_a_crash(Config) ->
 
 token_of_another_secret_is_refused(Config) ->
     {Cookie, Token} = session(Config),
-    nova_test_settings:set(csrf_secret, ?OTHER_SECRET),
+    nova_test_settings:set(secret_key_base, ?OTHER_SECRET),
     ?assertMatch({403, _}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Token}], <<>>)).
 
 %% The first secret signs and every secret in the list is accepted, so a
 %% form that was open when the secret was changed can still be sent.
 token_of_the_previous_secret_is_accepted_while_it_is_listed(Config) ->
     {Cookie, Old} = session(Config),
-    nova_test_settings:set(csrf_secret, [?OTHER_SECRET, ?SECRET]),
+    nova_test_settings:set(secret_key_base, [?OTHER_SECRET, ?SECRET]),
     ?assertEqual({200, ~"submitted"}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Old}], <<>>)),
     {200, New} = request(Config, "GET", "/csrf/token", [Cookie], <<>>),
-    nova_test_settings:set(csrf_secret, ?OTHER_SECRET),
+    nova_test_settings:set(secret_key_base, ?OTHER_SECRET),
     ?assertEqual({200, ~"submitted"}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", New}], <<>>)),
     ?assertMatch({403, _}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Old}], <<>>)).
 
@@ -326,9 +326,9 @@ token_stays_good_while_the_session_is_written(Config) ->
 %% A form that was rendered while the tokens were kept in the session store
 %% holds the token of its session, which is still there to compare with.
 session_token_of_an_open_form_is_accepted(Config) ->
-    nova_test_settings:unset(csrf_secret),
+    nova_test_settings:unset(secret_key_base),
     {Cookie, SessionToken} = session(Config),
-    nova_test_settings:set(csrf_secret, ?SECRET),
+    nova_test_settings:set(secret_key_base, ?SECRET),
     [?assertEqual({200, ~"submitted"}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", Token}], <<>>))
      || Token <- [SessionToken, unmasked(SessionToken)]],
     ?assertMatch({403, _}, request(Config, "POST", "/csrf/submit", [Cookie, {"x-csrf-token", ~"wrong"}], <<>>)).

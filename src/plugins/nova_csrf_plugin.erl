@@ -8,17 +8,17 @@ __Important:__ `nova_request_plugin` must run before this plugin so that form pa
 
 ## Where the token comes from
 
-With `csrf_secret` set in the `nova` environment the token is signed and nothing is stored for it. It is an HMAC-SHA256, under the secret, over the id in the session cookie of the client and 16 random bytes, so every response carries another token and each of them is good for as long as the client holds that cookie and the secret is in use. A visitor without a session cookie is handed one by the response (`nova_session:client_id/1`); no session is started. A request that changes state is refused when it does not send the cookie the token was signed for. Signing in moves a visitor to another session id, and the pages rendered after that carry tokens for the new one.
+With `secret_key_base` set in the `nova` environment the token is signed and nothing is stored for it. It is an HMAC-SHA256 over the id in the session cookie of the client and 16 random bytes, under a key made from the secret for this plugin alone, so every response carries another token and each of them is good for as long as the client holds that cookie and the secret is in use. A visitor without a session cookie is handed one by the response; no session is started. A request that changes state is refused when it does not send the cookie the token was signed for. `nova_session:renew/1`, which signing in calls, moves a visitor to another session id, and the pages rendered after that carry tokens for the new one.
 
 ```erlang
 {nova, [
-    {csrf_secret, ~"at least 32 bytes that every node of the system is given"}
+    {secret_key_base, ~"at least 32 bytes that every node of the system is given"}
 ]}
 ```
 
-The secret has to be the same on every node and across restarts. A list of secrets signs with the first and accepts all of them: put the new secret in front of the old one to change it, and take the old one out once the pages that were open have been sent.
+The secret has to be the same on every node and across restarts, and belongs in what the release reads when it starts, such as an environment variable in `sys.config.src`, not in a file that is committed. A list of secrets signs with the first and accepts all of them: put the new secret in front of the old one to change it, and take the old one out once the pages that were open have been sent. Nova never logs the secret, and what it keeps of it once it has started is the keys made from it.
 
-Without `csrf_secret` the token is a random value kept in the session, as in earlier releases: a visitor without a session gets one that holds the token (`nova_session:set_provisional/3`). A page gets it under a mask that is new for every response, so the same token never looks the same twice in a compressed response. The token without a mask, which is what a page rendered by an earlier release holds, is accepted as well. The boot says so once. Set `{csrf_token, session}` to say that this is intended, or `{csrf_token, stateless}` to have a boot without a secret fail instead.
+Without `secret_key_base` the token is a random value kept in the session, as in earlier releases: a visitor without a session gets one that holds the token. A page gets it under a mask that is new for every response, so the same token never looks the same twice in a compressed response. The token without a mask, which is what a page rendered by an earlier release holds, is accepted as well. The boot says so once. Set `{csrf_token, session}` to say that this is intended, or `{csrf_token, stateless}` to have a boot without a secret fail instead.
 
 After a secret is set, a form that was rendered before still sends the token of its session. It is accepted for as long as that session is there.
 
@@ -72,26 +72,20 @@ This is not `allow_origins` of `nova_cors_plugin`, which says which pages may re
 -doc false.
 -spec init() -> nova:state().
 init() ->
-    Unset = nova_settings:value(csrf_token) =:= undefined andalso nova_settings:value(csrf_secret) =:= [],
+    Unset = nova_settings:value(csrf_token) =:= undefined andalso nova_secret:keys(csrf_token) =:= [],
     _ = Unset andalso
-        ?LOG_NOTICE(#{msg => ~"csrf_secret is not set, so nova_csrf_plugin keeps its tokens in the session store and starts a session for every visitor. Set csrf_secret for signed tokens that store nothing, or csrf_token to session to say that this is intended",
-                      key => csrf_secret, csrf_token => session}),
+        ?LOG_NOTICE(#{msg => ~"secret_key_base is not set, so nova_csrf_plugin keeps its tokens in the session store and starts a session for every visitor. Set secret_key_base for signed tokens that store nothing, or csrf_token to session to say that this is intended",
+                      key => secret_key_base, csrf_token => session}),
     #{}.
 
-%% How tokens are made: signed with the secrets, the first of which signs,
-%% or kept in the session. Both settings were checked when Nova started.
+%% How tokens are made: signed with the keys this plugin has from
+%% secret_key_base, the first of which signs, or kept in the session. Both
+%% settings were checked when Nova started.
 -spec tokens() -> {stateless, [binary()]} | session.
 tokens() ->
-    case nova_settings:value(csrf_token) =/= session andalso secrets() of
-        [_ | _] = Secrets -> {stateless, Secrets};
+    case nova_settings:value(csrf_token) =/= session andalso nova_secret:keys(csrf_token) of
+        [_ | _] = Keys -> {stateless, Keys};
         _NoSecret -> session
-    end.
-
--spec secrets() -> [binary()].
-secrets() ->
-    case nova_settings:value(csrf_secret) of
-        Secrets when is_list(Secrets) -> [Secret || Secret <- Secrets, is_binary(Secret)];
-        _NoSecrets -> []
     end.
 
 %%--------------------------------------------------------------------
@@ -156,13 +150,13 @@ pre_request(Req = #{method := Method, path := Path}, _Env, Options, State) ->
             handle_safe_request(Req, SessionKey, State);
         session ->
             handle_unsafe_request(Req, SessionKey, FieldName, HeaderName, State);
-        {stateless, Secrets} when Safe ->
-            {ok, with_signed_token(nova_session:client_id(Req), Secrets, Req), State};
-        {stateless, Secrets} ->
+        {stateless, Keys} when Safe ->
+            {ok, with_signed_token(nova_session:client_id(Req), Keys, Req), State};
+        {stateless, Keys} ->
             Presented = nova_session:presented_session_id(Req),
             Submitted = get_submitted_token(Req, FieldName, HeaderName),
-            case is_signed_for(Presented, Submitted, Secrets) orelse is_session_token(Req, SessionKey, Submitted) of
-                true -> {ok, with_signed_token({ok, Presented}, Secrets, Req), State};
+            case is_signed_for(Presented, Submitted, Keys) orelse is_session_token(Req, SessionKey, Submitted) of
+                true -> {ok, with_signed_token({ok, Presented}, Keys, Req), State};
                 false -> reject(Req, State)
             end
     end.
@@ -269,36 +263,35 @@ decoded(Submitted) when is_binary(Submitted) ->
 decoded(_Submitted) ->
     undefined.
 
--spec with_signed_token(SessionId :: {ok, term()} | {error, term()}, Secrets :: [binary()], Req) -> Req
+-spec with_signed_token(SessionId :: {ok, term()} | {error, term()}, Keys :: [binary()], Req) -> Req
               when Req :: cowboy_req:req().
-with_signed_token({ok, SessionId}, [Secret | _], Req) when is_binary(SessionId) ->
+with_signed_token({ok, SessionId}, [Key | _], Req) when is_binary(SessionId) ->
     Nonce = crypto:strong_rand_bytes(?NONCE_BYTES),
-    Signed = <<Nonce/binary, (signature(Secret, SessionId, Nonce))/binary>>,
+    Signed = <<Nonce/binary, (signature(Key, SessionId, Nonce))/binary>>,
     Req#{csrf_token => base64:encode(Signed, #{mode => urlsafe, padding => false})};
-with_signed_token(_NoSessionId, _Secrets, Req) ->
+with_signed_token(_NoSessionId, _Keys, Req) ->
     Req.
 
 %% The nonce has a fixed length and comes last, so the session id is what is
 %% between it and the label whatever bytes a client put in its cookie.
--spec signature(Secret :: binary(), SessionId :: binary(), Nonce :: binary()) -> binary().
-signature(Secret, SessionId, Nonce) ->
-    crypto:mac(hmac, sha256, Secret, [~"nova_csrf_plugin", SessionId, Nonce]).
+-spec signature(Key :: binary(), SessionId :: binary(), Nonce :: binary()) -> binary().
+signature(Key, SessionId, Nonce) ->
+    crypto:mac(hmac, sha256, Key, [~"nova_csrf_plugin", SessionId, Nonce]).
 
 %% 64 characters are the 16 bytes of a nonce and the 32 of its signature,
 %% when every one of them is a character of the encoding.
--spec is_signed_for(SessionId :: term(), Submitted :: term(), Secrets :: [binary()]) -> boolean().
-is_signed_for(SessionId, <<Token:64/binary>>, Secrets) when is_binary(SessionId) ->
+-spec is_signed_for(SessionId :: term(), Submitted :: term(), Keys :: [binary()]) -> boolean().
+is_signed_for(SessionId, <<Token:64/binary>>, Keys) when is_binary(SessionId) ->
     case decoded(Token) of
         <<Nonce:?NONCE_BYTES/binary, Signature:?SIGNATURE_BYTES/binary>> ->
-            [] =/= [Secret || Secret <- Secrets,
-                              constant_time_compare(Signature, signature(Secret, SessionId, Nonce))];
+            [] =/= [Key || Key <- Keys, constant_time_compare(Signature, signature(Key, SessionId, Nonce))];
         _NotSigned ->
             false
     end;
-is_signed_for(_SessionId, _Submitted, _Secrets) ->
+is_signed_for(_SessionId, _Submitted, _Keys) ->
     false.
 
-%% The token of a form that was rendered before csrf_secret was set.
+%% The token of a form that was rendered before secret_key_base was set.
 -spec is_session_token(Req :: cowboy_req:req(), SessionKey :: binary(), Submitted :: term()) -> boolean().
 is_session_token(Req, SessionKey, Submitted) ->
     case nova_session:get(Req, SessionKey) of
