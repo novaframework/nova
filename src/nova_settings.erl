@@ -16,13 +16,15 @@
 -export_type([key/0]).
 
 -define(MIN_SECRET_BYTES, 32).
+-define(MIN_DISTINCT_BYTES, 8).
 -define(DEFAULT_MAX_SESSIONS, 1000000).
 
 -doc """
 Checks every setting and keeps what `value/1` returns from then on. Raises
 `{invalid_setting, Key, Reason}` for the first one that cannot be used.
-`Reason` is the value that was refused, `redacted` where that is a secret,
-`not_set`, `{requires, Setting}` for one that cannot be used without another,
+`Reason` is the value that was refused, `redacted` where that is a secret
+(one that is too short, not a binary, or plainly not out of a random
+source), `not_set`, `{requires, Setting}` for one that cannot be used without another,
 or `{replaced_by, Replacement}` for a setting of `removed/0`. For
 `nova_sup`, which calls it before it starts anything.
 """.
@@ -94,7 +96,8 @@ checked(_Key, Value) ->
 expected(non_canonical_paths) -> ~"non_canonical_paths must be reject or resolve";
 expected(trusted_origins) -> ~"trusted_origins must be same_host, same_origin, any or a list of origins";
 expected(csrf_token) -> ~"csrf_token must be stateless or session";
-expected(secret_key_base) -> ~"secret_key_base must be a binary of at least 32 bytes, or a list of such";
+expected(secret_key_base) ->
+    ~"secret_key_base must be a binary of at least 32 bytes out of a random source, or a list of such. A value that repeats a few bytes, an example out of the documentation or a ${VARIABLE} that was not filled in is refused. base64:encode(crypto:strong_rand_bytes(48)) in an Erlang shell, or openssl rand -base64 48, makes one";
 expected(max_sessions) -> ~"max_sessions must be infinity or an integer above 0";
 expected(plugins_before_security) ->
     ~"plugins_before_security must be all or a list of plugin modules that have pre_request/4".
@@ -198,14 +201,51 @@ string_as_binary(String) ->
 %% that is raised carries the value into the report of the boot that failed.
 -spec secrets(term()) -> {ok, [binary()]} | error.
 secrets([Secret]) when is_binary(Secret), byte_size(Secret) >= ?MIN_SECRET_BYTES ->
-    {ok, [Secret]};
+    case is_plainly_not_random(Secret) of
+        false -> {ok, [Secret]};
+        true -> error
+    end;
 secrets([Secret | Rest]) when is_binary(Secret), byte_size(Secret) >= ?MIN_SECRET_BYTES ->
-    case secrets(Rest) of
+    case is_plainly_not_random(Secret) orelse secrets(Rest) of
         {ok, Secrets} -> {ok, [Secret | Secrets]};
-        error -> error
+        _NotSecrets -> error
     end;
 secrets(_NotSecrets) ->
     error.
+
+%% Whoever sees a signed session id or token can try secrets against it at
+%% home, as fast as HMAC runs, so the secret has to come from a random
+%% source and a long word does not do. Nova cannot measure that. It refuses
+%% what plainly is not: a few bytes over and over, which 32 characters out
+%% of a random source do not come to in hex or base64 or as they are, an
+%% example out of the documentation, and the name of a variable in a
+%% configuration template that nothing filled in.
+-spec is_plainly_not_random(Secret :: binary()) -> boolean().
+is_plainly_not_random(Secret) ->
+    length(lists:usort(binary_to_list(Secret))) < ?MIN_DISTINCT_BYTES orelse
+        lists:member(Secret, documented_examples()) orelse is_variable_not_filled_in(Secret).
+
+-spec documented_examples() -> [binary()].
+documented_examples() ->
+    [~"at least 32 bytes that every node of the system is given",
+     ~"the-new-secret-of-at-least-32-bytes-0001",
+     ~"the-old-secret-of-at-least-32-bytes-0000"].
+
+%% `${NAME}`, as sys.config.src has it before the release fills it in.
+-spec is_variable_not_filled_in(Secret :: binary()) -> boolean().
+is_variable_not_filled_in(<<"${", Name/binary>>) ->
+    is_variable_name(Name);
+is_variable_not_filled_in(_Secret) ->
+    false.
+
+-spec is_variable_name(binary()) -> boolean().
+is_variable_name(<<"}">>) ->
+    true;
+is_variable_name(<<Char, Rest/binary>>)
+  when Char >= $A, Char =< $Z; Char >= $a, Char =< $z; Char >= $0, Char =< $9; Char =:= $_ ->
+    is_variable_name(Rest);
+is_variable_name(_NotAName) ->
+    false.
 
 %% A name that is not a plugin moves nothing ahead of the security callback,
 %% so a misspelt one, or `all` written inside a list, is refused.

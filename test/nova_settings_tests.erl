@@ -136,6 +136,57 @@ secret_that_cannot_be_used_is_not_told_test_() ->
                            {one_too_short, [New, binary:part(Old, 0, 31)]},
                            {empty_list, []}]].
 
+%% Everything Nova signs lets whoever sees it try secrets at home, so a
+%% secret has to come from a random source. What plainly does not is
+%% refused: one byte over and over, a few bytes over and over, the examples
+%% the documentation has had, and the name of a variable nothing filled in.
+%% Nothing here measures what a passphrase is worth.
+secret_that_is_plainly_not_random_stops_the_boot_test_() ->
+    [{lists:flatten(io_lib:format("~0p", [Shape])),
+      fun() ->
+              application:set_env(nova, secret_key_base, Value),
+              try
+                  {Raised, Events} = nova_test_log:collect(fun() ->
+                                                                   try nova_settings:validate()
+                                                                   catch Class:Reason:Stacktrace ->
+                                                                           {Class, Reason, Stacktrace}
+                                                                   end
+                                                           end),
+                  ?assertMatch({error, {invalid_setting, secret_key_base, redacted}, _}, Raised),
+                  ?assertMatch([#{setting := secret_key_base, value := redacted}], nova_test_log:errors(Events)),
+                  Told = iolist_to_binary(io_lib:format("~0p", [{Raised, Events}])),
+                  [?assertEqual({Secret, nomatch}, {Secret, binary:match(Told, Written)})
+                   || Secret <- lists:flatten([Value]),
+                      Written <- [Secret, iolist_to_binary(io_lib:format("~0p", [Secret]))]]
+              after
+                  nova_test_settings:unset(secret_key_base)
+              end
+      end}
+     || {Shape, Value} <- [{one_byte, binary:copy(~"s", 32)},
+                           {one_byte_many_times, binary:copy(<<0>>, 512)},
+                           {two_bytes, binary:copy(~"ab", 16)},
+                           {a_word_repeated, binary:copy(~"changeme", 4)},
+                           {another_word_repeated, binary:copy(~"password", 8)},
+                           {seven_bytes_in_any_order, ~"abcdefgabcdefggfedcbagfedcbaabcdefg"},
+                           {digits_of_a_date, ~"20261115202611152026111520261115"},
+                           {example_of_the_documentation, ~"at least 32 bytes that every node of the system is given"},
+                           {example_of_the_guides, ~"the-new-secret-of-at-least-32-bytes-0001"},
+                           {other_example_of_the_guides, ~"the-old-secret-of-at-least-32-bytes-0000"},
+                           {variable_nothing_filled_in, ~"${SECRET_KEY_BASE_OF_THE_PRODUCTION_NODES}"},
+                           {one_of_two, [?SECRET, binary:copy(~"changeme", 4)]},
+                           {other_of_two, [binary:copy(~"s", 64), ?SECRET]}]].
+
+%% What `base64:encode(crypto:strong_rand_bytes(48))`, `openssl rand -base64 48`
+%% and `openssl rand -hex 32` give, and 32 bytes as they come.
+secret_of_a_random_source_is_taken_test_() ->
+    [{lists:flatten(io_lib:format("~0p", [Shape])),
+      ?_assertMatch(#{secret_key_base := [_ | _]}, booted_with([{secret_key_base, Value}]))}
+     || {Shape, Value} <- [{base64, ~"pT4mQ0fYxk8Hn2cWv7sJ1dLrA9uEoZb3KiG5yNqXwC6tRhVlMeSaUjOgBfDzIP+/"},
+                           {hex, ~"9f2c41d7a0b3e85c6d1f7a924be03c58d6a1f09e7b34c2d85a60f1e39c7b4d20"},
+                           {bytes, binary:decode_hex(~"9f2c41d7a0b3e85c6d1f7a924be03c58d6a1f09e7b34c2d85a60f1e39c7b4d20")},
+                           {eight_bytes, ~"abcdefghabcdefghhgfedcbahgfedcba"},
+                           {two, [?SECRET, ~"9f2c41d7a0b3e85c6d1f7a924be03c58"]}]].
+
 %% A setting that was in no release and is gone stops the boot, and what is
 %% raised and logged names the one that took its place and not the value.
 removed_settings_stop_the_boot_test_() ->

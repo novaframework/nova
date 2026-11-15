@@ -396,7 +396,7 @@ secret_is_not_told_by_a_boot(_Config) ->
 csrf_plugin_without_sessions_fails_the_boot(_Config) ->
     Routes = [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}],
     Csrf = #{prefix => "/forms", plugins => [{pre_request, nova_csrf_plugin, #{}}], routes => Routes},
-    Secret = binary:copy(~"s", 32),
+    Secret = ~"a secret of thirty-two bytes or more, for the tests",
     [begin
          [application:set_env(nova, Key, Value) || {Key, Value} <- [{use_sessions, false} | Settings]],
          try
@@ -433,7 +433,7 @@ csrf_tokens_kept_in_the_session_store_are_said_once(_Config) ->
     Csrf = [#{plugins => [{pre_request, nova_csrf_plugin, #{}}],
               routes => [{"/", fun nova_boot_pages:page/1, #{methods => [get]}},
                          {"/other", fun nova_boot_pages:page/1, #{methods => [get]}}]}],
-    Secret = binary:copy(~"s", 32),
+    Secret = ~"a secret of thirty-two bytes or more, for the tests",
     [begin
          [application:set_env(nova, Key, Value) || {Key, Value} <- Settings],
          try

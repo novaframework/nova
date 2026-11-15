@@ -14,11 +14,23 @@ With `secret_key_base` set in the `nova` environment the token is signed and not
 
 ```erlang
 {nova, [
-    {secret_key_base, ~"at least 32 bytes that every node of the system is given"}
+    {secret_key_base, ~"${SECRET_KEY_BASE}"}
 ]}
 ```
 
-The secret has to be the same on every node and across restarts, and belongs in what the release reads when it starts, such as an environment variable in `sys.config.src`, not in a file that is committed. A list of secrets signs with the first and accepts all of them: put the new secret in front of the old one to change it, and take the old one out once the pages that were open have been sent. Nova never logs the secret, and what it keeps of it once it has started is the keys made from it.
+The secret has to come from a random source, since everything signed with it lets whoever sees it try secrets at home: a word or a sentence, however long, does not do. Make one in an Erlang shell or with `openssl`, which both give 64 characters:
+
+```erlang
+base64:encode(crypto:strong_rand_bytes(48)).
+```
+
+```sh
+openssl rand -base64 48
+```
+
+It is a binary of at least 32 bytes. One that is shorter stops the boot with `{invalid_setting, secret_key_base, redacted}`, and so does one that plainly is not random: fewer than 8 different bytes, such as a letter or a word repeated, an example out of this documentation, or a `${VARIABLE}` that the release did not fill in. Nova cannot tell a sentence from a random value, so passing this check says little.
+
+The secret has to be the same on every node and across restarts, and belongs in what the release reads when it starts, such as an environment variable in `sys.config.src`, not in a file that is committed. Use it for Nova alone: an application that signs things of its own has a secret of its own. A list of secrets signs with the first and accepts all of them: put the new secret in front of the old one to change it, and take the old one out once the pages that were open have been sent. Nova never logs the secret, and what it keeps of it once it has started is the keys made from it.
 
 Without `secret_key_base` the token is a random value kept in the session, as in earlier releases: a visitor without a session gets one that holds the token. A page gets it under a mask that is new for every response, so the same token never looks the same twice in a compressed response. The token without a mask, which is what a page rendered by an earlier release holds, is accepted as well. The boot says so once. Set `{csrf_token, session}` to say that this is intended, or `{csrf_token, stateless}` to have a boot without a secret fail instead.
 
