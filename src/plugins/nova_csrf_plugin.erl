@@ -205,7 +205,7 @@ plugin_info() ->
                   {field_name, <<"Form field name for CSRF token (default: _csrf_token)">>},
                   {header_name, <<"Header name for CSRF token (default: x-csrf-token)">>},
                   {session_key, <<"Session key for CSRF token (default: _csrf_token)">>},
-                  {allowed_origins, <<"same_host, same_origin, any, or the list of origins that may send unsafe requests">>},
+                  {allowed_origins, ~"same_host, same_origin, any, or the list of origins that may send unsafe requests"},
                   {excluded_paths, <<"List of path prefixes to exclude from CSRF protection">>}
                  ]}.
 
