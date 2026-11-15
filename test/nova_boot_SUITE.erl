@@ -22,6 +22,8 @@
          unknown_non_canonical_paths_fails_the_boot/1,
          unknown_allowed_origins_fails_the_boot/1,
          session_store_for_no_session_fails_the_boot/1,
+         plugins_before_security_that_names_no_plugin_fails_the_boot/1,
+         plugins_before_security_of_a_route_group_that_names_none_of_its_plugins_fails_the_boot/1,
          csrf_settings_nothing_can_go_by_fail_the_boot/1,
          csrf_secret_that_fails_the_boot_is_not_told/1,
          csrf_tokens_kept_in_the_session_store_are_said_once/1,
@@ -50,6 +52,8 @@ all() ->
      unknown_non_canonical_paths_fails_the_boot,
      unknown_allowed_origins_fails_the_boot,
      session_store_for_no_session_fails_the_boot,
+     plugins_before_security_that_names_no_plugin_fails_the_boot,
+     plugins_before_security_of_a_route_group_that_names_none_of_its_plugins_fails_the_boot,
      csrf_settings_nothing_can_go_by_fail_the_boot,
      csrf_secret_that_fails_the_boot_is_not_told,
      csrf_tokens_kept_in_the_session_store_are_said_once,
@@ -245,6 +249,27 @@ unknown_allowed_origins_fails_the_boot(_Config) ->
 
 session_store_for_no_session_fails_the_boot(_Config) ->
     ?assertEqual({invalid_setting, max_sessions, 0}, stopped_by([{max_sessions, 0}])).
+
+%% A name that is not a plugin would leave the order as it is, and the
+%% security callback without the body its author listed the plugin for.
+plugins_before_security_that_names_no_plugin_fails_the_boot(_Config) ->
+    [?assertEqual({invalid_setting, plugins_before_security, Value}, stopped_by([{plugins_before_security, Value}]))
+     || Value <- [[nova_reqeust_plugin], [all], nova_request_plugin]].
+
+plugins_before_security_of_a_route_group_that_names_none_of_its_plugins_fails_the_boot(_Config) ->
+    Routes = [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}],
+    Request = {pre_request, nova_request_plugin, #{decode_json_body => true}},
+    [begin
+         Group = #{prefix => "/admin", plugins => [Request], plugins_before_security => Value, routes => Routes},
+         {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => [Group]}) end),
+         ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
+                                                  {invalid_setting, plugins_before_security, Value}}}, _}}},
+                      Result),
+         ?assertMatch([#{setting := plugins_before_security, value := Value, app := nova_test_app,
+                         prefix := "/admin"} | _],
+                      nova_test_log:errors(Events)),
+         ?assertEqual(undefined, whereis(nova_sup))
+     end || Value <- [[nova_reqeust_plugin], [all], [nova_csrf_plugin], nova_request_plugin]].
 
 csrf_settings_nothing_can_go_by_fail_the_boot(_Config) ->
     [?assertEqual({Settings, Reason}, {Settings, stopped_by(Settings)})

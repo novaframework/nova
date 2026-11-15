@@ -30,7 +30,7 @@ A plugin listed as `{pre_request, Module, Options}` takes part twice before the 
 
 Earlier releases ran `pre_request/4` ahead of the security callback. Two lists, each in a route group or in the `nova` environment (the route group wins), change the order for the modules they name:
 
-- `plugins_before_security` - `pre_request/4` of these modules runs ahead of the security callback, as it did. `all` names every plugin of the route group.
+- `plugins_before_security` - `pre_request/4` of these modules runs ahead of the security callback, as it did. `all` names every plugin of the route group. A list has to name plugins that have `pre_request/4`, and the list of a route group plugins that the group lists as `pre_request`: any other name stops the boot with `{invalid_setting, plugins_before_security, List}`.
 - `plugins_after_security` - nothing of these modules runs ahead of the security callback: `pre_security/4` runs behind it too, right before `pre_request/4`. A module in both lists runs after.
 
 Within each of the two phases the plugins run in the order they are listed. What the security callback finds in the request is what `pre_security/4` put there. With the plugins of Nova that is the correlation id, the CORS headers and `parsed_qs`, and not `json`, `params`, `body` or `files`: a security callback that needs the decoded body lists `nova_request_plugin` under `plugins_before_security` for its route group.

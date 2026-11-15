@@ -78,7 +78,7 @@ checked(max_sessions, Value) when Value =:= infinity; is_integer(Value), Value >
 checked(plugins_before_security, all) ->
     {ok, all};
 checked(plugins_before_security, Value) ->
-    case is_list_of_modules(Value) of
+    case is_list_of_plugins(Value) of
         true -> {ok, Value};
         false -> {error, Value}
     end;
@@ -92,7 +92,8 @@ expected(allowed_origins) -> ~"allowed_origins must be same_host, same_origin, a
 expected(csrf_token) -> ~"csrf_token must be stateless or session";
 expected(csrf_secret) -> ~"csrf_secret must be a binary of at least 32 bytes, or a list of such";
 expected(max_sessions) -> ~"max_sessions must be infinity or an integer above 0";
-expected(plugins_before_security) -> ~"plugins_before_security must be all or a list of plugin modules".
+expected(plugins_before_security) ->
+    ~"plugins_before_security must be all or a list of plugin modules that have pre_request/4".
 
 -spec keys() -> [key()].
 keys() ->
@@ -160,10 +161,17 @@ is_list_of_secrets(_NotAList) ->
 is_secret(Secret) ->
     is_binary(Secret) andalso byte_size(Secret) >= ?MIN_SECRET_BYTES.
 
--spec is_list_of_modules(term()) -> boolean().
-is_list_of_modules([]) ->
+%% A name that is not a plugin moves nothing ahead of the security callback,
+%% so a misspelt one, or `all` written inside a list, is refused.
+-spec is_list_of_plugins(term()) -> boolean().
+is_list_of_plugins([]) ->
     true;
-is_list_of_modules([Module | Modules]) ->
-    is_atom(Module) andalso is_list_of_modules(Modules);
-is_list_of_modules(_NotAList) ->
+is_list_of_plugins([Module | Modules]) ->
+    is_atom(Module) andalso has_pre_request(Module) andalso is_list_of_plugins(Modules);
+is_list_of_plugins(_NotAList) ->
     false.
+
+-spec has_pre_request(module()) -> boolean().
+has_pre_request(Module) ->
+    _ = code:ensure_loaded(Module),
+    erlang:function_exported(Module, pre_request, 4).

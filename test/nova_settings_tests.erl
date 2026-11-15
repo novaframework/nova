@@ -63,7 +63,12 @@ values_that_stop_the_boot_test_() ->
                          {plugins_before_security, none},
                          {plugins_before_security, nova_request_plugin},
                          {plugins_before_security, [~"nova_request_plugin"]},
-                         {plugins_before_security, [nova_request_plugin | nova_csrf_plugin]}]].
+                         {plugins_before_security, [nova_request_plugin | nova_csrf_plugin]},
+                         {plugins_before_security, [all]},
+                         {plugins_before_security, [nova_reqeust_plugin]},
+                         {plugins_before_security, [nova_request_plugin, nova_reqeust_plugin]},
+                         {plugins_before_security, [nova_cors_plugin]},
+                         {plugins_before_security, [lists]}]].
 
 csrf_settings_test_() ->
     Short = binary:copy(~"s", 31),

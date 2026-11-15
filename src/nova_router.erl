@@ -49,7 +49,7 @@
 
 -ifdef(TEST).
 -export([add_plugin/1, apply_callback/3, concat_strings/2, insert/6, method_to_binary/1, normalize_plugins/2,
-         normalize_secure/2, plugins_after_security/2, plugins_before_security/2, resolve_secure/3,
+         normalize_secure/2, plugins_after_security/2, plugins_before_security/3, resolve_secure/3,
          router_module/1]).
 -endif.
 
@@ -543,14 +543,15 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
 
     Secure = resolve_secure(Options, RouteInfo, RouterFile),
 
-    Order = #{before => plugins_before_security(RouteInfo, RouterFile),
+    Prefix = concat_strings(maps:get(prefix, Options, ""),
+                            maps:get(prefix, RouteInfo, "")),
+    Order = #{before => plugins_before_security(RouteInfo, Plugins,
+                                                #{app => App, prefix => Prefix, router_file => RouterFile}),
               'after' => plugins_after_security(RouteInfo, RouterFile),
               secured => Secure =/= false},
     Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins, Order),
                                 extra_state = maps:get(extra_state, RouteInfo, #{})},
 
-    Prefix = concat_strings(maps:get(prefix, Options, ""),
-                            maps:get(prefix, RouteInfo, "")),
     Host = maps:get(host, RouteInfo, '_'),
     SubApps = maps:get(apps, RouteInfo, []),
     ok = misplaced_security(misplaced_in_group(Prefix, RouteInfo), App, RouterFile),
@@ -1068,17 +1069,29 @@ is_plugin_of_nova(PluginName) ->
 
 %% The list of a route group is checked here, when its routes are compiled,
 %% by the rule the one of the nova environment was checked with at the boot.
-plugins_before_security(#{plugins_before_security := Value}, RouterFile) ->
+%% It also has to name plugins the group lists as pre_request: any other
+%% name changes nothing, which a misspelt one would do without a sound.
+plugins_before_security(#{plugins_before_security := Value}, Plugins, Group) ->
+    Listed = [Module || {pre_request, Module, _Options} <- Plugins],
     case nova_settings:checked(plugins_before_security, Value) of
+        {ok, all} ->
+            all;
         {ok, Modules} ->
-            Modules;
+            case Modules -- Listed of
+                [] -> Modules;
+                _NotOfTheGroup -> invalid_plugins_before_security(Value, Group)
+            end;
         {error, Reason} ->
-            ?LOG_ERROR(#{msg => nova_settings:expected(plugins_before_security),
-                         setting => plugins_before_security, value => Reason, router_file => RouterFile}),
-            throw({error, {invalid_setting, plugins_before_security, Reason}})
+            invalid_plugins_before_security(Reason, Group)
     end;
-plugins_before_security(_RouteInfo, _RouterFile) ->
+plugins_before_security(_RouteInfo, _Plugins, _Group) ->
     nova_settings:value(plugins_before_security).
+
+-spec invalid_plugins_before_security(term(), map()) -> no_return().
+invalid_plugins_before_security(Value, Group) ->
+    ?LOG_ERROR(Group#{msg => ~"plugins_before_security of a route group must be all or a list of its pre_request plugins that have pre_request/4",
+                      setting => plugins_before_security, value => Value}),
+    throw({error, {invalid_setting, plugins_before_security, Value}}).
 
 plugins_after_security(RouteInfo, RouterFile) ->
     Modules = maps:get(plugins_after_security, RouteInfo,
