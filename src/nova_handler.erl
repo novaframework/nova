@@ -145,7 +145,8 @@ render_crash_page(Req, Env = #{callback := Callback}, 500) ->
         true ->
             reply(500, maps:without([resp_body], Req), Env);
         false ->
-            execute_controller(Req, Env#{app => nova, callback => fun nova_error_controller:server_error/1}, 500)
+            execute_controller(nova_router:status_page_request(500, #{}, Req),
+                               Env#{app => nova, callback => fun nova_error_controller:server_error/1}, 500)
     end;
 render_crash_page(Req, Env, _StatusPage) ->
     render_response(Req, Env, 500).
@@ -326,7 +327,8 @@ render_response(Req, Env, StatusCode) ->
             {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, fun erlang:date/0, Req),
             send_response(Req0, Env);
         {ok, _Bindings, #nova_handler_value{callback = Callback}} ->
-            execute_controller(Req, Env#{app => nova, callback => Callback}, StatusCode)
+            execute_controller(nova_router:status_page_request(StatusCode, #{}, Req),
+                               Env#{app => nova, callback => Callback}, StatusCode)
     end.
 
 

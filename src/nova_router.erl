@@ -26,6 +26,7 @@
          render_status_page/2,
          render_status_page/3,
          render_status_page/5,
+         status_page_request/3,
 
          %% Expose the router-callback
          routes/1,
@@ -700,8 +701,6 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
     %% A status page is rendered by a controller. Left in place, the handler
     %% of a websocket route would run instead and upgrade the connection.
     Env1 = maps:without([cowboy_handler, arguments], Env),
-    %% The controller of the page is called with the request alone, so what
-    %% it was given goes there too.
     ControllerData = #{status => StatusCode, data => Data},
     {Req0, Env0} =
         case nova_routing_trie:find(Host, StatusCode, '_', Dispatch) of
@@ -724,7 +723,16 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
                       bindings => Bindings}
                 }
         end,
-    {ok, Req0#{resp_status_code => StatusCode, controller_data => ControllerData}, Env0}.
+    {ok, status_page_request(StatusCode, Data, Req0), Env0}.
+
+%% What the controller of a status page finds in its request, however the
+%% page was reached. It is called with the request alone, so the status and
+%% what the caller gave for the page go there. For nova_handler, which
+%% renders the page of a controller that failed.
+-doc false.
+-spec status_page_request(StatusCode :: integer(), Data :: map(), Req :: cowboy_req:req()) -> routed_req().
+status_page_request(StatusCode, Data, Req) ->
+    Req#{resp_status_code => StatusCode, controller_data => #{status => StatusCode, data => Data}}.
 
 
 insert_opts(T) ->
