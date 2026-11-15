@@ -2,21 +2,23 @@
 -include_lib("eunit/include/eunit.hrl").
 
 setup() ->
-    Dir = tmp_dir(),
-    ok = file:make_dir(Dir),
-    {ok, Spool} = nova_multipart_spool:start_link(),
-    unlink(Spool),
-    Dir.
+    Dir = nova_test_helper:make_tmp_dir("nova_multipart_test"),
+    try
+        {ok, Spool} = nova_multipart_spool:start_link(),
+        unlink(Spool),
+        Dir
+    catch
+        Class:Reason:Stacktrace ->
+            ok = file:del_dir_r(Dir),
+            erlang:raise(Class, Reason, Stacktrace)
+    end.
 
 teardown(Dir) ->
-    ok = gen_server:stop(nova_multipart_spool),
-    {ok, Files} = file:list_dir(Dir),
-    [file:delete(filename:join(Dir, F)) || F <- Files],
-    ok = file:del_dir(Dir).
-
-tmp_dir() ->
-    Name = io_lib:format("nova_multipart_test_~p", [erlang:unique_integer([positive])]),
-    filename:join("/tmp", lists:flatten(Name)).
+    try
+        ok = gen_server:stop(nova_multipart_spool)
+    after
+        ok = file:del_dir_r(Dir)
+    end.
 
 client_filename_never_used_in_path_test_() ->
     {setup, fun setup/0, fun teardown/1,

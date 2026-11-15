@@ -19,18 +19,26 @@ spool_test_() ->
       fun stopping_the_spool_deletes_what_it_tracks/1]}.
 
 setup() ->
-    Dir = filename:join("/tmp", "nova_spool_test_" ++ integer_to_list(erlang:unique_integer([positive]))),
-    ok = file:make_dir(Dir),
-    {ok, Spool} = nova_multipart_spool:start_link(),
-    unlink(Spool),
-    Dir.
+    Dir = nova_test_helper:make_tmp_dir("nova_spool_test"),
+    try
+        {ok, Spool} = nova_multipart_spool:start_link(),
+        unlink(Spool),
+        Dir
+    catch
+        Class:Reason:Stacktrace ->
+            ok = file:del_dir_r(Dir),
+            erlang:raise(Class, Reason, Stacktrace)
+    end.
 
 teardown(Dir) ->
-    case whereis(nova_multipart_spool) of
-        undefined -> ok;
-        _Pid -> gen_server:stop(nova_multipart_spool)
-    end,
-    ok = file:del_dir_r(Dir).
+    try
+        case whereis(nova_multipart_spool) of
+            undefined -> ok;
+            _Pid -> gen_server:stop(nova_multipart_spool)
+        end
+    after
+        ok = file:del_dir_r(Dir)
+    end.
 
 file_is_deleted_when_its_owner_ends(Dir) ->
     fun() ->

@@ -9,8 +9,19 @@
          with_qs/2,
          with_content_type/2,
          setup_nova_env/0,
-         cleanup_nova_env/1
+         cleanup_nova_env/1,
+         make_tmp_dir/1
         ]).
+
+%% A new directory for the files of a test. Its name is one no other run
+%% makes: several of them share /tmp, and every one of them counts its
+%% unique integers from the same start.
+-spec make_tmp_dir(Name :: string()) -> file:filename().
+make_tmp_dir(Name) ->
+    Unique = binary_to_list(binary:encode_hex(crypto:strong_rand_bytes(6))),
+    Dir = filename:join("/tmp", lists:flatten([Name, $_, os:getpid(), $_, Unique])),
+    ok = file:make_dir(Dir),
+    Dir.
 
 %% Build a minimal cowboy_req-like map for testing pure handler logic.
 %% We avoid depending on nova_test (circular dep) and cowboy internals.
