@@ -30,15 +30,15 @@ A route group that declares `plugins` uses only those and none of the global one
 """.
 -behaviour(nova_plugin).
 
--export([pre_request/4,
+-export([pre_security/4,
          post_request/4,
          plugin_info/0]).
 
--doc "Stops a websocket upgrade from an origin that is not allowed with a 403.".
--spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
+-doc "Stops a websocket upgrade from an origin that is not allowed with a 403, ahead of the security callback.".
+-spec pre_security(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
           {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
           {stop, nova_plugin:reply(), Req0 :: cowboy_req:req(), NewState :: any()}.
-pre_request(Req, _Env, Options, State) ->
+pre_security(Req, _Env, Options, State) ->
     Allowed = maps:get(allowed_origins, Options, same_host),
     case is_websocket_upgrade(Req) andalso not is_allowed(cowboy_req:header(~"origin", Req), Req, Allowed) of
         true -> {stop, {reply, 403, ~"Origin not allowed"}, Req, State};

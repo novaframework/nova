@@ -6,7 +6,7 @@
 -define(EVIL, ~"https://evil.example").
 
 pre_request(Req, Options) ->
-    nova_ws_origin_plugin:pre_request(Req, #{}, Options, undefined).
+    nova_ws_origin_plugin:pre_security(Req, #{}, Options, undefined).
 
 http3_connect(Headers) ->
     #{version => 'HTTP/3', method => ~"CONNECT", protocol => ~"websocket", scheme => ~"https",

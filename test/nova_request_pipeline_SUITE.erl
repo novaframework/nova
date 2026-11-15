@@ -7,15 +7,15 @@
 -export([
          served_request_runs_both_plugin_phases/1,
          plugin_answers_before_the_security_callback/1,
-         stopped_request_runs_no_post_request_plugin/1,
-         denied_request_runs_no_post_request_plugin/1,
+         stopped_request_runs_no_later_plugin/1,
+         denied_request_runs_no_later_plugin/1,
          unmatched_path_runs_no_plugin/1,
          unmatched_method_runs_no_plugin/1,
          status_page_is_behind_the_security_of_its_group/1,
          websocket_upgrade_runs_both_plugin_phases/1
         ]).
 
--export([pre_request/4, post_request/4, plugin_info/0]).
+-export([pre_security/4, pre_request/4, post_request/4, plugin_info/0]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
@@ -24,8 +24,8 @@ all() ->
     [
      served_request_runs_both_plugin_phases,
      plugin_answers_before_the_security_callback,
-     stopped_request_runs_no_post_request_plugin,
-     denied_request_runs_no_post_request_plugin,
+     stopped_request_runs_no_later_plugin,
+     denied_request_runs_no_later_plugin,
      unmatched_path_runs_no_plugin,
      unmatched_method_runs_no_plugin,
      status_page_is_behind_the_security_of_its_group,
@@ -40,6 +40,9 @@ init_per_suite(Config) ->
             #{prefix => "/stopped",
               security => fun nova_request_pipeline_pages:deny/1,
               plugins => [{pre_request, ?MODULE, #{stop => true}}, {post_request, ?MODULE, #{}}],
+              routes => Page},
+            #{prefix => "/stopped-late",
+              plugins => [{pre_request, ?MODULE, #{stop => late}}, {post_request, ?MODULE, #{}}],
               routes => Page},
             #{security => fun nova_request_pipeline_pages:marked/1,
               routes => [{405, fun nova_request_pipeline_pages:method_page/1, #{}}]}
@@ -64,7 +67,14 @@ end_per_testcase(_Case, _Config) ->
     persistent_term:erase(?MODULE),
     ok.
 
-pre_request(Req, _Env, #{stop := true}, State) ->
+pre_security(Req, _Env, #{stop := true}, State) ->
+    ran(pre_security),
+    {stop, {reply, 403, ~"stopped by a plugin"}, Req, State};
+pre_security(Req, _Env, _Options, State) ->
+    ran(pre_security),
+    {ok, cowboy_req:set_resp_header(~"x-pipeline", ~"pre_security", Req), State}.
+
+pre_request(Req, _Env, #{stop := late}, State) ->
     ran(pre_request),
     {stop, {reply, 403, ~"stopped by a plugin"}, Req, State};
 pre_request(Req, _Env, _Options, State) ->
@@ -102,20 +112,23 @@ served_request_runs_both_plugin_phases(Config) ->
     {Status, Headers, Body} = nova_test_listener:response(?config(port, Config), "GET", "/open/", []),
     ?assertEqual({200, ~"page"}, {Status, Body}),
     ?assertEqual(~"pre_request", maps:get(~"x-pipeline", Headers)),
-    ?assertEqual([pre_request, post_request], phases()).
+    ?assertEqual([pre_security, pre_request, post_request], phases()).
 
 plugin_answers_before_the_security_callback(Config) ->
     ?assertEqual({403, ~"stopped by a plugin"}, nova_test_listener:get(?config(port, Config), "/stopped/")).
 
-stopped_request_runs_no_post_request_plugin(Config) ->
+stopped_request_runs_no_later_plugin(Config) ->
     ?assertMatch({403, _}, nova_test_listener:get(?config(port, Config), "/stopped/")),
-    ?assertEqual([pre_request], phases()).
+    ?assertEqual([pre_security], phases()),
+    ?assertMatch({403, _}, nova_test_listener:get(?config(port, Config), "/stopped-late/")),
+    ?assertEqual([pre_security, pre_request], phases()).
 
-denied_request_runs_no_post_request_plugin(Config) ->
+%% pre_request/4 waits for the security callback, so it does not run either.
+denied_request_runs_no_later_plugin(Config) ->
     {Status, Headers, _Body} = nova_test_listener:response(?config(port, Config), "GET", "/denied/", []),
     ?assertEqual(401, Status),
-    ?assertEqual(~"pre_request", maps:get(~"x-pipeline", Headers)),
-    ?assertEqual([pre_request], phases()).
+    ?assertEqual(~"pre_security", maps:get(~"x-pipeline", Headers)),
+    ?assertEqual([pre_security], phases()).
 
 unmatched_path_runs_no_plugin(Config) ->
     {Status, Headers, _Body} = nova_test_listener:response(?config(port, Config), "GET", "/nowhere", []),
@@ -141,4 +154,4 @@ websocket_upgrade_runs_both_plugin_phases(Config) ->
     ?assertEqual([~"connected", ~"pong"],
                  nova_test_listener:websocket_texts(?config(port, Config), "/open/ws", ~"ping", 2)),
     ?assertMatch({200, _}, nova_test_listener:get(?config(port, Config), "/open/")),
-    ?assertEqual([pre_request, post_request, pre_request, post_request], phases()).
+    ?assertEqual([pre_security, pre_request, post_request, pre_security, pre_request, post_request], phases()).

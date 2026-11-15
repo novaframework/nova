@@ -40,7 +40,7 @@ The plugin defines a field called `correlation_id` in the request object for con
 """.
 -behaviour(nova_plugin).
 
--export([pre_request/4,
+-export([pre_security/4,
          post_request/4,
          plugin_info/0]).
 
@@ -50,8 +50,8 @@ The plugin defines a field called `correlation_id` in the request object for con
 -define(DEFAULT_LOGGER_KEY, 'correlation-id').
 
 %%--------------------------------------------------------------------
--doc "Pre-request callback to either pick up correlation id from request headers or generate a new uuid correlation id.".
-pre_request(Req0, _Env, Opts, State) ->
+-doc "Picks the correlation id up from the request headers or generates a new uuid. Runs ahead of the security callback, so that what it logs and a request it refuses carry the id.".
+pre_security(Req0, _Env, Opts, State) ->
     CorrId = get_correlation_id(Req0, Opts),
     %% Update the loggers metadata with correlation-id
     ok = update_logger_metadata(CorrId, Opts),

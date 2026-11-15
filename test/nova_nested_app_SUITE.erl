@@ -147,11 +147,13 @@ secure_covers_a_nested_application_but_prefix_and_plugins_do_not(_Config) ->
                                       mounted => [#{prefix => "/own", routes => ?PAGE}],
                                       mounted_nova_apps => [nova_test_nested_app],
                                       nested => [#{prefix => "/nested", routes => ?PAGE}]}),
-    ?assertMatch({403, #{~"x-nova-pre-request" := ~"1"}, ~"outer"}, response(Port, "/mounted/own/?outer=deny")),
+    ?assertMatch({200, #{~"x-nova-pre-request" := ~"1"}, ~"none"}, response(Port, "/mounted/own/")),
+    ?assertMatch({403, _, ~"outer"}, response(Port, "/mounted/own/?outer=deny")),
     ?assertMatch({404, _Headers, _Body}, response(Port, "/mounted/nested/")),
-    {403, Headers, ~"outer"} = response(Port, "/nested/?outer=deny"),
+    {200, Headers, ~"none"} = response(Port, "/nested/"),
     ?assertNot(is_map_key(~"x-nova-pre-request", Headers)),
-    ?assertEqual([outer, outer], nova_nested_app_pages:calls()).
+    ?assertMatch({403, _, ~"outer"}, response(Port, "/nested/?outer=deny")),
+    ?assertEqual([outer, outer, outer, outer], nova_nested_app_pages:calls()).
 
 %% Outermost first, and the security of the route group last.
 secure_of_every_application_around_a_nested_one_has_to_allow(_Config) ->

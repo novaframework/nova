@@ -3,17 +3,17 @@
 -behaviour(nova_plugin).
 
 -export([
-         pre_request/4,
+         pre_security/4,
          post_request/4,
          plugin_info/0
         ]).
 
 %%--------------------------------------------------------------------
--doc "Pre-request callback".
--spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
-                         {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
-                         {stop, Req0 :: cowboy_req:req(), NewState :: any()}.
-pre_request(Req, _Env, #{allow_origins := Origins} = Options, State) ->
+-doc "Sets the CORS headers and answers a preflight. Runs ahead of the security callback: a preflight carries no credentials, and a browser only shows a refusal to the page when it has the headers.".
+-spec pre_security(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
+                          {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
+                          {stop, Req0 :: cowboy_req:req(), NewState :: any()}.
+pre_security(Req, _Env, #{allow_origins := Origins} = Options, State) ->
     ReqWithOptions = add_cors_headers(Req, Origins, Options),
     continue(ReqWithOptions, State).
 

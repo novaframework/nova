@@ -3,7 +3,7 @@
 %%% Created : 12 Feb 2020 by Niclas Axelsson <niclas@burbas.se>
 -module(nova_plugin).
 -moduledoc """
-Plugins can be run at two different times; either in the beginning or at the end of a request. They can modify both the actual request or the nova-state. A plugin is implemented with the nova_plugin behaviour and needs to implement pre_request/4 and/or post_request/4 and plugin_info/0.
+Plugins run at the beginning or at the end of a request. They can modify both the actual request or the nova-state. A plugin is implemented with the nova_plugin behaviour and needs to implement pre_security/4, pre_request/4 and/or post_request/4, and plugin_info/0.
 
 A plugin returns one of:
 
@@ -21,7 +21,21 @@ A plugin returns one of:
 
 When a pre_request plugin stops the request, or the security function refuses it, the controller and the post_request plugins do not run.
 
-A pre_request plugin runs before the route's security function, unless its module is listed under `plugins_after_security` in the route group or the `nova` environment. A listed plugin runs once the security function has let the request through, which keeps a body-reading plugin away from requests that are refused.
+## Before and after the security callback
+
+A plugin listed as `{pre_request, Module, Options}` takes part twice before the controller, with the same options:
+
+- `pre_security/4`, when the module has it, runs ahead of the security callback of the route, for every request to the route. It is for what has to happen whether or not the request is let in: answering a CORS preflight, which carries no credentials, giving the request its correlation id, turning a client away by address or rate. It must not read the request body.
+- `pre_request/4` runs once the security callback has let the request through, and at once on a route without one. Reading and decoding the body belongs here, so that nothing is read from a client that is refused.
+
+Earlier releases ran `pre_request/4` ahead of the security callback. Two lists, each in a route group or in the `nova` environment (the route group wins), change the order for the modules they name:
+
+- `plugins_before_security` - `pre_request/4` of these modules runs ahead of the security callback, as it did. `all` names every plugin of the route group.
+- `plugins_after_security` - nothing of these modules runs ahead of the security callback: `pre_security/4` runs behind it too, right before `pre_request/4`. A module in both lists runs after.
+
+Within each of the two phases the plugins run in the order they are listed. What the security callback finds in the request is what `pre_security/4` put there. With the plugins of Nova that is the correlation id, the CORS headers and `parsed_qs`, and not `json`, `params`, `body` or `files`: a security callback that needs the decoded body lists `nova_request_plugin` under `plugins_before_security` for its route group.
+
+When a route has a security callback, a plugin from outside Nova that only has `pre_request/4` and is in neither list is named in a notice when the routes are compiled, once, since it no longer runs for requests that are refused.
 
 The state a plugin returns is kept per plugin module and shared by every request. Nova writes it back only when it changed, and concurrent requests overwrite each other's writes (the last writer wins). Keep per-request data in `Req`, and use `ets` or `counters` for anything shared that has to add up, such as counters.
 
@@ -57,8 +71,23 @@ It takes the plugin's state as argument and should return ok.
 -optional_callbacks([stop/1]).
 
 -doc """
-This function is called before the request is processed. It can modify the request
-and the nova-state. See the module documentation for what it can return.
+This function is called ahead of the security callback of the route, for every
+request to it. It can modify the request and the nova-state, and returns what
+`c:pre_request/4` can. It must not read the request body.
+""".
+-callback pre_security(Req :: cowboy_req:req(), Env :: any(),
+                       Options :: map(), PluginState :: any()) ->
+    {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
+    {ok, Reply :: reply(), Req0 :: cowboy_req:req(), NewState :: any()} |
+    {stop, Req0 :: cowboy_req:req(), NewState :: any()} |
+    {stop, Reply :: reply(), Req0 :: cowboy_req:req(), NewState :: any()} |
+    {error, Reason :: term()}.
+-optional_callbacks([pre_security/4]).
+
+-doc """
+This function is called before the controller, once the security callback of
+the route has let the request through. It can modify the request and the
+nova-state. See the module documentation for what it can return.
 """.
 -callback pre_request(Req :: cowboy_req:req(), Env :: any(),
                       Options :: map(), PluginState :: any()) ->

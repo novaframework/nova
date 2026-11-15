@@ -19,7 +19,7 @@
          unexpected_security_return_denies/1
         ]).
 
--export([pre_request/4, plugin_info/0]).
+-export([pre_security/4, plugin_info/0]).
 
 -export([init/2]).
 
@@ -80,7 +80,7 @@ add_cowboy_handler_route(Path, Secure, PluginOptions) ->
     Value = #cowboy_handler_value{app = nova_test_app,
                                   handler = ?MODULE,
                                   arguments = #{},
-                                  plugins = [{pre_request, [{fun ?MODULE:pre_request/4, PluginOptions}]}],
+                                  plugins = [{pre_request, [{fun ?MODULE:pre_security/4, PluginOptions}]}],
                                   secure = Secure},
     add_route(Path, Value).
 
@@ -103,11 +103,14 @@ init(Req, State) ->
 handler_calls() ->
     counters:get(persistent_term:get(?MODULE), 1).
 
-pre_request(Req, _Env, #{return := ok}, State) ->
+%% Ahead of the security callback, which refuses every request it is asked
+%% about: what is tested here is that a plugin failing there ends the
+%% request, and not that the callback does.
+pre_security(Req, _Env, #{return := ok}, State) ->
     {ok, Req, State};
-pre_request(_Req, _Env, #{return := Return}, _State) ->
+pre_security(_Req, _Env, #{return := Return}, _State) ->
     Return;
-pre_request(_Req, _Env, _Options, _State) ->
+pre_security(_Req, _Env, _Options, _State) ->
     error(plugin_crashed).
 
 plugin_info() ->
@@ -115,7 +118,7 @@ plugin_info() ->
       version => ~"1.0.0",
       url => ~"https://github.com/novaframework/nova",
       authors => [~"Nova team <info@novaframework.org>"],
-      description => ~"Crashes in pre_request",
+      description => ~"Crashes in pre_security",
       options => []}.
 
 crashed_plugin_does_not_upgrade_websocket(Config) ->

@@ -3,6 +3,7 @@
 -behaviour(nova_plugin).
 
 -export([
+         pre_security/4,
          pre_request/4,
          post_request/4,
          plugin_info/0
@@ -20,14 +21,25 @@
 -define(CHUNK_PERIOD, 15000).
 
 %%--------------------------------------------------------------------
--doc "Pre-request callback".
+-doc "Parses the query string, which reads nothing from the client, ahead of the security callback.".
+-spec pre_security(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
+                          {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
+                          {stop, {status, 400}, Req0 :: cowboy_req:req(), NewState :: any()}.
+pre_security(Req, _Env, Options, State) ->
+    case [Option || {parse_qs, _Type} = Option <- maps:to_list(Options)] of
+        [] -> {ok, Req, State};
+        ParseQs -> modulate_state(Req, ParseQs, State)
+    end.
+
+%%--------------------------------------------------------------------
+-doc "Reads and decodes the body, once the security callback has let the request through.".
 -spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
                          {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
                          {stop, Req0 :: cowboy_req:req(), NewState :: any()} |
                          {stop, {status, 400 | 413} | {status, 408 | 413, #{binary() => binary()}},
                           Req0 :: cowboy_req:req(), NewState :: any()}.
 pre_request(Req, _Env, Options, State) ->
-    ListOptions = maps:to_list(Options),
+    ListOptions = [Option || {Key, _Value} = Option <- maps:to_list(Options), Key =/= parse_qs],
     MaxLength = limit(max_body_length, Options, ?DEFAULT_MAX_BODY_LENGTH, 0),
     Timeout = limit(body_read_timeout, Options, ?DEFAULT_BODY_READ_TIMEOUT, 1),
     %% The rest of the body is still on the connection, so it is closed.

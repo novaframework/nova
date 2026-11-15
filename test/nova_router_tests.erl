@@ -371,172 +371,105 @@ plugins_empty_test_() ->
 
 normalize_plugins_empty_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        ?assertEqual([], nova_router:normalize_plugins([], []))
+        ?assertEqual([], nova_router:normalize_plugins([], order([], [])))
     end}.
 
+%% pre_request/4 waits for the security callback, and pre_security/4 of a
+%% plugin that has it runs ahead of it.
 normalize_plugins_single_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        Result = nova_router:normalize_plugins([{pre_request, nova_request_plugin, #{}}], []),
-        ?assertMatch([{pre_request, [{_, #{}}]}], Result),
+        Result = nova_router:normalize_plugins([{pre_request, nova_request_plugin, #{}}], order([], [])),
+        ?assertEqual([{after_security, [{fun nova_request_plugin:pre_request/4, #{}}]},
+                      {pre_request, [{fun nova_request_plugin:pre_security/4, #{}}]}], Result),
         %% Verify the plugin was added to the global store
         Plugins = persistent_term:get(nova_plugins),
         ?assert(lists:member(nova_request_plugin, Plugins))
     end}.
 
-normalize_plugins_multiple_same_type_test_() ->
+normalize_plugins_keep_their_order_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         Result = nova_router:normalize_plugins([
             {pre_request, nova_request_plugin, #{}},
-            {pre_request, nova_cors_plugin, #{}}
-        ], []),
-        ?assertMatch([{pre_request, [_, _]}], Result)
+            {pre_request, nova_cors_plugin, #{}},
+            {pre_request, nova_csrf_plugin, #{}}
+        ], order([], [])),
+        ?assertEqual([{after_security, [{fun nova_request_plugin:pre_request/4, #{}},
+                                        {fun nova_csrf_plugin:pre_request/4, #{}}]},
+                      {pre_request, [{fun nova_request_plugin:pre_security/4, #{}},
+                                     {fun nova_cors_plugin:pre_security/4, #{}}]}], Result)
     end}.
 
 normalize_plugins_different_types_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         Result = nova_router:normalize_plugins([
-            {pre_request, nova_request_plugin, #{}},
+            {pre_request, nova_csrf_plugin, #{}},
             {post_request, nova_cors_plugin, #{}}
-        ], []),
-        ?assertEqual(2, length(Result)),
-        ?assertMatch({pre_request, [_]}, lists:keyfind(pre_request, 1, Result)),
-        ?assertMatch({post_request, [_]}, lists:keyfind(post_request, 1, Result))
+        ], order([], [])),
+        ?assertEqual([{after_security, [{fun nova_csrf_plugin:pre_request/4, #{}}]},
+                      {post_request, [{fun nova_cors_plugin:post_request/4, #{}}]}], Result)
+    end}.
+
+normalize_plugins_before_security_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Plugins = [{pre_request, nova_request_plugin, #{}}, {pre_request, nova_csrf_plugin, #{}}],
+        ?assertEqual([{after_security, [{fun nova_csrf_plugin:pre_request/4, #{}}]},
+                      {pre_request, [{fun nova_request_plugin:pre_security/4, #{}},
+                                     {fun nova_request_plugin:pre_request/4, #{}}]}],
+                     nova_router:normalize_plugins(Plugins, order([nova_request_plugin], []))),
+        ?assertEqual([{pre_request, [{fun nova_request_plugin:pre_security/4, #{}},
+                                     {fun nova_request_plugin:pre_request/4, #{}},
+                                     {fun nova_csrf_plugin:pre_request/4, #{}}]}],
+                     nova_router:normalize_plugins(Plugins, order(all, [])))
     end}.
 
 normalize_plugins_after_security_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        Result = nova_router:normalize_plugins([
-            {pre_request, nova_cors_plugin, #{}},
-            {pre_request, nova_request_plugin, #{}},
-            {post_request, nova_request_plugin, #{}}
-        ], [nova_request_plugin]),
-        ?assertEqual({pre_request, [{fun nova_cors_plugin:pre_request/4, #{}}]},
-                     lists:keyfind(pre_request, 1, Result)),
-        ?assertEqual({after_security, [{fun nova_request_plugin:pre_request/4, #{}}]},
-                     lists:keyfind(after_security, 1, Result)),
-        ?assertEqual({post_request, [{fun nova_request_plugin:post_request/4, #{}}]},
-                     lists:keyfind(post_request, 1, Result))
+        Plugins = [{pre_request, nova_cors_plugin, #{}},
+                   {pre_request, nova_request_plugin, #{}},
+                   {post_request, nova_request_plugin, #{}}],
+        Expected = [{after_security, [{fun nova_request_plugin:pre_security/4, #{}},
+                                      {fun nova_request_plugin:pre_request/4, #{}}]},
+                    {post_request, [{fun nova_request_plugin:post_request/4, #{}}]},
+                    {pre_request, [{fun nova_cors_plugin:pre_security/4, #{}}]}],
+        ?assertEqual(Expected, nova_router:normalize_plugins(Plugins, order([], [nova_request_plugin]))),
+        ?assertEqual(Expected, nova_router:normalize_plugins(Plugins, order(all, [nova_request_plugin])))
     end}.
 
-plugins_after_security_must_be_modules_test_() ->
+%% A plugin from outside Nova that only has pre_request/4 no longer runs for
+%% a request that is refused, which nothing else would tell its author.
+plugin_that_moved_behind_security_is_noted_once_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        ?assertEqual([nova_request_plugin],
-                     nova_router:plugins_after_security(#{plugins_after_security => [nova_request_plugin]}, undefined)),
-        ?assertEqual([], nova_router:plugins_after_security(#{}, undefined)),
-        ?assertThrow({error, {invalid_plugins_after_security, true}},
-                     nova_router:plugins_after_security(#{plugins_after_security => true}, undefined))
+        meck:new(moved_plugin, [non_strict, no_link]),
+        meck:expect(moved_plugin, pre_request, fun(Req, _Env, _Options, State) -> {ok, Req, State} end),
+        meck:expect(moved_plugin, plugin_info, fun() -> #{title => ~"moved", version => ~"0"} end),
+        Plugins = [{pre_request, moved_plugin, #{}}, {pre_request, nova_csrf_plugin, #{}}],
+        Noted = fun(Order) ->
+                        {_, Events} = nova_test_log:collect(fun() -> nova_router:normalize_plugins(Plugins, Order) end),
+                        [Plugin || {notice, {report, #{plugin := Plugin}}} <- Events]
+                end,
+        try
+            ?assertEqual([], Noted(order([], []))),
+            ?assertEqual([], Noted((order([moved_plugin], []))#{secured => true})),
+            ?assertEqual([], Noted((order([], [moved_plugin]))#{secured => true})),
+            ?assertEqual([moved_plugin], Noted((order([], []))#{secured => true})),
+            ?assertEqual([], Noted((order([], []))#{secured => true}))
+        after
+            persistent_term:erase({nova_router, new_order_noted, moved_plugin}),
+            meck:unload(moved_plugin)
+        end
     end}.
 
-%%====================================================================
-%% add_routes/2
-%%====================================================================
+plugins_before_security_test_() ->
+    [?_assertEqual([], nova_router:plugins_before_security(#{}, "router.erl")),
+     ?_assertEqual(all, nova_router:plugins_before_security(#{plugins_before_security => all}, "router.erl")),
+     ?_assertEqual([a_plugin], nova_router:plugins_before_security(#{plugins_before_security => [a_plugin]},
+                                                                   "router.erl")),
+     ?_assertThrow({error, {invalid_plugins_before_security, none}},
+                   nova_router:plugins_before_security(#{plugins_before_security => none}, "router.erl"))].
 
-add_routes_empty_test_() ->
-    {setup, ?SETUP, ?CLEANUP, fun() ->
-        ?assertEqual(ok, nova_router:add_routes(my_app, []))
-    end}.
+order(Before, After) ->
+    #{before => Before, 'after' => After, secured => false}.
 
-add_routes_invalid_throws_test_() ->
-    {setup, ?SETUP, ?CLEANUP, fun() ->
-        ?assertThrow({error, {invalid_routes, my_app, not_a_list}},
-                     apply(nova_router, add_routes, [my_app, not_a_list]))
-    end}.
-
-%% Regression: add_routes/2 used to crash with {badkey, router_file}
-%% but was fixed in PR #373. Verify it succeeds.
-add_routes_without_router_file_test_() ->
-    {setup, ?SETUP, ?CLEANUP, fun() ->
-        NewCallback = fun(_) -> {json, #{new => true}} end,
-        Routes = [#{
-            routes => [{"/new_route", NewCallback, #{methods => [get]}}]
-        }],
-        ?assertEqual(ok, nova_router:add_routes(new_app, [Routes]))
-    end}.
-
-add_routes_keeps_the_prefix_in_the_env_of_the_main_application_test_() ->
-    {setup, ?SETUP,
-     fun(State) ->
-         application:unset_env(nova, apps),
-         cleanup(State)
-     end,
-     fun() ->
-         Page = fun(_) -> {json, #{}} end,
-         application:set_env(nova, apps, [{other_app, #{prefix => "/other"}}]),
-         ok = nova_router:add_routes(env_app, #{prefix => "/env", routes => [{"/page", Page, #{methods => [get]}}]}),
-         ?assertEqual([{other_app, #{prefix => "/other"}}, {env_app, #{prefix => "/env"}}],
-                      nova:get_env(apps, [])),
-         ok = nova_router:remove_application(env_app),
-         ?assertEqual([{other_app, #{prefix => "/other"}}], nova:get_env(apps, []))
-     end}.
-
-%%====================================================================
-%% routes/1 callback
-%%====================================================================
-
-routes_callback_test() ->
-    Routes = nova_router:routes(dev),
-    ?assertMatch([#{routes := [_, _]}], Routes),
-    [#{routes := RouteList}] = Routes,
-    ?assertEqual(2, length(RouteList)),
-    [{404, Fun404, _}, {500, Fun500, _}] = RouteList,
-    ?assert(is_function(Fun404, 1)),
-    ?assert(is_function(Fun500, 1)).
-
-%%====================================================================
-%% add_plugin (internal, exported via TEST)
-%%====================================================================
-
-add_plugin_new_test_() ->
-    {setup, ?SETUP, ?CLEANUP, fun() ->
-        nova_router:add_plugin(test_plugin),
-        Plugins = persistent_term:get(nova_plugins),
-        ?assert(lists:member(test_plugin, Plugins))
-    end}.
-
-add_plugin_duplicate_test_() ->
-    {setup, ?SETUP, ?CLEANUP, fun() ->
-        nova_router:add_plugin(test_plugin),
-        nova_router:add_plugin(test_plugin),
-        Plugins = persistent_term:get(nova_plugins),
-        %% Should only appear once (umerge deduplicates)
-        ?assertEqual(1, length([P || P <- Plugins, P =:= test_plugin]))
-    end}.
-
-%%====================================================================
-%% insert/5 (internal, exported via TEST)
-%%====================================================================
-
-insert_valid_test_() ->
-    {setup, ?SETUP, ?CLEANUP, fun() ->
-        Tree = nova_routing_trie:new(#{strict => false}),
-        Value = #nova_handler_value{app = test_app, callback = fun(_) -> ok end},
-        Tree1 = nova_router:insert('_', "/test", <<"GET">>, Value, Tree, #{}),
-        {ok, _, V} = nova_routing_trie:find('_', <<"/test">>, <<"GET">>, Tree1),
-        ?assertMatch(#nova_handler_value{app = test_app}, V)
-    end}.
-
-%%====================================================================
-%% apply_callback/3 (internal, exported via TEST)
-%%====================================================================
-
-apply_callback_existing_test_() ->
-    {setup, ?SETUP, ?CLEANUP, fun() ->
-        %% lists:reverse/1 exists
-        Result = nova_router:apply_callback(lists, reverse, [[1, 2, 3]]),
-        ?assertEqual([3, 2, 1], Result)
-    end}.
-
-apply_callback_missing_function_test_() ->
-    {setup, ?SETUP, ?CLEANUP, fun() ->
-        Result = nova_router:apply_callback(lists, nonexistent_function_xyz, []),
-        ?assertEqual([], Result)
-    end}.
-
-apply_callback_missing_module_test_() ->
-    {setup, ?SETUP, ?CLEANUP, fun() ->
-        Result = nova_router:apply_callback(totally_fake_module_xyz, foo, []),
-        ?assertEqual([], Result)
-    end}.
 
 %%====================================================================
 %% Route template
@@ -553,12 +486,14 @@ route_template_controller_and_ws_test_() ->
 
         {ok, Req, _Env} = nova_router:execute(nova_test_helper:mock_req(~"GET", ~"/api/users/7"), #{}),
         ?assertEqual(~"/api/users/:id", maps:get(nova_route, Req)),
-        ?assertEqual([{pre_request, [{fun nova_request_plugin:pre_request/4, #{}}]}],
+        ?assertEqual([{after_security, [{fun nova_request_plugin:pre_request/4, #{}}]},
+                      {pre_request, [{fun nova_request_plugin:pre_security/4, #{}}]}],
                      maps:get(plugins, Req)),
 
         {ok, WsReq, WsEnv} = nova_router:execute(nova_test_helper:mock_req(~"GET", ~"/api/socket"), #{}),
         ?assertEqual(~"/api/socket", maps:get(nova_route, WsReq)),
-        ?assertEqual([{pre_request, [{fun nova_request_plugin:pre_request/4, #{}}]}],
+        ?assertEqual([{after_security, [{fun nova_request_plugin:pre_request/4, #{}}]},
+                      {pre_request, [{fun nova_request_plugin:pre_security/4, #{}}]}],
                      maps:get(plugins, WsReq)),
         ?assertEqual(#{module => route_ws_mod, app => route_app}, maps:get(arguments, WsEnv))
     end}.

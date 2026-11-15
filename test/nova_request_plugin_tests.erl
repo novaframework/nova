@@ -405,3 +405,23 @@ logged() ->
     after 50 ->
             []
     end.
+
+%%====================================================================
+%% Ahead of the security callback and behind it
+%%====================================================================
+
+query_string_is_parsed_ahead_of_security_test() ->
+    Req = (nova_test_helper:mock_req(~"POST", ~"/"))#{qs => ~"a=1"},
+    Options = #{parse_qs => true, decode_json_body => true, read_urlencoded_body => true},
+    {ok, Early, state} = nova_request_plugin:pre_security(Req, #{}, Options, state),
+    ?assertEqual(#{~"a" => ~"1"}, maps:get(parsed_qs, Early)),
+    ?assertNot(is_map_key(body, Early)),
+    ?assertEqual({ok, Req, state}, nova_request_plugin:pre_security(Req, #{}, maps:remove(parse_qs, Options), state)),
+    ?assertMatch({stop, {status, 400}, _, state},
+                 nova_request_plugin:pre_security(Req#{qs => ~"a=%zz"}, #{}, Options, state)).
+
+body_is_left_for_after_security_test() ->
+    Req = (nova_test_helper:mock_req(~"GET", ~"/"))#{qs => ~"a=1", has_body => false},
+    {ok, Late, state} = nova_request_plugin:pre_request(Req, #{}, #{parse_qs => true, decode_json_body => true}, state),
+    ?assertEqual(<<>>, maps:get(body, Late)),
+    ?assertNot(is_map_key(parsed_qs, Late)).

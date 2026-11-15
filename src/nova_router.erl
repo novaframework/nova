@@ -48,7 +48,8 @@
 
 -ifdef(TEST).
 -export([add_plugin/1, apply_callback/3, concat_strings/2, insert/6, method_to_binary/1, normalize_plugins/2,
-         normalize_secure/2, plugins_after_security/2, resolve_secure/3, router_module/1]).
+         normalize_secure/2, plugins_after_security/2, plugins_before_security/2, resolve_secure/3,
+         router_module/1]).
 -endif.
 
 -include_lib("kernel/include/logger.hrl").
@@ -531,8 +532,10 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
 
     Secure = resolve_secure(Options, RouteInfo, RouterFile),
 
-    AfterSecurity = plugins_after_security(RouteInfo, RouterFile),
-    Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins, AfterSecurity),
+    Order = #{before => plugins_before_security(RouteInfo, RouterFile),
+              'after' => plugins_after_security(RouteInfo, RouterFile),
+              secured => Secure =/= false},
+    Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins, Order),
                                 extra_state = maps:get(extra_state, RouteInfo, #{})},
 
     Prefix = concat_strings(maps:get(prefix, Options, ""),
@@ -991,28 +994,74 @@ dedupe_plugins([Plugin|Tl], Seen, Acc) ->
 plugin_key({Type, PluginName, _Options}) -> {Type, PluginName};
 plugin_key(Plugin)                       -> Plugin.
 
-normalize_plugins(Plugins, AfterSecurity) ->
-    NormalizedPlugins = normalize_plugins(Plugins, AfterSecurity, []),
-    [{Phase, lists:reverse(PhasePlugins)} || {Phase, PhasePlugins} <- NormalizedPlugins].
+%% The plugins of a route by the phase they run in, each phase in the order
+%% the plugins are listed. `pre_request` is the phase ahead of the security
+%% callback and `after_security` the one behind it.
+normalize_plugins(Plugins, Order) ->
+    Phased = lists:append([phased(Plugin, Order) || Plugin <- Plugins]),
+    [{Phase, [Callback || {In, Callback} <- Phased, In =:= Phase]}
+     || Phase <- lists:usort([Phase || {Phase, _Callback} <- Phased])].
 
-normalize_plugins([], _AfterSecurity, Ack) -> Ack;
-normalize_plugins([{Type, PluginName, Options}|Tl], AfterSecurity, Ack) ->
-    Phase = plugin_phase(Type, PluginName, AfterSecurity),
-    ExistingPlugins = lists:append([PhasePlugins || {Existing, PhasePlugins} <- Ack, Existing =:= Phase]),
+%% A plugin listed as pre_request takes part before the controller: its
+%% pre_security/4 ahead of the security callback, and its pre_request/4 once
+%% the request is let through, so that nothing is read from a client that is
+%% refused. plugins_before_security names the modules whose pre_request/4
+%% runs ahead of security as it did in earlier releases, and
+%% plugins_after_security those of which nothing does, which wins.
+phased({pre_request, PluginName, Options}, Order = #{before := Before, 'after' := After}) ->
     add_plugin(PluginName),
-    normalize_plugins(Tl, AfterSecurity,
-                      [{Phase, [{fun PluginName:Type/4, Options}|ExistingPlugins]}|proplists:delete(Phase, Ack)]).
+    Postponed = lists:member(PluginName, After),
+    Ahead = not Postponed andalso (Before =:= all orelse lists:member(PluginName, Before)),
+    HasPreSecurity = exports(PluginName, pre_security),
+    ok = note_new_order(PluginName, Order, HasPreSecurity orelse Postponed orelse Ahead),
+    [{phase(not Postponed), {fun PluginName:pre_security/4, Options}} || HasPreSecurity] ++
+        [{phase(Ahead), {fun PluginName:pre_request/4, Options}}
+         || not HasPreSecurity orelse exports(PluginName, pre_request)];
+phased({Type, PluginName, Options}, _Order) ->
+    add_plugin(PluginName),
+    [{Type, {fun PluginName:Type/4, Options}}].
 
-%% A pre_request plugin listed in plugins_after_security keeps its callback
-%% and its place among the listed ones, and runs once the security callback
-%% has let the request through.
-plugin_phase(pre_request, PluginName, AfterSecurity) ->
-    case lists:member(PluginName, AfterSecurity) of
-        true -> after_security;
-        false -> pre_request
+phase(true) -> pre_request;
+phase(false) -> after_security.
+
+exports(Module, Function) ->
+    _ = code:ensure_loaded(Module),
+    erlang:function_exported(Module, Function, 4).
+
+%% Earlier releases ran every pre_request plugin ahead of the security
+%% callback. One that was there to count, log or turn away requests before they were
+%% let in does not see the refused ones any more, and nothing fails to tell.
+note_new_order(PluginName, #{secured := true}, false) ->
+    case not is_plugin_of_nova(PluginName) andalso nova_once:first({?MODULE, new_order_noted, PluginName}) of
+        true ->
+            ?LOG_NOTICE(#{msg => ~"pre_request/4 of this plugin runs after the security callback of a route, and not for a request that is refused. Earlier releases ran it first. Put what has to run first in pre_security/4, or list the plugin under plugins_before_security to run it first as before, or under plugins_after_security to say that this order is intended",
+                          plugin => PluginName});
+        false ->
+            ok
     end;
-plugin_phase(Type, _PluginName, _AfterSecurity) ->
-    Type.
+note_new_order(_PluginName, _Order, _Settled) ->
+    ok.
+
+%% The routes of an application can be compiled by a tool that has not
+%% loaded Nova, which is what tells the modules of an application.
+is_plugin_of_nova(PluginName) ->
+    _ = application:load(nova),
+    application:get_application(PluginName) =:= {ok, nova}.
+
+plugins_before_security(RouteInfo, RouterFile) ->
+    case maps:get(plugins_before_security, RouteInfo, application:get_env(nova, plugins_before_security, [])) of
+        all ->
+            all;
+        Modules ->
+            case is_list(Modules) andalso lists:all(fun erlang:is_atom/1, Modules) of
+                true ->
+                    Modules;
+                false ->
+                    ?LOG_ERROR(#{msg => ~"plugins_before_security must be all or a list of plugin modules",
+                                 value => Modules, router_file => RouterFile}),
+                    throw({error, {invalid_plugins_before_security, Modules}})
+            end
+    end.
 
 plugins_after_security(RouteInfo, RouterFile) ->
     Modules = maps:get(plugins_after_security, RouteInfo,
