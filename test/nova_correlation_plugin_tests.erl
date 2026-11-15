@@ -74,7 +74,12 @@ logger_metadata_key_is_an_atom_test_() ->
      ?_assertEqual([trace_ref], logger_key(#{logger_metadata_key => ~"trace_ref"}))].
 
 logger_metadata_key_naming_no_atom_test() ->
-    Options = #{logger_metadata_key => ~"nova correlation key that names no atom"},
-    {Key, [{error, _Msg}]} = nova_test_log:collect(fun() -> logger_key(Options) end),
-    ?assertEqual(['correlation-id'], Key),
-    ?assertEqual({['correlation-id'], []}, nova_test_log:collect(fun() -> logger_key(Options) end)).
+    Name = ~"nova correlation key that names no atom",
+    Options = #{logger_metadata_key => Name},
+    try
+        {Key, [{error, _Msg}]} = nova_test_log:collect(fun() -> logger_key(Options) end),
+        ?assertEqual(['correlation-id'], Key),
+        ?assertEqual({['correlation-id'], []}, nova_test_log:collect(fun() -> logger_key(Options) end))
+    after
+        persistent_term:erase({nova_correlation_plugin, logger_metadata_key, Name})
+    end.
