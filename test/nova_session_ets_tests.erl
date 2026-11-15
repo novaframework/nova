@@ -399,18 +399,38 @@ format_status_passthrough() ->
     Status = #{state => test, log => [], message => undefined, reason => undefined},
     ?assertEqual(Status, nova_session_ets:format_status(Status)).
 
-%% Older releases stored {SessionId, Data}; a hot upgrade converts the rows.
+%% Older releases stored {SessionId, Data} and then {SessionId, Data,
+%% ExpiresAt}; a hot upgrade converts the rows of both and leaves the ones it
+%% already converted alone.
 code_change_converts_old_rows() ->
-    Pid = nova_session_ets,
+    Pid = whereis(nova_session_ets),
+    Soon = erlang:system_time(millisecond) + 60000,
+    Past = erlang:system_time(millisecond) - 1,
+    ok = nova_session_ets:set_value(~"current", ~"k", ~"v"),
     sys:replace_state(Pid, fun(State) ->
-                                   ets:insert(nova_session_ets_entries, {~"old-row", #{~"k" => ~"v"}}),
+                                   ets:insert(nova_session_ets_entries,
+                                              [{~"two", #{~"k" => ~"v"}},
+                                               {~"three", #{~"k" => ~"v"}, Soon},
+                                               {~"three-forever", #{~"k" => ~"v"}, infinity},
+                                               {~"three-expired", #{~"k" => ~"v"}, Past}]),
                                    State
                            end),
     ok = sys:suspend(Pid),
     ok = sys:change_code(Pid, nova_session_ets, "1.0", []),
+    ok = sys:change_code(Pid, nova_session_ets, "1.0", []),
     ok = sys:resume(Pid),
-    ?assertEqual({ok, ~"v"}, nova_session_ets:get_value(~"old-row", ~"k")),
-    ?assert(nova_session_ets:session_exists(~"old-row")).
+    Live = [~"two", ~"three", ~"three-forever", ~"current"],
+    [?assertEqual({Id, {ok, ~"v"}}, {Id, nova_session_ets:get_value(Id, ~"k")}) || Id <- Live],
+    [?assertEqual({Id, ok}, {Id, nova_session_ets:set_value(Id, ~"k2", ~"v2")}) || Id <- Live],
+    [?assertEqual({Id, {ok, ~"v2"}}, {Id, nova_session_ets:get_value(Id, ~"k2")}) || Id <- Live],
+    ?assertEqual({error, not_found}, nova_session_ets:get_value(~"three-expired", ~"k")),
+    ?assertMatch([{~"three", _, Soon, kept}], ets:lookup(nova_session_ets_entries, ~"three")),
+    Pid ! sweep,
+    ok = gen_server:call(Pid, sync),
+    ?assertEqual([], ets:lookup(nova_session_ets_entries, ~"three-expired")),
+    ?assertEqual(4, ets:info(nova_session_ets_entries, size)),
+    ?assertEqual(4, ets:info(nova_session_ets_expiry, size)),
+    ?assertEqual(Pid, whereis(nova_session_ets)).
 
 terminate_returns_ok() ->
     ?assertEqual(ok, nova_session_ets:terminate(normal, #{})).

@@ -36,7 +36,8 @@ so it is signed out. Use a shared backend, such as a database, when sessions
 have to outlive a node.
 
 Rows are `{SessionId, Data, ExpiresAt, Class}`. Older releases stored
-`{SessionId, Data}`; `code_change/3` converts them on a hot upgrade.
+`{SessionId, Data}` or `{SessionId, Data, ExpiresAt}`; `code_change/3`
+converts both on a hot upgrade.
 """.
 
 -behaviour(gen_server).
@@ -266,8 +267,9 @@ terminate(_Reason, _State) ->
                                       {error, Reason :: term()}.
 code_change(_OldVsn, _State, _Extra) ->
     _ = ets:whereis(?EXPIRY) =:= undefined andalso ets:new(?EXPIRY, [ordered_set, named_table]),
-    Old = ets:select(?TABLE, [{{'$1', '$2'}, [], [{{'$1', '$2'}}]}]),
-    _ = [insert(SessionId, Session, infinity, kept) || {SessionId, Session} <- Old],
+    Old = ets:select(?TABLE, [{{'$1', '$2'}, [], [{{'$1', '$2', infinity}}]},
+                              {{'$1', '$2', '$3'}, [], ['$_']}]),
+    _ = [insert(SessionId, Session, ExpiresAt, kept) || {SessionId, Session, ExpiresAt} <- Old],
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------
