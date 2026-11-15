@@ -7,6 +7,7 @@ change it.
 
 | Situation | Response | Logged as |
 |---|---|---|
+| The path is not canonical, as `/a//b` and `/a/../b` are not | `400`, through the `400` page if the application has one. See [Routing](routing.md#paths-that-are-not-canonical) | `Request path is not canonical`, at debug level |
 | No route matches the path | The `404` page | |
 | The path has routes, but none for the method | `405` with an `allow` header, through the `405` page if the application has one | |
 | A controller throws `{StatusCode, Reason}` | The page for that status code | `Controller threw an exception` |
@@ -15,7 +16,9 @@ change it.
 | A view names a template that does not exist | The `500` page. In `dev` the page names the template | `Nova could not render template` |
 | A controller or a handler fails after the response has begun | What was sent already. No page | The failure, and a warning that no page is sent |
 | A request that was answered already is answered again, for instance by a controller that replied with `cowboy_req:reply/4` and returned without the request that call gave back | The response that was sent first. The second one is dropped, and the connection stays open | `The request was answered already, so this response is not sent ...`, once per request |
-| A `pre_request` plugin crashes or returns `{error, Reason}` | The `500` page | `Plugin crashed` |
+| A `pre_request` plugin crashes or returns `{error, Reason}`, in `pre_security/4` or in `pre_request/4` | The `500` page | `Plugin crashed` |
+| A request to a websocket route comes from an origin that is not allowed | `403` with the text `Origin not allowed`. No page is rendered | |
+| `nova_csrf_plugin` refuses a request | `403` with the text `Forbidden - request from another origin` or `Forbidden - CSRF token invalid`. No page is rendered | |
 | The security callback crashes | The `500` page | `Security handler crashed` |
 | The security callback refuses the request | `401`, or what the callback returned. No page is rendered | |
 | The client sent something Cowboy cannot parse, or sent the body too slowly | `400`, `408` or `413` | A warning |
@@ -53,7 +56,7 @@ request asks for:
 | Not sent, or cannot be parsed | A JSON object |
 | Prefers JSON | A JSON object |
 | Prefers HTML | An HTML page |
-| Admits neither | Empty |
+| Admits neither | Empty, and no `content-type` header |
 
 `application/json`, `application/*` and `*/*` stand for JSON, and
 `text/html`, `text/*` and `*/*` for HTML. The form with the higher quality
@@ -65,7 +68,7 @@ the one the header names first wins, and JSON when one range covers both, as
 The `500` page has a title and a generic message, in every environment. The
 class and the reason of the crash and the stacktrace are only added when
 `environment` is set to `dev` under `nova`. An environment that is not set
-does not count as `dev` here. The stacktrace also needs
+is read as `prod`. The stacktrace also needs
 `{use_stacktrace, true}`. Without it, Nova logs a hint about the setting
 with the first such page in `dev`, once per node.
 
@@ -108,16 +111,25 @@ routes replace the pages that come with Nova. For a `500`, the request has
 what is known about the failure under `crash_info`, after
 [redaction](logging.md#redaction). Do not send it to the client.
 
-What else the request of a page holds depends on how the page was reached:
+The request of a page always has `resp_status_code`, and `controller_data`
+with `#{status => StatusCode, data => Data}`. `Data` and `crash_info` depend
+on how the page was reached:
 
-| Reached from | In the request |
-|---|---|
-| A request no route or no method matches, a crash in a plugin or in a security callback, and your own call of `nova_router:render_status_page/2,3,5` | `resp_status_code`, and `controller_data` with `#{status => StatusCode, data => Data}`. `Data` is the map `render_status_page` was given: `#{error => "Not found in path"}` for a `404`, `#{error => "Method not allowed"}` for a `405`, otherwise `#{}`. A crash has `crash_info` as well |
-| A controller that crashed, threw `{StatusCode, Reason}` or returned something no handler knows | `crash_info`. Neither `resp_status_code` nor `controller_data` |
-| A request `cowboy_req` could not parse in a controller (`400`, `408`, `413`) | None of the three |
+| Reached from | `Data` | `crash_info` |
+|---|---|---|
+| A path that is not canonical (`400`) | `#{error => "Path is not canonical"}` | No |
+| A request no route matches (`404`) | `#{error => "Not found in path"}` | No |
+| A request no method matches (`405`) | `#{error => "Method not allowed"}` | No |
+| A crash in a plugin or in a security callback | `#{}` | Yes |
+| A controller that crashed, threw `{StatusCode, Reason}` or returned something no handler knows | `#{}` | Yes |
+| A request `cowboy_req` could not parse in a controller (`400`, `408`, `413`) | `#{}` | No |
+| Your own call of `nova_router:render_status_page/2,3,5` | The map it was given, `#{}` with `render_status_page/2` | No |
 
-Match on the keys a page needs with a default, as in
-`maps:get(resp_status_code, Req, 500)`, so that one page serves both.
+```erlang
+not_found(#{resp_status_code := Status, controller_data := #{data := Data}}) ->
+    Reason = maps:get(error, Data, "Unknown"),
+    {status, Status, #{~"content-type" => ~"text/plain"}, unicode:characters_to_binary(Reason)}.
+```
 
 A page that crashes is not rendered again: the request gets the `500` page,
 Nova's own if it was your `500` page that failed, and a `500` without a body
