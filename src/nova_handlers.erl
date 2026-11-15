@@ -85,8 +85,7 @@ start_link() ->
 
 %%--------------------------------------------------------------------
 -doc "Registers a new handler. This can then be used in a nova controller by returning a tuple where the first element is the name of the handler.".
--spec register_handler(Handle :: atom(), Callback :: handler_callback()) ->
-                              ok | {error, Reason :: atom()}.
+-spec register_handler(Handle :: atom(), Callback :: handler_callback()) -> ok.
 register_handler(Handle, Callback) ->
     gen_server:cast(?SERVER, {register_handler, Handle, Callback}).
 
