@@ -123,4 +123,7 @@ unsupported_return_closes_with_one_redacted_error(Config) ->
                     controller := nova_ws_lifecycle_pages, function := websocket_handle,
                     reason := function_clause}],
                  nova_test_log:errors(Events)),
-    ?assertEqual([], [Msg || {error, Msg} <- Events, element(1, Msg) =/= report]).
+    ?assertEqual([], [Msg || {error, Msg} <- Events, not is_report(Msg)]).
+
+is_report({report, _Report}) -> true;
+is_report(_Msg) -> false.
