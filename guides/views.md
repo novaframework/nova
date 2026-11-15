@@ -86,8 +86,8 @@ option in `erlydtl_opts` turns escaping off for every template; leave it on.
 
 ## The csrf_token variable
 
-When `nova_csrf_plugin` runs for the route, Nova adds the token to the
-variables as `csrf_token`:
+When `nova_csrf_plugin` runs for the route, Nova adds a token to the
+variables as `csrf_token`. Every response gets another one:
 
 ```html+django
 <form method="post">
@@ -96,7 +96,7 @@ variables as `csrf_token`:
 </form>
 ```
 
-See [Plugins](plugins.md) for the plugin.
+See [Nova CSRF](plugins.md#nova-csrf) for the plugin.
 
 ## The url tag
 
