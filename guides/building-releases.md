@@ -101,7 +101,10 @@ When a proxy or load balancer terminates TLS and forwards plain HTTP:
   is `http`. Read the headers your proxy sets in your own code, and only
   trust them when the node is reachable through the proxy alone.
 * The session cookie is still marked `Secure` unless `environment` is set to
-  `dev`, so sessions work as long as the client talks HTTPS to the proxy.
+  `dev`, and is named `__Host-session_id` unless `session_cookie_name` names
+  it, so sessions work as long as the client talks HTTPS to the proxy. Nova
+  logs one notice at boot about a listener without TLS
+  (`notice => session_cookie_needs_https`), which needs no change here.
 * The origin checks of websocket routes and of `nova_csrf_plugin` compare the
   `Origin` of a request with its `Host` header by default, and cannot
   compare the scheme, since the scheme Nova sees is `http`. List the `https`

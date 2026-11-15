@@ -13,7 +13,7 @@ What Nova does when a setting is left out:
 
 | Setting | When it is not set | Details |
 |---|---|---|
-| `environment` | Read as `prod`. No crash details on error pages, the session cookie is `Secure`, routers are asked for `routes(prod)` | [Configuration](configuration.md#nova-specific-configurations) |
+| `environment` | Read as `prod`. No crash details on error pages, the session cookie is `Secure` and named `__Host-session_id`, routers are asked for `routes(prod)` | [Configuration](configuration.md#nova-specific-configurations) |
 | `non_canonical_paths` | `reject`. A path with an empty, `.` or `..` segment is answered with `400` before routing | [Routing](routing.md#paths-that-are-not-canonical) |
 | `trusted_origins` | `same_host`. A websocket route refuses a request from another host, and so does `nova_csrf_plugin` for a request that changes state | [Configuration](configuration.md#trusted-origins) |
 | `plugins_before_security` | `[]`. No plugin of Nova reads the body before the security callback has let the request through | [Plugins](plugins.md#before-and-after-the-security-callback) |
@@ -184,8 +184,11 @@ Sessions are described in the [Sessions](sessions.md) guide. For security:
   new password.
 * The session cookie is sent with `HttpOnly`, `SameSite=Lax`, `Path=/` and,
   unless `environment` is set to `dev`, `Secure`.
-* Name the cookie with the `__Host-` prefix in new applications
-  (`session_cookie_name`), so another host of the same domain cannot set it.
+* The cookie is named `__Host-session_id` unless `environment` is `dev` or
+  `session_cookie_name` names it, so another host of the same domain cannot
+  set it. An upgrade from a release that named it `session_id` signs every
+  client out once, see
+  [The `__Host-` cookie name](sessions.md#the-__host-cookie-name).
 * The session id is 32 random bytes. With `secret_key_base` set it is 16
   random bytes and 16 bytes of their HMAC-SHA-256, and a signed id is
   exactly the 44 characters Nova handed out. An id the backend does not know
@@ -446,7 +449,7 @@ browser. See [Websockets](websockets.md#behind-a-proxy-that-terminates-tls).
 | `environment` is not `dev` | `{nova, [{environment, prod}]}`. When it is not set it is read as `prod`, and Nova logs a notice at boot |
 | `use_stacktrace` is `false` | `nova` environment |
 | Every route group has the `security` it needs | `rebar3 nova audit --env prod --strict` |
-| The session cookie has a `__Host-` name | `session_cookie_name` |
+| The session cookie has a `__Host-` name | It has when `session_cookie_name` is not set. A name you set should have the prefix too |
 | Users are signed in with `nova_session:sign_in/3` and out with `nova_session:delete/1` | Your sign-in and sign-out controllers, and the libraries that sign in for you |
 | Forms of signed-in users are covered by `nova_csrf_plugin` | Route groups |
 | `secret_key_base` is set, out of a random source, the same on every node and not in the repository | See [The secret of the node](configuration.md#the-secret-of-the-node) |
