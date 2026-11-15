@@ -153,7 +153,7 @@ Report a vulnerability privately, not in a public issue. See
 
 ## Contributing
 
-Contributions are welcome! Check [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) and look for issues labeled `good first issue`.
+Contributions are welcome! [CONTRIBUTING.md](CONTRIBUTING.md) says how to build, test and open a pull request. Check [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) and look for issues labeled `good first issue`.
 
 ## License
 
