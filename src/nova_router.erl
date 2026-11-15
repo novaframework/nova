@@ -1040,14 +1040,28 @@ plugin_key(Plugin)                       -> Plugin.
 %% It is checked by the rule of the setting, when the routes are compiled
 %% and not by the first request that goes by it, and kept as that keeps it.
 %% Under the name the setting had before any release, it is refused as the
-%% setting is.
+%% setting is. nova_csrf_plugin is refused on a node without sessions, where
+%% every request to its routes would fail.
 -spec with_checked_options(Plugin :: plugin(), Named :: map()) -> plugin().
-with_checked_options({_Type, Plugin, #{allowed_origins := _}}, Named)
+with_checked_options({pre_request, nova_csrf_plugin, _Options} = Plugin, Named) ->
+    case nova_session:enabled() of
+        true ->
+            with_checked_origins(Plugin, Named);
+        false ->
+            ?LOG_ERROR(Named#{msg => ~"nova_csrf_plugin keeps its token in the session, or signs it for the session cookie, and use_sessions is false",
+                              setting => use_sessions, value => false, plugin => nova_csrf_plugin}),
+            throw({error, {invalid_setting, use_sessions, {required_by, nova_csrf_plugin}}})
+    end;
+with_checked_options(Plugin, Named) ->
+    with_checked_origins(Plugin, Named).
+
+-spec with_checked_origins(Plugin :: plugin(), Named :: map()) -> plugin().
+with_checked_origins({_Type, Plugin, #{allowed_origins := _}}, Named)
   when Plugin =:= nova_csrf_plugin; Plugin =:= nova_ws_origin_plugin ->
     ?LOG_ERROR(Named#{msg => nova_settings:removed_notice(allowed_origins), setting => allowed_origins,
                       replaced_by => trusted_origins, plugin => Plugin}),
     throw({error, {invalid_setting, allowed_origins, {replaced_by, trusted_origins}}});
-with_checked_options({Type, Plugin, Options = #{trusted_origins := Value}}, Named)
+with_checked_origins({Type, Plugin, Options = #{trusted_origins := Value}}, Named)
   when Plugin =:= nova_csrf_plugin; Plugin =:= nova_ws_origin_plugin ->
     case nova_settings:checked(trusted_origins, Value) of
         {ok, Origins} ->
@@ -1057,7 +1071,7 @@ with_checked_options({Type, Plugin, Options = #{trusted_origins := Value}}, Name
                               value => Reason, plugin => Plugin}),
             throw({error, {invalid_setting, trusted_origins, Reason}})
     end;
-with_checked_options(Plugin, _Named) ->
+with_checked_origins(Plugin, _Named) ->
     Plugin.
 
 %% A browser sends the cookies of a site with a websocket upgrade from any

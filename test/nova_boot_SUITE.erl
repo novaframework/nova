@@ -31,6 +31,7 @@
          csrf_settings_nothing_can_go_by_fail_the_boot/1,
          secret_that_fails_the_boot_is_not_told/1,
          secret_is_not_told_by_a_boot/1,
+         csrf_plugin_without_sessions_fails_the_boot/1,
          csrf_tokens_kept_in_the_session_store_are_said_once/1,
          body_decoded_behind_a_security_callback_is_warned_about/1,
          plugins_of_an_earlier_run_are_forgotten/1
@@ -67,6 +68,7 @@ all() ->
      csrf_settings_nothing_can_go_by_fail_the_boot,
      secret_that_fails_the_boot_is_not_told,
      secret_is_not_told_by_a_boot,
+     csrf_plugin_without_sessions_fails_the_boot,
      csrf_tokens_kept_in_the_session_store_are_said_once,
      body_decoded_behind_a_security_callback_is_warned_about,
      plugins_of_an_earlier_run_are_forgotten
@@ -384,6 +386,41 @@ secret_is_not_told_by_a_boot(_Config) ->
              nova_test_listener:stop()
          end
      end || {Key, Outcome} <- [{csrf_secret, error}, {secret_key_base, ok}]].
+
+%% The token of nova_csrf_plugin is kept in the session or signed for the
+%% session cookie. Without sessions every request to its routes would fail.
+csrf_plugin_without_sessions_fails_the_boot(_Config) ->
+    Routes = [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}],
+    Csrf = #{prefix => "/forms", plugins => [{pre_request, nova_csrf_plugin, #{}}], routes => Routes},
+    Secret = binary:copy(~"s", 32),
+    [begin
+         [application:set_env(nova, Key, Value) || {Key, Value} <- [{use_sessions, false} | Settings]],
+         try
+             {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => [Csrf]}) end),
+             ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
+                                                      {invalid_setting, use_sessions,
+                                                       {required_by, nova_csrf_plugin}}}}, _}}},
+                          Result),
+             ?assertMatch([#{setting := use_sessions, plugin := nova_csrf_plugin, app := nova_test_app,
+                             prefix := "/forms"} | _],
+                          nova_test_log:errors(Events)),
+             ?assertEqual(undefined, whereis(nova_sup))
+         after
+             [application:unset_env(nova, Key) || {Key, _Value} <- [{use_sessions, false} | Settings]],
+             nova_test_listener:stop()
+         end
+     end || Settings <- [[], [{csrf_token, session}], [{secret_key_base, Secret}]]],
+    ?assertEqual({invalid_setting, csrf_token, {requires, use_sessions}},
+                 stopped_by([{use_sessions, false}, {csrf_token, stateless}, {secret_key_base, Secret}])),
+    application:set_env(nova, use_sessions, false),
+    application:set_env(nova, secret_key_base, Secret),
+    try
+        Port = nova_test_listener:start(#{host => [#{prefix => "/pages", plugins => [], routes => Routes}]}),
+        ?assertEqual({200, ~"page"}, nova_test_listener:get(Port, "/pages/"))
+    after
+        application:unset_env(nova, use_sessions),
+        application:unset_env(nova, secret_key_base)
+    end.
 
 %% Without a secret the tokens of nova_csrf_plugin are kept in the session
 %% store, as before there were signed ones. An application that has the

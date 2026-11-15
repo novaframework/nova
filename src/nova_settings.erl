@@ -22,7 +22,8 @@
 Checks every setting and keeps what `value/1` returns from then on. Raises
 `{invalid_setting, Key, Reason}` for the first one that cannot be used.
 `Reason` is the value that was refused, `redacted` where that is a secret,
-`not_set`, or `{replaced_by, Replacement}` for a setting of `removed/0`. For
+`not_set`, `{requires, Setting}` for one that cannot be used without another,
+or `{replaced_by, Replacement}` for a setting of `removed/0`. For
 `nova_sup`, which calls it before it starts anything.
 """.
 -spec validate() -> ok.
@@ -152,11 +153,22 @@ valid(Key) ->
             erlang:error({invalid_setting, Key, Reason})
     end.
 
+%% A signed token is made for the session cookie of a client and with a key
+%% of the secret, so the setting that asks for one needs both.
 -spec secret_to_sign_with(map()) -> ok.
 secret_to_sign_with(#{csrf_token := stateless, secret_key_base := []}) ->
     ?LOG_ERROR(#{msg => ~"csrf_token is stateless and secret_key_base, which signs the tokens, is not set",
                  setting => secret_key_base, value => not_set}),
     erlang:error({invalid_setting, secret_key_base, not_set});
+secret_to_sign_with(#{csrf_token := stateless}) ->
+    case nova_session:enabled() of
+        true ->
+            ok;
+        false ->
+            ?LOG_ERROR(#{msg => ~"csrf_token is stateless and use_sessions is false. A signed token is for the session cookie of a client, which Nova does not hand out without sessions",
+                         setting => csrf_token, value => stateless}),
+            erlang:error({invalid_setting, csrf_token, {requires, use_sessions}})
+    end;
 secret_to_sign_with(_Settings) ->
     ok.
 

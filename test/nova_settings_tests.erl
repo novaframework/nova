@@ -92,6 +92,17 @@ csrf_settings_test_() ->
                             {[{csrf_token, session}, {secret_key_base, Short}],
                              {stopped, {invalid_setting, secret_key_base, redacted}}}]].
 
+%% A signed token is for the session cookie of a client, which a node
+%% without sessions does not hand out.
+stateless_tokens_without_sessions_stop_the_boot_test_() ->
+    Off = {use_sessions, false},
+    [?_assertEqual({stopped, {invalid_setting, csrf_token, {requires, use_sessions}}},
+                   booted_with([Off, {csrf_token, stateless}, {secret_key_base, ?SECRET}])),
+     ?_assertMatch(#{csrf_token := undefined, secret_key_base := [_]}, booted_with([Off, {secret_key_base, ?SECRET}])),
+     ?_assertMatch(#{csrf_token := session}, booted_with([Off, {csrf_token, session}])),
+     ?_assertMatch(#{csrf_token := stateless},
+                   booted_with([{use_sessions, true}, {csrf_token, stateless}, {secret_key_base, ?SECRET}]))].
+
 %% A value that is not a secret, or not a list of them, is refused whatever
 %% it is, and what it holds is in nothing that is raised or logged.
 secret_that_cannot_be_used_is_not_told_test_() ->
