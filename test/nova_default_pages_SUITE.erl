@@ -93,7 +93,10 @@ every_failure_is_html_for_a_browser(Config) ->
      || {Path, Status} <- ?FAILURES].
 
 every_failure_has_no_body_for_a_client_that_accepts_neither(Config) ->
-    [?assertMatch({Status, _, <<>>}, get(Config, Path, "image/png"), Path) || {Path, Status} <- ?FAILURES].
+    [begin
+         {Status, Headers, Body} = get(Config, Path, "image/png"),
+         ?assertEqual({Path, Expected, <<>>, false}, {Path, Status, Body, is_map_key(~"content-type", Headers)})
+     end || {Path, Expected} <- ?FAILURES].
 
 %% render_error_pages is about the pages of Nova in every form.
 every_failure_is_a_bare_status_with_error_pages_off(Config) ->

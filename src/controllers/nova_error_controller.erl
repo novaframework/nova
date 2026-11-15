@@ -50,7 +50,7 @@ render(StatusCode, Variables, Req) ->
 
 %% Every page of Nova leaves from here, and this is the one place that reads
 %% render_error_pages: with it off the status is sent bare to every client,
-%% whatever form it accepts. The status routes of an application are not
+%% whatever form it accepts, as it is to a client that accepts neither form. The status routes of an application are not
 %% pages of Nova and run either way.
 page(StatusCode, Json, Variables, Req) ->
     case application:get_env(nova, render_error_pages, true) =:= true andalso response_type(Req) of
@@ -62,7 +62,7 @@ page(StatusCode, Json, Variables, Req) ->
             {ok, Body} = nova_basic_handler:render_dtl(nova_error_dtl, Variables, []),
             {status, StatusCode, #{~"content-type" => ~"text/html"}, Body};
         none ->
-            {status, StatusCode, #{~"content-type" => ~"text/html"}, <<>>}
+            {status, StatusCode}
     end.
 
 %% A client that sends no accept header gets JSON, as does one whose header
