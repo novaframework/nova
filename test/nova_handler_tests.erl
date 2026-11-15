@@ -308,7 +308,8 @@ controller_telemetry_test_() ->
       fun() -> with_handler(fun controller_telemetry_exception/0) end,
       fun() -> with_handler(fun controller_telemetry_exception_reason_is_a_tag/0) end,
       {timeout, 1, fun() -> with_handler(fun controller_telemetry_status_page/0) end},
-      fun controller_unsupported_return/0]}.
+      fun controller_unsupported_return/0,
+      fun controller_return_for_a_websocket/0]}.
 
 controller_telemetry_metadata() ->
     nova_handlers:register_handler(no_status, fun ?MODULE:no_status_handler/3),
@@ -399,6 +400,15 @@ controller_telemetry_status_page() ->
 
 controller_unsupported_return() ->
     Env = #{callback => fun(_) -> {unsupported, value} end, app => test_app, secure => false,
+            controller_data => #{}},
+    {ok, Req1, _Env1} = nova_handler:execute(nova_test_helper:mock_req(~"GET", ~"/"), Env),
+    ?assertEqual(500, maps:get(resp_status_code, Req1)),
+    ?assertMatch(#{title := ~"Controller returned unsupported data"}, maps:get(crash_info, Req1)).
+
+%% The handler of `ws` takes what a websocket controller returns, not a
+%% return, a callback and a request.
+controller_return_for_a_websocket() ->
+    Env = #{callback => fun(_) -> {ws, value} end, app => test_app, secure => false,
             controller_data => #{}},
     {ok, Req1, _Env1} = nova_handler:execute(nova_test_helper:mock_req(~"GET", ~"/"), Env),
     ?assertEqual(500, maps:get(resp_status_code, Req1)),

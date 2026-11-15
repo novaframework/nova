@@ -287,9 +287,14 @@ call_handler(Callback, Req, RetObj, Env, IsFallbackController) ->
     end.
 
 %% A controller that returns something other than a tagged tuple (an atom, a
-%% map) goes to the fallback controller like any other unknown return.
+%% map) goes to the fallback controller like any other unknown return, and
+%% so does a tuple whose handler is not one for a request, as the handler of
+%% `ws` is not.
 get_handler(RetObj) when is_tuple(RetObj), tuple_size(RetObj) > 0, is_atom(element(1, RetObj)) ->
-    nova_handlers:get_handler(element(1, RetObj));
+    case nova_handlers:get_handler(element(1, RetObj)) of
+        {ok, Callback} when is_function(Callback, 3) -> {ok, Callback};
+        _ -> {error, not_found}
+    end;
 get_handler(_RetObj) ->
     {error, not_found}.
 
