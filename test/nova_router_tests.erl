@@ -465,7 +465,8 @@ body_read_behind_the_security_callback_is_warned_about_once_test_() ->
 %% A route group says with security_reads_body whether its callback reads
 %% what nova_request_plugin decodes. `false` ends the warning. `true` makes
 %% the order the callback needs a condition of the boot. A form read for
-%% nova_csrf_plugin is the setup the guides give and is not warned about.
+%% nova_csrf_plugin is the setup the guides give and is not warned about:
+%% it has a notice of its own.
 security_reads_body_says_what_the_callback_reads_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         Request = fun(Options) -> {pre_request, nova_request_plugin, Options} end,
@@ -508,7 +509,48 @@ security_reads_body_says_what_the_callback_reads_test_() ->
              || Value <- [yes, ~"true", 1, [true], undefined]]
         after
             [nova_once:forget({nova_router, body_behind_security, route_app, Prefix, [nova_request_plugin]})
-             || Prefix <- ["/csrf-json", "/csrf-both"]]
+             || Prefix <- ["/csrf-json", "/csrf-both"]],
+            nova_once:forget({nova_router, form_behind_security, route_app, "/csrf-form", [nova_request_plugin]})
+        end
+    end}.
+
+%% A form read for the token of nova_csrf_plugin is the setup the guides and
+%% the generators give, and the callback of such a route group gets no
+%% params either. Nothing tells whether it reads them, so it is said, once
+%% for the route group and as a notice of its own, with the way to end it.
+form_read_for_a_token_behind_the_security_callback_is_noticed_once_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Form = {pre_request, nova_request_plugin, #{read_urlencoded_body => true}},
+        Csrf = {pre_request, nova_csrf_plugin, #{}},
+        Group = fun(Prefix, More) ->
+                        maps:merge(#{prefix => Prefix, plugins => [Form, Csrf],
+                                     routes => [{"/page", fun(_) -> {json, #{}} end, #{}}]},
+                                   More)
+                end,
+        Secured = fun(Prefix, More) -> Group(Prefix, More#{security => fun allow/1}) end,
+        Notices = fun(RouteGroup) ->
+                          {ok, Events} = nova_test_log:collect(fun() -> nova_router:add_routes(route_app, RouteGroup) end),
+                          [{Level, maps:with([app, prefix, plugins, notice], Report)}
+                           || {Level, {report, #{notice := _} = Report}} <- Events]
+                  end,
+        try
+            {ok, Events} = nova_test_log:collect(fun() -> nova_router:add_routes(route_app, Secured("/form", #{})) end),
+            [{notice, Report}] = [{Level, Report} || {Level, {report, #{notice := _} = Report}} <- Events],
+            #{notice := form_behind_security, app := route_app, prefix := "/form",
+              plugins := [nova_request_plugin], msg := <<Said/binary>>} = Report,
+            [?assertNotEqual({Word, nomatch}, {Word, binary:match(Said, Word)})
+             || Word <- [~"security_reads_body => false", ~"plugins_before_security", ~"params"]],
+            ?assertEqual([], Notices(Secured("/form", #{}))),
+            [?assertEqual({Prefix, []}, {Prefix, Notices(Quiet)})
+             || {Prefix, Quiet} <- [{"/said", Secured("/said", #{security_reads_body => false})},
+                                    {"/listed", Secured("/listed", #{plugins_before_security => [nova_request_plugin]})},
+                                    {"/open", Group("/open", #{})}]],
+            ?assertEqual([{warning, #{notice => body_behind_security, app => route_app, prefix => "/no-token",
+                                      plugins => [nova_request_plugin]}}],
+                         Notices(Secured("/no-token", #{plugins => [Form]})))
+        after
+            nova_once:forget({nova_router, form_behind_security, route_app, "/form", [nova_request_plugin]}),
+            nova_once:forget({nova_router, body_behind_security, route_app, "/no-token", [nova_request_plugin]})
         end
     end}.
 

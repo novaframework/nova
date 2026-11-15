@@ -35,6 +35,7 @@
          csrf_tokens_kept_in_the_session_store_are_said_once/1,
          body_decoded_behind_a_security_callback_is_warned_about/1,
          security_reads_body_of_a_route_group_is_checked_by_the_boot/1,
+         mounted_application_does_not_answer_for_the_callback_of_its_host/1,
          plugins_of_an_earlier_run_are_forgotten/1
         ]).
 
@@ -73,6 +74,7 @@ all() ->
      csrf_tokens_kept_in_the_session_store_are_said_once,
      body_decoded_behind_a_security_callback_is_warned_about,
      security_reads_body_of_a_route_group_is_checked_by_the_boot,
+     mounted_application_does_not_answer_for_the_callback_of_its_host,
      plugins_of_an_earlier_run_are_forgotten
     ].
 
@@ -486,6 +488,47 @@ security_reads_body_of_a_route_group_is_checked_by_the_boot(_Config) ->
      end || {Value, Reason} <- [{true, {requires, plugins_before_security}}, {sometimes, sometimes}]],
     {{ok, _Port}, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => [Group(false)]}) end),
     ?assertEqual([], [Report || {warning, {report, #{plugins := _} = Report}} <- Events]).
+
+%% security_reads_body => false is what the author of a route group says
+%% about the callback the group declares. The callback an application is
+%% mounted behind is written by somebody else, who is not told anything
+%% when the routes of the mounted application say it reads no body.
+mounted_application_does_not_answer_for_the_callback_of_its_host(_Config) ->
+    Group = fun(More) ->
+                    More#{prefix => "/api", security_reads_body => false,
+                          plugins => [{pre_request, nova_request_plugin, #{decode_json_body => true}}],
+                          routes => [{"/", fun nova_boot_pages:page/1, #{methods => [post]}}]}
+            end,
+    Own = Group(#{security => fun nova_boot_pages:allow/1}),
+    Behind = fun(Callbacks) -> Callbacks#{prefix => "/mounted"} end,
+    [begin
+         try
+             {{ok, _Port}, Events} =
+                 nova_test_log:collect(fun() ->
+                                               nova_test_listener:try_start(#{mounted => [Mounted],
+                                                                              mounted_options => Options})
+                                       end),
+             ?assertEqual({Name, Warned},
+                          {Name, [maps:with([notice, app, prefix, plugins], Report)
+                                  || {warning, {report, #{plugins := _} = Report}} <- Events]})
+         after
+             nova_once:forget({nova_router, body_behind_security, nova_test_sub_app, "/mounted/api",
+                               [nova_request_plugin]}),
+             nova_test_listener:stop()
+         end
+     end || {Name, Mounted, Options, Warned} <-
+                [{callback_of_the_group, Own, Behind(#{}), []},
+                 {callback_of_the_host, Group(#{}), Behind(#{secure => fun nova_boot_pages:refuse_admins/1}),
+                  [#{notice => body_behind_security, app => nova_test_sub_app, prefix => "/mounted/api",
+                     plugins => [nova_request_plugin]}]},
+                 {callback_of_both, Own, Behind(#{secure => fun nova_boot_pages:refuse_admins/1}),
+                  [#{notice => body_behind_security, app => nova_test_sub_app, prefix => "/mounted/api",
+                     plugins => [nova_request_plugin]}]},
+                 {callback_that_replaces_the_one_of_the_group, Own,
+                  Behind(#{override_secure => fun nova_boot_pages:refuse_admins/1}),
+                  [#{notice => body_behind_security, app => nova_test_sub_app, prefix => "/mounted/api",
+                     plugins => [nova_request_plugin]}]},
+                 {same_callback_on_both, Own, Behind(#{secure => fun nova_boot_pages:allow/1}), []}]].
 
 %% nova_plugin_manager starts every plugin the router has listed, also after
 %% a restart, so the list must not carry over from a run with other routes.

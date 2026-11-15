@@ -92,7 +92,8 @@
 -type callback() :: {Callback :: fun(), Options :: term()}.
 -type phased() :: [{Phase :: atom(), [callback()]}].
 -type order() :: #{before := all | [module()], secured := boolean()}.
--type order_warning() :: body_behind_security | pre_request_behind_security | pre_request_not_for_preflight.
+-type order_warning() :: body_behind_security | form_behind_security | pre_request_behind_security |
+                         pre_request_not_for_preflight.
 
 -doc "The key of the routing table of every listener Nova has started, for the functions that take a `DispatchKey`.".
 -spec dispatch_keys() -> [dispatch_key()].
@@ -565,7 +566,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
 
     ok = removed_keys(RouteInfo, Named),
     Order = #{before => plugins_before_security(RouteInfo, Plugins, Named), secured => Secure =/= false},
-    ok = warn_about_order(RouteInfo, Plugins, Order, Named),
+    ok = warn_about_order(RouteInfo, Secure, Plugins, Order, Named),
     Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins, Order),
                                 extra_state = maps:get(extra_state, RouteInfo, #{})},
 
@@ -1140,40 +1141,74 @@ exports(Module, Function) ->
 %% first. Listing it under plugins_before_security ends what is said about
 %% refused requests and not what is said about preflights, for which
 %% pre_request/4 does not run wherever the plugin is listed.
--spec warn_about_order(RouteInfo :: map(), [plugin()], order(), Named :: map()) -> ok.
-warn_about_order(RouteInfo, Plugins, Order = #{secured := Secured}, Named) ->
+-spec warn_about_order(RouteInfo :: map(), Secure :: term(), [plugin()], order(), Named :: map()) -> ok.
+warn_about_order(RouteInfo, Secure, Plugins, Order = #{secured := Secured}, Named) ->
     Behind = [{Module, Options} || {pre_request, Module, Options} <- Plugins, Secured, not is_ahead(Module, Order)],
-    ok = body_behind_security(RouteInfo, [Plugin || Plugin = {Module, Options} <- Behind, reads_body(Module, Options)],
+    ok = body_behind_security(said_about_the_body(RouteInfo, Secure),
+                              [Plugin || Plugin = {Module, Options} <- Behind, reads_body(Module, Options)],
                               lists:keymember(nova_csrf_plugin, 2, Plugins), Named),
     Outside = [Module || {pre_request, Module, _Options} <- Plugins, not is_plugin_of_nova(Module),
                          not exports(Module, pre_security)],
     Refused = [Module || Module <- Outside, lists:keymember(Module, 1, Behind)],
-    ok = warn_once(pre_request_behind_security, Refused, Named),
+    ok = say_once(warning, pre_request_behind_security, Refused, Named),
     case has_route_without_options(RouteInfo) of
-        true -> warn_once(pre_request_not_for_preflight, Outside -- Refused, Named);
+        true -> say_once(warning, pre_request_not_for_preflight, Outside -- Refused, Named);
         false -> ok
     end.
 
 %% What a route group says with security_reads_body about a body that is
-%% decoded behind its security callback. `false` is that the callback does
-%% not read it, which ends the warning. `true` is that it does, and the
-%% routes do not compile until the body is decoded ahead of the callback.
-%% A route group that says nothing is warned about, unless what it reads is
-%% a form for nova_csrf_plugin, which is the setup the guides give.
--spec body_behind_security(RouteInfo :: map(), Readers :: [{module(), Options :: term()}],
+%% decoded behind the security callback. `false` is that the callback does
+%% not read it, which ends what is said about it. That is the word of the
+%% author of the route group about the callback the group declares, and it
+%% is taken for nothing said when another callback is in front of the
+%% routes: the secure or the override_secure of the nova_apps entry an
+%% application is mounted with, or the security of the route group that
+%% lists it, is written by somebody else. `true` is that the callback reads
+%% the body, which asks for more and is taken from anybody.
+-spec said_about_the_body(RouteInfo :: map(), Secure :: term()) -> {said, term()} | not_said.
+said_about_the_body(RouteInfo = #{security_reads_body := false}, Secure) ->
+    case is_declared_by_the_group(Secure, RouteInfo) of
+        true -> {said, false};
+        false -> not_said
+    end;
+said_about_the_body(#{security_reads_body := Value}, _Secure) ->
+    {said, Value};
+said_about_the_body(_RouteInfo, _Secure) ->
+    not_said.
+
+%% Whether no callback is in front of the routes of a group but the one the
+%% group has as its security.
+-spec is_declared_by_the_group(Secure :: term(), RouteInfo :: map()) -> boolean().
+is_declared_by_the_group(Callbacks, RouteInfo) when is_list(Callbacks) ->
+    [] =:= [Callback || Callback <- Callbacks, not is_declared_by_the_group(Callback, RouteInfo)];
+is_declared_by_the_group(false, _RouteInfo) ->
+    true;
+is_declared_by_the_group(Callback, RouteInfo) ->
+    case maps:get(security, RouteInfo, false) of
+        {Module, Function} when is_atom(Module), is_atom(Function) -> Callback =:= fun Module:Function/1;
+        Security -> Callback =:= Security
+    end.
+
+%% `true` is that the callback reads the body, and the routes do not compile
+%% until the body is decoded ahead of the callback. A route group that says
+%% nothing is warned about. One that reads a form for nova_csrf_plugin and
+%% nothing else, which is the setup the guides and the generators give, is
+%% told with a notice of its own: nothing shows whether its callback reads
+%% the params, and the callback finds none.
+-spec body_behind_security(Said :: {said, term()} | not_said, Readers :: [{module(), Options :: term()}],
                            HasCsrfPlugin :: boolean(), Named :: map()) -> ok.
-body_behind_security(#{security_reads_body := false}, _Readers, _HasCsrfPlugin, _Named) ->
+body_behind_security({said, false}, _Readers, _HasCsrfPlugin, _Named) ->
     ok;
-body_behind_security(#{security_reads_body := true}, [], _HasCsrfPlugin, _Named) ->
+body_behind_security({said, true}, [], _HasCsrfPlugin, _Named) ->
     ok;
-body_behind_security(#{security_reads_body := true}, _Readers, _HasCsrfPlugin, Named) ->
+body_behind_security({said, true}, _Readers, _HasCsrfPlugin, Named) ->
     invalid_security_reads_body({requires, plugins_before_security}, Named);
-body_behind_security(#{security_reads_body := Value}, _Readers, _HasCsrfPlugin, Named) ->
+body_behind_security({said, Value}, _Readers, _HasCsrfPlugin, Named) ->
     invalid_security_reads_body(Value, Named);
-body_behind_security(_RouteInfo, Readers, HasCsrfPlugin, Named) ->
-    warn_once(body_behind_security,
-              [Module || {Module, Options} <- Readers, not (HasCsrfPlugin andalso reads_a_form_alone(Options))],
-              Named).
+body_behind_security(not_said, Readers, HasCsrfPlugin, Named) ->
+    ForTheToken = [Module || {Module, Options} <- Readers, HasCsrfPlugin andalso reads_a_form_alone(Options)],
+    ok = say_once(warning, body_behind_security, [Module || {Module, _Options} <- Readers] -- ForTheToken, Named),
+    say_once(notice, form_behind_security, ForTheToken, Named).
 
 -spec invalid_security_reads_body(term(), Named :: map()) -> no_return().
 invalid_security_reads_body(Value, Named) ->
@@ -1187,19 +1222,21 @@ reads_a_form_alone(Options) when is_map(Options) ->
 reads_a_form_alone(_Options) ->
     false.
 
--spec warn_once(order_warning(), [module()], Named :: map()) -> ok.
-warn_once(_About, [], _Named) ->
+-spec say_once(Level :: warning | notice, order_warning(), [module()], Named :: map()) -> ok.
+say_once(_Level, _About, [], _Named) ->
     ok;
-warn_once(About, Listed, Named = #{app := App, prefix := Prefix}) ->
+say_once(Level, About, Listed, Named = #{app := App, prefix := Prefix}) ->
     Plugins = lists:usort(Listed),
     case nova_once:first({?MODULE, About, App, Prefix, Plugins}) of
-        true -> ?LOG_WARNING(Named#{msg => order_warning(About), notice => About, plugins => Plugins});
+        true -> ?LOG(Level, Named#{msg => order_warning(About), notice => About, plugins => Plugins});
         false -> ok
     end.
 
 -spec order_warning(order_warning()) -> binary().
 order_warning(body_behind_security) ->
-    ~"The security callback of this route group runs before nova_request_plugin reads the body, so it finds no json or params in the request. Earlier releases read the body first. If the callback reads them, list nova_request_plugin under plugins_before_security of the route group. If it does not, set security_reads_body => false in the route group";
+    ~"The security callback of this route group runs before nova_request_plugin reads the body, so it finds no json or params in the request. Earlier releases read the body first. If the callback reads them, list nova_request_plugin under plugins_before_security of the route group. If it does not, set security_reads_body => false in the route group. That answers for the callback the route group declares as its security, and not for one the application is mounted behind: the secure or override_secure of a nova_apps entry, or the security of a route group that lists the application";
+order_warning(form_behind_security) ->
+    ~"The security callback of this route group runs before nova_request_plugin reads the form, which the route group reads for the token of nova_csrf_plugin, so the callback finds no params in the request. Nothing shows whether it reads them. If it does not, say so with security_reads_body => false in the route group, which ends this notice. If it does, list nova_request_plugin under plugins_before_security of the route group";
 order_warning(pre_request_behind_security) ->
     ~"pre_request/4 of these plugins runs once the security callback of this route group has let a request through, where earlier releases ran it first. It does not run for a request that is refused, nor for a CORS preflight to a route that does not take OPTIONS. What has to run for those belongs in pre_security/4. To run pre_request/4 ahead of the security callback as before, list the plugin under plugins_before_security";
 order_warning(pre_request_not_for_preflight) ->
