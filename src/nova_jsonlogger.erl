@@ -44,7 +44,7 @@ With `redact => true` in its configuration the formatter takes request data and 
 format(
     #{msg := {report, #{format := Format, args := Args, label := {error_logger, _}}}} = Map, Config
 ) ->
-    Report = #{text => io_lib:format(Format, Args)},
+    Report = #{text => text(rendered(Format, Args, Config))},
     format(Map#{msg := {report, Report}}, Config);
 format(#{level := Level, msg := {report, Msg}, meta := Meta}, Config) when is_map(Msg) ->
     Data0 = merge_meta(redact(Msg, Config), redact(Meta#{level => Level}, Config), Config),
@@ -56,7 +56,7 @@ format(Map = #{msg := {report, KeyVal}}, Config) when is_list(KeyVal) ->
 format(Map = #{msg := {string, String}}, Config) ->
     format(Map#{msg := {report, #{text => text(String)}}}, Config);
 format(Map = #{msg := {Format, Terms}}, Config) ->
-    format(Map#{msg := {string, io_lib:format(Format, Terms)}}, Config).
+    format(Map#{msg := {string, rendered(Format, Terms, Config)}}, Config).
 
 %%% Useful for converting logger:timestamp() to a readable timestamp.
 -spec system_time_to_iso8601(integer()) -> binary().
@@ -77,6 +77,19 @@ system_time_to_iso8601(Epoch, Unit) ->
 -spec text(dynamic()) -> dynamic().
 text(String) ->
     unicode:characters_to_binary(String).
+
+%% The arguments are redacted before they are rendered: once they are text
+%% there is no key left to tell a secret by. A redacted argument may no
+%% longer be what its control sequence takes, and is then printed as a term.
+-spec rendered(io:format(), dynamic(), config()) -> io_lib:chars().
+rendered(Format, Args, Config) ->
+    Redacted = redact(Args, Config),
+    try
+        io_lib:format(Format, Redacted)
+    catch
+        error:_ ->
+            io_lib:format("~0tp ~0tp", [Format, Redacted], [{chars_limit, ?PRINTED_CHARS_LIMIT}])
+    end.
 
 pre_encode(Data, Config) ->
     #{jsonify(K) => pre_encode_value(V, Config) || K := V <- Data}.
