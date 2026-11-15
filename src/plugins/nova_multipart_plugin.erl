@@ -20,8 +20,9 @@ Multipart fields win over `params` set by an earlier plugin, and a repeated fiel
 -define(DEFAULT_MAX_FIELD_SIZE, 65536).
 -define(DEFAULT_MAX_TOTAL_SIZE, 64000000).
 -define(DEFAULT_READ_TIMEOUT, 60000).
+-define(DEFAULT_CHUNK_TIMEOUT, 15000).
 -define(CHUNK_LENGTH, 64000).
--define(CHUNK_PERIOD, 15000).
+-define(PERIOD_MARGIN, 1000).
 -define(LABEL_MAX_LEN, 64).
 
 -spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
@@ -33,7 +34,7 @@ pre_request(Req, _Env, #{handler := {Mod, InitArgs}} = Options, State) when is_a
             {ok, Req#{params => maps:get(params, Req, #{}), files => []}, State};
         {multipart, no_boundary} ->
             warn(400, <<"multipart/form-data without a boundary parameter.">>, #{}),
-            {stop, cowboy_req:reply(400, Req), State};
+            {stop, reply(400, Req), State};
         multipart ->
             Limits = limits(Options),
             Deadline = erlang:monotonic_time(millisecond) + maps:get(read_timeout, Limits),
@@ -48,7 +49,7 @@ pre_request(Req, _Env, #{handler := {Mod, InitArgs}} = Options, State) when is_a
 pre_request(Req, _Env, Options, State) ->
     ?LOG_ERROR(#{msg => <<"nova_multipart_plugin needs handler => {Mod, InitArgs}.">>,
                  options => nova_redact:term(Options)}),
-    {stop, cowboy_req:reply(500, Req), State}.
+    {stop, reply(500, Req), State}.
 
 -spec post_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
           {ok, Req0 :: cowboy_req:req(), NewState :: any()}.
@@ -73,7 +74,8 @@ plugin_info() ->
                   {max_part_size, <<"Reply 413 past this many bytes in one file part (default 8 000 000)">>},
                   {max_field_size, <<"Reply 413 past this many bytes in one non-file field (default 65 536)">>},
                   {max_total_size, <<"Reply 413 past this many bytes across all parts (default 64 000 000)">>},
-                  {read_timeout, <<"Reply 408 if the body is not fully read within this many ms (default 60 000). Checked between chunks, so a stalled read can overrun by up to 15 s">>}
+                  {read_timeout, ~"Reply 408 if the body is not fully read within this many ms (default 60 000)"},
+                  {chunk_timeout, ~"Reply 408 if the next 64 000 bytes of the body, or its end, do not arrive within this many ms (default 15 000)"}
                  ]
      }.
 
@@ -103,7 +105,17 @@ limits(Options) ->
       max_part_size => maps:get(max_part_size, Options, ?DEFAULT_MAX_PART_SIZE),
       max_field_size => maps:get(max_field_size, Options, ?DEFAULT_MAX_FIELD_SIZE),
       max_total_size => maps:get(max_total_size, Options, ?DEFAULT_MAX_TOTAL_SIZE),
-      read_timeout => maps:get(read_timeout, Options, ?DEFAULT_READ_TIMEOUT)}.
+      read_timeout => maps:get(read_timeout, Options, ?DEFAULT_READ_TIMEOUT),
+      chunk_timeout => maps:get(chunk_timeout, Options, ?DEFAULT_CHUNK_TIMEOUT)}.
+
+%% When the period ends Cowboy hands over what has arrived, and cowboy_req
+%% then waits for more without coming back here, for as long as the client
+%% keeps the connection. A timeout that ends before the period makes the read
+%% exit, so a client that stalls or sends a few bytes at a time is answered.
+read_opts(Limits, Deadline) ->
+    Left = Deadline - erlang:monotonic_time(millisecond),
+    Wait = max(0, min(maps:get(chunk_timeout, Limits), Left)),
+    #{length => ?CHUNK_LENGTH, period => Wait + ?PERIOD_MARGIN, timeout => Wait}.
 
 deadline_expired(Deadline) ->
     erlang:monotonic_time(millisecond) > Deadline.
@@ -112,23 +124,23 @@ stream_parts(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params,
     case deadline_expired(Deadline) of
         true ->
             warn(408, <<"Multipart read deadline exceeded.">>, #{}),
-            {stop, cowboy_req:reply(408, Req)};
+            {stop, reply(408, Req)};
         false ->
             read_next_part(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params, Files)
     end.
 
 read_next_part(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params, Files) ->
-    case safe_read_part(Req) of
+    case safe_read_part(Req, read_opts(Limits, Deadline)) of
         {done, Req0} ->
             {ok, Req0, Params, lists:reverse(Files)};
         {ok, _Headers, Req0} when PartCount >= map_get(max_parts, Limits) ->
             warn(413, ~"Too many multipart parts.", #{max_parts => maps:get(max_parts, Limits)}),
-            {stop, cowboy_req:reply(413, Req0)};
+            {stop, reply(413, Req0)};
         {ok, Headers, Req0} ->
             case part_info(Headers) of
                 error ->
                     warn(400, <<"Malformed content-disposition in part.">>, #{}),
-                    {stop, cowboy_req:reply(400, Req0)};
+                    {stop, reply(400, Req0)};
                 {data, FieldName} ->
                     read_field(Req0, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params, Files, FieldName);
                 {file, FieldName, Filename, ContentType} ->
@@ -138,18 +150,18 @@ read_next_part(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Param
         {error, Reason, Req0} ->
             Status = error_status(Reason),
             warn(Status, <<"Failed to read multipart headers.">>, #{error => safe_label(Reason)}),
-            {stop, cowboy_req:reply(Status, Req0)}
+            {stop, reply(Status, Req0)}
     end.
 
 read_field(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params, Files, FieldName) ->
     MaxFieldSize = maps:get(max_field_size, Limits),
-    case read_bounded_body(Req, MaxFieldSize, Deadline, <<>>) of
+    case read_bounded_body(Req, MaxFieldSize, Limits, Deadline, <<>>) of
         {ok, Body, Req0} ->
             NewTotal = TotalSize + byte_size(Body),
             case NewTotal > maps:get(max_total_size, Limits) of
                 true ->
                     warn(413, <<"Multipart request exceeded max_total_size.">>, #{}),
-                    {stop, cowboy_req:reply(413, Req0)};
+                    {stop, reply(413, Req0)};
                 false ->
                     stream_parts(Req0, Mod, InitArgs, Limits, Deadline, PartCount + 1, NewTotal,
                                  Params#{FieldName => Body}, Files)
@@ -157,28 +169,28 @@ read_field(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params, F
         {too_large, Req0} ->
             warn(413, <<"Multipart field exceeded max_field_size.">>,
                  #{field => safe_label(FieldName), max_field_size => MaxFieldSize}),
-            {stop, cowboy_req:reply(413, Req0)};
+            {stop, reply(413, Req0)};
         {timeout, Req0} ->
             warn(408, <<"Multipart field read deadline exceeded.">>, #{field => safe_label(FieldName)}),
-            {stop, cowboy_req:reply(408, Req0)};
+            {stop, reply(408, Req0)};
         {error, Reason, Req0} ->
             Status = error_status(Reason),
             warn(Status, <<"Failed to read a multipart field.">>,
                  #{field => safe_label(FieldName), error => safe_label(Reason)}),
-            {stop, cowboy_req:reply(Status, Req0)}
+            {stop, reply(Status, Req0)}
     end.
 
-read_bounded_body(Req, MaxSize, Deadline, Acc) ->
+read_bounded_body(Req, MaxSize, Limits, Deadline, Acc) ->
     case deadline_expired(Deadline) of
         true ->
             {timeout, Req};
         false ->
-            case safe_read_part_body(Req, #{length => ?CHUNK_LENGTH, period => ?CHUNK_PERIOD}) of
+            case safe_read_part_body(Req, read_opts(Limits, Deadline)) of
                 {more, Data, Req0} ->
                     Body = <<Acc/binary, Data/binary>>,
                     case byte_size(Body) > MaxSize of
                         true -> {too_large, Req0};
-                        false -> read_bounded_body(Req0, MaxSize, Deadline, Body)
+                        false -> read_bounded_body(Req0, MaxSize, Limits, Deadline, Body)
                     end;
                 {ok, Data, Req0} ->
                     Body = <<Acc/binary, Data/binary>>,
@@ -199,15 +211,15 @@ read_file_part(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Param
                     File = PartInfo#{result => Result},
                     stream_parts(Req0, Mod, InitArgs, Limits, Deadline, PartCount + 1, NewTotal, Params, [File|Files]);
                 {aborted, Status, Req0} ->
-                    {stop, cowboy_req:reply(Status, Req0)}
+                    {stop, reply(Status, Req0)}
             end;
         {reject, Reason} ->
             warn(400, <<"Handler rejected part.">>, #{error => safe_label(Reason)}),
-            {stop, cowboy_req:reply(400, Req)};
+            {stop, reply(400, Req)};
         {error, Reason} ->
             Status = handler_error_status(Reason),
             warn(Status, <<"Handler failed to init.">>, #{error => safe_label(Reason)}),
-            {stop, cowboy_req:reply(Status, Req)}
+            {stop, reply(Status, Req)}
     end.
 
 stream_part_body(Req, Mod, HandlerState, Limits, Deadline, PartSize, TotalSize) ->
@@ -216,7 +228,7 @@ stream_part_body(Req, Mod, HandlerState, Limits, Deadline, PartSize, TotalSize) 
             safe_abort(Mod, timeout, HandlerState),
             {aborted, 408, Req};
         false ->
-            case safe_read_part_body(Req, #{length => ?CHUNK_LENGTH, period => ?CHUNK_PERIOD}) of
+            case safe_read_part_body(Req, read_opts(Limits, Deadline)) of
                 {more, Data, Req0} ->
                     consume_chunk(Data, Req0, Mod, HandlerState, Limits, Deadline, PartSize, TotalSize, more);
                 {ok, Data, Req0} ->
@@ -264,8 +276,8 @@ finish_part(Req, Mod, HandlerState, TotalSize) ->
 %% cowboy_req:read_part/1 and read_part_body/2 exit on a stalled or malformed
 %% read, and raise error:badmatch on duplicate part headers. Both are turned
 %% into {error, Reason, Req} so every caller cleans up through one path.
-safe_read_part(Req) ->
-    try cowboy_req:read_part(Req)
+safe_read_part(Req, Opts) ->
+    try cowboy_req:read_part(Req, Opts)
     catch
         exit:Reason -> {error, Reason, Req};
         error:Reason -> {error, Reason, Req}
@@ -277,6 +289,12 @@ safe_read_part_body(Req, Opts) ->
         exit:Reason -> {error, Reason, Req};
         error:Reason -> {error, Reason, Req}
     end.
+
+%% The rest of the body is not coming, so the connection is not kept for it.
+reply(408, #{version := Version} = Req) when Version =:= 'HTTP/1.1'; Version =:= 'HTTP/1.0' ->
+    cowboy_req:reply(408, #{~"connection" => ~"close"}, Req);
+reply(Status, Req) ->
+    cowboy_req:reply(Status, Req).
 
 error_status(timeout) -> 408;
 error_status({request_error, timeout, _}) -> 408;
