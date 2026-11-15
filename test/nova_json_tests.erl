@@ -20,6 +20,9 @@ json_lib_test_() ->
       fun otp_json_decodes/0,
       fun otp_json_rejects_bad_input/0,
       fun what_is_said_about_bad_input_has_nothing_of_the_input/0,
+      fun key_that_is_there_twice_is_refused/0,
+      fun what_follows_the_value_is_refused/0,
+      fun another_library_decides_about_keys_itself/0,
       fun what_is_said_about_bad_input_of_another_library/0,
       fun otp_json_encodes/0,
       fun thoas_still_works/0,
@@ -66,6 +69,36 @@ what_is_said_about_bad_input_has_nothing_of_the_input() ->
                          {~"{\"password\":\"hunter2\"", #{error => unexpected_end}},
                          {~"", #{error => unexpected_end}}]],
     ?assertEqual({ok, #{~"a" => 1}}, nova_json:try_decode(~"{\"a\":1}")).
+
+%% Libraries do not agree on which of two values of a key is the one, so a
+%% check that reads the body and the code behind it could each see their
+%% own. An object that has a key twice is no input at all.
+key_that_is_there_twice_is_refused() ->
+    [?assertEqual({Input, {error, duplicate_key, #{error => duplicate_key}}}, {Input, nova_json:try_decode(Input)})
+     || Input <- [~"{\"role\":\"user\",\"role\":\"admin\"}",
+                  ~"{\"role\":\"user\",\"name\":\"x\",\"role\":\"user\"}",
+                  ~"{\"a\":{\"b\":1,\"b\":2}}",
+                  ~"[1,{\"a\":1,\"\\u0061\":2}]",
+                  ~"{\"\":1,\"\":1}"]],
+    ?assertEqual({error, duplicate_key}, nova_json:decode(~"{\"a\":1,\"a\":2}")),
+    [?assertEqual({Input, {ok, Term}}, {Input, nova_json:try_decode(Input)})
+     || {Input, Term} <- [{~"{\"a\":{\"a\":1},\"b\":{\"a\":1}}", #{~"a" => #{~"a" => 1}, ~"b" => #{~"a" => 1}}},
+                          {~"[{\"a\":1},{\"a\":1}]", [#{~"a" => 1}, #{~"a" => 1}]},
+                          {~"{\"a\":1,\"A\":2}", #{~"a" => 1, ~"A" => 2}},
+                          {~"{}", #{}},
+                          {[~"{\"a\":", ~"1}"], #{~"a" => 1}}]].
+
+what_follows_the_value_is_refused() ->
+    ?assertEqual({error, {invalid_byte, ${}, #{error => invalid_byte, position => 8}},
+                 nova_json:try_decode(~"{\"a\":1} {\"a\":2}")),
+    ?assertEqual({error, {invalid_byte, $x}, #{error => invalid_byte, position => 2}}, nova_json:try_decode(~"1 x")),
+    [?assertEqual({Input, {ok, Term}}, {Input, nova_json:try_decode(Input)})
+     || {Input, Term} <- [{~"{\"a\":1} \n", #{~"a" => 1}}, {~" 12 ", 12}, {~"12", 12}, {~"-1.5e3", -1500.0},
+                          {~"null", null}]].
+
+another_library_decides_about_keys_itself() ->
+    application:set_env(nova, json_lib, thoas),
+    ?assertMatch({ok, #{~"a" := _}}, nova_json:decode(~"{\"a\":1,\"a\":2}")).
 
 what_is_said_about_bad_input_of_another_library() ->
     meck:new(fake_json_lib, [non_strict]),

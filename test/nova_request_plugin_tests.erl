@@ -178,6 +178,9 @@ json_that_does_not_decode_is_logged_without_the_body_test_() ->
                                   {~"{\"password\":\"\\uhunter2\"}",
                                    #{status_code => 400, msg => ~"Request refused", reason => ~"Malformed JSON body",
                                      error => unexpected_sequence, position => 13}},
+                                  {~"{\"password\":\"hunter2\",\"password\":\"hunter2\"}",
+                                   #{status_code => 400, msg => ~"Request refused", reason => ~"Malformed JSON body",
+                                     error => duplicate_key}},
                                   {~"", #{status_code => 400, msg => ~"Request refused",
                                           reason => ~"Empty JSON body"}}]]
      end}.
