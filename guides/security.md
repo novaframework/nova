@@ -7,6 +7,26 @@ protected, what Nova limits and escapes for you and what it leaves to you.
 To report a vulnerability in Nova itself, see
 [Reporting a vulnerability](#reporting-a-vulnerability).
 
+## Defaults at a glance
+
+What Nova does when a setting is left out:
+
+| Setting | When it is not set | Details |
+|---|---|---|
+| `environment` | Read as `prod`. No crash details on error pages, the session cookie is `Secure`, routers are asked for `routes(prod)` | [Configuration](configuration.md#nova-specific-configurations) |
+| `non_canonical_paths` | `reject`. A path with an empty, `.` or `..` segment is answered with `400` before routing | [Routing](routing.md#paths-that-are-not-canonical) |
+| `allowed_origins` | `same_host`. A websocket route refuses a request from another host, and so does `nova_csrf_plugin` for a request that changes state | [Configuration](configuration.md#allowed-origins) |
+| `plugins_before_security` | `[]`. No plugin of Nova reads the body before the security callback has let the request through | [Plugins](plugins.md#before-and-after-the-security-callback) |
+| `csrf_secret`, `csrf_token` | `nova_csrf_plugin` keeps its tokens in the session | [Plugins](plugins.md#csrf-token-modes) |
+| `max_sessions` | `1000000` sessions on a node | [Sessions](sessions.md#when-the-session-store-is-full) |
+| `use_stacktrace` | `false`. No stacktraces in crash logs | [Configuration](configuration.md#nova-specific-configurations) |
+| `security` of a route group | The routes of the group are public | [Protecting routes](#protecting-routes) |
+
+`non_canonical_paths`, `allowed_origins`, `csrf_secret`, `csrf_token`,
+`max_sessions` and `plugins_before_security` are checked when Nova starts. A
+value that cannot be used stops the boot, see
+[Configuration](configuration.md#settings-checked-at-boot).
+
 ## Protecting routes
 
 A route is public unless its route group declares a security callback. The
@@ -97,21 +117,35 @@ Things to know:
 * **Status pages are routes.** Declare the routes for status codes such as
   `404` in a group without a callback, or the page is only rendered for
   requests the callback lets through.
+* **Paths with `..` and empty segments are refused.** A request for
+  `/public/../admin` or `/admin//users` is answered with `400` before any
+  plugin or callback runs, unless `non_canonical_paths` is `resolve`. See
+  [Routing](routing.md#paths-that-are-not-canonical).
 * **Compare whole path segments.** A callback or plugin that decides by path
   uses `nova_router:canonical_path/1`, not the raw `path` of the request,
-  which can contain `..` and empty segments.
+  which can end in a slash the routed path does not have, and with `resolve`
+  can contain `..` and empty segments.
 * **Check your routes.** `rebar3 nova audit --env prod --strict` reports
   routes that change state without a callback and routes that accept every
   method. `rebar3 nova routes` prints all of them.
 
 ### What runs before the callback
 
-The `pre_request` plugins of a route run before its security callback. A
-plugin that reads the body, such as `nova_request_plugin` or
-`nova_multipart_plugin`, therefore reads what an unauthenticated client
-sent. List such plugins under `plugins_after_security` to make them wait for
-the callback, see
-[Plugins](plugins.md#running-a-plugin-after-the-security-callback).
+Only `pre_security/4` of the `pre_request` plugins of a route runs before its
+security callback. With the plugins of Nova that is the correlation id, the
+CORS headers and the answer to a preflight, the origin checks of
+`nova_csrf_plugin` and `nova_ws_origin_plugin`, and the parsing of the query
+string. None of them reads the body. `nova_request_plugin` and
+`nova_multipart_plugin` read it in `pre_request/4`, once the callback has let
+the request through, so a client that is refused has nothing read, decoded
+or spooled.
+
+It follows that the callback does not find `json`, `params` or `files` in
+the request. A callback that needs the decoded body lists the plugin under
+`plugins_before_security`. The body of every request to that route group is
+then read from clients that are not authenticated, so keep
+`max_body_length` low there. See
+[Plugins](plugins.md#before-and-after-the-security-callback).
 
 ### Included applications
 
@@ -155,7 +189,7 @@ written:
 
 * A session that only holds what was written with
   `nova_session:set_provisional/3` is provisional. `nova_csrf_plugin` stores
-  its token that way. A provisional session lives one day, is dropped first,
+  its token that way when it keeps tokens in the session. A provisional session lives one day, is dropped first,
   and can only take the place of an expired or another provisional session.
   The first `nova_session:set/3` on it makes it a session in use.
 * A session written with `nova_session:set/3` is in use. It takes the place
@@ -171,7 +205,8 @@ What requests without a cookie can still do:
   other, for as long as the flood outpaces the visitors. When the store
   holds nothing but sessions in use, a new visitor gets no session and no
   token, and the post is refused the same way. Sessions in use are not
-  dropped by this.
+  dropped by this. With signed tokens the plugin stores nothing, and this
+  does not happen.
 * **Sign users out, when the application calls `nova_session:set/3` for
   clients that are not signed in.** Each of those writes starts a session in
   use, and in a full store it takes the place of the oldest session in use,
@@ -190,9 +225,24 @@ sets its own limits.
 
 A browser sends the session cookie with requests that another site makes it
 send. `SameSite=Lax` on the cookie stops most of them. Add
-`nova_csrf_plugin` to the route groups that take forms from signed-in users:
-it refuses a `POST`, `PUT`, `PATCH` or `DELETE` that does not carry the token
-of the session. See [Nova CSRF](plugins.md#nova-csrf).
+`nova_csrf_plugin` to the route groups that take forms from signed-in users.
+It refuses a `POST`, `PUT`, `PATCH` or `DELETE`:
+
+* that the browser says a page of another site sent, by `Sec-Fetch-Site` and
+  `Origin`, before the security callback runs and before the body is read,
+* that does not carry the token a page of the site was given.
+
+Set `csrf_secret` so that the tokens are signed and nothing is stored for a
+visitor:
+
+```erlang
+{nova, [
+    {csrf_secret, ~"${CSRF_SECRET}"}
+]}
+```
+
+See [Nova CSRF](plugins.md#nova-csrf) for the two checks, the token modes and
+how to change the secret.
 
 Do not change state in a `GET` route. The plugin does not check them.
 
@@ -208,9 +258,12 @@ requests made with cookies are not exposed to other origins. See
 
 A websocket upgrade passes the plugins and the security callback of its
 route group. A browser sends cookies with an upgrade started by a page of any
-site, and CORS does not apply to websockets, so a websocket that trusts the
-session cookie needs `nova_ws_origin_plugin`. It is not on by default. See
-[Websockets](websockets.md#authentication).
+site, and CORS does not apply to websockets. Nova therefore checks the
+`Origin` header of every request to a websocket route against the allowed
+origins of the node, before anything else of the route runs, and answers a
+request from another origin with `403`. The default, `same_host`, accepts
+pages served from the host the request was sent to. See
+[The origin check](websockets.md#the-origin-check).
 
 ## Request data
 
@@ -226,10 +279,9 @@ session cookie needs `nova_ws_origin_plugin`. It is not on by default. See
   time (`multipart_spool`). That room is not shared out between clients:
   with the defaults, 125 uploads of 64 MB that are kept open for up to the
   60 seconds of `read_timeout` fill it, and other uploads get `503`
-  meanwhile. The upload is read before the security callback unless the
-  plugin is listed under `plugins_after_security`, so list it there on
-  routes with a callback, and limit concurrent uploads per client in the
-  proxy.
+  meanwhile. The upload is read once the security callback has let the
+  request through, so put upload routes in a group with a callback, and
+  limit concurrent uploads per client in the proxy.
 * **Binaries, not atoms.** Path parameters, query string keys and the keys of
   a decoded JSON body are binaries. Do not turn data from a request into
   atoms with `binary_to_atom/2` or `list_to_atom/1`: atoms are never garbage
@@ -266,9 +318,9 @@ in your application or in the proxy in front of it.
 ```erlang
 -module(my_app_security_headers_plugin).
 -behaviour(nova_plugin).
--export([pre_request/4, plugin_info/0]).
+-export([pre_security/4, plugin_info/0]).
 
-pre_request(Req, _Env, _Options, State) ->
+pre_security(Req, _Env, _Options, State) ->
     Headers = #{~"x-frame-options" => ~"DENY",
                 ~"referrer-policy" => ~"same-origin",
                 ~"content-security-policy" => ~"default-src 'self'"},
@@ -282,22 +334,25 @@ plugin_info() ->
       description => ~"Adds security headers to every response"}.
 ```
 
-  Responses to requests that match no route (`404`, `405`) run no plugins and
-  do not get these headers.
+  The headers are set in `pre_security/4`, so that a response to a request
+  the security callback refuses has them too. Responses to requests that
+  match no route (`404`, `405`) and to paths that are not canonical (`400`)
+  run no plugins and do not get these headers.
 
 ## Errors and logs
 
 * The pages for `404` and `500` show a title and a generic message. The
   reason and the stacktrace of a crash are only on the page when
   `environment` is set to `dev`. See [Error handling](error-handling.md).
-* Nova takes request data out of what it logs about a crash: a request map is
-  reduced to its method and path, and values under keys that look sensitive
-  are replaced with `redacted`. What your own code logs is not touched unless
-  you use `nova_jsonlogger` with `redact => true`, which covers reports,
-  their metadata and the arguments of format strings. A secret that is text
-  already is not found: a message logged as a plain string, the format
-  string itself, and anything inside a binary, such as the unparsed bytes of
-  a request in a crash report. See [Logging](logging.md#redaction).
+* What is kept out of the logs, see [Logging](logging.md#redaction):
+
+  | Logged | Redacted |
+  |---|---|
+  | Crash reasons and stacktraces that Nova logs or shows on an error page | A request map is reduced to its method and path, the arguments of a stacktrace frame to their number, and values under keys that look sensitive are replaced with `redacted` |
+  | A `csrf_secret` that is refused at boot | Replaced with `redacted`, in the log and in the error the boot fails with |
+  | Any other setting that is refused at boot | No. The value is logged as it was set |
+  | Reports, metadata and format arguments that your own code logs | Only with `nova_jsonlogger` and `redact => true` |
+  | A secret that is text already: a message logged as a plain string, a format string, anything inside a binary such as the unparsed bytes of a request in a crash report | No |
 * Telemetry events carry the route template and not the path. The raw path
   and the address of the client are only added when
   `telemetry_request_fields` asks for them.
@@ -306,23 +361,46 @@ plugin_info() ->
 
 Serve production traffic over TLS, either from the node (`use_ssl` and
 `ssl_options` in `cowboy_configuration`) or from a proxy in front of it. See
-[Building releases](building-releases.md#tls). Behind a proxy, Nova does not
-read forwarded headers: what `cowboy_req:peer/1` returns is the address of
-the proxy.
+[Building releases](building-releases.md#tls).
+
+### Behind a proxy that terminates TLS
+
+Nova then receives plain HTTP. What to check:
+
+| Check | Why |
+|---|---|
+| The proxy passes the `Host` header on as the browser sent it | `same_host` compares the `Origin` of a request with the host and port in `Host`. With a rewritten `Host`, websocket upgrades from the pages of the site are refused with `403`, and so are the requests `nova_csrf_plugin` goes by the `Origin` of |
+| `allowed_origins` is `same_host` or a list of the public origins, not `same_origin` | `same_origin` compares the scheme too, and the scheme Nova sees is `http`. Every `https` origin is refused |
+| `allowed_origins` is a list when the proxy cannot keep `Host` | A list is compared with the `Origin` alone. Put every public origin of the site in it, such as `[~"https://app.example.com"]` |
+| `allowed_origins` is not `any` | `any` also turns off the origin check of `nova_csrf_plugin` |
+| `environment` is not `dev` | The session cookie is `Secure` whatever the scheme, unless `environment` is `dev` |
+| The node is only reachable through the proxy | Nova does not read `x-forwarded-for`, `x-forwarded-proto` or `forwarded`. `cowboy_req:peer/1` is the address of the proxy, and a header your own code reads can be set by anyone who reaches the node directly |
+| `strict-transport-security` is set, by the proxy or by a plugin | Nova does not add it |
+
+```erlang
+{nova, [
+    {environment, prod},
+    {allowed_origins, [~"https://app.example.com"]}
+]}
+```
 
 ## Before going to production
 
 | Check | Where |
 |---|---|
-| `environment` is set, and not to `dev` | `{nova, [{environment, prod}]}`. When it is not set, routers get `dev` and Nova logs a warning at boot |
+| `environment` is not `dev` | `{nova, [{environment, prod}]}`. When it is not set it is read as `prod`, and Nova logs a notice at boot |
 | `use_stacktrace` is `false` | `nova` environment |
 | Every route group has the `security` it needs | `rebar3 nova audit --env prod --strict` |
 | The session cookie has a `__Host-` name | `session_cookie_name` |
 | `nova_session:renew/1` is called at sign-in | Your sign-in controller |
 | Forms of signed-in users are covered by `nova_csrf_plugin` | Route groups |
+| CSRF tokens are signed, with a secret that is the same on every node and not in the repository | See [Cross-site request forgery](#cross-site-request-forgery) |
+| The allowed origins fit how the site is reached | See [Behind a proxy that terminates TLS](#behind-a-proxy-that-terminates-tls) |
+| `non_canonical_paths` is not `resolve` | `nova` environment |
 | Data for visitors who are not signed in is stored with `nova_session:set_provisional/3` | Controllers and plugins that write to the session |
-| Upload routes with a security callback list `nova_multipart_plugin` under `plugins_after_security` | Route groups |
-| Websockets that trust the session cookie have `nova_ws_origin_plugin` | `plugins` |
+| Upload routes have a security callback | Route groups |
+| `plugins_before_security` only lists plugins whose callback needs the body | Route groups and the `nova` environment |
+| The boot logs no warning about the order of plugins | See [Warnings about the order](plugins.md#warnings-about-the-order) |
 | CORS lists the origins you trust, not `*` | `nova_cors_plugin` options |
 | Traffic is served over TLS | `cowboy_configuration` or the proxy |
 | The release has a distribution cookie that is long and random | `RELEASE_COOKIE`, see [Building releases](building-releases.md) |
