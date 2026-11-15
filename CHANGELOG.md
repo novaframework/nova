@@ -314,6 +314,8 @@ All notable changes to this project will be documented in this file.
 - *(sessions)* The session cookie is named __Host-session_id outside dev
 - *(changelog)* Regenerate with the secure defaults and their guides
 - *(sessions)* Client_id/1 is for nova_csrf_plugin and out of the guides
+- *(changelog)* Add the last guide changes
+- *(sessions)* Say what the docs of the session, websocket and request modules left out
 
 ### Features
 
