@@ -1,0 +1,17 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "url": "https://context7.com/novaframework/nova",
+  "public_key": "pk_SsqFYEREzihq8mePzQroo",
+  "projectTitle": "Nova (Erlang web framework)",
+  "description": "Web framework for the BEAM, usable from Erlang, Elixir and LFE. Routing, controllers, plugins, WebSockets, pub/sub, sessions and ErlyDTL views on top of Cowboy.",
+  "folders": ["guides"],
+  "excludeFolders": [".github", "src", "include", "priv", "test"],
+  "excludeFiles": ["CHANGELOG.md"],
+  "rules": [
+    "Controllers are arity-1 functions that take the request map and return a handler tuple: {json, Map}, {json, Status, Headers, Map}, {ok, Variables}, {view, Variables}, {status, Code} or {redirect, Path}.",
+    "Routes live in the app's router module: routes/1 returns a list of maps with prefix, security and routes, where each route is {Path, {Module, Function}}.",
+    "security is false or a fun Module:Function/1, and applies to every route in that group.",
+    "A decoded JSON body appears under the json key of the request map only when nova_request_plugin is configured with decode_json_body => true.",
+    "Scaffold new apps with rebar3 new nova my_app (from the rebar3_nova plugin) and run them with rebar3 nova serve for auto-reload."
+  ]
+}
