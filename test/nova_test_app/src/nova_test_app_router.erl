@@ -10,6 +10,34 @@
 
 routes(_Environment) ->
     [
+     %% One group per plugin return, driven by nova_full_app_SUITE.
+     #{prefix => "/plugin-break-redirect",
+       plugins => [{pre_request, nova_test_app_return_plugin, #{return => break_redirect}},
+                   {pre_request, nova_test_app_plugin, #{}}],
+       routes => [{"/", fun nova_test_app_controller:json/1, #{methods => [get]}}]},
+     #{prefix => "/plugin-break-status",
+       plugins => [{pre_request, nova_test_app_return_plugin, #{return => break_status}}],
+       routes => [{"/", fun nova_test_app_controller:json/1, #{methods => [get]}}]},
+     #{prefix => "/plugin-break-unknown",
+       plugins => [{pre_request, nova_test_app_return_plugin, #{return => break_unknown}}],
+       routes => [{"/", fun nova_test_app_controller:json/1, #{methods => [get]}}]},
+     #{prefix => "/plugin-stop",
+       plugins => [{pre_request, nova_test_app_return_plugin, #{return => stop_two_tuple}}],
+       routes => [{"/", fun nova_test_app_controller:json/1, #{methods => [get]}}]},
+     #{prefix => "/plugin-error",
+       plugins => [{pre_request, nova_test_app_plugin, #{}},
+                   {pre_request, nova_test_app_return_plugin, #{return => error}}],
+       routes => [{"/", fun nova_test_app_controller:json/1, #{methods => [get]}}]},
+     #{prefix => "/cors",
+       plugins => [{pre_request, nova_cors_plugin, #{allow_origins => [~"https://app.example.com"]}}],
+       routes => [{"/", fun nova_test_app_controller:method/1, #{methods => [options, post]}}]},
+     #{prefix => "/body-limit",
+       plugins => [{pre_request, nova_request_plugin, #{decode_json_body => true, max_body_length => 64}}],
+       routes => [{"/", fun nova_test_app_controller:body/1, #{methods => [post]}}]},
+     #{prefix => "/body-timeout",
+       plugins => [{pre_request, nova_request_plugin, #{decode_json_body => true, body_read_timeout => 300}}],
+       routes => [{"/", fun nova_test_app_controller:body/1, #{methods => [post]}}]},
+
      %% Plain routes, bindings, methods, plugins and a catch-all static dir.
      #{prefix => "",
        security => false,
@@ -30,10 +58,13 @@ routes(_Environment) ->
                   {"/redirect", fun nova_test_app_controller:redirect/1, #{methods => [get]}},
                   {"/teapot", fun nova_test_app_controller:teapot/1, #{methods => [get]}},
                   {"/crash", fun nova_test_app_controller:crash/1, #{methods => [get]}},
+                  {"/forbidden", fun nova_test_app_controller:forbidden/1, #{methods => [get]}},
+                  {"/gone", fun nova_test_app_controller:gone/1, #{methods => [get]}},
                   {"/extra", fun nova_test_app_controller:extra/1,
                    #{methods => [get], extra_state => #{answer => 42}}},
                   {"/assets/[...]", "assets"},
                   {"/ws", nova_test_app_ws_controller, #{protocol => ws}},
+                  {"/ws-crash", nova_test_app_ws_crash_controller, #{protocol => ws}},
 
                   %% Status-code routes. Nova registers its own 404 and 500,
                   %% and an application may override them.
@@ -53,5 +84,16 @@ routes(_Environment) ->
        host => <<"api.localhost">>,
        routes => [
                   {"/host", fun nova_test_app_controller:host/1, #{methods => [get]}}
+                 ]},
+
+     %% Sessions, driven by nova_session_SUITE.
+     #{prefix => "/session",
+       routes => [
+                  {"/set/:value", fun nova_test_app_session_controller:set/1, #{methods => [get]}},
+                  {"/get", fun nova_test_app_session_controller:get/1, #{methods => [get]}},
+                  {"/renew", fun nova_test_app_session_controller:renew/1, #{methods => [get]}},
+                  {"/delete", fun nova_test_app_session_controller:delete/1, #{methods => [get]}},
+                  {"/untouched", fun nova_test_app_session_controller:untouched/1, #{methods => [get]}},
+                  {"/ws", nova_test_app_session_ws_controller, #{protocol => ws}}
                  ]}
     ].

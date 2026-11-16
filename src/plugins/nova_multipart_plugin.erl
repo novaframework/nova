@@ -43,7 +43,7 @@ pre_request(Req, _Env, #{handler := {Mod, InitArgs}} = Options, State) when is_a
     end;
 pre_request(Req, _Env, Options, State) ->
     ?LOG_ERROR(#{msg => <<"nova_multipart_plugin needs handler => {Mod, InitArgs}.">>,
-                 options => Options}),
+                 options => nova_redact:term(Options)}),
     {stop, cowboy_req:reply(500, Req), State}.
 
 -spec post_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
@@ -65,7 +65,7 @@ plugin_info() ->
       description => <<"Reads multipart/form-data bodies. Fields go under `params`, files are streamed to a nova_multipart_handler and listed under `files`.">>,
       options => [
                   {handler, <<"Required. {Mod, InitArgs} implementing nova_multipart_handler. nova_multipart_file_handler spools to disk, nova_multipart_memory_handler buffers in memory">>},
-                  {max_parts, <<"Reply 413 after this many parts (default 32)">>},
+                  {max_parts, ~"Reply 413 when the body has more than this many parts (default 32)"},
                   {max_part_size, <<"Reply 413 past this many bytes in one file part (default 8 000 000)">>},
                   {max_field_size, <<"Reply 413 past this many bytes in one non-file field (default 65 536)">>},
                   {max_total_size, <<"Reply 413 past this many bytes across all parts (default 64 000 000)">>},
@@ -110,19 +110,16 @@ stream_parts(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params,
             warn(408, <<"Multipart read deadline exceeded.">>, #{}),
             {stop, cowboy_req:reply(408, Req)};
         false ->
-            case PartCount >= maps:get(max_parts, Limits) of
-                true ->
-                    warn(413, <<"Too many multipart parts.">>, #{max_parts => maps:get(max_parts, Limits)}),
-                    {stop, cowboy_req:reply(413, Req)};
-                false ->
-                    read_next_part(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params, Files)
-            end
+            read_next_part(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params, Files)
     end.
 
 read_next_part(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params, Files) ->
     case safe_read_part(Req) of
         {done, Req0} ->
             {ok, Req0, Params, lists:reverse(Files)};
+        {ok, _Headers, Req0} when PartCount >= map_get(max_parts, Limits) ->
+            warn(413, ~"Too many multipart parts.", #{max_parts => maps:get(max_parts, Limits)}),
+            {stop, cowboy_req:reply(413, Req0)};
         {ok, Headers, Req0} ->
             case part_info(Headers) of
                 error ->
@@ -291,7 +288,8 @@ safe_call(Mod, Fun, Args) ->
                  Class:Reason:Stacktrace ->
                      ?LOG_ERROR(#{msg => <<"nova_multipart_handler callback raised.">>,
                                   mod => Mod, fun_name => Fun, class => Class,
-                                  error => Reason, stacktrace => Stacktrace}),
+                                  error => nova_redact:term(Reason),
+                                  stacktrace => nova_redact:stacktrace(Stacktrace)}),
                      {error, handler_crashed}
              end,
     case Result of
@@ -300,7 +298,7 @@ safe_call(Mod, Fun, Args) ->
         {error, _} -> Result;
         Other ->
             ?LOG_ERROR(#{msg => <<"nova_multipart_handler callback returned an invalid value.">>,
-                         mod => Mod, fun_name => Fun, value => Other}),
+                         mod => Mod, fun_name => Fun, value => nova_redact:term(Other)}),
             {error, handler_crashed}
     end.
 
@@ -310,7 +308,7 @@ safe_abort(Mod, Reason, HandlerState) ->
     catch
         Class:AbortReason ->
             ?LOG_WARNING(#{msg => <<"nova_multipart_handler:handle_abort/2 raised.">>,
-                           class => Class, error => AbortReason})
+                           class => Class, error => nova_redact:term(AbortReason)})
     end,
     ok.
 

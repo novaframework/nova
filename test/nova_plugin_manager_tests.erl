@@ -156,3 +156,27 @@ code_change_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         ?assertEqual({ok, my_state}, nova_plugin_manager:code_change("1.0", my_state, []))
     end}.
+
+%%====================================================================
+%% terminate/2 calls stop/1 with the plugin's state, as the behaviour says
+%%====================================================================
+
+stop_receives_state_test() ->
+    Prev = nova_test_helper:setup_nova_env(),
+    application:set_env(nova, dispatch_backend, persistent_term),
+    persistent_term:put(nova_plugins, []),
+    Self = self(),
+    meck:new(test_plugin_stop1, [non_strict, no_link]),
+    meck:expect(test_plugin_stop1, plugin_info, fun() -> #{title => ~"Stop", version => ~"1"} end),
+    meck:expect(test_plugin_stop1, init, fun() -> #{pid => Self} end),
+    meck:expect(test_plugin_stop1, stop, fun(State) -> Self ! {stopped, State}, ok end),
+    try
+        {ok, Pid} = nova_plugin_manager:start_link(),
+        ok = nova_plugin_manager:add_plugin(test_plugin_stop1),
+        gen_server:stop(Pid),
+        ?assertEqual({stopped, #{pid => Self}}, receive M -> M after 1000 -> timeout end)
+    after
+        meck:unload(test_plugin_stop1),
+        persistent_term:erase(nova_plugins),
+        nova_test_helper:cleanup_nova_env(Prev)
+    end.

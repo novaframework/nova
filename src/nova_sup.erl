@@ -23,6 +23,10 @@ Each listener owns its own routing table, so an application started on a second 
 %% Supervisor callbacks
 -export([init/1]).
 
+-ifdef(TEST).
+-export([warn_without_session_exists/2]).
+-endif.
+
 -include_lib("kernel/include/logger.hrl").
 -include("../include/nova.hrl").
 
@@ -143,6 +147,11 @@ init([]) ->
 
     %% try to ensure callback module is loaded first
     ExportedFuns = SessionManager:module_info(exports),
+    warn_without_session_exists(SessionManager, ExportedFuns),
+    case nova_session:enabled() of
+        true -> nova_session:validate_cookie_config();
+        false -> ok
+    end,
 
     Children =
         case proplists:get_value(start_link, ExportedFuns) of
@@ -520,3 +529,14 @@ nova_app_options(_App)            -> #{}.
 -spec nova_app_name(nova_app()) -> atom().
 nova_app_name({App, _Options}) -> App;
 nova_app_name(App)             -> App.
+
+%% Without session_exists/1 a presented session id is used as is, so a client
+%% can pick its own id.
+warn_without_session_exists(SessionManager, ExportedFuns) ->
+    case nova_session:enabled() andalso not lists:member({session_exists, 1}, ExportedFuns) of
+        true ->
+            ?LOG_WARNING(#{msg => ~"Session manager does not implement session_exists/1, so presented session ids are accepted unchecked",
+                           session_manager => SessionManager});
+        false ->
+            ok
+    end.

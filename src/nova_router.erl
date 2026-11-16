@@ -132,7 +132,9 @@ compile_fresh(Apps, DispatchKey) ->
 execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
     StorageBackend = storage_backend(),
     DispatchKey = dispatch_key(Env),
-    Req = Req0#{nova_dispatch_key => DispatchKey},
+    %% nova_session only tells nova_stream_h about session changes made by the
+    %% process serving the request.
+    Req = Req0#{nova_dispatch_key => DispatchKey, nova_session_owner => self()},
     Dispatch = StorageBackend:get(DispatchKey),
     case nova_routing_trie:find(Host, Path, Method, Dispatch) of
         {error, not_found} ->
@@ -144,12 +146,13 @@ execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
             %% Set the 'allow'-header
             Req1 = cowboy_req:set_resp_header(<<"allow">>, AllowHeader, Req),
             render_status_page('_', 405, #{error => "Method not allowed"}, Req1, Env);
-        {ok, Bindings, #nova_handler_value{app = App, callback = Callback, secure = Secure, plugins = Plugins,
+        {ok, Bindings, #nova_handler_value{app = App, callback = Callback, secure = Secure, plugins = RoutePlugins,
                                            extra_state = ExtraState}} ->
+            {Route, Plugins} = take_route(RoutePlugins),
             {ok,
-             Req#{plugins => Plugins,
-                  extra_state => ExtraState,
-                  bindings => Bindings},
+             put_route(Route, Req#{plugins => Plugins,
+                                   extra_state => ExtraState,
+                                   bindings => Bindings}),
              Env#{app => App,
                   callback => Callback,
                   secure => Secure,
@@ -157,11 +160,12 @@ execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
                  }
             };
         {ok, Bindings, #nova_handler_value{app = App, callback = Callback,
-                                           secure = Secure, plugins = Plugins, extra_state = ExtraState}, Pathinfo} ->
+                                           secure = Secure, plugins = RoutePlugins, extra_state = ExtraState}, Pathinfo} ->
+            {Route, Plugins} = take_route(RoutePlugins),
             {ok,
-             Req#{plugins => Plugins,
-                  extra_state => with_pathinfo(ExtraState, Pathinfo),
-                  bindings => Bindings},
+             put_route(Route, Req#{plugins => Plugins,
+                                   extra_state => with_pathinfo(ExtraState, Pathinfo),
+                                   bindings => Bindings}),
              Env#{app => App,
                   callback => Callback,
                   secure => Secure,
@@ -169,10 +173,11 @@ execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
                  }
             };
         {ok, Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
-                                              plugins = Plugins, secure = Secure}} ->
+                                              plugins = RoutePlugins, secure = Secure}} ->
+            {Route, Plugins} = take_route(RoutePlugins),
             {ok,
-             Req#{plugins => Plugins,
-                  bindings => Bindings},
+             put_route(Route, Req#{plugins => Plugins,
+                                   bindings => Bindings}),
              Env#{app => App,
                   cowboy_handler => Handler,
                   arguments => Args,
@@ -435,6 +440,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     App = maps:get(app, Options),
     RouterFile = maps:get(router_file, Options),
 
+    ok = warn_route_plugin_strategy(App, RouteInfo, RouterFile),
     Plugins = resolve_plugins(maps:get(plugin_strategy, Options, local_or_global), RouteInfo, RouterFile),
 
     Secure = resolve_secure(Options, RouteInfo, RouterFile),
@@ -507,14 +513,15 @@ parse_url(Host, [{RemotePath, LocalPath, Options}|Tl], T = #{prefix := Prefix},
                     {priv_dir, _, _} -> get_dir
                 end,
 
+    RealPath = string:concat(Prefix, RemotePath),
     Value0 = #nova_handler_value{
                 app = App,
                 callback = fun nova_file_controller:TargetFun/1,
                 extra_state = nova_file_controller:static_state(Payload, Options),
-                plugins = Value#nova_handler_value.plugins,
+                plugins = with_route(RealPath, Value#nova_handler_value.plugins),
                 secure = Secure
                },
-    Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree, insert_opts(T)),
+    Tree0 = insert(Host, RealPath, '_', Value0, Tree, insert_opts(T)),
     parse_url(Host, Tl, T, Value, Tree0);
 parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], T, Value = #nova_handler_value{app = _App, secure = _Secure}, Tree) ->
     RouterFile = maps:get(router_file, T, undefined),
@@ -535,7 +542,8 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
             ExtraState = maps:get(extra_state, Options, undefined),
             Value0 = Value#nova_handler_value{extra_state = ExtraState},
 
-            Value1 = Value0#nova_handler_value{callback = Callback},
+            Value1 = Value0#nova_handler_value{callback = Callback,
+                                               plugins = with_route(RealPath, Value#nova_handler_value.plugins)},
             ?LOG_DEBUG(#{action => <<"Adding route">>, route => RealPath, app => App, methods => Methods,
                          router_file => maps:get(router_file, Options, undefined)}),
             CompiledPaths = insert_methods(Methods, Host, RealPath, Value1, Tree, insert_opts(T),
@@ -550,16 +558,16 @@ parse_url(Host,
           [{Path, Mod, #{protocol := ws}} | Tl],
           T = #{prefix := Prefix}, #nova_handler_value{app = App, secure = Secure} = Value,
           Tree) when is_atom(Mod) ->
+    RealPath = concat_strings(Prefix, Path),
     Value0 =  #cowboy_handler_value{
                   app = App,
                   handler = nova_ws_handler,
-                  arguments = #{module => Mod},
-                  plugins = Value#nova_handler_value.plugins,
+                  arguments = #{module => Mod, app => App},
+                  plugins = with_route(RealPath, Value#nova_handler_value.plugins),
                   secure = Secure},
 
     ?LOG_DEBUG(#{action => <<"Adding route">>, protocol => <<"ws">>, route => Path, app => App,
                  router_file => maps:get(router_file, T, undefined)}),
-    RealPath = concat_strings(Prefix, Path),
     CompiledPaths = insert(Host, RealPath, '_', Value0, Tree, insert_opts(T)),
     parse_url(Host, Tl, T, Value, CompiledPaths).
 
@@ -620,6 +628,18 @@ with_pathinfo(undefined, Pathinfo) ->
     #{pathinfo => Pathinfo};
 with_pathinfo(ExtraState, _Pathinfo) ->
     ExtraState.
+
+%% The route template rides at the head of the compiled plugin list so the
+%% routing records keep their arity: rebar3_nova and other tools match them
+%% positionally. execute/2 takes it off again before the list reaches the Req.
+with_route(RealPath, Plugins) ->
+    [{nova_route, unicode:characters_to_binary(RealPath)} | Plugins].
+
+take_route([{nova_route, Route} | Plugins]) -> {Route, Plugins};
+take_route(Plugins)                          -> {undefined, Plugins}.
+
+put_route(undefined, Req) -> Req;
+put_route(Route, Req)     -> Req#{nova_route => Route}.
 
 %% The module the dispatch table is stored in. Configurable, so it has to be
 %% narrowed to a module before it can be called.
@@ -757,6 +777,22 @@ resolve_plugins(Strategy, RouteInfo, RouterFile) ->
     ?LOG_ERROR(#{reason => <<"Unknown plugin_strategy, falling back to local_or_global">>,
                  plugin_strategy => Strategy, router_file => RouterFile}),
     resolve_plugins(local_or_global, RouteInfo, RouterFile).
+
+%% The routing guide for 0.17.0 to 0.18.1 put plugin_strategy on the route
+%% entry, where it was never read. Once per application, so a router that is
+%% compiled again does not log again.
+warn_route_plugin_strategy(App, #{plugin_strategy := Strategy}, RouterFile) ->
+    Key = {?MODULE, route_plugin_strategy_warned, App},
+    case persistent_term:get(Key, false) of
+        true ->
+            ok;
+        false ->
+            persistent_term:put(Key, true),
+            ?LOG_WARNING(#{msg => ~"plugin_strategy on a route entry is ignored. Set it in the application's nova_apps options instead: {nova_apps, [{App, #{plugin_strategy => Strategy}}]}",
+                           app => App, plugin_strategy => Strategy, router_file => RouterFile})
+    end;
+warn_route_plugin_strategy(_App, _RouteInfo, _RouterFile) ->
+    ok.
 
 local_plugins(RouteInfo) ->
     maps:get(plugins, RouteInfo, []).

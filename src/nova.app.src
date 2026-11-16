@@ -14,7 +14,7 @@
                  compiler,
                  erlydtl,
                  jhn_stdlib,
-                 thoas
+                 telemetry
                 ]},
   {env,[]},
   {modules,[nova]},

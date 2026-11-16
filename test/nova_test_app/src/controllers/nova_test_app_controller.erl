@@ -3,12 +3,15 @@
 -export([
          index/1,
          json/1,
+         body/1,
          echo/1,
          literal/1,
          method/1,
          redirect/1,
          teapot/1,
          crash/1,
+         forbidden/1,
+         gone/1,
          extra/1,
          secret/1,
          auth_data/1,
@@ -21,6 +24,9 @@ index(_Req) ->
 
 json(_Req) ->
     {json, #{ok => true, from => <<"nova_test_app">>}}.
+
+body(#{json := JSON}) ->
+    {json, JSON}.
 
 echo(#{bindings := Bindings}) ->
     {json, Bindings}.
@@ -37,8 +43,14 @@ redirect(_Req) ->
 teapot(_Req) ->
     {status, 418, #{}, <<"short and stout">>}.
 
-crash(_Req) ->
-    erlang:error(deliberate_crash).
+crash(Req) ->
+    erlang:error(deliberate_crash, [Req]).
+
+forbidden(_Req) ->
+    throw({403, not_allowed}).
+
+gone(_Req) ->
+    erlang:error({410, gone}).
 
 extra(#{extra_state := ExtraState}) ->
     {json, #{answer => maps:get(answer, ExtraState, undefined)}}.
@@ -52,5 +64,9 @@ auth_data(#{auth_data := AuthData}) ->
 host(_Req) ->
     {json, #{host_scoped => true}}.
 
-not_found(_Req) ->
-    {status, 404, #{<<"content-type">> => <<"text/plain">>}, <<"custom not found">>}.
+not_found(Req) ->
+    Headers = case Req of
+                  #{nova_route := Route} -> #{<<"x-nova-route">> => Route};
+                  _ -> #{}
+              end,
+    {status, 404, Headers#{<<"content-type">> => <<"text/plain">>}, <<"custom not found">>}.

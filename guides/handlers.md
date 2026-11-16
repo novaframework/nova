@@ -16,7 +16,7 @@ You can create your own handlers to support custom response types or behaviors. 
 
 ```erlang
 -module(my_console_handler).
--export([handle_console/4]).
+-export([handle_console/3]).
 
 handle_console({_Type, Format, Args}, _Callback, Req) ->
     io:format(Format, Args),
@@ -67,10 +67,12 @@ greet(_Req) ->
 Handlers are registered using Nova’s API:
 
 ```erlang
-nova_handlers:register_handler(custom_handler, my_custom_handler).
+nova_handlers:register_handler(console, fun my_console_handler:handle_console/3).
+%% or, the same function:
+nova_handlers:register_handler(console, {my_console_handler, handle_console}).
 ```
 
-Once registered, when a controller returns `{custom_handler, Payload}`, Nova will use the specified handler to process the response.
+Once registered, when a controller returns `{console, Format, Args}`, Nova will use the specified handler to process the response.
 
 ## Advanced Usage
 
