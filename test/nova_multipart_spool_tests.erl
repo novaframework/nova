@@ -134,5 +134,19 @@ owner(Fun) ->
     receive
         {'DOWN', Monitor, process, Pid, _Reason} -> ok
     end,
+    ok = spool_was_told(whereis(nova_multipart_spool), Pid),
     _ = sys:get_state(nova_multipart_spool),
     ok.
+
+%% The spool's monitor of the owner goes when its 'DOWN' is in the spool's
+%% queue, and the call after this one waits behind that message. Without
+%% this the call can get to the spool first.
+spool_was_told(Spool, Owner) ->
+    {monitors, Monitors} = erlang:process_info(Spool, monitors),
+    case lists:member({process, Owner}, Monitors) of
+        true ->
+            erlang:yield(),
+            spool_was_told(Spool, Owner);
+        false ->
+            ok
+    end.
