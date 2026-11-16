@@ -100,6 +100,15 @@ register_mfa_handler_test_() ->
         ?assert(is_function(Handler))
     end}.
 
+%% Handlers are called with three arguments; {Mod, Fun} used to become /4.
+register_mfa_handler_arity_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        nova_handlers:register_handler(mfa_arity, {nova_basic_handler, handle_json}),
+        _ = sys:get_state(nova_handlers),
+        {ok, Handler} = nova_handlers:get_handler(mfa_arity),
+        ?assert(is_function(Handler, 3))
+    end}.
+
 %%====================================================================
 %% unregister_handler/1
 %%====================================================================

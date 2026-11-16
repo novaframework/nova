@@ -118,7 +118,7 @@ Request → Cowboy → Nova Router → Plugins (pre) → Security → Controller
 
 ## Requirements
 
-- Erlang/OTP 23+
+- Erlang/OTP 27+
 - Rebar3
 
 ## Community

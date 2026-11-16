@@ -3,7 +3,26 @@
 %%% Created :  8 Dec 2019 by Niclas Axelsson <niclas@burbas.se>
 %%%-------------------------------------------------------------------
 -module(nova_session_ets).
--moduledoc false.
+-moduledoc """
+The default session backend. Sessions live in an ETS table on every node and
+are replicated through `nova_pubsub`.
+
+A session is dropped `session_max_age` seconds (14 days by default) after it
+was created, whatever happens to it in between. With
+`{nova, [{session_max_age, infinity}]}` sessions live until they are deleted
+or the node restarts. Expired sessions are swept once a minute; a session
+created while the setting was `infinity` never expires.
+
+Sessions do not survive a restart, and a node that starts or joins later only
+has the sessions written after it joined. During a rolling deploy or behind a
+load balancer without sticky sessions, a client whose id the serving node does
+not have gets a fresh session (Nova replaces ids the backend does not know),
+so it is signed out. Use a shared backend, such as a database, when sessions
+have to outlive a node.
+
+Rows are `{SessionId, Data, ExpiresAt}`. Older releases stored
+`{SessionId, Data}`; `code_change/3` converts them on a hot upgrade.
+""".
 
 -behaviour(gen_server).
 -behaviour(nova_session).
@@ -14,7 +33,8 @@
          get_value/2,
          set_value/3,
          delete_value/1,
-         delete_value/2
+         delete_value/2,
+         session_exists/1
         ]).
 
 %% gen_server callbacks
@@ -24,6 +44,7 @@
 -define(SERVER, ?MODULE).
 -define(TABLE, nova_session_ets_entries).
 -define(CHANNEL, '__sessions').
+-define(SWEEP_INTERVAL, 60000).
 
 -include("../include/nova_pubsub.hrl").
 
@@ -47,17 +68,36 @@ start_link() ->
 get_value(SessionId, Key) ->
     gen_server:call(?SERVER, {get_value, SessionId, Key}).
 
--spec set_value(SessionId :: binary(), Key :: binary(), Value :: binary()) -> ok | {error, Reason :: term()}.
+%% Every write waits for the local copy, so the next request on this node,
+%% which may arrive as soon as the response is out, already sees it.
+-spec set_value(SessionId :: binary(), Key :: binary(), Value :: binary()) -> ok.
 set_value(SessionId, Key, Value) ->
-    nova_pubsub:broadcast(?CHANNEL, "set_value", {SessionId, Key, Value}).
+    nova_pubsub:broadcast(?CHANNEL, "set_value", {SessionId, Key, Value}),
+    sync().
 
--spec delete_value(SessionId :: binary()) -> ok | {error, Reason :: term()}.
+-spec delete_value(SessionId :: binary()) -> ok.
 delete_value(SessionId) ->
-    nova_pubsub:broadcast(?CHANNEL, "delete_value", SessionId).
+    nova_pubsub:broadcast(?CHANNEL, "delete_value", SessionId),
+    sync().
 
--spec delete_value(SessionId :: binary(), Key :: binary()) -> ok | {error, Reason :: term()}.
+-spec delete_value(SessionId :: binary(), Key :: binary()) -> ok.
 delete_value(SessionId, Key) ->
-    nova_pubsub:broadcast(?CHANNEL, "delete_value", {SessionId, Key}).
+    nova_pubsub:broadcast(?CHANNEL, "delete_value", {SessionId, Key}),
+    sync().
+
+%% Read straight from the table: nova_session calls this on every access by a
+%% request that carries a session cookie.
+-spec session_exists(SessionId :: binary()) -> boolean().
+session_exists(SessionId) ->
+    try ets:lookup(?TABLE, SessionId) of
+        [{SessionId, _Session, ExpiresAt}] -> not expired(ExpiresAt);
+        _ -> false
+    catch
+        error:badarg -> false
+    end.
+
+sync() ->
+    ok = gen_server:call(?SERVER, sync).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -75,6 +115,7 @@ init([]) ->
     process_flag(trap_exit, true),
     ets:new(?TABLE, [set, named_table]),
     nova_pubsub:join(?CHANNEL),
+    schedule_sweep(),
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------
@@ -90,17 +131,19 @@ init([]) ->
                          {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
                          {stop, Reason :: term(), NewState :: term()}.
 handle_call({get_value, SessionId, Key}, _From, State) ->
-    case ets:lookup(?TABLE, SessionId) of
-        [] ->
-            {reply, {error, not_found}, State};
-        [{SessionId, Session}|_] ->
+    case live_session(SessionId) of
+        {ok, Session, _ExpiresAt} ->
             case maps:get(Key, Session, undefined) of
                 undefined ->
                     {reply, {error, not_found}, State};
                 Value ->
                     {reply, {ok, Value}, State}
-            end
+            end;
+        error ->
+            {reply, {error, not_found}, State}
     end;
+handle_call(sync, _From, State) ->
+    {reply, ok, State};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -125,23 +168,33 @@ handle_cast(_Request, State) ->
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: normal | term(), NewState :: term()}.
 handle_info(#nova_pubsub{topic = "set_value", payload = {SessionId, Key, Value}}, State) ->
-    case ets:lookup(?TABLE, SessionId) of
-        [] ->
-            ets:insert(?TABLE, {SessionId, #{Key => Value}});
-        [{_, Session}|_] ->
-            ets:insert(?TABLE, {SessionId, Session#{Key => Value}})
+    case live_session(SessionId) of
+        {ok, Session, ExpiresAt} ->
+            ets:insert(?TABLE, {SessionId, Session#{Key => Value}, ExpiresAt});
+        error ->
+            ets:insert(?TABLE, {SessionId, #{Key => Value}, expires_at()})
     end,
     {noreply, State};
 handle_info(#nova_pubsub{topic = "delete_value", payload = {SessionId, Key}}, State) ->
-    case ets:lookup(?TABLE, SessionId) of
-        [] ->
-            ok;
-        [{SessionId, Session}|_] ->
-            ets:insert(?TABLE, {SessionId, maps:remove(Key, Session)})
+    case live_session(SessionId) of
+        {ok, Session, ExpiresAt} ->
+            ets:insert(?TABLE, {SessionId, maps:remove(Key, Session), ExpiresAt});
+        error ->
+            ok
     end,
     {noreply, State};
 handle_info(#nova_pubsub{topic = "delete_value", payload = SessionId}, State) ->
     ets:delete(?TABLE, SessionId),
+    {noreply, State};
+handle_info(sweep, State) ->
+    case max_age() of
+        undefined ->
+            ok;
+        _ ->
+            Now = erlang:system_time(millisecond),
+            ets:select_delete(?TABLE, [{{'_', '_', '$1'}, [{is_integer, '$1'}, {'=<', '$1', Now}], [true]}])
+    end,
+    schedule_sweep(),
     {noreply, State};
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -165,6 +218,8 @@ terminate(_Reason, _State) ->
                   Extra :: term()) -> {ok, NewState :: term()} |
                                       {error, Reason :: term()}.
 code_change(_OldVsn, State, _Extra) ->
+    Old = ets:select(?TABLE, [{{'$1', '$2'}, [], [{{'$1', '$2'}}]}]),
+    ets:insert(?TABLE, [{SessionId, Session, infinity} || {SessionId, Session} <- Old]),
     {ok, State}.
 
 %%--------------------------------------------------------------------
@@ -180,3 +235,31 @@ format_status(Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+live_session(SessionId) ->
+    case ets:lookup(?TABLE, SessionId) of
+        [{SessionId, Session, ExpiresAt}] ->
+            case expired(ExpiresAt) of
+                false -> {ok, Session, ExpiresAt};
+                true -> error
+            end;
+        [] ->
+            error
+    end.
+
+expires_at() ->
+    case max_age() of
+        undefined -> infinity;
+        MaxAge -> erlang:system_time(millisecond) + MaxAge * 1000
+    end.
+
+expired(infinity) -> false;
+expired(ExpiresAt) -> ExpiresAt =< erlang:system_time(millisecond).
+
+max_age() ->
+    case nova_session:max_age() of
+        infinity -> undefined;
+        MaxAge -> MaxAge
+    end.
+
+schedule_sweep() ->
+    erlang:send_after(?SWEEP_INTERVAL, self(), sweep).

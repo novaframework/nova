@@ -12,8 +12,7 @@ get_file(#{extra_state := #{static := File, options := Options}, headers := Head
     MimeType =
         case maps:get(mimetype, Options, undefined) of
             undefined ->
-                {T, V, _} = cow_mimetypes:web(erlang:list_to_binary(Filepath)),
-                <<T/binary, "/", V/binary>>;
+                mimetype(unicode:characters_to_binary(Filepath));
             MType ->
                 MType
         end,
@@ -25,7 +24,7 @@ get_file(#{extra_state := #{static := File, options := Options}, headers := Head
     case maps:get(<<"range">>, Headers, undefined) of
         undefined ->
             %% No range header, return full file
-            {sendfile, 200, #{}, {0, Size, Filepath}, MimeType};
+            {sendfile, 200, #{~"x-content-type-options" => ~"nosniff"}, {0, Size, Filepath}, MimeType};
 
         <<"bytes=", RangeSpec/binary>> ->
             %% Handle Range Request
@@ -35,7 +34,8 @@ get_file(#{extra_state := #{static := File, options := Options}, headers := Head
                     RespHeaders = #{<<"content-range">> => <<"bytes ", (integer_to_binary(Start))/binary, "-",
                                                              (integer_to_binary(End))/binary, "/",
                                                              (integer_to_binary(Size))/binary>>,
-                                    <<"content-length">> => integer_to_binary(Length)},
+                                    ~"content-length" => integer_to_binary(Length),
+                                    ~"x-content-type-options" => ~"nosniff"},
                     {sendfile, 206, RespHeaders, {Start, Length, Filepath}, MimeType};
                 _ ->
                     %% Invalid range request
@@ -49,20 +49,12 @@ get_file(_Req) ->
 get_dir(#{extra_state := #{pathinfo := Pathinfo, static := Dir, options := Options}} = Req) ->
     %% This case will be invoked if a directory was set with wildcard - pathinfo will then
     %% contain the segments of the wildcard value
-    Filepath = get_filepath(Dir),
-    Filepath0 = lists:foldl(fun(F, Acc) -> filename:join(Acc, binary_to_list(F)) end, Filepath, Pathinfo),
-    case filelib:is_dir(Filepath0) of
-        false ->
-            %% Check if it's a file
-            case filelib:is_file(Filepath0) of
-                true ->
-                    %% It's a file
-                    get_file(Req#{extra_state => #{static => {file, Filepath0}, options => Options}});
-                false ->
-                    {status, 404}
-            end;
+    case lists:all(fun safe_segment/1, Pathinfo) of
         true ->
-            get_dir(Req#{extra_state => #{static => {dir, Filepath0}, options => Options}})
+            Filepath = filename:join([get_filepath(Dir) | [binary_to_list(Segment) || Segment <- Pathinfo]]),
+            get_path(Filepath, Options, Req);
+        false ->
+            {status, 404}
     end;
 get_dir(#{path := Path, extra_state := #{static := Dir, options := Options}} = Req) ->
     Filepath = get_filepath(Dir),
@@ -92,6 +84,24 @@ get_dir(_Req) ->
 %%%%%%%%%%%%%%%%%%%%%%%%
 %% Internal functions %%
 %%%%%%%%%%%%%%%%%%%%%%%%
+
+get_path(Filepath, Options, Req) ->
+    case filelib:is_dir(Filepath) of
+        true ->
+            get_dir(Req#{extra_state => #{static => {dir, Filepath}, options => Options}});
+        false ->
+            case filelib:is_file(Filepath) of
+                true ->
+                    get_file(Req#{extra_state => #{static => {file, Filepath}, options => Options}});
+                false ->
+                    {status, 404}
+            end
+    end.
+
+%% The router already drops dot segments, so this only guards callers that
+%% build pathinfo themselves.
+safe_segment(~"..") -> false;
+safe_segment(Segment) -> binary:match(Segment, [~"/", <<0>>]) =:= nomatch.
 
 parse_range(RangeSpec, FileSize) ->
     %% Parse the "bytes=" range header value
@@ -142,3 +152,25 @@ file_info(Filepath, Filename) ->
         _ ->
             undefined
     end.
+
+%% cow_mimetypes:web/1 only knows a handful of types (no .txt, .json, .woff2
+%% or .webp), so fall back to the full table before octet-stream. Types a
+%% browser renders as a document and runs scripts in (XML, XHTML, compressed
+%% SVG and the other +xml types) stay octet-stream unless the route sets a
+%% mimetype.
+mimetype(Path) ->
+    {T, V, _} = case cow_mimetypes:web(Path) of
+                    {~"application", ~"octet-stream", _} = Default -> fallback(cow_mimetypes:all(Path), Default);
+                    Type -> Type
+                end,
+    <<T/binary, "/", V/binary>>.
+
+fallback({_, SubType, _} = Type, Default) ->
+    case document_type(SubType) of
+        true -> Default;
+        false -> Type
+    end.
+
+document_type(~"xml") -> true;
+document_type(~"html") -> true;
+document_type(SubType) -> binary:longest_common_suffix([SubType, ~"+xml"]) =:= 4.
