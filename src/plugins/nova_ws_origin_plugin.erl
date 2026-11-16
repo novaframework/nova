@@ -80,25 +80,25 @@ is_websocket_upgrade(Req) ->
 is_allowed(undefined, _Req, _Allowed) ->
     true;
 is_allowed(Origin, Req, same_host) ->
-    case binary:split(cowboy_bstr:to_lower(Origin), ~"://") of
+    case binary:split(ascii_lowercase(Origin), ~"://") of
         [Scheme, Authority] ->
             case cowboy_req:header(~"host", Req) of
                 undefined -> is_request_authority(Scheme, Authority, Req);
-                Host -> Authority =:= cowboy_bstr:to_lower(Host)
+                Host -> Authority =:= ascii_lowercase(Host)
             end;
         _NoAuthority ->
             false
     end;
 is_allowed(Origin, Req, same_origin) ->
-    case binary:split(cowboy_bstr:to_lower(Origin), ~"://") of
+    case binary:split(ascii_lowercase(Origin), ~"://") of
         [Scheme, Authority] ->
             Scheme =:= cowboy_req:scheme(Req) andalso is_request_authority(Scheme, Authority, Req);
         _NoAuthority ->
             false
     end;
 is_allowed(Origin, _Req, Allowed) ->
-    lists:member(cowboy_bstr:to_lower(Origin),
-                 [cowboy_bstr:to_lower(iolist_to_binary(AllowedOrigin)) || AllowedOrigin <- Allowed]).
+    lists:member(ascii_lowercase(Origin),
+                 [ascii_lowercase(iolist_to_binary(AllowedOrigin)) || AllowedOrigin <- Allowed]).
 
 %% HTTP/2 and HTTP/3 send the authority outside the headers. Cowboy keeps it
 %% as host and port, with the port of the scheme where none was sent.
@@ -113,3 +113,10 @@ is_request_authority(Scheme, Authority, Req) ->
 origin_port(~"http", undefined) -> 80;
 origin_port(~"https", undefined) -> 443;
 origin_port(_Scheme, Port) -> Port.
+
+%% Header values may hold any byte, so this folds ASCII only.
+ascii_lowercase(Value) ->
+    << <<(ascii_lowercase_byte(Byte))>> || <<Byte>> <= Value >>.
+
+ascii_lowercase_byte(Byte) when Byte >= $A, Byte =< $Z -> Byte + 32;
+ascii_lowercase_byte(Byte) -> Byte.
