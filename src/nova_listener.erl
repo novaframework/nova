@@ -51,6 +51,7 @@ that serves the bootstrap application.
 -export([
          configured/0,
          from_legacy/2,
+         runtime_settings/1,
          normalize/3,
          check/3,
          protocol_names/1
@@ -63,6 +64,8 @@ that serves the bootstrap application.
 -define(PORT, 8080).
 -define(TLS_PORT, 8443).
 -define(KEYS, [port, ip, tls, protocols, applications, steps, server_opts]).
+-define(LEGACY_KEYS, [use_ssl, ssl_port, ssl_options, ca_cert, cert, options, stream_handlers,
+                      middleware_handlers]).
 
 -type name() :: atom().
 
@@ -113,14 +116,10 @@ no_two_on_one_port(Listeners) ->
     end.
 
 -doc false.
-%% The settings of the `cowboy_configuration` key of Nova before 1.0, or of
-%% the map `nova_sup:add_application/2` took then, as those of a listener.
-%% `use_ssl` picked `ssl_port` over `port`.
+%% The settings of the `cowboy_configuration` key of Nova before 1.0 as those
+%% of a listener. `use_ssl` picked `ssl_port` over `port`, and Cowboy served
+%% HTTP/2 next to HTTP/1.1 with or without TLS.
 -spec from_legacy(map(), atom() | undefined) -> map().
-from_legacy(Settings, _Name) when is_map_key(protocols, Settings); is_map_key(tls, Settings);
-                                  is_map_key(server_opts, Settings); is_map_key(applications, Settings);
-                                  is_map_key(steps, Settings) ->
-    Settings;
 from_legacy(Legacy, _Name) ->
     Tls = case maps:get(use_ssl, Legacy, false) of
               false -> false;
@@ -141,6 +140,17 @@ from_legacy(Legacy, _Name) ->
                  server_opts => ServerOpts},
     (maps:merge(Listener, maps:with([ip], Legacy)))
         #{steps => maps:get(middleware_handlers, Legacy, nova_pipeline:steps())}.
+
+-doc false.
+%% What `nova_sup:add_application/2` is given: the settings of a listener, or
+%% those Nova took before 1.0, which are told apart by the keys only they
+%% have.
+-spec runtime_settings(map()) -> map().
+runtime_settings(Settings) ->
+    case maps:size(maps:with(?LEGACY_KEYS, Settings)) of
+        0 -> Settings;
+        _ -> from_legacy(Settings, undefined)
+    end.
 
 legacy_tls(#{ca_cert := CACert, cert := Cert}) ->
     [{certfile, Cert}, {cacertfile, CACert}];

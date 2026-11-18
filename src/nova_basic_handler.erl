@@ -35,8 +35,9 @@ return value does, and as examples of a handler.
 -doc "The variables a template is rendered with, as a map or a list of pairs.".
 -type erlydtl_vars() :: map() | [{Key :: atom() | binary() | string(), Value :: any()}].
 
-%% A Cowboy request, told apart from a JSON object by the keys Cowboy sets.
--define(IS_REQ(Term), (is_map(Term) andalso is_map_key(streamid, Term) andalso is_map_key(pid, Term))).
+%% A request, told apart from a JSON object by keys every server sets.
+-define(IS_REQ(Term), (is_map(Term) andalso is_map_key(method, Term) andalso is_map_key(path, Term)
+                       andalso is_map_key(headers, Term))).
 
 
 

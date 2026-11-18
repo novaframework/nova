@@ -120,7 +120,7 @@ execute_controller(Req, Env = #{callback := Callback}, StatusPage) ->
             render_crash(Req#{crash_info => Payload}, Env, StatusPage)
     end.
 
-%% cowboy_req exits with request_error when the client sent something it
+%% nova_req exits with request_error when the client sent something it
 %% cannot parse or did not send the body in time. Cowboy answers that with a
 %% 4xx when nothing catches it, so it is not a crash here either.
 render_request_error(Kind, Req, Env) ->

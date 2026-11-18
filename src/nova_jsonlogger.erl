@@ -406,7 +406,7 @@ redact_test() ->
     ?assertEqual(#{~"level" => ~"error", ~"time" => 1, ~"user" => ~"ada",
                    ~"access_token" => ~"redacted", ~"client_secret" => ~"redacted",
                    ~"params" => #{~"password_confirmation" => ~"redacted", ~"name" => ~"ada"},
-                   ~"req" => #{~"method" => ~"GET", ~"path" => ~"/login", ~"redacted" => ~"cowboy_req"}},
+                   ~"req" => #{~"method" => ~"GET", ~"path" => ~"/login", ~"redacted" => ~"nova_req"}},
                  Redacted),
     [begin
          #{~"access_token" := Token, ~"client_secret" := Secret, ~"req" := #{~"headers" := Headers}} =

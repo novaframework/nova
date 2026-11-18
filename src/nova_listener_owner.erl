@@ -15,31 +15,31 @@ goes down under them, since nothing they hand a request to is there any
 longer: the process then exits, and takes the application of the package
 with it when its supervisor allows no restarts.
 
-`shutdown/0` is for the `prep_stop/1` of that application: it stops the
+`shutdown/1` is for the `prep_stop/1` of that application: it stops the
 listeners the slow way, waiting for the connections that are open.
 """.
 
 -behaviour(gen_server).
 
--export([start_link/1, shutdown/0]).
+-export([start_link/1, shutdown/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -spec start_link(Server :: module()) -> {ok, pid()} | {error, term()}.
 start_link(Server) ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, Server, []).
+    gen_server:start_link(?MODULE, Server, []).
 
--doc "Stop taking connections, wait for the open ones, and stop the listeners.".
--spec shutdown() -> ok.
-shutdown() ->
-    nova_sup:shutdown_listeners().
+-doc "Stop taking connections, wait for the open ones, and stop the listeners of the server.".
+-spec shutdown(Server :: module()) -> ok.
+shutdown(Server) ->
+    nova_sup:shutdown_listeners(Server).
 
 -doc false.
--spec init(module()) -> {ok, reference()} | {error, term()}.
+-spec init(module()) -> {ok, {module(), reference()}} | {error, term()}.
 init(Server) ->
     process_flag(trap_exit, true),
     Monitor = monitor(process, nova_sup),
     case nova_sup:start_listeners(Server) of
-        ok -> {ok, Monitor};
+        ok -> {ok, {Server, Monitor}};
         {error, Reason} -> {error, Reason}
     end.
 
@@ -55,12 +55,12 @@ handle_cast(_Request, State) ->
 
 -doc false.
 -spec handle_info(term(), State) -> {noreply, State} | {stop, {shutdown, nova_stopped}, State}.
-handle_info({'DOWN', Monitor, process, _Pid, _Reason}, Monitor) ->
-    {stop, {shutdown, nova_stopped}, Monitor};
+handle_info({'DOWN', Monitor, process, _Pid, _Reason}, {_Server, Monitor} = State) ->
+    {stop, {shutdown, nova_stopped}, State};
 handle_info(_Info, State) ->
     {noreply, State}.
 
 -doc false.
--spec terminate(term(), term()) -> ok.
-terminate(_Reason, _State) ->
-    nova_sup:stop_listeners().
+-spec terminate(term(), {module(), reference()}) -> ok.
+terminate(_Reason, {Server, _Monitor}) ->
+    nova_sup:stop_listeners(Server).

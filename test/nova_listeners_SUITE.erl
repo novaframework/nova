@@ -11,6 +11,7 @@
          listeners_are_known_by_name/1,
          an_application_is_added_to_a_listener_by_name/1,
          a_version_the_server_does_not_have_fails_the_boot/1,
+         http3_needs_tls/1,
          a_misconfigured_listener_fails_the_boot/1,
          a_listener_that_cannot_start_leaves_none_behind/1,
          stopping_the_server_package_stops_the_listeners/1
@@ -27,6 +28,7 @@ all() ->
      listeners_are_known_by_name,
      an_application_is_added_to_a_listener_by_name,
      a_version_the_server_does_not_have_fails_the_boot,
+     http3_needs_tls,
      a_misconfigured_listener_fails_the_boot,
      a_listener_that_cannot_start_leaves_none_behind,
      stopping_the_server_package_stops_the_listeners
@@ -42,9 +44,12 @@ each_listener_serves_its_own_applications(_Config) ->
     ?assertMatch({404, _}, nova_test_listener:get(Admin, "/only-public")),
     ?assertMatch({200, _}, nova_test_listener:get(Public, "/only-public")).
 
+%% A listener without TLS that serves HTTP/2 alone is one every server has.
 a_listener_serves_the_versions_it_names(_Config) ->
-    {Public, Admin} = two_listeners(),
+    {Public, Admin} = two_listeners([http2]),
     ?assertEqual(200, nova_test_listener:h2_get(Public, ~"/where")),
+    ?assertNotMatch({200, _}, catch nova_test_listener:get(Public, "/where")),
+    ?assertEqual({200, ~"admin http1"}, nova_test_listener:get(Admin, "/where")),
     ?assertNotEqual(200, catch nova_test_listener:h2_get(Admin, ~"/where")).
 
 listeners_are_known_by_name(_Config) ->
@@ -73,16 +78,31 @@ an_application_is_added_to_a_listener_by_name(_Config) ->
 
 a_version_the_server_does_not_have_fails_the_boot(_Config) ->
     Port = nova_test_listener:free_port(),
-    Listeners = #{web => #{port => Port, tls => #{certfile => "cert.pem"}, protocols => [http1, http3]}},
-    ?assertMatch({error, {nova_cowboy,
-                          {{shutdown, {failed_to_start_child, nova_listener,
-                                       {listener_protocols_not_supported, web, [http3], nova_cowboy}}}, _}}},
-                 nova_test_listener:try_start(#{port => Port, listeners => Listeners})),
+    {Settings, Refusal} =
+        case nova_test_listener:server(#{}) of
+            nova_cowboy ->
+                {#{tls => #{certfile => "cert.pem"}, protocols => [http1, http3]},
+                 {listener_protocols_not_supported, web, [http3], nova_cowboy}};
+            nova_roadrunner ->
+                {#{protocols => [http1, http2]},
+                 {listener_without_tls_serves_one_protocol, web, [http1, http2]}}
+        end,
+    {error, {_Server, {{shutdown, {failed_to_start_child, nova_listener, Reason}}, _}}} =
+        nova_test_listener:try_start(#{port => Port, listeners => #{web => Settings#{port => Port}}}),
+    ?assertEqual(Refusal, Reason),
     ?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Port, [], 1000)).
+
+http3_needs_tls(_Config) ->
+    Port = nova_test_listener:free_port(),
+    Listeners = #{web => #{port => Port, protocols => [http3]}},
+    {error, {_Server, {{shutdown, {failed_to_start_child, nova_listener, Reason}}, _}}} =
+        nova_test_listener:try_start(#{port => Port, listeners => Listeners}),
+    ?assert(lists:member(element(1, Reason), [listener_protocols_need_tls, listener_protocols_not_supported])),
+    ?assertEqual({web, [http3]}, {element(2, Reason), element(3, Reason)}).
 
 a_misconfigured_listener_fails_the_boot(_Config) ->
     Port = nova_test_listener:free_port(),
-    ?assertMatch({error, {nova_cowboy,
+    ?assertMatch({error, {_Server,
                           {{shutdown, {failed_to_start_child, nova_listener,
                                        {unknown_listener_settings, web, [use_ssl]}}}, _}}},
                  nova_test_listener:try_start(#{port => Port, listeners => #{web => #{port => Port, use_ssl => true}}})).
@@ -94,7 +114,7 @@ a_listener_that_cannot_start_leaves_none_behind(_Config) ->
     try
         Listeners = #{a => #{port => First, applications => [nova_test_app]},
                       b => #{port => Second, applications => [nova_test_sub_app]}},
-        ?assertMatch({error, {nova_cowboy,
+        ?assertMatch({error, {_Server,
                               {{shutdown, {failed_to_start_child, nova_listener, {listener_not_started, eaddrinuse}}},
                                _}}},
                      nova_test_listener:try_start(#{port => First, listeners => Listeners, nova_apps => []})),
@@ -106,17 +126,20 @@ a_listener_that_cannot_start_leaves_none_behind(_Config) ->
 stopping_the_server_package_stops_the_listeners(_Config) ->
     {Public, Admin} = two_listeners(),
     ok = application:stop(nova_test_app),
-    ok = application:stop(nova_cowboy),
+    ok = application:stop(nova_test_listener:server(#{})),
     ?assertEqual([], nova_sup:listeners()),
     ?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Public, [], 1000)),
     ?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Admin, [], 1000)),
     ?assertNotEqual(undefined, whereis(nova_sup)).
 
 two_listeners() ->
+    two_listeners([http1]).
+
+two_listeners(PublicProtocols) ->
     Public = nova_test_listener:free_port(),
     Admin = nova_test_listener:free_port(),
     Listeners = #{public => #{port => Public,
-                              protocols => [http1, http2],
+                              protocols => PublicProtocols,
                               applications => [nova_test_app]},
                   admin => #{ip => {127, 0, 0, 1},
                              port => Admin,

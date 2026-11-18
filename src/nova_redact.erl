@@ -41,8 +41,8 @@ term(Term) ->
     term(Term, keys()).
 
 -spec term(term(), keys()) -> term().
-term(#{pid := Pid, streamid := _, headers := _} = Req, _Keys) when is_pid(Pid) ->
-    (maps:with([method, path], Req))#{redacted => cowboy_req};
+term(#{method := _, headers := Headers} = Req, _Keys) when is_map(Headers) ->
+    (maps:with([method, path], Req))#{redacted => nova_req};
 term(Map, Keys) when is_map(Map) ->
     maps:map(fun(Key, Value) -> member_value(Key, Value, Keys) end, Map);
 term(List, Keys) when is_list(List) ->

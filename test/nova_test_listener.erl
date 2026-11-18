@@ -3,7 +3,7 @@
 %%% listener untouched.
 -module(nova_test_listener).
 
--export([start/1, try_start/1, configure/1, stop/0, get/2, get/3, request/4, response/4, response/5,
+-export([start/1, try_start/1, configure/1, boot/1, port/0, stop/0, server/1, get/2, get/3, request/4, response/4, response/5,
          websocket_handshake/2, websocket_handshake/3, websocket_texts/4, h2_websocket_connect/4, h2_get/2,
          send_and_close/2, free_port/0]).
 
@@ -23,8 +23,8 @@ try_start(Options) ->
 
 try_start(Options, Attempts) ->
     case boot(Options, free_port()) of
-        {error, {nova_cowboy, {{shutdown, {failed_to_start_child, nova_listener, {listener_not_started, eaddrinuse}}},
-                        _Start}}} when Attempts > 1 ->
+        {error, {_Server, {{shutdown, {failed_to_start_child, nova_listener, {listener_not_started, eaddrinuse}}},
+                           _Start}}} when Attempts > 1 ->
             ok = stop(),
             try_start(Options, Attempts - 1);
         Result ->
@@ -33,10 +33,40 @@ try_start(Options, Attempts) ->
 
 boot(Options, Port) ->
     ok = configure(Options#{port => Port}),
-    case application:ensure_all_started(nova_test_app) of
-        {ok, _Started} -> {ok, Port};
-        {error, Reason} -> {error, Reason}
+    boot(Options#{port => Port}).
+
+%% Starts what configure/1 set up, as application:ensure_all_started/1 of
+%% the test application does: the server package first, since it is the one
+%% that serves.
+-spec boot(map()) -> {ok, inet:port_number()} | {error, term()}.
+boot(Options) ->
+    Port = maps:get(port, Options, port()),
+    case application:ensure_all_started(server(Options)) of
+        {ok, _} ->
+            case application:ensure_all_started(nova_test_app) of
+                {ok, _Started} -> {ok, Port};
+                {error, Reason} -> {error, Reason}
+            end;
+        {error, Reason} ->
+            {error, Reason}
     end.
+
+%% The server package a suite runs on: the one it asks for, or the one named
+%% by NOVA_TEST_SERVER, so that every suite that boots through here can be
+%% run on another server than Cowboy:
+%%
+%%     NOVA_TEST_SERVER=nova_roadrunner rebar3 ct
+%% The port of the listener configure/1 set up.
+-spec port() -> inet:port_number().
+port() ->
+    case application:get_env(nova, listeners) of
+        {ok, #{default := #{port := Port}}} -> Port;
+        _ -> maps:get(port, application:get_env(nova, cowboy_configuration, #{}), undefined)
+    end.
+
+-spec server(map()) -> module().
+server(#{server := Server}) -> Server;
+server(_Options) -> list_to_atom(os:getenv("NOVA_TEST_SERVER", "nova_cowboy")).
 
 %% Sets the environment a boot reads, without starting anything.
 %% nova_test_nested_app and nova_test_deep_app are not applications on
@@ -54,12 +84,17 @@ configure(Options) ->
     nova_test_nested_router:set_routes(maps:get(nested, Options, [])),
     nova_test_deep_router:set_routes(maps:get(deep, Options, [])),
     application:set_env(nova, bootstrap_application, nova_test_app),
+    Server = server(Options),
+    application:set_env(nova, server, Server),
     case Options of
         #{listeners := Listeners} ->
             application:set_env(nova, listeners, Listeners);
-        #{} ->
+        #{} when Server =:= nova_cowboy ->
             application:set_env(nova, cowboy_configuration,
-                                #{port => Port, options => maps:get(cowboy_options, Options, #{})})
+                                #{port => Port, options => maps:get(cowboy_options, Options, #{})});
+        #{} ->
+            application:set_env(nova, listeners,
+                                #{default => #{port => Port, server_opts => maps:get(server_opts, Options, #{})}})
     end,
     application:set_env(nova, environment, test),
     application:set_env(nova, plugins, []),
@@ -78,8 +113,10 @@ configure(Options) ->
 -spec stop() -> ok.
 stop() ->
     application:stop(nova_test_app),
+    application:stop(nova_roadrunner),
     application:stop(nova_cowboy),
     application:stop(nova),
+    application:unset_env(nova, server),
     application:unload(nova_test_app),
     application:unload(nova_test_sub_app),
     application:unset_env(nova, cowboy_configuration),

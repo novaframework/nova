@@ -19,14 +19,14 @@ req() ->
     (nova_test_helper:mock_req(~"POST", ~"/login"))#{headers => #{~"cookie" => ?SECRET}}.
 
 request_map_is_reduced_to_method_and_path_test() ->
-    ?assertEqual(#{method => ~"POST", path => ~"/login", redacted => cowboy_req},
+    ?assertEqual(#{method => ~"POST", path => ~"/login", redacted => nova_req},
                  nova_redact:term(req())).
 
 nested_request_is_redacted_test() ->
     Reason = {case_clause, {stop, req()}},
-    ?assertEqual({case_clause, {stop, #{method => ~"POST", path => ~"/login", redacted => cowboy_req}}},
+    ?assertEqual({case_clause, {stop, #{method => ~"POST", path => ~"/login", redacted => nova_req}}},
                  nova_redact:term(Reason)),
-    ?assertEqual([a, #{req => #{method => ~"POST", path => ~"/login", redacted => cowboy_req}}],
+    ?assertEqual([a, #{req => #{method => ~"POST", path => ~"/login", redacted => nova_req}}],
                  nova_redact:term([a, #{req => req()}])).
 
 other_terms_are_untouched_test() ->

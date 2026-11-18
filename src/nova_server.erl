@@ -161,7 +161,14 @@ send, such as one a controller sent with the server's own functions.
 """.
 -callback response_begun(nova_req:req()) -> response_progress().
 
--optional_callbacks([stream_trailers/2, inform/3, response_begun/1]).
+-doc """
+What the server cannot do for a listener and `capabilities/0` cannot say,
+such as two HTTP versions that cannot share a port without TLS. The node
+does not start with a listener that is refused.
+""".
+-callback check_listener(nova_listener:listener()) -> ok | {error, term()}.
+
+-optional_callbacks([stream_trailers/2, inform/3, response_begun/1, check_listener/1]).
 
 %%--------------------------------------------------------------------
 -doc "The server module of the node.".

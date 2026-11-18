@@ -13,7 +13,7 @@ start(_StartType, _StartArgs) ->
 %% open ones are waited for, and then the listeners are stopped.
 -spec prep_stop(State) -> State.
 prep_stop(State) ->
-    ok = nova_listener_owner:shutdown(),
+    ok = nova_listener_owner:shutdown(nova_cowboy),
     State.
 
 -spec stop(term()) -> ok.

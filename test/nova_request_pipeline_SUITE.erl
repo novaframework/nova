@@ -50,7 +50,7 @@ init_per_suite(Config) ->
     Port = nova_test_listener:free_port(),
     ok = nova_test_listener:configure(#{port => Port, host => Host}),
     application:set_env(nova, plugins, [{pre_request, ?MODULE, #{}}, {post_request, ?MODULE, #{}}]),
-    {ok, _Started} = application:ensure_all_started(nova_test_app),
+    {ok, Port} = nova_test_listener:boot(#{}),
     [{port, Port} | Config].
 
 end_per_suite(_Config) ->

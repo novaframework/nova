@@ -1,0 +1,6 @@
+nova_roadrunner
+Copyright the Nova framework contributors
+
+The request handler, the WebSocket bridge and parts of the server module are
+derived from roadrunner_nova (https://github.com/arizona-framework/roadrunner_nova)
+by William Fank Thomé, licensed under the Apache License, Version 2.0.

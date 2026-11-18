@@ -314,8 +314,11 @@ read_urlencoded_body(Req0, Opts) ->
                                  Stacktrace)
             end;
         {more, Body, _Req} ->
+            %% There is more, either past the length or not sent in time. A
+            %% server may hand over more than the length or cut the piece at
+            %% it, so a piece of that length is past it as well.
             Length = maps:get(length, Opts, ?READ_URLENCODED_LENGTH),
-            Reason = case byte_size(Body) > Length of
+            Reason = case byte_size(Body) >= Length of
                          true -> payload_too_large;
                          false -> timeout
                      end,

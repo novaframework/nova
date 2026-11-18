@@ -1,0 +1,16 @@
+{application, nova_roadrunner,
+ [{description, "Run Nova on the Roadrunner HTTP server"},
+  {vsn, git},
+  {registered, [nova_roadrunner_sup]},
+  {mod, {nova_roadrunner_app, []}},
+  {applications,
+   [kernel,
+    stdlib,
+    roadrunner,
+    nova
+   ]},
+  {env, []},
+  {modules, []},
+  {licenses, ["Apache-2.0"]},
+  {links, [{"GitHub", "https://github.com/novaframework/nova"}]}
+ ]}.

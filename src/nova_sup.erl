@@ -38,7 +38,7 @@ Each listener owns its own routing table, so an application started on a second 
 -type nova_app() :: atom() | {atom(), map()}.
 
 %% Called by nova_listener_owner, in the application of the server package
--export([start_listeners/1, shutdown_listeners/0, stop_listeners/0]).
+-export([start_listeners/1, shutdown_listeners/0, shutdown_listeners/1, stop_listeners/1]).
 
 %% Started by the supervisor as its first child
 -export([start_pubsub_scope/0]).
@@ -68,7 +68,8 @@ start_link() ->
 -doc """
 Start a Nova application at runtime.
 
-`Settings` are those of a listener, as `nova_listener` describes them. With
+`Settings` are those of a listener, as `nova_listener` describes them, or
+those of `cowboy_configuration` as Nova took them before 1.0. With
 `#{listener => Name}` the routes of the application are added to the
 listener of that name. Without it they are added to the listener already
 bound to the `ip` and `port` of the settings, and when there is none a
@@ -89,7 +90,7 @@ add_to_listener(App, #{listener := Name}) ->
         error -> {error, {no_such_listener, Name}}
     end;
 add_to_listener(App, Settings) ->
-    case nova_listener:normalize(App, nova_listener:from_legacy(Settings, App), #{applications => [App]}) of
+    case nova_listener:normalize(App, nova_listener:runtime_settings(Settings), #{applications => [App]}) of
         {ok, #{ip := Host, port := Port} = Listener} ->
             case find_listener(Host, Port) of
                 {ok, Bound} -> attach_application(App, Bound);
@@ -134,13 +135,14 @@ listeners() ->
 %% Called by nova_listener_owner as it starts, in the application of a
 %% server package, after the `nova` application and the server itself have
 %% started. The caller owns the table of listeners from here on, so there
-%% are listeners for as long as it lives.
+%% are listeners for as long as it lives. A package that is started on a
+%% node whose server is another starts none.
 -spec start_listeners(Server :: module()) -> ok | {error, Reason :: any()}.
 start_listeners(Server) ->
-    ?NOVA_LISTENERS_TABLE = ets:new(?NOVA_LISTENERS_TABLE,
-                                    [named_table, public, set, {keypos, #nova_listener.bind}]),
     case nova_server:module() of
         Server ->
+            ?NOVA_LISTENERS_TABLE = ets:new(?NOVA_LISTENERS_TABLE,
+                                            [named_table, public, set, {keypos, #nova_listener.bind}]),
             try
                 start_configured(Server)
             catch
@@ -153,22 +155,27 @@ start_listeners(Server) ->
     end.
 
 -doc false.
-%% Stops taking connections, waits for the open ones and stops the listeners.
-%% Called when the application of the server package stops, and when `nova`
-%% does, for the listeners that are still there then.
+%% Stops taking connections, waits for the open ones and stops the listeners:
+%% those of one server when its application stops, and whatever is left when
+%% `nova` does.
 -spec shutdown_listeners() -> ok.
 shutdown_listeners() ->
-    case all_listeners() of
-        [] -> ok;
-        Listeners -> graceful_shutdown(Listeners)
-    end.
+    graceful_shutdown(all_listeners()).
+
+-spec shutdown_listeners(Server :: module()) -> ok.
+shutdown_listeners(Server) ->
+    graceful_shutdown(listeners_of(Server)).
 
 -doc false.
-%% Stops the listeners as they are, without waiting for their connections.
--spec stop_listeners() -> ok.
-stop_listeners() ->
-    _ = [stop_listener(Name) || #nova_listener{name = Name} <- all_listeners()],
+%% Stops the listeners of a server as they are, without waiting for their
+%% connections.
+-spec stop_listeners(Server :: module()) -> ok.
+stop_listeners(Server) ->
+    _ = [stop_listener(Name) || #nova_listener{name = Name} <- listeners_of(Server)],
     ok.
+
+listeners_of(Server) ->
+    [Listener || Listener = #nova_listener{server = S} <- all_listeners(), S =:= Server].
 
 %%--------------------------------------------------------------------
 -doc false.
@@ -329,12 +336,23 @@ start_all(Server, [Listener | Rest], Started) ->
     end.
 
 start_checked(Server, Listener = #{name := Name}) ->
-    case nova_listener:check(Listener, Server, nova_server:capabilities(Server)) of
+    case checked(Server, Listener) of
         ok ->
             start_listener(Server, Listener);
         {error, Reason} ->
             ?LOG_ERROR(#{msg => ~"Listener asks for what the server cannot do", listener => Name,
                          server => Server, reason => Reason}),
+            {error, Reason}
+    end.
+
+checked(Server, Listener) ->
+    case nova_listener:check(Listener, Server, nova_server:capabilities(Server)) of
+        ok ->
+            case nova_server:supports(Server, {check_listener, 1}) of
+                true -> Server:check_listener(Listener);
+                false -> ok
+            end;
+        {error, Reason} ->
             {error, Reason}
     end.
 
@@ -350,6 +368,9 @@ dispatch_key(#{name := Name, applications := Apps}) ->
 start_listener(Server, Listener = #{name := Name, ip := Host, port := Port, tls := Tls,
                                     applications := [App | _] = Apps, protocols := Protocols}) ->
     DispatchKey = dispatch_key(Listener),
+    %% The applications a listener serves say in their environment which
+    %% others they mount, so it has to be loaded by now. It is in a release.
+    _ = [application:load(Each) || Each <- Apps],
     %% Routes are first-wins. An application comes before those it mounts so
     %% nothing it mounts can take over one of its routes, and nova last so its
     %% 404/500 routes are only defaults.
@@ -459,6 +480,8 @@ register_listener(Listener) ->
 %% Shutdown
 %%--------------------------------------------------------------------
 
+graceful_shutdown([]) ->
+    ok;
 graceful_shutdown(Listeners) ->
     Delay = application:get_env(nova, shutdown_delay, 0),
     case Delay > 0 of
