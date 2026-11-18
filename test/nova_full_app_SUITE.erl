@@ -425,7 +425,15 @@ pre_and_post_request_plugins_run(Config) ->
     ?assertEqual(<<"1">>, header(<<"x-nova-pre-request">>, Headers)),
 
     ?assert(counters:get(Counters, 1) > PreBefore),
-    ?assert(counters:get(Counters, 2) > PostBefore).
+    ?assert(counted(Counters, 2, PostBefore, 100)).
+
+%% post_request runs once the response has gone, so its count can follow it.
+counted(Counters, Index, Before, Tries) ->
+    case counters:get(Counters, Index) > Before of
+        true -> true;
+        false when Tries > 0 -> timer:sleep(20), counted(Counters, Index, Before, Tries - 1);
+        false -> false
+    end.
 
 %% {break, ...} is a deprecated alias of stop: it must never let the request
 %% through to the controller (nova_oidcc answers anonymous users this way).

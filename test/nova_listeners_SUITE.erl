@@ -1352,15 +1352,18 @@ cowboy_ws_http2(_Config) ->
     ok = nova_test_listener:stop(),
     ?assertEqual({ok, Port}, Start(#{server_opts => #{enable_connect_protocol => true}})).
 
-%% The reason is logged, and is what the node does not start with.
+%% The reason is logged, and is what the node does not start with. The port
+%% is taken, as OTP 27 listens with a certificate file that is not there.
 start_error_secrets(_Config) ->
-    Port = nova_test_listener:free_port(),
+    {ok, Taken} = gen_tcp:listen(0, [{ip, {0, 0, 0, 0}}]),
+    {ok, Port} = inet:port(Taken),
     Tls = #{certfile => "/nova/no/such/cert.pem", keyfile => "/nova/no/such/key.pem", password => "hunter2"},
     {Refused, Events} = nova_test_log:collect(
                           fun() ->
                                   nova_test_listener:try_start(#{port => Port,
                                                                  listeners => #{web => #{port => Port, tls => Tls}}})
                           end),
+    ok = gen_tcp:close(Taken),
     ?assertMatch({error, _}, Refused),
     ?assertEqual(nomatch, string:find(lists:flatten(io_lib:format("~0p", [{Refused, Events}])), "hunter2")).
 
