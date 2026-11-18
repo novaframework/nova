@@ -95,6 +95,10 @@ rebuilt_table_test_() ->
                                                                                  nova_router:add_routes(
                                                                                    nova_test_app, Open#{prefix => "/added"}, ?KEY)
                                                                          end)},
+                                                  Test ! {removed, Refused(fun() ->
+                                                                                   nova_router:remove_application(
+                                                                                     nova_test_sub_app, ?KEY)
+                                                                           end)},
                                                   [Open#{prefix => "/fresh"}];
                                               building ->
                                                   [Open]
@@ -107,6 +111,7 @@ rebuilt_table_test_() ->
              end,
              ?assertEqual({routing_table_replaced, ?KEY}, receive {merged, Merged} -> Merged after 0 -> none end),
              ?assertEqual({routing_table_replaced, ?KEY}, receive {added, Added} -> Added after 0 -> none end),
+             ?assertEqual({routing_table_replaced, ?KEY}, receive {removed, Removed} -> Removed after 0 -> none end),
              Found = fun(Path) -> element(1, nova_routing_trie:find('_', Path, ~"GET", persistent_term:get(?KEY))) end,
              ?assertEqual([error, error, ok], [Found(Path) || Path <- [~"/admin/", ~"/added/", ~"/fresh/"]]),
              ?assertEqual([{nova_test_sub_app, "/"}], nova_router:compiled_apps(?KEY))
@@ -233,12 +238,73 @@ removed_meanwhile_test_() ->
                                           ok = nova_router:remove_application(nova_test_sub_app, ?KEY),
                                           [Open#{prefix => "/again"}]
                                   end),
-                 ?assertError({routing_table_replaced, ?KEY}, nova_router:compile([nova_test_sub_app], ?KEY))
+                 ?assertError({routing_table_changed, ?KEY}, nova_router:compile([nova_test_sub_app], ?KEY))
              after
                  meck:unload(nova_test_mounted_router)
              end,
              ?assertEqual(error, element(1, nova_routing_trie:find('_', ~"/admin/", ~"GET", persistent_term:get(?KEY)))),
              ?assertEqual([], nova_router:compiled_apps(?KEY))
+     end}.
+
+%% Of two merges that read the same table, the one that stores last has
+%% none of what the other one stored. A route that was given a security
+%% callback meanwhile is not left open by it.
+secured_meanwhile_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             Open = group(unset),
+             Callback = fun ?MODULE:group_callback/1,
+             _ = nova_router:compile_fresh([], ?KEY),
+             ok = nova_router:add_routes(nova_test_app, Open, ?KEY),
+             ok = meck:new(nova_test_mounted_router, [passthrough, no_link]),
+             try
+                 ok = meck:expect(nova_test_mounted_router, routes,
+                                  fun(_Env) ->
+                                          ok = nova_router:add_routes(nova_test_app, group(Callback), ?KEY),
+                                          [Open#{prefix => "/sub"}]
+                                  end),
+                 ?assertError({routing_table_changed, ?KEY}, nova_router:compile([nova_test_sub_app], ?KEY))
+             after
+                 meck:unload(nova_test_mounted_router)
+             end,
+             ?assertMatch({ok, _Bindings, #nova_handler_value{secure = Callback}},
+                          nova_routing_trie:find('_', ~"/admin/", ~"GET", persistent_term:get(?KEY))),
+             nova_test_mounted_router:set_routes([Open#{prefix => "/sub"}]),
+             _ = nova_router:compile([nova_test_sub_app], ?KEY),
+             ?assertMatch({ok, _Bindings, #nova_handler_value{secure = Callback}},
+                          nova_routing_trie:find('_', ~"/admin/", ~"GET", persistent_term:get(?KEY))),
+             ?assertEqual(ok, element(1, nova_routing_trie:find('_', ~"/sub/", ~"GET", persistent_term:get(?KEY))))
+     end}.
+
+%% Routes that are stored as an application is taken out of the table are
+%% kept: the application is taken out of the table as it is by then.
+removed_again_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             Open = group(unset),
+             nova_test_mounted_router:set_routes([Open]),
+             _ = nova_router:compile_fresh([nova_test_sub_app], ?KEY),
+             ok = meck:new(nova_routing_trie, [passthrough, no_link]),
+             try
+                 ok = meck:expect(nova_routing_trie, foldl,
+                                  fun(Trie, Each) ->
+                                          case put(?FUNCTION_NAME, stored) of
+                                              undefined ->
+                                                  ok = nova_router:add_routes(nova_test_app, Open#{prefix => "/added"},
+                                                                              ?KEY);
+                                              stored ->
+                                                  ok
+                                          end,
+                                          meck:passthrough([Trie, Each])
+                                  end),
+                 ?assertEqual(ok, nova_router:remove_application(nova_test_sub_app, ?KEY))
+             after
+                 erase(?FUNCTION_NAME),
+                 meck:unload(nova_routing_trie)
+             end,
+             Found = fun(Path) -> element(1, nova_routing_trie:find('_', Path, ~"GET", persistent_term:get(?KEY))) end,
+             ?assertEqual([error, ok], [Found(Path) || Path <- [~"/admin/", ~"/added/"]]),
+             ?assertEqual([{nova_test_app, "/"}], nova_router:compiled_apps(?KEY))
      end}.
 
 failed_compile_test_() ->

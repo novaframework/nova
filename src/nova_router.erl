@@ -187,9 +187,11 @@ and lists none of the applications.
 A mistake in a router is thrown as `{error, Reason}`. The error
 `{routing_table_replaced, DispatchKey}` is raised when the table was
 replaced while the routers of the applications ran, as it is when its
-listener is started again, when an application was removed from it
-meanwhile, and while the table of a listener that starts is being built.
-What was compiled is then not stored.
+listener is started again, and while the table of a listener that starts
+is being built. The error `{routing_table_changed, DispatchKey}` is raised
+when routes were added to the table, or an application was removed from
+it, while the routers ran. What was compiled is then not stored, and to
+compile again merges into the table as it is by then.
 """.
 -spec compile(Apps :: [atom() | {atom(), map()}], DispatchKey :: dispatch_key()) ->
           nova_routing_trie:trie().
@@ -218,24 +220,49 @@ generation(DispatchKey) ->
 is_being_built({building, Builder, _Build}) -> is_process_alive(Builder);
 is_being_built(_Generation) -> false.
 
-%% Two builds of one table can only come from outside Nova, which starts
-%% a listener in one process. The mark of another build is then left to
-%% that build.
-built(DispatchKey, Building) ->
+%% A generation is the table that was built for a listener and what was
+%% stored into it last. One that differs in the first was replaced, and
+%% one that differs in the second alone had routes added or taken out.
+build({building, _Builder, _Build}) -> make_ref();
+build({Build, _Stored}) -> Build;
+build(undefined) -> undefined.
+
+%% The generation of a table is read and written by one process at a
+%% time. On this node alone: a table is not shared with another.
+lock(DispatchKey) ->
+    Lock = {{?MODULE, DispatchKey}, self()},
+    true = global:set_lock(Lock, [node()]),
+    Lock.
+
+unlock(Lock) ->
+    true = global:del_lock(Lock, [node()]),
+    ok.
+
+%% A table that is stored has its generation written last, which would
+%% take the mark away were it set meanwhile.
+marked(DispatchKey, Building) ->
     StorageBackend = storage_backend(),
-    case StorageBackend:get(generation_key(DispatchKey), undefined) of
-        Building -> StorageBackend:put(generation_key(DispatchKey), make_ref());
-        _Other -> ok
+    Lock = lock(DispatchKey),
+    try
+        Before = StorageBackend:get(generation_key(DispatchKey), undefined),
+        StorageBackend:put(generation_key(DispatchKey), Building),
+        Before
+    after
+        unlock(Lock)
     end.
 
-%% A merge that read the table before something was taken out of it is
-%% refused when it comes to store, and does not put it back. One that is
-%% being built takes the place of this table, and is not merged into.
-moved(DispatchKey) ->
+%% Two builds of one table can only come from outside Nova, which starts
+%% a listener in one process. The mark of another build is then left to
+%% that build. A merge that began before this build is refused: routes
+%% can have been stored into the table since it read it.
+not_built(DispatchKey, Building, Before) ->
     StorageBackend = storage_backend(),
-    case is_being_built(StorageBackend:get(generation_key(DispatchKey), undefined)) of
-        true -> ok;
-        false -> StorageBackend:put(generation_key(DispatchKey), make_ref())
+    Lock = lock(DispatchKey),
+    try StorageBackend:get(generation_key(DispatchKey), undefined) of
+        Building -> StorageBackend:put(generation_key(DispatchKey), {build(Before), make_ref()});
+        _Other -> ok
+    after
+        unlock(Lock)
     end.
 
 %% A table as it is compiled: its routes, and the applications and the
@@ -253,19 +280,34 @@ stored(DispatchKey, Empty) ->
 %% was started again by then has a table of its own, and what was read
 %% from the one before is not written to it: not the routes and their
 %% security callbacks, nor which applications and route groups it has.
-%% The generation is read and the table then written, which no backend
-%% does as one step.
+%% Of two merges that read the same table, the one that stores last is
+%% refused as well: what it read has none of what the other one stored,
+%% be that a route with a security callback or an application that was
+%% taken out. The generation is read and the table written as one step,
+%% which no backend does by itself.
 -spec commit(dispatch_key(), table(), term()) -> ok.
-commit(DispatchKey, #{routes := Dispatch, apps := Apps, bound := Bound}, Generation) ->
+commit(DispatchKey, Table, Generation) ->
+    Lock = lock(DispatchKey),
+    try
+        swap(DispatchKey, Table, Generation)
+    after
+        unlock(Lock)
+    end.
+
+swap(DispatchKey, #{routes := Dispatch, apps := Apps, bound := Bound}, Generation) ->
     StorageBackend = storage_backend(),
     case StorageBackend:get(generation_key(DispatchKey), undefined) of
         Generation ->
             StorageBackend:put(apps_key(DispatchKey), Apps),
             StorageBackend:put(bound_key(DispatchKey), Bound),
             StorageBackend:put(DispatchKey, Dispatch),
+            StorageBackend:put(generation_key(DispatchKey), {build(Generation), make_ref()}),
             ok;
-        _Replaced ->
-            error({routing_table_replaced, DispatchKey})
+        Now ->
+            case build(Now) =:= build(Generation) of
+                true -> error({routing_table_changed, DispatchKey});
+                false -> error({routing_table_replaced, DispatchKey})
+            end
     end.
 
 %%--------------------------------------------------------------------
@@ -293,7 +335,7 @@ compile_fresh(Apps, DispatchKey, Serving) ->
     %% under the key: a compile that began before is refused when it comes
     %% to store, and one that begins now is refused at once.
     Building = {building, self(), make_ref()},
-    StorageBackend:put(generation_key(DispatchKey), Building),
+    Before = marked(DispatchKey, Building),
     StorageBackend:put(serving_key(DispatchKey), Serving),
     Empty = #{routes => nova_routing_trie:new(#{strict => UseStrict}), apps => [], bound => []},
     try compile(Apps, Empty, with_serving(#{dispatch_key => DispatchKey})) of
@@ -301,13 +343,12 @@ compile_fresh(Apps, DispatchKey, Serving) ->
             %% Outside of what is caught below: a table that is refused
             %% here was replaced by another build, whose mark it is.
             ok = commit(DispatchKey, Table, Building),
-            ok = built(DispatchKey, Building),
             Dispatch
     catch
         Class:Reason:Stacktrace ->
             %% The table before this one is still under the key, and is
             %% not left as one that is being built for ever.
-            ok = built(DispatchKey, Building),
+            ok = not_built(DispatchKey, Building, Before),
             erlang:raise(Class, Reason, Stacktrace)
     end.
 
@@ -521,7 +562,7 @@ add_routes(App, Routes) ->
     add_routes(App, Routes, ?NOVA_DISPATCH).
 
 %%--------------------------------------------------------------------
--doc "As add_routes/2, but against the routing table addressed by `DispatchKey`. Raises the error `{routing_table_replaced, DispatchKey}` when the table was replaced meanwhile, as `compile/2` does.".
+-doc "As add_routes/2, but against the routing table addressed by `DispatchKey`. Raises the errors `{routing_table_replaced, DispatchKey}` and `{routing_table_changed, DispatchKey}` as `compile/2` does, when the table was replaced or stored into meanwhile.".
 -spec add_routes(App :: atom(), Routes :: [map() | [map()]] | map(), DispatchKey :: dispatch_key()) -> ok.
 add_routes(_App, [], _DispatchKey) ->
     ok;
@@ -566,24 +607,32 @@ remove_application(Application) ->
     remove_application(Application, ?NOVA_DISPATCH).
 
 %%--------------------------------------------------------------------
--doc "As remove_application/1, but against the routing table addressed by `DispatchKey`.".
+-doc """
+As remove_application/1, but against the routing table addressed by
+`DispatchKey`. Raises the error `{routing_table_replaced, DispatchKey}`
+while the table of a listener that starts is being built: the table the
+application would be taken out of is not the one that will be served.
+""".
 -spec remove_application(Application :: atom(), DispatchKey :: dispatch_key()) -> ok.
 remove_application(Application, DispatchKey) when is_atom(Application) ->
     StorageBackend = storage_backend(),
-    ok = moved(DispatchKey),
-    Dispatch = StorageBackend:get(DispatchKey),
-    {ok, Dispatch0} =
+    Generation = generation(DispatchKey),
+    Stored = #{routes := Dispatch, apps := Apps, bound := Bound} = stored(DispatchKey, StorageBackend:get(DispatchKey)),
+    {ok, Kept} =
         nova_routing_trie:foldl(Dispatch,
                                 fun(Routes) ->
                                         [Route || Route <- Routes, route_app(Route) =/= Application]
                                 end),
-    AppsKey = apps_key(DispatchKey),
-    StorageBackend:put(DispatchKey, Dispatch0),
-    StorageBackend:put(AppsKey, lists:keydelete(Application, 1, StorageBackend:get(AppsKey, []))),
-    StorageBackend:put(bound_key(DispatchKey),
-                       [Group || {_Status, App, _Prefix, _Names} = Group <- bound_groups(DispatchKey),
-                                 App =/= Application]),
-    ok.
+    Without = Stored#{routes := Kept,
+                      apps := lists:keydelete(Application, 1, Apps),
+                      bound := [Group || {_Status, App, _Prefix, _Names} = Group <- Bound, App =/= Application]},
+    try
+        commit(DispatchKey, Without, Generation)
+    catch
+        %% Routes were stored into the table meanwhile. No router ran
+        %% here, so the application is taken out of the table as it is now.
+        error:{routing_table_changed, DispatchKey} -> remove_application(Application, DispatchKey)
+    end.
 
 %% Both handler kinds carry the owning application, and dropping the one of
 %% a module would silently strip every websocket route.

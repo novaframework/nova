@@ -38,6 +38,7 @@
          settings_ignored/1,
          listener_replaced/1,
          table_replaced/1,
+         routes_changed/1,
          registry_dies_adding/1,
          registry_restart/1,
          restart_keeps_added/1,
@@ -107,6 +108,7 @@ all() ->
      settings_ignored,
      listener_replaced,
      table_replaced,
+     routes_changed,
      registry_dies_adding,
      registry_restart,
      restart_keeps_added,
@@ -746,6 +748,50 @@ listener_replaced(_Config) ->
 %% A listener whose routing table is replaced while the router runs is not
 %% the one the application was to be added to, and the new table does not
 %% list it.
+%% Routes that are added to a listener as the router of an application
+%% that is added to it runs are no reason not to add the application. It
+%% is compiled again into the table as it is by then, and both are served.
+%% Not for ever: a table that changes each time is given up on.
+routes_changed(_Config) ->
+    Port = nova_test_listener:free_port(),
+    {ok, Port} = nova_test_listener:try_start(#{port => Port,
+                                                listeners => #{web => #{port => Port}},
+                                                host => [#{routes => [?WHERE]}],
+                                                mounted => [#{prefix => "/sub", routes => [?WHERE]}],
+                                                nested => [#{prefix => "/nested", routes => [?WHERE]}],
+                                                nova_apps => []}),
+    [Key] = nova_router:dispatch_keys(),
+    Late = fun(Prefix) -> nova_router:add_routes(nova_test_app, #{prefix => Prefix, routes => [?WHERE]}, Key) end,
+    ok = meck:new([nova_test_mounted_router, nova_test_nested_router], [passthrough, no_link]),
+    try
+        ok = meck:expect(nova_test_mounted_router, routes,
+                         fun(Env) ->
+                                 case put(?FUNCTION_NAME, ran) of
+                                     undefined -> ok = Late("/late");
+                                     ran -> ok
+                                 end,
+                                 meck:passthrough([Env])
+                         end),
+        ok = meck:expect(nova_test_nested_router, routes,
+                         fun(Env) ->
+                                 ok = Late("/later"),
+                                 meck:passthrough([Env])
+                         end),
+        ?assertEqual({ok, nova_test_sub_app, {0, 0, 0, 0}, Port},
+                     nova_sup:add_application(nova_test_sub_app, #{listener => web})),
+        ?assertEqual(2, meck:num_calls(nova_test_mounted_router, routes, '_')),
+        ?assertEqual({error, {routing_table_changed, web}},
+                     nova_sup:add_application(nova_test_nested_app, #{listener => web})),
+        ?assertEqual(3, meck:num_calls(nova_test_nested_router, routes, '_'))
+    after
+        meck:unload([nova_test_mounted_router, nova_test_nested_router])
+    end,
+    ?assertEqual([{200, ~"web http1"}, {200, ~"web http1"}, {200, ~"web http1"}],
+                 [nova_test_listener:get(Port, Path) || Path <- ["/sub/where", "/late/where", "/later/where"]]),
+    ?assertMatch({404, _}, nova_test_listener:get(Port, "/nested/where")),
+    ?assertEqual([nova_test_app, nova_test_sub_app],
+                 lists:sort([App || #{app := App} <- nova_sup:get_started_applications()])).
+
 table_replaced(_Config) ->
     Port = nova_test_listener:free_port(),
     {ok, Port} = nova_test_listener:try_start(#{port => Port,

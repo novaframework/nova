@@ -32,6 +32,7 @@ Each listener owns its own routing table, so an application started on a second 
 
 -define(SERVER, ?MODULE).
 -define(NOVA_LISTENERS_TABLE, nova_listeners).
+-define(ATTACH_TRIES, 3).
 
 -type nova_app() :: atom() | {atom(), map()}.
 
@@ -132,6 +133,11 @@ package, as one that is added before the first.
 the listener was stopped or started again while the router of the
 application ran. Its routes are then not served.
 
+`{error, {routing_table_changed, Name}}` when routes were added to the
+listener with `nova_router`, or an application was removed from it there,
+each time the router of the application ran. The application is compiled
+again when that happens, three times at most.
+
 `{error, server_not_started}` when the `nova` application is not running.
 """.
 -spec add_application(App :: atom(), Settings :: map()) ->
@@ -172,13 +178,14 @@ listeners_owner() ->
 %% already, which is what was asked for.
 -spec attach_to_listener(App :: atom(), Name) ->
           {ok, Host :: inet:ip_address() | string(), Port :: inet:port_number()} |
-          {error, {no_such_listener, Name}}
+          {error, {no_such_listener | routing_table_changed, Name}}
               when Name :: nova_listener:name().
 attach_to_listener(App, Name) ->
     case find_listener(Name) of
         {ok, Listener = #nova_listener{bind = {Host, Port}}} ->
             case attach_application(App, Listener) of
                 {error, {no_such_listener, Name}} -> {error, {no_such_listener, Name}};
+                {error, {routing_table_changed, Name}} -> {error, {routing_table_changed, Name}};
                 _AddedOrListed -> {ok, Host, Port}
             end;
         error ->
@@ -674,7 +681,11 @@ say_what_the_session_cookie_needs(false) ->
 %% Runtime application lifecycle
 %%--------------------------------------------------------------------
 
-attach_application(App, #nova_listener{name = Name, apps = Apps, bind = {Host, Port}, dispatch_key = DispatchKey}) ->
+attach_application(App, Listener) ->
+    attach_application(App, Listener, ?ATTACH_TRIES).
+
+attach_application(App, Listener = #nova_listener{name = Name, apps = Apps, bind = {Host, Port},
+                                                  dispatch_key = DispatchKey}, Tries) ->
     case lists:member(App, Apps) of
         true ->
             {error, {already_started, App}};
@@ -683,7 +694,14 @@ attach_application(App, #nova_listener{name = Name, apps = Apps, bind = {Host, P
                 _Dispatch -> listed(App, Name, {Host, Port}, DispatchKey)
             catch
                 %% The listener was started again as the router ran.
-                error:{routing_table_replaced, DispatchKey} -> {error, {no_such_listener, Name}}
+                error:{routing_table_replaced, DispatchKey} ->
+                    {error, {no_such_listener, Name}};
+                %% Routes were stored into the table as the router ran,
+                %% which is no reason not to add the application to it.
+                error:{routing_table_changed, DispatchKey} when Tries > 1 ->
+                    attach_application(App, Listener, Tries - 1);
+                error:{routing_table_changed, DispatchKey} ->
+                    {error, {routing_table_changed, Name}}
             end
     end.
 
@@ -707,7 +725,14 @@ listed(App, Name, {Host, Port}, DispatchKey) ->
 
 detach_application(App, #nova_listener{name = Name, apps = Apps, added = Added,
                                        dispatch_key = DispatchKey} = Listener) ->
-    ok = nova_router:remove_application(App, DispatchKey),
+    ok = try
+             nova_router:remove_application(App, DispatchKey)
+         catch
+             %% The table is built again, which only code outside Nova
+             %% does to that of a listener that is up. The application is
+             %% not among those of the listener from here on.
+             error:{routing_table_replaced, DispatchKey} -> ok
+         end,
     case lists:delete(App, Apps) of
         [] ->
             ?LOG_NOTICE(#{msg => ~"Stopping listener", app => App, listener => Name}),
