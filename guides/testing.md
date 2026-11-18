@@ -32,8 +32,8 @@ create_echoes_the_item_test() ->
     ?assertEqual({json, #{created => #{~"name" => ~"book"}}}, my_app_items_controller:create(Req)).
 ```
 
-The `cowboy_req` functions that only read the request work on such a map
-too. `cowboy_req:header/2` reads the `headers` key, a map with lowercase
+The `nova_req` functions that only read the request work on such a map
+too. `nova_req:header/2` reads the `headers` key, a map with lowercase
 binary names:
 
 ```erlang
@@ -57,7 +57,7 @@ maintenance_plugin_stops_the_request_test() ->
 ```
 
 Functions that write to the response or use the session, such as
-`cowboy_req:set_resp_cookie/4` followed by a reply and `nova_session`, need
+`nova_req:set_resp_cookie/4` followed by a reply and `nova_session`, need
 a real request. Test those through the server.
 
 Run the tests with `rebar3 eunit`.
@@ -83,7 +83,7 @@ init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(inets),
     Port = free_port(),
     _ = application:load(nova),
-    ok = application:set_env(nova, cowboy_configuration, #{port => Port}),
+    ok = application:set_env(nova, listeners, #{default => #{port => Port}}),
     {ok, _} = application:ensure_all_started(my_app),
     [{base_url, "http://localhost:" ++ integer_to_list(Port)} | Config].
 

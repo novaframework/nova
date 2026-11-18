@@ -1,7 +1,7 @@
 # Telemetry
 
 Nova emits [`telemetry`](https://hex.pm/packages/telemetry) events for the
-work it does on top of Cowboy: controllers, plugins, websocket controllers and
+work it does on top of its server: controllers, plugins, websocket controllers and
 pubsub broadcasts. Attach a handler to turn them into metrics, traces or logs.
 Instrumentation libraries such as
 [opentelemetry_nova](https://github.com/novaframework/opentelemetry_nova) can
@@ -22,8 +22,8 @@ handle_event([nova, controller, stop], #{duration := Duration}, Metadata, _Confi
 ```
 
 Nova does not emit request-level events (`[nova, request, *]`). The HTTP
-request as a whole belongs to Cowboy; use
-[cowboy_telemetry](https://hex.pm/packages/cowboy_telemetry) or a Cowboy stream
+request as a whole belongs to the server. On Cowboy, use
+[cowboy_telemetry](https://hex.pm/packages/cowboy_telemetry) or a stream
 handler for it.
 
 ## Conventions
@@ -76,7 +76,7 @@ Plugins and the security callback are outside it.
 
 - `controller` is the module and `action` the function name of the route's
   callback.
-- `method`, `host`, `scheme` and `version` are copied from the Cowboy
+- `method`, `host`, `scheme` and `version` are copied from the
   request.
 - `path` (the raw request path) and `peer` (the client's address and port)
   are not exported by default. A path can carry a secret, such as the token
@@ -94,7 +94,7 @@ Plugins and the security callback are outside it.
 - A controller that raises `{Status, Reason}` with an integer `Status`, as a
   throw, error or exit, is asking Nova for a status page. That ends the span
   with `stop` and `status => Status`, not with `exception`.
-- A request error that `cowboy_req` exits with in a controller, such as a
+- A request error that `nova_req` exits with in a controller, such as a
   query string it cannot parse, ends the span with `stop` and the `400`,
   `408` or `413` it is answered with.
 - `status_page` is `true` for the span of a status page, and `false` for the
@@ -157,7 +157,7 @@ call of a plugin.
   stop, or end in a `500` page. The `nova_plugin` documentation has the
   contract.
 - A crashing plugin still renders a `500` page after the `exception` event.
-- A `pre_request` plugin in which `cowboy_req` exits with a request error
+- A `pre_request` plugin in which `nova_req` exits with a request error
   emits `stop` with `result => stop`, not `exception`: the request is
   answered with a `400`, `408` or `413`.
 
@@ -189,7 +189,7 @@ The lifetime of a websocket connection, from `websocket_init` to `terminate`.
 | `start` | `monotonic_time`, `system_time` | `module`, `app`, `route` |
 | `stop` | `duration`, `monotonic_time` | start metadata, `reason` |
 
-- `reason` is the tag of the termination reason Cowboy passes to
+- `reason` is the tag of the termination reason the server passes to
   `terminate/3`: the reason itself when it is an atom (`normal`, `stop`,
   `timeout`, `remote`), otherwise the first element of the tuple (`remote`
   for `{remote, Code, Payload}`, `error`, `crash`), or `unknown`. The rest of

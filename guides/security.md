@@ -70,7 +70,7 @@ For an API that authenticates with a token:
 
 ```erlang
 bearer(Req) ->
-    case cowboy_req:header(~"authorization", Req) of
+    case nova_req:header(~"authorization", Req) of
         <<"Bearer ", Token/binary>> ->
             case my_app_tokens:verify(Token) of
                 {ok, UserId} -> {true, #{user_id => UserId}};
@@ -96,7 +96,7 @@ session(Req) ->
         {ok, UserId} ->
             {true, #{user_id => UserId}};
         {error, _} ->
-            #{next := Next} = cowboy_req:match_qs([{next, [], ~"/login"}], Req),
+            Next = proplists:get_value(~"next", nova_req:parse_qs(Req), ~"/login"),
             {redirect_local, Next}
     end.
 ```
@@ -311,7 +311,7 @@ another site started is refused unless its origin is listed. See
   answers `413` and `408` past them. `nova_multipart_plugin` has limits per
   part, per field and per request. Raise them only on the routes that need
   it. A controller that reads the body itself sets its own limits with the
-  options of `cowboy_req:read_body/2`.
+  options of `nova_req:read_body/2`.
 * **Uploads.** `nova_multipart_plugin` ends an upload that sends less than
   64 000 bytes in `chunk_timeout` (15 seconds) with `408`, and
   `nova_multipart_file_handler` bounds the bytes spooled on the node at one
@@ -368,7 +368,7 @@ pre_security(Req, _Env, _Options, State) ->
     Headers = #{~"x-frame-options" => ~"DENY",
                 ~"referrer-policy" => ~"same-origin",
                 ~"content-security-policy" => ~"default-src 'self'"},
-    {ok, cowboy_req:set_resp_headers(Headers, Req), State}.
+    {ok, nova_req:set_resp_headers(Headers, Req), State}.
 
 plugin_info() ->
     #{title => ~"my_app_security_headers_plugin",
@@ -404,8 +404,8 @@ plugin_info() ->
 
 ## Transport
 
-Serve production traffic over TLS, either from the node (`use_ssl` and
-`ssl_options` in `cowboy_configuration`) or from a proxy in front of it. See
+Serve production traffic over TLS, either from the node (`tls` in a
+listener of `listeners`) or from a proxy in front of it. See
 [Building releases](building-releases.md#tls).
 
 ### Behind a proxy that terminates TLS
@@ -419,7 +419,7 @@ Nova then receives plain HTTP. What to check:
 | With `same_host`, the proxy passes the `Host` header on as the browser sent it | `same_host` compares the `Origin` of a request with the host and port in `Host`. With a rewritten `Host`, websocket upgrades from the pages of the site are refused with `403`, and so are the requests `nova_csrf_plugin` goes by the `Origin` of |
 | `trusted_origins` is not `any` | `any` opens websocket upgrades to every origin. It does not turn off the origin check of `nova_csrf_plugin`: that is switched off for a route group with the plugin option `trusted_origins => any` |
 | `environment` is not `dev` | The session cookie is `Secure` whatever the scheme, unless `environment` is `dev` |
-| The node is only reachable through the proxy | Nova does not read `x-forwarded-for`, `x-forwarded-proto` or `forwarded`. `cowboy_req:peer/1` is the address of the proxy, and a header your own code reads can be set by anyone who reaches the node directly |
+| The node is only reachable through the proxy | Nova does not read `x-forwarded-for`, `x-forwarded-proto` or `forwarded`. `nova_req:peer/1` is the address of the proxy, and a header your own code reads can be set by anyone who reaches the node directly |
 | `strict-transport-security` is set, with `includeSubDomains`, by the proxy or by a plugin | Nova does not add it. A browser that has it does not load a page of the site without TLS |
 
 ```erlang
@@ -460,7 +460,7 @@ browser. See [Websockets](websockets.md#behind-a-proxy-that-terminates-tls).
 | `plugins_before_security` only lists plugins whose callback needs the body | Route groups and the `nova` environment |
 | The boot logs no warning about the order of plugins, and every route group with a security callback and a decoded body says `security_reads_body` | See [Warnings about the order](plugins.md#warnings-about-the-order) |
 | CORS lists the origins you trust, not `*` | `nova_cors_plugin` options |
-| Traffic is served over TLS | `cowboy_configuration` or the proxy |
+| Traffic is served over TLS | `tls` of the listener, or the proxy |
 | The release has a distribution cookie that is long and random | `RELEASE_COOKIE`, see [Building releases](building-releases.md) |
 | No watchers are configured | `watchers` in the environment of your application |
 | Logs redact what your own code logs | `nova_jsonlogger` with `redact => true` |

@@ -62,9 +62,10 @@ websocket_info(_Msg, State) ->
 | `auth_data` | The `auth_data` of the upgrade request: what the security callback returned in `{true, AuthData}`, or what a plugin wrote there when the callback returned `true` or the route has no callback. Not there otherwise |
 
 It returns `{ok, State}` to accept the connection, or `{ok, State, Options}`
-with a map of
-[`cowboy_websocket` options](https://ninenines.eu/docs/en/cowboy/2.21/manual/cowboy_websocket/)
-such as `idle_timeout` and `max_frame_size`. Any other return refuses the
+with a map of options: `idle_timeout`, `max_frame_size` and `compress` on
+every server, and whatever else the server takes, as
+[`cowboy_websocket`](https://ninenines.eu/docs/en/cowboy/2.21/manual/cowboy_websocket/)
+does on Cowboy. Any other return refuses the
 upgrade with a `500` and is logged as an error. `State` is a map and is what
 the other callbacks get.
 

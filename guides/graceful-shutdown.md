@@ -3,7 +3,7 @@
 Nova includes built-in graceful shutdown support for safe deployments. When the BEAM VM receives a `SIGTERM` signal (or the application is stopped), Nova will:
 
 1. Wait an optional delay for load balancers to stop routing traffic
-2. Suspend the Cowboy listener (stop accepting new connections)
+2. Suspend the listeners (stop accepting new connections)
 3. Wait for in-flight requests to complete
 4. Stop the listener
 
@@ -70,11 +70,11 @@ If you use readiness probes, your health endpoint should reflect the application
 
 ## How it works
 
-Nova implements graceful shutdown in the `prep_stop` callback of its application, which is called by OTP before the supervision tree is terminated. The sequence is:
+The application of the server package implements graceful shutdown in its `prep_stop` callback, which is called by OTP before the supervision tree is terminated, and so does the `nova` application for whatever listeners are left. The sequence is:
 
 1. **Delay**: Sleep for `shutdown_delay` milliseconds. During this time, the listener is still active and serving requests normally. This covers the load balancer propagation window.
-2. **Suspend**: Call `ranch:suspend_listener/1` on every listener Nova has started, so no new TCP connections are accepted. Existing connections continue to be served.
-3. **Drain**: Poll `ranch:info/1` every 500ms until active connections reach zero or `shutdown_drain_timeout` is exceeded.
-4. **Stop**: Call `cowboy:stop_listener/1` on every listener to fully shut them down.
+2. **Suspend**: Every listener stops accepting connections. Existing connections continue to be served.
+3. **Drain**: Wait until active connections reach zero or `shutdown_drain_timeout` is exceeded.
+4. **Stop**: Every listener is stopped.
 
 After `prep_stop` returns, OTP proceeds with the normal supervision tree shutdown.

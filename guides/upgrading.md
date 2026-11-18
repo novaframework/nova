@@ -8,9 +8,33 @@ notes of each release are on the
 
 ## To the next release
 
-The release that follows 0.18.3 tightens several defaults. Go through the
+The release that follows 0.18.3 is 1.0. It takes Cowboy out of Nova and
+tightens several defaults. Go through the
 tables with your application in mind. The entries under
 [Next release](deprecations.md#next-release) have the details.
+
+### The server and its listeners
+
+Nova 1.0 has no HTTP server of its own. Cowboy moved to the `nova_cowboy`
+package, and `nova_roadrunner` runs Nova on Roadrunner. See
+[Servers and listeners](listeners.md).
+
+| Before | Now | What to change |
+|---|---|---|
+| Nova depended on Cowboy and started its listener | A server package starts the listeners. Without one Nova starts, logs a warning and serves nothing | Add `nova_cowboy` to the dependencies and to the `applications` of your application, next to `nova` |
+| The listener was configured under `cowboy_configuration` | Listeners are configured by name under `listeners`. `cowboy_configuration` is still read when `listeners` is not set, as one listener named `default`, and a notice says so at boot | Write the listener out, see [the table of keys](listeners.md#cowboy_configuration) |
+| A node had one listener, and more only through `nova_sup:add_application/2` | A node has as many as `listeners` names, each with its `applications` | Nothing |
+| A listener without TLS served HTTP/1.1 and HTTP/2 | A listener serves its `protocols`: `[http1]` without `tls` and `[http1, http2]` with it, when they are not set. One read from `cowboy_configuration` serves both, as before | List `http2` in the `protocols` of a listener without TLS that clients speak HTTP/2 to |
+| A listener that could not start failed the `nova` application with `{listener_not_started, Reason}` | The application of the server package fails, with the reason in `{shutdown, {failed_to_start_child, nova_listener, Reason}}`. A listener that asks for what the server cannot do, and a route that no listener could serve, fail it as well, see [what is checked at boot](listeners.md#what-is-checked-at-boot) | Code that matched the error of `application:ensure_all_started/1` |
+| The request was Cowboy's request map, read with `cowboy_req` | It is a map with the keys `nova_req` documents, read and answered with `nova_req`. On `nova_cowboy` it is still Cowboy's map with Nova's keys added, so `cowboy_req` calls keep working there | Call `nova_req` in code that is to run on any server. `cowboy_req:match_qs/2` and `cowboy_req:cast/2` have no counterpart |
+| A response sent with `cowboy_req:reply/4` carried the session cookie | The session cookie goes out with the response Nova sends and with one sent through `nova_req` | Answer with `nova_req:reply/4` where a session may have started |
+| Typespecs said `cowboy_req:req()` | They say `nova_req:req()` | Specs of your own that dialyzer now reports |
+| `nova_sup:listeners/0` returned `ranch` references, and the listener of the bootstrap application was `nova_listener` | It returns the names of the listeners. On Cowboy the `ranch` reference of a listener is `nova_cowboy:ranch_ref(Name)` | Code that calls `ranch` with the reference |
+| The routing table of a listener started at runtime was under `{nova_dispatch, App, Port}` | It is under `{nova_dispatch, Name}`. `nova_router:dispatch_keys/0` lists them | Code that builds the key itself |
+| `nova_stream_h` was a module of `nova` | It is a module of `nova_cowboy`, and `stream_handlers` goes in the `server_opts` of a listener | Nothing, with `nova_cowboy` in the release |
+| `middleware_handlers` listed Cowboy middlewares | `steps` of a listener lists them. They implement `nova_pipeline` and are called as before, with `execute/2` | Rename the key when you write the listener out |
+| When `nova_sup` went down without `nova` being stopped, the listener stayed bound and a new `nova_sup` took it over | The application of the server package stops with `nova_sup`, and its listeners with it | Start that application again to serve again |
+| Every route was served on every listener of its application, over every HTTP version | The same, unless a route group names its `listener` or a route its `http_versions`, see [Routing](routing.md#the-listeners-of-a-route-group) | Nothing |
 
 ### Defaults that changed
 

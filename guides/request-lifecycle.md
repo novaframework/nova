@@ -1,7 +1,7 @@
 # Request lifecycle
 
-Nova is a set of Cowboy stream handlers and middlewares. This guide follows a
-request through them and lists what Nova adds to the request on the way.
+Nova is a set of steps a request goes through, run by the server Nova is on.
+This guide follows a request through them and lists what Nova adds to the request on the way.
 
 ## The steps
 
@@ -9,13 +9,10 @@ request through them and lists what Nova adds to the request on the way.
 Client
   │
   ▼
-Cowboy listener (nova_listener)
+Listener of the server package (nova_cowboy, nova_roadrunner)
   │
   ▼
-Stream handlers: nova_stream_h → cowboy_compress_h → cowboy_stream_h
-  │
-  ▼
-Middlewares, in the request process:
+nova_pipeline, in the request process:
   1. nova_router            refuse a path that is not canonical, find the route
   2. nova_plugin_handler    pre_security/4 of the pre_request plugins
   3. nova_security_handler  security callback, then pre_request/4 of the plugins
@@ -25,27 +22,29 @@ Middlewares, in the request process:
 
 A step that answers the request ends it, and the steps after it do not run.
 
-1. **Stream handlers.** `nova_stream_h` sets the `server` response header to
-   `Cowboy/Nova` and issues the session cookie when the request wrote to the
-   session. `cowboy_compress_h` compresses responses.
-2. **Routing.** `nova_router` answers a path that is not canonical, such as
+The numbered steps are the `steps` of the listener, see
+[Servers and listeners](listeners.md). The server compresses responses, and
+the session cookie goes out with the response when the request wrote to the
+session.
+
+1. **Routing.** `nova_router` answers a path that is not canonical, such as
    `/a//b` or `/a/../b`, with `400`, see
    [Routing](routing.md#paths-that-are-not-canonical). It then looks up the
    host, the path and the method in the routing table. Without a match the
    request gets the `404` page, or `405` when the path exists for another
    method, and no plugin runs.
-3. **`pre_security/4` of the `pre_request` plugins**, in the order they are
+2. **`pre_security/4` of the `pre_request` plugins**, in the order they are
    listed. A plugin can change the request or answer it. Nothing of the body
    is read here. On a websocket route the origin check runs first.
-4. **The security callback** of the route group, if it has one. A request it
+3. **The security callback** of the route group, if it has one. A request it
    refuses is answered with `401` or with what the callback returned.
    **`pre_request/4` of the `pre_request` plugins** runs after it, in the
    order they are listed. This is where the body is read and decoded.
-5. **The controller.** Its return value is handed to the handler registered
+4. **The controller.** Its return value is handed to the handler registered
    for it, which sets the response on the request. Nova then sends the
    response. For a route with `protocol => ws` the connection is upgraded
    here instead.
-6. **`post_request` plugins.** The response has been sent by then.
+5. **`post_request` plugins.** The response has been sent by then.
 
 The [Plugins](plugins.md#request-pipeline) guide has the consequences of
 this order, and the two route group keys that move a plugin to the other
@@ -68,8 +67,8 @@ side of the security callback.
 
 ## The request map
 
-Controllers, plugins and security callbacks get the Cowboy request, a map.
-The `cowboy_req` functions read the method, the headers, the query string,
+Controllers, plugins and security callbacks get the request, a map.
+The `nova_req` functions read the method, the headers, the query string,
 the cookies and the body from it. Nova adds these keys:
 
 | Key | Set by | Value |

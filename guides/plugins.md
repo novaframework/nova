@@ -52,8 +52,8 @@ create(#{json := #{~"id" := Id, ~"value" := Value}}) ->
 ## Writing a plugin
 
 A plugin implements the `nova_plugin` behaviour. `pre_security/4`,
-`pre_request/4` and `post_request/4` take the request, the Cowboy middleware
-environment, the options from the configuration and the state of the plugin:
+`pre_request/4` and `post_request/4` take the request, the environment of
+the request steps, the options from the configuration and the state of the plugin:
 
 ```erlang
 -module(my_app_header_plugin).
@@ -61,7 +61,7 @@ environment, the options from the configuration and the state of the plugin:
 -export([pre_request/4, post_request/4, plugin_info/0]).
 
 pre_request(Req, _Env, _Options, State) ->
-    {ok, cowboy_req:set_resp_header(~"x-served-by", ~"my_app", Req), State}.
+    {ok, nova_req:set_resp_header(~"x-served-by", ~"my_app", Req), State}.
 
 post_request(Req, _Env, _Options, State) ->
     {ok, Req, State}.
@@ -91,7 +91,7 @@ plugin module, shared by every request, see below.
 |--------|--------|
 | `{ok, Req, State}` | Carry on with the next plugin. |
 | `{ok, Reply, Req, State}` | Set the reply's status, headers and body on `Req` and carry on. Only `{reply, ...}` is accepted here; see below. |
-| `{stop, Req, State}` | End the request here. The plugin has replied itself, for example with `cowboy_req:reply/4`. |
+| `{stop, Req, State}` | End the request here. The plugin has replied itself, for example with `nova_req:reply/4`. |
 | `{stop, Req}` | Deprecated form of `{stop, Req, State}` that keeps the plugin's state, removed in 1.0. |
 | `{stop, Reply, Req, State}` | End the request and send `Reply`. |
 | `{break, Req, State}`, `{break, Reply, Req, State}` | Deprecated aliases of the matching `stop` returns, removed in 1.0. They log a warning, once per plugin module. |
@@ -107,14 +107,14 @@ pre_request(Req, _Env, _Options, State) ->
         {ok, _} ->
             {ok, Req, State};
         {error, _} ->
-            #{next := Next} = cowboy_req:match_qs([{next, [], ~"/"}], Req),
+            Next = proplists:get_value(~"next", nova_req:parse_qs(Req), ~"/"),
             {stop, {redirect_local, Next}, Req, State}
     end.
 ```
 
 A `post_request` plugin runs after the controller has answered, so a `Reply` it returns with `stop` is dropped, with one warning per plugin in the log.
 
-A request is answered once. A plugin that answers with `cowboy_req:reply/4` returns `{stop, Req1, State}` with the request that call gave back. When it hands back the request it was called with, Nova answers a second time: that response is dropped, the client keeps the first one, and the warning `The request was answered already, so this response is not sent ...` is logged, once per request.
+A request is answered once. A plugin that answers with `nova_req:reply/4` returns `{stop, Req1, State}` with the request that call gave back. When it hands back the request it was called with, Nova answers a second time: that response is dropped, the client keeps the first one, and the warning `The request was answered already, so this response is not sent ...` is logged, once per request.
 
 With `ok` the controller still runs and answers, so a redirect or a bare status set there would be overwritten. `{ok, {redirect, ...}, Req, State}` and `{ok, {status, ...}, Req, State}` therefore render the 500 status page and log that `stop` is needed. To send them, return `{stop, Reply, Req, State}`:
 
@@ -149,7 +149,7 @@ A plugin that turns clients away before they are authenticated does it in `pre_s
 -export([pre_security/4, plugin_info/0]).
 
 pre_security(Req, _Env, #{blocked := Blocked}, State) ->
-    {Address, _Port} = cowboy_req:peer(Req),
+    {Address, _Port} = nova_req:peer(Req),
     case lists:member(Address, Blocked) of
         true -> {stop, {status, 403}, Req, State};
         false -> {ok, Req, State}
@@ -201,7 +201,7 @@ Releases up to 0.18 ran `pre_request/4` of every plugin ahead of the security ca
 
 ```erlang
 is_signed(Req = #{body := Body}) ->
-    Sent = cowboy_req:header(~"x-signature", Req, ~""),
+    Sent = nova_req:header(~"x-signature", Req, ~""),
     Expected = binary:encode_hex(crypto:mac(hmac, sha256, signing_key(), Body), lowercase),
     byte_size(Sent) =:= byte_size(Expected) andalso crypto:hash_equals(Sent, Expected).
 ```
@@ -268,7 +268,7 @@ What the order changes without anything failing is logged when routes are compil
 
 ## Request errors
 
-`cowboy_req` exits with `{request_error, Reason, Message}` when the client sent something it cannot parse, or did not send the body in time: `parse_qs/1`, `match_qs/2`, `parse_header/2`, `parse_cookies/1`, `read_urlencoded_body/2` and the multipart readers do. Nova does not treat that as a crash. In a `pre_request` plugin the request is answered with a bare `400`, `408` when the body timed out or `413` when it was too large, as Cowboy would answer it. In a controller the same status goes through the status-code route for it, if the application has one. Both are logged as a warning.
+`nova_req` exits with `{request_error, Reason, Message}` when the client sent something it cannot parse, or did not send the body in time: `parse_qs/1`, `parse_header/2`, `parse_cookies/1`, `read_urlencoded_body/2` and the multipart readers do. Nova does not treat that as a crash. In a `pre_request` plugin the request is answered with a bare `400`, `408` when the body timed out or `413` when it was too large. In a controller the same status goes through the status-code route for it, if the application has one. Both are logged as a warning.
 
 ## Reading the matched route
 
@@ -817,7 +817,7 @@ callback, and on one that lists `nova_multipart_plugin` under
 [Before and after the security callback](#before-and-after-the-security-callback).
 
 To read the parts yourself, leave `nova_multipart_plugin` off the route and use
-[cowboy_req:read_part/1](https://ninenines.eu/docs/en/cowboy/2.21/manual/cowboy_req.read_part/)
+`nova_req:read_part/1`
 from the controller, handing the updated request back through a five element
 return tuple:
 
@@ -827,9 +827,9 @@ upload(Req) ->
     {json, 200, #{}, #{uploaded => length(Files)}, Req1}.
 
 read_parts(Req0, Acc) ->
-    case cowboy_req:read_part(Req0) of
+    case nova_req:read_part(Req0) of
         {ok, Headers, Req1} ->
-            {ok, Body, Req2} = cowboy_req:read_part_body(Req1),
+            {ok, Body, Req2} = nova_req:read_part_body(Req1),
             read_parts(Req2, [{cow_multipart:form_data(Headers), Body}|Acc]);
         {done, Req1} ->
             {lists:reverse(Acc), Req1}

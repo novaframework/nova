@@ -81,7 +81,7 @@ See [Nova correlation](plugins.md#nova-correlation).
 Crash reasons and stacktraces can hold request data. Before Nova writes them
 to a log, or shows them on an error page, it:
 
-* replaces a Cowboy request map with its method and path,
+* replaces a request map with its method and path,
 * replaces the argument list of a stacktrace frame with its arity,
 * replaces the value of a key that looks sensitive, such as `password`,
   `authorization`, `cookie` or `access_token`, with `redacted`.
@@ -152,8 +152,9 @@ for.
 | `pre_request/4 of these plugins runs once the security callback of this route group has let a request through, ...` | warning | `notice => pre_request_behind_security`. The same, for a plugin from outside Nova without `pre_security/4` |
 | `pre_request/4 of these plugins does not run for a CORS preflight to a route of this group that does not take OPTIONS, ...` | warning | `notice => pre_request_not_for_preflight`. The same |
 | `You need to define bootstrap_application option in configuration` | error | `bootstrap_application` is missing. Nova does not start |
-| `Cowboy could not start` | error | The listener could not be started, for instance because the port is in use. Nova does not start |
-| `Could not start cowboy with SSL` | error | The TLS listener could not be started, for instance because a certificate cannot be read. Nova does not start |
+| `Could not start listener` | error | A listener could not be started, for instance because the port is in use or a certificate cannot be read. The node does not start |
+| `Listener asks for what the server cannot do` | error | A listener asks for an HTTP version the server does not serve, or does not serve without TLS. The node does not start |
+| `A route group names a listener that is not configured or does not serve its application` | error | See [Routing](routing.md#the-listeners-of-a-route-group). The node does not start |
 | `A security value must be false, a fun/1 or {Mod, Fun}.` | error | A `security`, `secure` or `override_secure` has another value. Nova does not start |
 | `This key is not read here, so it protects nothing. ...` | warning | A route group has `secure => false`, the options of a route have `security => false` or `secure => false`, or a `nova_apps` entry has `security => false`. The report has the `app`, the `path` and the `key`. Remove the key |
 | `This key is not read here, so the callback would protect nothing. ...` | error | The same keys with any other value. Nova does not start. Declare the callback as `security` on the route group, or as `secure` on the `nova_apps` entry |

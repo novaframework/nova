@@ -41,7 +41,7 @@ Set these in `config/prod_sys.config.src`, under `nova`:
 | `secret_key_base` | The secret of the node: `~"${SECRET_KEY_BASE}"`, the same value on every node and across restarts. Nova signs the tokens of `nova_csrf_plugin` and the session ids with keys made from it. See [Configuration](configuration.md#the-secret-of-the-node) |
 | `trusted_origins` | Behind a proxy that terminates TLS or rewrites the `Host` header, list the public origins of the site, such as `[~"https://app.example.com"]`. Leave it out when the node serves TLS itself and the `Host` header reaches it as the browser sent it. See [Security](security.md#behind-a-proxy-that-terminates-tls) |
 | `use_stacktrace` | Leave it `false` |
-| `cowboy_configuration` | The port, and TLS when the node terminates it, see below |
+| `listeners` | The port, and TLS when the node terminates it, see below |
 | `shutdown_delay`, `shutdown_drain_timeout` | See [Graceful shutdown](graceful-shutdown.md) |
 
 Set `RELEASE_COOKIE` to the same long random value on every node of a
@@ -79,25 +79,27 @@ To serve HTTPS from the node itself:
 
 ```erlang
 {nova, [
-    {cowboy_configuration, #{
-        use_ssl => true,
-        ssl_port => 8443,
-        ssl_options => #{
-            certfile => "/etc/ssl/my_app/fullchain.pem",
-            keyfile => "/etc/ssl/my_app/privkey.pem"
+    {listeners, #{
+        default => #{
+            port => 8443,
+            tls => #{
+                certfile => "/etc/ssl/my_app/fullchain.pem",
+                keyfile => "/etc/ssl/my_app/privkey.pem"
+            }
         }
     }}
 ]}
 ```
 
-With `use_ssl` the listener serves TLS on `ssl_port` and nothing on `port`.
+A listener with `tls` serves HTTP/1.1 and HTTP/2 unless its `protocols` say
+otherwise. See [Servers and listeners](listeners.md).
 
 ## Behind a reverse proxy
 
 When a proxy or load balancer terminates TLS and forwards plain HTTP:
 
 * Nova does not read `x-forwarded-for`, `x-forwarded-proto` or `forwarded`.
-  `cowboy_req:peer/1` is the address of the proxy and `cowboy_req:scheme/1`
+  `nova_req:peer/1` is the address of the proxy and `nova_req:scheme/1`
   is `http`. Read the headers your proxy sets in your own code, and only
   trust them when the node is reachable through the proxy alone.
 * The session cookie is still marked `Secure` unless `environment` is set to
@@ -111,5 +113,5 @@ When a proxy or load balancer terminates TLS and forwards plain HTTP:
   origins of the site in `trusted_origins` and send
   `strict-transport-security` from the proxy. See
   [Security](security.md#behind-a-proxy-that-terminates-tls).
-* Bind the listener to an address only the proxy reaches, with the `ip` key
-  of `cowboy_configuration`.
+* Bind the listener to an address only the proxy reaches, with the `ip` of
+  the listener.
