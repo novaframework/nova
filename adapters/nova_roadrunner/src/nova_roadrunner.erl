@@ -118,6 +118,8 @@ capabilities() ->
 -doc "The name Roadrunner knows the listener by, for `roadrunner_listener:info/1` and the like.".
 -spec roadrunner_name(nova_listener:name()) -> atom().
 roadrunner_name(Name) ->
+    %% One atom for each listener of the configuration.
+    % elp:ignore W0023 (atoms_exhaustion)
     list_to_atom("nova_listener_" ++ atom_to_list(Name)).
 
 %% HTTP/1.1 and HTTP/2 share a port by ALPN, which there is none of without
@@ -132,7 +134,7 @@ check_listener(_Listener) ->
 
 -spec start_listener(nova_listener:listener(), nova_server:env()) -> {ok, pid()} | {error, term()}.
 start_listener(#{name := Name, ip := Ip, port := Port, tls := Tls, protocols := Protocols,
-                 server_opts := ServerOpts}, Env) ->
+                 server_opts := ServerOpts}, Env) when is_tuple(Ip) ->
     State = #{env => Env, compress => maps:get(compress, ServerOpts, true) =/= false},
     Opts0 = (maps:remove(compress, ServerOpts))#{ip => Ip,
                                                  port => Port,
@@ -146,7 +148,9 @@ start_listener(#{name := Name, ip := Ip, port := Port, tls := Tls, protocols := 
     case roadrunner:start_listener(roadrunner_name(Name), Opts) of
         {ok, Pid} -> {ok, Pid};
         {error, Reason} -> {error, why(Reason)}
-    end.
+    end;
+start_listener(#{name := Name, ip := Ip}, _Env) ->
+    {error, {invalid_listener_setting, Name, ip, Ip}}.
 
 %% What kept the listener from starting, without the child specification
 %% Roadrunner's supervisor reports it with: that has the TLS options in it.
@@ -208,8 +212,8 @@ end_request() ->
 -spec reply(nova_server:status(), nova_server:headers(), nova_server:body(), Req) -> Req
               when Req :: nova_req:req().
 reply(Status, Headers, {sendfile, Offset, Length, Path}, Req) ->
-    sent(roadrunner_send:file(Status, with_content_length(Length, header_list(Headers)), {Path, Offset, Length},
-                              rr(Req)),
+    File = {filename(Path), Offset, Length},
+    sent(roadrunner_send:file(Status, with_content_length(Length, header_list(Headers)), File, rr(Req)),
          Status, Req);
 reply(Status, Headers0, Body0, #{roadrunner_compress := Compress} = Req) ->
     RR = rr(Req),
@@ -257,11 +261,17 @@ inform(Status, Headers, Req) ->
     _ = roadrunner_send:inform(Status, header_list(Headers), rr(Req)),
     ok.
 
+filename(Path) when is_atom(Path) -> atom_to_list(Path);
+filename(Path) -> Path.
+
 -spec read_body(Req, nova_server:read_body_opts()) -> {ok, binary(), Req} | {more, binary(), Req}
               when Req :: nova_req:req().
 read_body(Req, Opts) ->
-    Length = maps:get(length, Opts, ?READ_BODY_LENGTH),
-    case roadrunner_req:read_body(rr(Req), #{length => Length}) of
+    Read = case maps:get(length, Opts, ?READ_BODY_LENGTH) of
+               infinity -> roadrunner_req:read_body(rr(Req));
+               Length -> roadrunner_req:read_body(rr(Req), #{length => Length})
+           end,
+    case Read of
         {ok, Data, RR} -> {ok, iolist_to_binary(Data), Req#{roadrunner_req := RR}};
         {more, Data, RR} -> {more, iolist_to_binary(Data), Req#{roadrunner_req := RR}};
         {error, Reason} -> exit(request_error(Reason))

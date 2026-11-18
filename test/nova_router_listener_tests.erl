@@ -2,6 +2,7 @@
 %%% versions, in routing tables compiled without nova_sup.
 -module(nova_router_listener_tests).
 -include_lib("eunit/include/eunit.hrl").
+-include("../include/nova_router.hrl").
 
 -export([page/1]).
 
@@ -66,8 +67,9 @@ router_listener_test_() ->
        fun() ->
                Route = {"/v", fun ?MODULE:page/1, #{methods => [get], http_versions => [http3, http2]}},
                ok = compiled(?SERVING, [#{routes => [Route]}]),
-               {ok, _Bindings, Value} = nova_router:lookup_url('_', ~"/v", ~"GET", ?KEY),
-               ?assertMatch([{nova_route, ~"/v"}, {nova_http_versions, [http2]} | _], element(6, Value))
+               {ok, _Bindings, #nova_handler_value{plugins = Plugins}} =
+                   nova_router:lookup_url('_', ~"/v", ~"GET", ?KEY),
+               ?assertMatch([{nova_route, ~"/v"}, {nova_http_versions, [http2]} | _], Plugins)
        end},
       {"websocket route needs a version the server takes websockets over",
        fun() ->

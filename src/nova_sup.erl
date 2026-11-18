@@ -29,10 +29,8 @@ Each listener owns its own routing table, so an application started on a second 
 -endif.
 
 -include_lib("kernel/include/logger.hrl").
--include("../include/nova.hrl").
 
 -define(SERVER, ?MODULE).
--define(NOVA_LISTENER, nova_listener).
 -define(NOVA_LISTENERS_TABLE, nova_listeners).
 
 -type nova_app() :: atom() | {atom(), map()}.

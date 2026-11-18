@@ -19,7 +19,7 @@ handle(Req) ->
 %% went out by the time it returns.
 -spec run(roadrunner_req:request()) -> roadrunner_req:request().
 run(RR) ->
-    #{env := Env, compress := Compress} = roadrunner_req:state(RR),
+    {Env, Compress} = listener_state(roadrunner_req:state(RR)),
     ok = nova_roadrunner:start_request(),
     try nova_pipeline:execute(request(RR, Compress), Env) of
         {ok, #{roadrunner_req := Last}, _Env} -> Last;
@@ -27,6 +27,11 @@ run(RR) ->
     after
         ok = nova_roadrunner:end_request()
     end.
+
+%% What nova_roadrunner:start_listener/2 gave the listener.
+-spec listener_state(term()) -> {nova_server:env(), boolean()}.
+listener_state(#{env := Env, compress := Compress}) when is_map(Env), is_boolean(Compress) ->
+    {Env, Compress}.
 
 -spec request(roadrunner_req:request(), boolean()) -> nova_req:req().
 request(RR, Compress) ->

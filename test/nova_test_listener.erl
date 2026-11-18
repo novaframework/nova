@@ -3,6 +3,8 @@
 %%% listener untouched.
 -module(nova_test_listener).
 
+-include_lib("public_key/include/public_key.hrl").
+
 -export([start/1, try_start/1, configure/1, boot/1, port/0, stop/0, server/1, get/2, get/3, request/4, response/4, response/5,
          websocket_handshake/2, websocket_handshake/3, websocket_texts/4, h2_websocket_connect/4, h2_get/2,
          send_and_close/2, free_port/0, tls/0, https_get/2]).
@@ -40,7 +42,10 @@ boot(Options, Port) ->
 %% that serves.
 -spec boot(map()) -> {ok, inet:port_number()} | {error, term()}.
 boot(Options) ->
-    Port = maps:get(port, Options, port()),
+    Port = case Options of
+               #{port := Given} -> Given;
+               #{} -> port()
+           end,
     case application:ensure_all_started(server(Options)) of
         {ok, _} ->
             case application:ensure_all_started(nova_test_app) of
@@ -61,7 +66,9 @@ boot(Options) ->
 port() ->
     case application:get_env(nova, listeners) of
         {ok, #{default := #{port := Port}}} -> Port;
-        _ -> maps:get(port, application:get_env(nova, cowboy_configuration, #{}), undefined)
+        _ ->
+            #{port := Port} = application:get_env(nova, cowboy_configuration, #{}),
+            Port
     end.
 
 -spec server(map()) -> module().
@@ -326,12 +333,11 @@ free_port(Attempts) when Attempts > 0 ->
     end.
 
 %% The `tls` of a listener: a certificate made for the run, with its key.
--spec tls() -> [ssl:tls_server_option()].
+-spec tls() -> [{atom(), term()}].
 tls() ->
-    Key = [{key, {namedCurve, secp256r1}}, {digest, sha256}],
-    #{server_config := Config} =
-        public_key:pkix_test_data(#{server_chain => #{root => Key, peer => Key},
-                                    client_chain => #{root => Key, peer => Key}}),
+    Chain = #{root => [{key, {namedCurve, ?secp256r1}}, {digest, sha256}],
+              peer => [{key, {namedCurve, ?secp256r1}}, {digest, sha256}]},
+    #{server_config := Config} = public_key:pkix_test_data(#{server_chain => Chain, client_chain => Chain}),
     Config.
 
 %% A GET over HTTP/1.1 to a listener with TLS, with the response headers
@@ -354,6 +360,6 @@ https_get(Port, Path) ->
 
 until_closed(Socket, Acc) ->
     case ssl:recv(Socket, 0, 5000) of
-        {ok, Data} -> until_closed(Socket, <<Acc/binary, Data/binary>>);
+        {ok, Data} when is_binary(Data) -> until_closed(Socket, <<Acc/binary, Data/binary>>);
         {error, closed} -> Acc
     end.

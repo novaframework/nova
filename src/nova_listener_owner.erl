@@ -24,7 +24,7 @@ listeners the slow way, waiting for the connections that are open.
 -export([start_link/1, shutdown/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
--spec start_link(Server :: module()) -> {ok, pid()} | {error, term()}.
+-spec start_link(Server :: module()) -> gen_server:start_ret().
 start_link(Server) ->
     gen_server:start_link(?MODULE, Server, []).
 
@@ -54,7 +54,8 @@ handle_cast(_Request, State) ->
     {noreply, State}.
 
 -doc false.
--spec handle_info(term(), State) -> {noreply, State} | {stop, {shutdown, nova_stopped}, State}.
+-spec handle_info(term(), State) -> {noreply, State} | {stop, {shutdown, nova_stopped}, State}
+              when State :: {module(), reference()}.
 handle_info({'DOWN', Monitor, process, _Pid, _Reason}, {_Server, Monitor} = State) ->
     {stop, {shutdown, nova_stopped}, State};
 handle_info(_Info, State) ->

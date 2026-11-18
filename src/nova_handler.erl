@@ -20,7 +20,7 @@
 -callback terminate(any(), map(), any()) -> ok.
 -optional_callbacks([terminate/3]).
 
--spec execute(Req, Env) -> {ok, Req, Env}
+-spec execute(Req, Env) -> {ok, Req, Env} | {stop, Req}
                                when Req::nova_req:req(), Env::nova_server:env().
 execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) when is_atom(Handler) ->
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),

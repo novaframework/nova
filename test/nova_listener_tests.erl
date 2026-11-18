@@ -61,7 +61,7 @@ listeners_come_in_the_order_of_their_names() ->
 
 tls_changes_the_defaults() ->
     application:set_env(nova, listeners, #{web => #{tls => #{certfile => "cert.pem", keyfile => "key.pem"}}}),
-    {ok, [#{port := Port, tls := Tls, protocols := Protocols}]} = nova_listener:configured(),
+    {ok, [#{port := Port, tls := [_ | _] = Tls, protocols := Protocols}]} = nova_listener:configured(),
     ?assertEqual(8443, Port),
     ?assertEqual([{certfile, "cert.pem"}, {keyfile, "key.pem"}], lists:sort(Tls)),
     ?assertEqual([http1, http2], nova_listener:protocol_names(Protocols)).
@@ -156,6 +156,6 @@ a_server_serves_what_it_can_test() ->
     ?assertEqual({error, {listener_protocols_need_tls, web, [http3]}},
                  nova_listener:check(ClearH3, my_server, ?CAPABLE)),
     ?assertEqual({error, {listener_protocols_not_supported, web, [http3], my_server}},
-                 nova_listener:check(Tls, my_server, ?CAPABLE#{protocols := [http1, http2]})),
+                 nova_listener:check(Tls, my_server, maps:put(protocols, [http1, http2], ?CAPABLE))),
     ?assertEqual({error, {listener_protocols_need_tls, web, [http2]}},
-                 nova_listener:check(Clear, my_server, ?CAPABLE#{cleartext := [http1]})).
+                 nova_listener:check(Clear, my_server, maps:put(cleartext, [http1], ?CAPABLE))).

@@ -48,9 +48,17 @@ each_listener_serves_its_own_applications(_Config) ->
 a_listener_serves_the_versions_it_names(_Config) ->
     {Public, Admin} = two_listeners([http2]),
     ?assertEqual(200, nova_test_listener:h2_get(Public, ~"/where")),
-    ?assertNotMatch({200, _}, catch nova_test_listener:get(Public, "/where")),
+    ?assertNotMatch({200, _}, attempt(fun() -> nova_test_listener:get(Public, "/where") end)),
     ?assertEqual({200, ~"admin http1"}, nova_test_listener:get(Admin, "/where")),
-    ?assertNotEqual(200, catch nova_test_listener:h2_get(Admin, ~"/where")).
+    ?assertNotEqual(200, attempt(fun() -> nova_test_listener:h2_get(Admin, ~"/where") end)).
+
+%% What a request gave, or that it could not be made.
+attempt(Request) ->
+    try
+        Request()
+    catch
+        _Class:_Reason -> failed
+    end.
 
 listeners_are_known_by_name(_Config) ->
     {Public, Admin} = two_listeners(),
@@ -97,8 +105,12 @@ http3_needs_tls(_Config) ->
     Listeners = #{web => #{port => Port, protocols => [http3]}},
     {error, {_Server, {{shutdown, {failed_to_start_child, nova_listener, Reason}}, _}}} =
         nova_test_listener:try_start(#{port => Port, listeners => Listeners}),
-    ?assert(lists:member(element(1, Reason), [listener_protocols_need_tls, listener_protocols_not_supported])),
-    ?assertEqual({web, [http3]}, {element(2, Reason), element(3, Reason)}).
+    {Refused, Listener, Protocols} = case Reason of
+                                         {listener_protocols_need_tls, Name, Versions} -> {tls, Name, Versions};
+                                         {listener_protocols_not_supported, Name, Versions, _On} -> {server, Name, Versions}
+                                     end,
+    ?assert(lists:member(Refused, [tls, server])),
+    ?assertEqual({web, [http3]}, {Listener, Protocols}).
 
 a_misconfigured_listener_fails_the_boot(_Config) ->
     Port = nova_test_listener:free_port(),

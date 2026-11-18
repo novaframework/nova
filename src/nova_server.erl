@@ -99,7 +99,7 @@ What a server can do.
 -type body() :: iodata() | {sendfile, Offset :: non_neg_integer(),
                             Length :: non_neg_integer(), Path :: file:name_all()}.
 -type read_body_opts() :: #{length => non_neg_integer() | infinity,
-                            period => non_neg_integer() | infinity,
+                            period => non_neg_integer(),
                             timeout => timeout()}.
 -type ws_opts() :: #{idle_timeout => timeout(),
                      max_frame_size => non_neg_integer() | infinity,

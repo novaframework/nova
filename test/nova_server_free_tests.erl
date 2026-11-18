@@ -18,7 +18,10 @@ nova_depends_on_no_server_test() ->
     ?assertEqual([], [Application || Application <- Applications, is_server(Application)]).
 
 servers_called(Module) ->
-    {ok, {Module, [{imports, Imports}]}} = beam_lib:chunks(code:which(Module), [imports]),
+    Beam = case code:which(Module) of
+               File when is_list(File) -> File
+           end,
+    {ok, {Module, [{imports, Imports}]}} = beam_lib:chunks(Beam, [imports]),
     lists:usort([Called || {Called, _Function, _Arity} <- Imports, is_server(Called)]).
 
 is_server(Module) ->

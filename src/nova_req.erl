@@ -217,7 +217,10 @@ parse_header(Name, Req) ->
 
 -spec parse_header(binary(), req(), Default) -> term() | Default.
 parse_header(Name, Req, Default) ->
-    Parse = header_parser(Name),
+    parsed(Name, header_parser(Name), Req, Default).
+
+-spec parsed(binary(), fun((binary()) -> Parsed), req(), Default) -> Parsed | Default.
+parsed(Name, Parse, Req, Default) ->
     case header(Name, Req) of
         undefined ->
             Default;
@@ -254,7 +257,7 @@ header_parser(Name) -> error({unsupported_header, Name}).
 
 -spec parse_cookies(req()) -> [{binary(), binary()}].
 parse_cookies(Req) ->
-    parse_header(~"cookie", Req, []).
+    parsed(~"cookie", fun cow_cookie:parse_cookie/1, Req, []).
 
 -doc """
 Whether the request asks for a WebSocket: with `Upgrade` over HTTP/1.1, or
@@ -266,8 +269,8 @@ is_websocket_upgrade(#{version := Version, method := ~"CONNECT", protocol := Pro
   when Version =:= 'HTTP/2'; Version =:= 'HTTP/3' ->
     string:lowercase(Protocol) =:= ~"websocket";
 is_websocket_upgrade(Req = #{version := 'HTTP/1.1', method := ~"GET"}) ->
-    lists:member(~"upgrade", parse_header(~"connection", Req, []))
-        andalso lists:member(~"websocket", parse_header(~"upgrade", Req, []));
+    lists:member(~"upgrade", parsed(~"connection", fun cow_http_hd:parse_connection/1, Req, []))
+        andalso lists:member(~"websocket", parsed(~"upgrade", fun cow_http_hd:parse_upgrade/1, Req, []));
 is_websocket_upgrade(_Req) ->
     false.
 
@@ -405,7 +408,7 @@ read_part_body(Buffer, Opts, Req = #{multipart := {Boundary, _}}, Acc) ->
     end.
 
 init_multipart(Req) ->
-    case parse_header(~"content-type", Req) of
+    case parsed(~"content-type", fun cow_http_hd:parse_content_type/1, Req, undefined) of
         {~"multipart", _SubType, Params} ->
             case lists:keyfind(~"boundary", 1, Params) of
                 {_, Boundary} ->

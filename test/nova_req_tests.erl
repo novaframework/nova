@@ -51,7 +51,7 @@ reply_merges_headers_and_cookies_test() ->
 
 headers_from_a_list_test() ->
     Req = nova_req:set_resp_headers([{~"vary", ~"accept"}, {~"x-a", ~"1"}, {~"vary", ~"origin"}], ?REQ()),
-    ?assertEqual(~"accept, origin", iolist_to_binary(nova_req:resp_header(~"vary", Req))),
+    ?assertEqual(~"accept, origin", iolist_to_binary(nova_req:resp_header(~"vary", Req, <<>>))),
     ?assertEqual(~"1", nova_req:resp_header(~"x-a", Req)),
     ?assertExit({response_error, invalid_header, _}, nova_req:set_resp_headers([{~"set-cookie", ~"a=1"}], ?REQ())).
 

@@ -152,7 +152,7 @@ stop_listener(Name) ->
 
 %% A listener can already be gone, so neither suspending nor inspecting it
 %% may bring the shutdown down.
--spec drain_listeners([nova_listener:name()], timeout()) -> ok.
+-spec drain_listeners([nova_listener:name()], non_neg_integer()) -> ok.
 drain_listeners(Names, Timeout) ->
     Refs = [ranch_ref(Name) || Name <- Names],
     _ = [suspend(Ref) || Ref <- Refs],
@@ -218,7 +218,7 @@ inform(Status, Headers, Req) ->
     cowboy_req:inform(Status, header_map(Headers), Req).
 
 %% Cowboy exits with a bare timeout when the body does not arrive.
--spec read_body(Req, nova_server:read_body_opts()) -> {ok, binary(), Req} | {more, binary(), Req}
+-spec read_body(Req, cowboy_req:read_body_opts()) -> {ok, binary(), Req} | {more, binary(), Req}
               when Req :: nova_req:req().
 read_body(Req, Opts) ->
     try
@@ -228,7 +228,7 @@ read_body(Req, Opts) ->
             exit({request_error, timeout, 'The request body was not received within the configured time.'})
     end.
 
--spec upgrade_websocket(Req, Env, module(), term(), nova_server:ws_opts()) ->
+-spec upgrade_websocket(Req, Env, module(), term(), cowboy_websocket:opts()) ->
           {ok, Req, Env} | {stop, Req} when Req :: nova_req:req(), Env :: nova_server:env().
 upgrade_websocket(Req, Env, Handler, State, Opts) ->
     cowboy_websocket:upgrade(Req, Env, Handler, State, Opts).

@@ -59,8 +59,6 @@ that serves the bootstrap application.
 
 -export_type([name/0, listener/0]).
 
--include_lib("kernel/include/logger.hrl").
-
 -define(PORT, 8080).
 -define(TLS_PORT, 8443).
 -define(KEYS, [port, ip, tls, protocols, applications, steps, server_opts]).
@@ -158,7 +156,7 @@ legacy_tls(Legacy) ->
     maps:get(ssl_options, Legacy, #{}).
 
 -doc false.
--spec normalize(name(), term(), map()) -> {ok, listener()} | {error, term()}.
+-spec normalize(term(), term(), map()) -> {ok, listener()} | {error, term()}.
 normalize(Name, _Settings, _Defaults) when not is_atom(Name) ->
     {error, {invalid_listener_name, Name}};
 normalize(Name, Settings, Defaults) when is_map(Settings) ->

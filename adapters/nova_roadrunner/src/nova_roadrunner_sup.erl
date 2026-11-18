@@ -7,7 +7,10 @@
 
 -spec start_link() -> {ok, pid()} | {error, term()}.
 start_link() ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+    case supervisor:start_link({local, ?MODULE}, ?MODULE, []) of
+        {ok, Pid} -> {ok, Pid};
+        {error, Reason} -> {error, Reason}
+    end.
 
 %% Without restarts: when nova_listener_owner goes, because `nova` went
 %% down under it, the application goes too.
