@@ -324,8 +324,16 @@ note_legacy_configuration() ->
 
 %% A listener that cannot start takes those started before it down again, so
 %% a boot that fails leaves nothing bound.
-start_all(_Server, [], _Started) ->
-    ok;
+start_all(_Server, [], Started) ->
+    case route_groups_not_served() of
+        [] ->
+            ok;
+        [{App, Prefix, Listener} | _] ->
+            ?LOG_ERROR(#{msg => ~"A route group names a listener that is not configured or does not serve its application",
+                         app => App, prefix => Prefix, listener => Listener, listeners => listeners()}),
+            _ = [stop_listener(Name) || #{name := Name} <- Started],
+            {error, {route_group_not_served, App, Prefix, Listener}}
+    end;
 start_all(Server, [Listener | Rest], Started) ->
     case start_checked(Server, Listener) of
         {ok, _App, _Host, _Port} ->
@@ -334,6 +342,16 @@ start_all(Server, [Listener | Rest], Started) ->
             _ = [stop_listener(Name) || #{name := Name} <- Started],
             {error, Reason}
     end.
+
+%% The route groups that name a listener whose routing table they are not
+%% in: one that is not there, or one the application is not served on.
+route_groups_not_served() ->
+    Bound = [{Name, Group} || #nova_listener{name = Name, dispatch_key = DispatchKey} <- all_listeners(),
+                              Group <- nova_router:bound_groups(DispatchKey)],
+    lists:usort([{App, Prefix, Listener}
+                 || {_On, {_Status, App, Prefix, Names}} <- Bound,
+                    Listener <- Names,
+                    not lists:member({Listener, {served, App, Prefix, Names}}, Bound)]).
 
 start_checked(Server, Listener = #{name := Name}) ->
     case checked(Server, Listener) of
@@ -375,7 +393,12 @@ start_listener(Server, Listener = #{name := Name, ip := Host, port := Port, tls 
     %% nothing it mounts can take over one of its routes, and nova last so its
     %% 404/500 routes are only defaults.
     NovaApps = lists:append([with_nova_apps(Each) || Each <- Apps]) ++ [nova],
-    Dispatch = nova_router:compile_fresh(resolve_nova_apps(NovaApps), DispatchKey),
+    Names = nova_listener:protocol_names(Protocols),
+    Serving = #{name => Name,
+                protocols => Names,
+                websocket => [Version || Version <- maps:get(websocket, nova_server:capabilities(Server)),
+                                         lists:member(Version, Names)]},
+    Dispatch = nova_router:compile_fresh(resolve_nova_apps(NovaApps), DispatchKey, Serving),
     case Server:start_listener(Listener, env(Listener, DispatchKey, Dispatch)) of
         {ok, _Pid} ->
             register_listener(#nova_listener{name = Name,
@@ -384,6 +407,7 @@ start_listener(Server, Listener = #{name := Name, ip := Host, port := Port, tls 
                                              apps = Apps,
                                              dispatch_key = DispatchKey}),
             say_what_the_session_cookie_needs(Tls =/= false),
+            say_how_http3_alone_is_found(Name, Names),
             ?LOG_NOTICE(#{msg => <<"Nova is running">>,
                           url => unicode:characters_to_binary(
                                    io_lib:format("~s://~s:~B", [scheme(Tls), format_host(Host), Port])),
@@ -399,6 +423,14 @@ start_listener(Server, Listener = #{name := Name, ip := Host, port := Port, tls 
                          listener => Name, port => Port, server => Server, reason => Reason}),
             {error, {listener_not_started, Reason}}
     end.
+
+%% A client tries HTTP/3 once it is told of it: by the alt-svc header of an
+%% answer over another version, or by an HTTPS record in DNS.
+say_how_http3_alone_is_found(Name, [http3]) ->
+    ?LOG_NOTICE(#{msg => ~"Listener serves HTTP/3 alone. Browsers only come to it when an HTTPS record in DNS says it is there",
+                  listener => Name});
+say_how_http3_alone_is_found(_Name, _Protocols) ->
+    ok.
 
 scheme(false) -> "http";
 scheme(_Tls) -> "https".

@@ -59,6 +59,8 @@ roadrunner(nova_stream_idle_timeout_SUITE, all) -> cowboy;
 roadrunner(nova_cowboy_advisory_SUITE, all) -> cowboy;
 roadrunner(nova_boot_SUITE, listener_of_another_owner_fails_the_boot) -> cowboy;
 roadrunner(nova_boot_SUITE, listener_with_tls_is_not_told_about_the_session_cookie) -> cowboy;
+roadrunner(nova_route_listeners_SUITE, route_is_served_over_the_versions_it_names) -> cleartext_http2;
+roadrunner(nova_route_listeners_SUITE, route_takes_the_versions_of_its_group) -> cleartext_http2;
 roadrunner(nova_canonical_path_SUITE, path_without_a_leading_slash_is_refused) -> cleartext_http2;
 roadrunner(nova_own_reply_SUITE, second_answer_over_http2) -> cleartext_http2;
 roadrunner(nova_upload_stall_SUITE, stalled_upload_over_http2_is_answered_and_the_connection_goes_on) ->

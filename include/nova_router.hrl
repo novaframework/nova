@@ -5,8 +5,8 @@
                              function :: atom(),
                              callback :: function() | undefined,
                              plugins = [] :: list(),
-                             secure = false :: false | fun((cowboy_req:req()) -> term()) |
-                                               [fun((cowboy_req:req()) -> term())] | {Mod :: atom(), Fun :: atom()},
+                             secure = false :: false | fun((nova_req:req()) -> term()) |
+                                               [fun((nova_req:req()) -> term())] | {Mod :: atom(), Fun :: atom()},
                              extra_state :: any()
                             }).
 
@@ -15,6 +15,6 @@
                                handler :: atom(),
                                arguments :: any(),
                                plugins = [] :: list(),
-                               secure = false :: false | fun((cowboy_req:req()) -> term()) |
-                                                 [fun((cowboy_req:req()) -> term())] | {Mod :: atom(), Fun :: atom()}
+                               secure = false :: false | fun((nova_req:req()) -> term()) |
+                                                 [fun((nova_req:req()) -> term())] | {Mod :: atom(), Fun :: atom()}
                               }).

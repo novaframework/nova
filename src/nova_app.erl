@@ -15,6 +15,7 @@
 
 start(_StartType, _StartArgs) ->
     note_unset_environment(),
+    note_missing_server(),
     %% The plugins the router lists are those of the routes compiled from
     %% here on. The list is stored outside the supervision tree and would
     %% otherwise still hold those of an earlier run in this VM.
@@ -34,6 +35,18 @@ stop(_State) ->
 %%====================================================================
 %% Internal functions
 %%====================================================================
+
+%% Nova serves through a server package. Before 1.0 Cowboy came with Nova,
+%% so an application that moves up without adding one finds nothing listening.
+note_missing_server() ->
+    Server = nova_server:module(),
+    case code:ensure_loaded(Server) of
+        {module, Server} ->
+            ok;
+        {error, _} ->
+            ?LOG_WARNING(#{msg => ~"No server package is in the release, so Nova serves nothing. Add nova_cowboy or nova_roadrunner to the dependencies and to the applications of your application",
+                           server => Server})
+    end.
 
 %% An unset environment is prod. A developer who left the key out expects
 %% dev, and finds the routes of routes(dev) missing.

@@ -15,6 +15,8 @@
          compile/1,
          compile/2,
          compile_fresh/2,
+         compile_fresh/3,
+         bound_groups/1,
          overrides_in_force/1,
          secures_in_force/1,
          lookup_url/1,
@@ -115,6 +117,15 @@ the listener of the bootstrap application.
 -type dispatch_key() :: term().
 -export_type([dispatch_key/0]).
 
+-doc """
+The listener a routing table is compiled for: its name, the HTTP versions it
+serves and those of them the server takes WebSockets over.
+""".
+-type serving() :: #{name := nova_listener:name(),
+                     protocols := [nova_server:protocol()],
+                     websocket := [nova_server:protocol()]}.
+-export_type([serving/0]).
+
 -type plugin() :: {Type :: atom(), Module :: module(), Options :: term()}.
 -type callback() :: {Callback :: fun(), Options :: term()}.
 -type phased() :: [{Phase :: atom(), [callback()]}].
@@ -170,7 +181,7 @@ compile(Apps, DispatchKey) ->
 
     StoredDispatch = StorageBackend:get(DispatchKey,
                                         nova_routing_trie:new(#{strict => UseStrict})),
-    Dispatch = compile(Apps, StoredDispatch, #{dispatch_key => DispatchKey}),
+    Dispatch = compile(Apps, StoredDispatch, with_serving(#{dispatch_key => DispatchKey})),
     %% Write the updated dispatch to storage
     StorageBackend:put(DispatchKey, Dispatch),
     Dispatch.
@@ -184,13 +195,34 @@ compile(Apps, DispatchKey) ->
 -spec compile_fresh(Apps :: [atom() | {atom(), map()}], DispatchKey :: dispatch_key()) ->
           nova_routing_trie:trie().
 compile_fresh(Apps, DispatchKey) ->
+    compile_fresh(Apps, DispatchKey, undefined).
+
+%% With the listener the table is for, which decides what is compiled into
+%% it: the route groups that name no listener or name this one, and the
+%% routes it has an HTTP version for.
+-doc false.
+-spec compile_fresh(Apps :: [atom() | {atom(), map()}], DispatchKey :: dispatch_key(),
+                    Serving :: serving() | undefined) ->
+          nova_routing_trie:trie().
+compile_fresh(Apps, DispatchKey, Serving) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
     StorageBackend = storage_backend(),
     StorageBackend:put(apps_key(DispatchKey), []),
+    StorageBackend:put(serving_key(DispatchKey), Serving),
+    StorageBackend:put(bound_key(DispatchKey), []),
     Dispatch = compile(Apps, nova_routing_trie:new(#{strict => UseStrict}),
-                       #{dispatch_key => DispatchKey}),
+                       with_serving(#{dispatch_key => DispatchKey})),
     StorageBackend:put(DispatchKey, Dispatch),
     Dispatch.
+
+%% The route groups of a table that name the listeners they are for, each
+%% with whether it was compiled into this one.
+-doc false.
+-spec bound_groups(DispatchKey :: dispatch_key()) ->
+          [{served | skipped, App :: atom(), Prefix :: string(), [nova_listener:name()]}].
+bound_groups(DispatchKey) ->
+    StorageBackend = storage_backend(),
+    StorageBackend:get(bound_key(DispatchKey), []).
 
 -doc false.
 -spec execute(Req, Env :: nova_server:env()) -> {ok, Req, Env0} | {stop, Req}
@@ -220,7 +252,47 @@ is_origin_form(<<"/", _/binary>>) -> true;
 is_origin_form(_Path) -> false.
 
 route(Req = #{host := Host, path := Path, method := Method}, Env, Dispatch) ->
-    case nova_routing_trie:find(Host, Path, Method, Dispatch) of
+    Found = nova_routing_trie:find(Host, Path, Method, Dispatch),
+    case refused_version(route_plugins(Found), Req) of
+        false -> routed(Found, Req, Env, Dispatch);
+        Served -> version_not_served(Served, Req, Env)
+    end.
+
+%% The versions a route is served over, when the request came over another.
+refused_version(undefined, _Req) ->
+    false;
+refused_version(RoutePlugins, Req) ->
+    case http_versions(RoutePlugins) of
+        undefined ->
+            false;
+        Served ->
+            case lists:member(nova_req:http_version(Req), Served) of
+                true -> false;
+                false -> Served
+            end
+    end.
+
+%% 426 names the versions to come back with, in a header only HTTP/1 has.
+%% Over the others the answer is that this version is not served here.
+version_not_served(Served, Req = #{version := Version, path := Path}, Env) ->
+    ?LOG_DEBUG(#{msg => ~"Route is not served over the HTTP version of the request", path => Path,
+                 version => Version, served => Served}),
+    Data = #{error => "Not served over this HTTP version"},
+    case nova_req:http_version(Req) of
+        http1 ->
+            Upgrade = iolist_to_binary(lists:join(~", ", [upgrade_token(Each) || Each <- Served])),
+            Req1 = nova_req:set_resp_headers(#{~"connection" => ~"upgrade", ~"upgrade" => Upgrade}, Req),
+            render_status_page('_', 426, Data, Req1, Env);
+        _ ->
+            render_status_page('_', 505, Data, Req, Env)
+    end.
+
+upgrade_token(http1) -> ~"HTTP/1.1";
+upgrade_token(http2) -> ~"HTTP/2.0";
+upgrade_token(http3) -> ~"HTTP/3.0".
+
+routed(Found, Req = #{host := Host, path := Path, method := Method}, Env, Dispatch) ->
+    case Found of
         {error, not_found} ->
             logger:debug(<<"Path ~p not found for ~p in ~p">>, [Path, Method, Host]),
             render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
@@ -390,8 +462,8 @@ insert_route_maps(App, Routes, DispatchKey) ->
 
     %% Routes added at runtime replace any route already registered on the
     %% same path and method, which is what the routing guide promises.
-    Options = #{app => App, router_file => undefined, dispatch_key => DispatchKey,
-                insert_opts => #{on_duplicate => overwrite}},
+    Options = with_serving(#{app => App, router_file => undefined, dispatch_key => DispatchKey,
+                             insert_opts => #{on_duplicate => overwrite}}),
 
     {ok, Dispatch1, _Options0} = compile_paths(Routes, Dispatch, Options),
 
@@ -438,8 +510,8 @@ delete_dispatch(?NOVA_DISPATCH) ->
 delete_dispatch(DispatchKey) ->
     case storage_backend() of
         persistent_term ->
-            persistent_term:erase(DispatchKey),
-            persistent_term:erase(apps_key(DispatchKey)),
+            _ = [persistent_term:erase(Key)
+                 || Key <- [DispatchKey, apps_key(DispatchKey), serving_key(DispatchKey), bound_key(DispatchKey)]],
             ok;
         _Backend ->
             %% A custom backend has no erase in its contract; leave it to
@@ -600,6 +672,39 @@ first_module([Name | Names]) ->
 
 compile_paths([], Dispatch, Options) -> {ok, Dispatch, Options};
 compile_paths([RouteInfo|Tl], Dispatch, Options) ->
+    case is_for_listener(RouteInfo, Options) of
+        true -> compile_paths(Tl, compile_group(RouteInfo, Dispatch, Options), Options);
+        false -> compile_paths(Tl, Dispatch, Options)
+    end.
+
+%% A route group that names listeners is compiled into their tables alone,
+%% and into none when the table is not known to be one of theirs.
+is_for_listener(RouteInfo = #{listener := Listener}, Options = #{app := App}) ->
+    Names = listener_names(Listener, App),
+    Served = case Options of
+                 #{serving := #{name := Name}} -> lists:member(Name, Names);
+                 #{} -> false
+             end,
+    Status = case Served of true -> served; false -> skipped end,
+    Prefix = concat_strings(maps:get(prefix, Options, ""), maps:get(prefix, RouteInfo, "")),
+    StorageBackend = storage_backend(),
+    BoundKey = bound_key(maps:get(dispatch_key, Options, ?NOVA_DISPATCH)),
+    StorageBackend:put(BoundKey, StorageBackend:get(BoundKey, []) ++ [{Status, App, Prefix, Names}]),
+    Served;
+is_for_listener(_RouteInfo, _Options) ->
+    true.
+
+listener_names(Name, _App) when is_atom(Name) ->
+    [Name];
+listener_names([_ | _] = Names, App) ->
+    case lists:all(fun is_atom/1, Names) of
+        true -> Names;
+        false -> throw({error, {invalid_route_listener, App, Names}})
+    end;
+listener_names(Other, App) ->
+    throw({error, {invalid_route_listener, App, Other}}).
+
+compile_group(RouteInfo, Dispatch, Options) ->
     App = maps:get(app, Options),
     RouterFile = maps:get(router_file, Options),
 
@@ -627,20 +732,19 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     %% We need to add this app info to nova-env
     nova:set_env(apps, lists:keystore(App, 1, mounted_apps(), {App, #{prefix => Prefix}})),
 
-    Group = maps:with([extra_state], RouteInfo),
+    Group = maps:merge(maps:with([serving], Options), maps:with([extra_state, http_versions], RouteInfo)),
     {ok, Dispatch1} = parse_url(Host, maps:get(routes, RouteInfo, []),
                                 Group#{prefix => Prefix,
+                                       app => App,
                                        router_file => maps:get(router_file, Options),
                                        insert_opts => maps:get(insert_opts, Options, #{})},
                                 Value, Dispatch),
 
     %% The applications the group lists are behind its security as well.
-    Dispatch2 = compile(SubApps, Dispatch1,
-                        Options#{value => Value, prefix => Prefix, secure => false,
-                                 inherited_secure => secures_in_force(Options) ++
-                                     [Security || security := Security <- RouteInfo, Security =/= false]}),
-
-    compile_paths(Tl, Dispatch2, Options).
+    compile(SubApps, Dispatch1,
+            Options#{value => Value, prefix => Prefix, secure => false,
+                     inherited_secure => secures_in_force(Options) ++
+                         [Security || security := Security <- RouteInfo, Security =/= false]}).
 
 parse_url(_Host, [], _Prefix, _Value, Tree) -> {ok, Tree};
 parse_url(Host, [{StatusCode, Callback, Options}|Tl], T, Value, Tree) when is_integer(StatusCode) andalso
@@ -692,7 +796,8 @@ parse_url(Host, [{RemotePath, LocalPath, Options}|Tl], T = #{prefix := Prefix},
                 app = App,
                 callback = fun nova_file_controller:TargetFun/1,
                 extra_state = nova_file_controller:static_state(Payload, Options),
-                plugins = with_route(RealPath, Value#nova_handler_value.plugins),
+                plugins = with_route(RealPath, served_versions(Options, T, RealPath),
+                                     Value#nova_handler_value.plugins),
                 secure = Secure
                },
     Tree0 = insert(Host, RealPath, '_', Value0, Tree, insert_opts(T)),
@@ -717,7 +822,8 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
             Value0 = Value#nova_handler_value{extra_state = ExtraState},
 
             Value1 = Value0#nova_handler_value{callback = Callback,
-                                               plugins = with_route(RealPath, Value#nova_handler_value.plugins)},
+                                               plugins = with_route(RealPath, served_versions(Options, T, RealPath),
+                                                                    Value#nova_handler_value.plugins)},
             ?LOG_DEBUG(#{action => <<"Adding route">>, route => RealPath, app => App, methods => Methods,
                          router_file => maps:get(router_file, Options, undefined)}),
             CompiledPaths = insert_methods(Methods, Host, RealPath, Value1, Tree, insert_opts(T),
@@ -737,7 +843,8 @@ parse_url(Host,
                   app = App,
                   handler = nova_ws_handler,
                   arguments = websocket_arguments(Mod, App, Options, T),
-                  plugins = with_route(RealPath, with_origin_check(Value#nova_handler_value.plugins)),
+                  plugins = with_route(RealPath, websocket_versions(Options, T, RealPath),
+                                       with_origin_check(Value#nova_handler_value.plugins)),
                   secure = Secure},
 
     ?LOG_DEBUG(#{action => <<"Adding route">>, protocol => <<"ws">>, route => Path, app => App,
@@ -829,11 +936,81 @@ mounted_apps() ->
 %% The route template rides at the head of the compiled plugin list so the
 %% routing records keep their arity: rebar3_nova and other tools match them
 %% positionally. execute/2 takes it off again before the list reaches the Req.
-with_route(RealPath, Plugins) ->
-    [{nova_route, unicode:characters_to_binary(RealPath)} | Plugins].
+with_route(RealPath, undefined, Plugins) ->
+    [{nova_route, unicode:characters_to_binary(RealPath)} | Plugins];
+with_route(RealPath, Versions, Plugins) ->
+    [{nova_route, unicode:characters_to_binary(RealPath)}, {nova_http_versions, Versions} | Plugins].
 
-take_route([{nova_route, Route} | Plugins]) -> {Route, Plugins};
-take_route(Plugins)                          -> {undefined, Plugins}.
+take_route([{nova_route, Route}, {nova_http_versions, _Versions} | Plugins]) -> {Route, Plugins};
+take_route([{nova_route, Route} | Plugins])                                  -> {Route, Plugins};
+take_route(Plugins)                                                          -> {undefined, Plugins}.
+
+http_versions([{nova_route, _Route}, {nova_http_versions, Versions} | _Plugins]) -> Versions;
+http_versions(_Plugins)                                                          -> undefined.
+
+%% The HTTP versions a route is served over: those it asks for, or else its
+%% route group does, that its listener has. A route that asks for none is
+%% served over every version, and one that asks for versions its listener
+%% has none of is a route nobody could reach.
+served_versions(Options, Group, Path) ->
+    case maps:get(http_versions, Options, maps:get(http_versions, Group, undefined)) of
+        undefined ->
+            undefined;
+        Versions ->
+            ok = valid_versions(Versions, Group, Path),
+            case Group of
+                #{serving := #{name := Listener, protocols := Protocols}} ->
+                    case [Version || Version <- Versions, lists:member(Version, Protocols)] of
+                        [] ->
+                            ?LOG_ERROR(#{msg => ~"Route asks for HTTP versions its listener does not serve",
+                                         route => Path, http_versions => Versions, listener => Listener,
+                                         protocols => Protocols, app => maps:get(app, Group, undefined),
+                                         router_file => maps:get(router_file, Group, undefined)}),
+                            throw({error, {route_http_versions_not_served, Path, Versions, Listener}});
+                        Served ->
+                            Served
+                    end;
+                #{} ->
+                    lists:usort(Versions)
+            end
+    end.
+
+valid_versions([_ | _] = Versions, Group, Path) ->
+    case Versions -- [http1, http2, http3] of
+        [] -> ok;
+        _ -> invalid_versions(Versions, Group, Path)
+    end;
+valid_versions(Versions, Group, Path) ->
+    invalid_versions(Versions, Group, Path).
+
+-spec invalid_versions(term(), map(), string()) -> no_return().
+invalid_versions(Versions, Group, Path) ->
+    ?LOG_ERROR(#{msg => ~"http_versions of a route is a list of http1, http2 and http3",
+                 route => Path, http_versions => Versions, app => maps:get(app, Group, undefined),
+                 router_file => maps:get(router_file, Group, undefined)}),
+    throw({error, {invalid_http_versions, Path, Versions}}).
+
+%% A WebSocket route is served over the versions the server takes WebSockets
+%% over. A listener with none of them could never upgrade a connection.
+websocket_versions(Options, Group = #{serving := #{name := Listener, protocols := Protocols,
+                                                   websocket := Websocket}}, Path) ->
+    Served = served_versions(Options, Group, Path),
+    Asked = case Served of
+                undefined -> Protocols;
+                _ -> Served
+            end,
+    case [Version || Version <- Asked, lists:member(Version, Websocket)] of
+        [] ->
+            ?LOG_ERROR(#{msg => ~"WebSocket route on a listener that serves no HTTP version the server takes WebSockets over. Name the listeners of its route group with listener, or give this one such a version",
+                         route => Path, listener => Listener, protocols => Protocols, websocket_over => Websocket,
+                         app => maps:get(app, Group, undefined),
+                         router_file => maps:get(router_file, Group, undefined)}),
+            throw({error, {websocket_route_not_served, Path, Listener}});
+        _ ->
+            Served
+    end;
+websocket_versions(Options, Group, Path) ->
+    served_versions(Options, Group, Path).
 
 put_route(undefined, Req) -> Req;
 put_route(Route, Req)     -> Req#{nova_route => Route}.
@@ -926,6 +1103,18 @@ dispatch_key(_) ->
 %% Each dispatch table keeps its own list of compiled applications.
 apps_key(?NOVA_DISPATCH)  -> ?NOVA_APPS;
 apps_key(DispatchKey)     -> {?NOVA_APPS, DispatchKey}.
+
+%% And the listener it was compiled for, with the route groups that name
+%% theirs.
+serving_key(DispatchKey) -> {nova_serving, DispatchKey}.
+bound_key(DispatchKey)   -> {nova_bound_groups, DispatchKey}.
+
+with_serving(Options = #{dispatch_key := DispatchKey}) ->
+    StorageBackend = storage_backend(),
+    case StorageBackend:get(serving_key(DispatchKey), undefined) of
+        undefined -> Options;
+        Serving -> Options#{serving => Serving}
+    end.
 
 insert_methods([], _Host, _Path, _Value, Tree, _Options, _ToComparator) ->
     Tree;

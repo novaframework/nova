@@ -5,7 +5,7 @@
 
 -export([start/1, try_start/1, configure/1, boot/1, port/0, stop/0, server/1, get/2, get/3, request/4, response/4, response/5,
          websocket_handshake/2, websocket_handshake/3, websocket_texts/4, h2_websocket_connect/4, h2_get/2,
-         send_and_close/2, free_port/0]).
+         send_and_close/2, free_port/0, tls/0, https_get/2]).
 
 -spec start(map()) -> inet:port_number().
 start(Options) ->
@@ -323,4 +323,37 @@ free_port(Attempts) when Attempts > 0 ->
             Port;
         {error, eaddrinuse} ->
             free_port(Attempts - 1)
+    end.
+
+%% The `tls` of a listener: a certificate made for the run, with its key.
+-spec tls() -> [ssl:tls_server_option()].
+tls() ->
+    Key = [{key, {namedCurve, secp256r1}}, {digest, sha256}],
+    #{server_config := Config} =
+        public_key:pkix_test_data(#{server_chain => #{root => Key, peer => Key},
+                                    client_chain => #{root => Key, peer => Key}}),
+    Config.
+
+%% A GET over HTTP/1.1 to a listener with TLS, with the response headers
+%% under lowercase names.
+-spec https_get(inet:port_number(), iodata()) -> {100..599, #{binary() => binary()}, binary()}.
+https_get(Port, Path) ->
+    {ok, Socket} = ssl:connect("localhost", Port, [binary, {active, false}, {verify, verify_none},
+                                                   {alpn_advertised_protocols, [~"http/1.1"]}], 5000),
+    try
+        ok = ssl:send(Socket, ["GET ", Path, " HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n"]),
+        Response = until_closed(Socket, <<>>),
+        [Head, Body] = binary:split(Response, ~"\r\n\r\n"),
+        [<<"HTTP/1.1 ", Status:3/binary, _/binary>> | Lines] = binary:split(Head, ~"\r\n", [global]),
+        {binary_to_integer(Status),
+         #{string:lowercase(Name) => string:trim(Value) || Line <- Lines, [Name, Value] <- [binary:split(Line, ~":")]},
+         Body}
+    after
+        ssl:close(Socket)
+    end.
+
+until_closed(Socket, Acc) ->
+    case ssl:recv(Socket, 0, 5000) of
+        {ok, Data} -> until_closed(Socket, <<Acc/binary, Data/binary>>);
+        {error, closed} -> Acc
     end.
