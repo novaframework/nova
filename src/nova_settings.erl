@@ -12,12 +12,13 @@
 -include_lib("kernel/include/logger.hrl").
 
 -type key() :: trusted_origins | csrf_token | max_sessions | non_canonical_paths | plugins_before_security |
-               secret_key_base.
+               secret_key_base | server_grace.
 -export_type([key/0]).
 
 -define(MIN_SECRET_BYTES, 32).
 -define(MIN_DISTINCT_BYTES, 8).
 -define(DEFAULT_MAX_SESSIONS, 1000000).
+-define(DEFAULT_SERVER_GRACE, 10000).
 
 -doc """
 Checks every setting and keeps what `value/1` returns from then on. Raises
@@ -81,6 +82,8 @@ checked(secret_key_base, Value) ->
     end;
 checked(max_sessions, Value) when Value =:= infinity; is_integer(Value), Value > 0 ->
     {ok, Value};
+checked(server_grace, Value) when Value =:= infinity; is_integer(Value), Value >= 0 ->
+    {ok, Value};
 checked(plugins_before_security, all) ->
     {ok, all};
 checked(plugins_before_security, Value) ->
@@ -99,6 +102,7 @@ expected(csrf_token) -> ~"csrf_token must be stateless or session";
 expected(secret_key_base) ->
     ~"secret_key_base must be a binary of at least 32 bytes out of a random source, or a list of such. A value that repeats a few bytes, an example out of the documentation or a ${VARIABLE} that was not filled in is refused. base64:encode(crypto:strong_rand_bytes(48)) in an Erlang shell, or openssl rand -base64 48, makes one";
 expected(max_sessions) -> ~"max_sessions must be infinity or an integer above 0";
+expected(server_grace) -> ~"server_grace must be infinity or a number of milliseconds, 0 or more";
 expected(plugins_before_security) ->
     ~"plugins_before_security must be all or a list of plugin modules that have pre_request/4".
 
@@ -136,7 +140,8 @@ no_removed_setting([{Key, Replacement} | Rest]) ->
 
 -spec keys() -> [key()].
 keys() ->
-    [non_canonical_paths, trusted_origins, csrf_token, secret_key_base, max_sessions, plugins_before_security].
+    [non_canonical_paths, trusted_origins, csrf_token, secret_key_base, max_sessions, plugins_before_security,
+     server_grace].
 
 -spec default(key()) -> term().
 default(non_canonical_paths) -> reject;
@@ -144,6 +149,7 @@ default(trusted_origins) -> same_host;
 default(csrf_token) -> undefined;
 default(secret_key_base) -> undefined;
 default(max_sessions) -> ?DEFAULT_MAX_SESSIONS;
+default(server_grace) -> ?DEFAULT_SERVER_GRACE;
 default(plugins_before_security) -> [].
 
 -spec valid(key()) -> term().

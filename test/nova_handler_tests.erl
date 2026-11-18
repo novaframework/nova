@@ -138,43 +138,43 @@ execute_controller_crash_with_stacktrace_test_() ->
 %% execute/2 — handler_module path
 %%====================================================================
 
-execute_cowboy_handler_ok_test_() ->
+execute_module_handler_ok_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        meck:new(test_cowboy_handler, [non_strict, no_link]),
-        meck:expect(test_cowboy_handler, init, fun(Req, _Args) -> {ok, Req, #{}} end),
+        meck:new(test_module_handler, [non_strict, no_link]),
+        meck:expect(test_module_handler, init, fun(Req, _Args) -> {ok, Req, #{}} end),
         Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
-        Env = #{handler_module => test_cowboy_handler, arguments => #{}, app => test_app},
+        Env = #{handler_module => test_module_handler, arguments => #{}, app => test_app},
         {ok, Req1, Env1} = nova_handler:execute(Req, Env),
         ?assertMatch(Req1 when is_map(Req1), Req1),
         ?assert(maps:is_key(result, Env1)),
-        meck:unload(test_cowboy_handler)
+        meck:unload(test_module_handler)
     end}.
 
-execute_cowboy_handler_crash_test_() ->
+execute_module_handler_crash_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        meck:new(test_cowboy_handler2, [non_strict, no_link]),
-        meck:expect(test_cowboy_handler2, init, fun(_Req, _Args) -> error(crash) end),
+        meck:new(test_module_handler2, [non_strict, no_link]),
+        meck:expect(test_module_handler2, init, fun(_Req, _Args) -> error(crash) end),
         Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
-        Env = #{handler_module => test_cowboy_handler2, arguments => #{}, app => test_app},
+        Env = #{handler_module => test_module_handler2, arguments => #{}, app => test_app},
         {ok, Req1, Env1} = nova_handler:execute(Req, Env),
         ?assertEqual(500, maps:get(resp_status_code, Req1)),
         ?assertMatch(#{crash_info := #{status_code := 500}}, Req1),
         ?assertNot(maps:is_key(handler_module, Env1)),
-        meck:unload(test_cowboy_handler2)
+        meck:unload(test_module_handler2)
     end}.
 
-execute_cowboy_handler_crash_with_stacktrace_test_() ->
+execute_module_handler_crash_with_stacktrace_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         persistent_term:put(nova_use_stacktrace, true),
-        meck:new(test_cowboy_handler3, [non_strict, no_link]),
-        meck:expect(test_cowboy_handler3, init, fun(_Req, _Args) -> error(boom) end),
+        meck:new(test_module_handler3, [non_strict, no_link]),
+        meck:expect(test_module_handler3, init, fun(_Req, _Args) -> error(boom) end),
         Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
-        Env = #{handler_module => test_cowboy_handler3, arguments => #{}, app => test_app},
+        Env = #{handler_module => test_module_handler3, arguments => #{}, app => test_app},
         {ok, Req1, Env1} = nova_handler:execute(Req, Env),
         ?assertNot(maps:is_key(handler_module, Env1)),
         ?assertEqual(500, maps:get(resp_status_code, Req1)),
         ?assertMatch(#{crash_info := #{stacktrace := _, status_code := 500}}, Req1),
-        meck:unload(test_cowboy_handler3)
+        meck:unload(test_module_handler3)
     end}.
 
 execute_websocket_upgrade_test_() ->
@@ -190,7 +190,7 @@ execute_websocket_upgrade_test_() ->
         meck:unload(test_upgrade_handler)
     end}.
 
-execute_websocket_upgrade_with_opts_test_() ->
+upgrade_opts_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         meck:new(test_upgrade_handler4, [non_strict, no_link]),
         meck:expect(test_upgrade_handler4, init, fun(Req, _Args) ->
@@ -225,7 +225,7 @@ terminate_called_with_three_arguments_test_() ->
         ?assertEqual({terminated, boom, #{}}, receive {terminated, _, _} = M -> M after 0 -> none end)
     end}.
 
-cowboy_handler_terminate_gets_its_state_test_() ->
+module_handler_terminate_gets_its_state_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         meck:new(test_cowboy_terminate, [non_strict, no_link]),
         Self = self(),

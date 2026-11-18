@@ -247,7 +247,7 @@ these affects and how to get the earlier behaviour back.
 
 - **`terminate/3` is called with three arguments.** `nova_handler` checked
   for `terminate/3` and called `terminate/2`. Controllers get
-  `terminate(Reason, Req, #{})`; plain Cowboy handlers get their own state. A
+  `terminate(Reason, Req, #{})`; plain handler modules get their own state. A
   controller that only exports `terminate/2` is not called, as before.
 
 - **A handler registered as `{Module, Function}` is called with arity 3.**

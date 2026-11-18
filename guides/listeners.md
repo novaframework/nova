@@ -158,12 +158,16 @@ the configuration lists on that listener as well is served once.
 Nova remembers the applications that were added, until
 `nova_sup:remove_application/1` takes one out. When the application of the
 server package is stopped and started again they are added again, after the
-listeners of the configuration.
+listeners of the configuration. A listener that was started for an
+application keeps its name and its settings while another application is
+served on it, also once the one it was started for is removed, and stops
+with the last of them.
 
 A route group of an application added at runtime that names a listener
 which is not started, or which does not serve the application, is not
 served there. Nova logs a warning with the application, the prefix and the
-listener, where a boot would have stopped.
+listener, where a boot would have stopped, and logs it again when the
+server package is started again.
 
 ## `cowboy_configuration`
 

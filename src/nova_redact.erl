@@ -172,8 +172,8 @@ tls_options({Option, Value}) ->
     end;
 tls_options(Tuple) when is_tuple(Tuple) ->
     list_to_tuple([tls_options(Element) || Element <- tuple_to_list(Tuple)]);
-tls_options(List) when is_list(List), length(List) >= 0 ->
-    [tls_options(Element) || Element <- List];
+tls_options(List) when is_list(List) ->
+    tls_list(List);
 tls_options(Map) when is_map(Map) ->
     #{Key => case is_tls_secret(Key) of
                  true -> redacted;
@@ -181,6 +181,13 @@ tls_options(Map) when is_map(Map) ->
              end || Key := Value <- Map};
 tls_options(Other) ->
     Other.
+
+tls_list([Head | Tail]) ->
+    [tls_options(Head) | tls_list(Tail)];
+tls_list([]) ->
+    [];
+tls_list(Tail) ->
+    tls_options(Tail).
 
 is_tls_secret(Option) ->
     lists:member(Option, [key, password, certs_keys, sni_hosts, sni_fun, user_lookup_fun, psk_identity,

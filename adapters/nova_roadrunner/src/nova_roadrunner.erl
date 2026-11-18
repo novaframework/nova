@@ -104,6 +104,10 @@ by William Fank Thomé.
 %% Called by nova_roadrunner_handler
 -export([start_request/0, end_request/0]).
 
+-ifdef(TEST).
+-export([why/1]).
+-endif.
+
 -include_lib("kernel/include/logger.hrl").
 
 -define(READ_BODY_LENGTH, 8000000).

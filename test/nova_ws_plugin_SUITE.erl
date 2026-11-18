@@ -81,7 +81,8 @@ post_plugin_stop(Config) ->
                                                                    ~"hello", 1)
                         end),
     ?assertEqual([closed], Texts),
-    ?assertEqual([], [Event || {error, _} = Event <- Events]).
+    ?assertEqual([], [Event || {error, _} = Event <- Events]),
+    ?assertMatch([#{signal := _}], [Report || {warning, {report, Report = #{msg := ~"Got stop signal"}}} <- Events]).
 
 route_without_plugins_is_unaffected(Config) ->
     ?assertEqual([~"no plugin ran"],

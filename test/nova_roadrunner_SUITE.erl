@@ -11,7 +11,11 @@
          websocket_needs_http1/1,
          logger_metadata/1,
          http_versions/1,
-         crashed_stream/1
+         crashed_stream/1,
+         escaped_crash/1,
+         ws_crash/1,
+         start_failure/1,
+         unended_response/1
         ]).
 
 -include_lib("stdlib/include/assert.hrl").
@@ -26,7 +30,11 @@ all() ->
      websocket_needs_http1,
      logger_metadata,
      http_versions,
-     crashed_stream
+     crashed_stream,
+     escaped_crash,
+     ws_crash,
+     start_failure,
+     unended_response
     ].
 
 end_per_testcase(_Case, _Config) ->
@@ -72,7 +80,8 @@ websocket_needs_http1(_Config) ->
     ok = nova_test_listener:stop(),
     ?assertEqual({ok, Port}, Start([http1], [?WHERE, Socket])).
 
-%% The requests of a connection run in its process, one after the other.
+%% The requests of a connection run in its process, one after the other,
+%% and what one of them added to the logger metadata is gone once it ends.
 logger_metadata(_Config) ->
     Port = nova_test_listener:free_port(),
     Metadata = {"/metadata", fun nova_listeners_pages:metadata/1, #{methods => [get]}},
@@ -82,9 +91,24 @@ logger_metadata(_Config) ->
                                                 host => [#{routes => [Metadata]}]}),
     {ok, Socket} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}]),
     try
-        [?assertEqual(nomatch, binary:match(kept_get(Socket, "/metadata"), ~"alice")) || _Request <- [1, 2, 3]]
+        Connection = list_to_pid(binary_to_list(kept_get(Socket, "/metadata"))),
+        ?assertEqual(Connection, list_to_pid(binary_to_list(kept_get(Socket, "/metadata")))),
+        ?assertEqual(ok, no_user(Connection, 100))
     after
         gen_tcp:close(Socket)
+    end.
+
+%% The response is out before the request is ended.
+no_user(_Connection, 0) ->
+    still_there;
+no_user(Connection, Attempts) ->
+    {dictionary, Dictionary} = process_info(Connection, dictionary),
+    case proplists:get_value('$logger_metadata$', Dictionary, #{}) of
+        #{user := _} ->
+            timer:sleep(10),
+            no_user(Connection, Attempts - 1);
+        _Metadata ->
+            ok
     end.
 
 %% With TLS a listener serves both versions on its port.
@@ -122,6 +146,64 @@ crashed_stream(_Config) ->
         ?assertEqual(~"0\r\n\r\n", binary:part(Response, byte_size(Response), -5))
     after
         gen_tcp:close(Socket)
+    end.
+
+%% Roadrunner logs what escapes the steps of a request, and the request is
+%% in it.
+escaped_crash(_Config) ->
+    Port = nova_test_listener:free_port(),
+    {ok, Port} = nova_test_listener:try_start(#{server => nova_roadrunner,
+                                                port => Port,
+                                                listeners => #{web => #{port => Port, steps => [nova_test_crashes]}},
+                                                host => [#{routes => [?WHERE]}]}),
+    {{Status, _Body}, Events} = nova_test_log:collect(
+                                  fun() -> nova_test_listener:get(Port, "/where", [{"cookie", "session=hunter2"}]) end),
+    Logged = iolist_to_binary(io_lib:format("~0p", [Events])),
+    ?assertEqual(500, Status),
+    ?assertNotEqual(nomatch, binary:match(Logged, ~"badmatch")),
+    ?assertEqual(nomatch, binary:match(Logged, ~"hunter2")).
+
+%% As is what a callback of a WebSocket raises: the state of the connection
+%% has the request of its upgrade in it.
+ws_crash(_Config) ->
+    Req = #{method => ~"GET", path => ~"/ws", headers => #{~"cookie" => ~"session=hunter2"}},
+    Session = #{handler => nova_test_crashes, state => #{req => Req}, req => Req},
+    Frame = #{fin => true, rsv1 => false, opcode => text, payload => ~"hello"},
+    try nova_roadrunner_ws:handle_frame(Frame, Session) of
+        Result -> error({not_raised, Result})
+    catch
+        error:Reason:Stacktrace ->
+            ?assertEqual({badmatch, #{req => nova_redact:term(Req)}}, Reason),
+            ?assertEqual(nomatch, binary:match(iolist_to_binary(io_lib:format("~0p", [{Reason, Stacktrace}])),
+                                               ~"hunter2"))
+    end.
+
+%% What Roadrunner's supervisor says of a listener that did not start has
+%% the child specification in it, and that has the TLS options.
+start_failure(_Config) ->
+    Child = {child, undefined, web, {roadrunner_listener, start_link, [#{key => ~"der"}]}},
+    ?assertEqual(eaddrinuse, nova_roadrunner:why({{listen_failed, eaddrinuse}, Child})),
+    ?assertEqual(shutdown, nova_roadrunner:why({shutdown, Child})),
+    ?assertEqual({already_started, self()}, nova_roadrunner:why({already_started, self()})),
+    ?assertEqual(timeout, nova_roadrunner:why(timeout)).
+
+%% A response that was begun is ended with the request, once.
+unended_response(_Config) ->
+    Self = self(),
+    Send = fun(Data, IsFin) -> Self ! {sent, Data, IsFin} end,
+    ok = nova_roadrunner:start_request(),
+    ?assertEqual(ok, nova_roadrunner:end_request()),
+    _ = put({nova_roadrunner, stream}, Send),
+    ?assertEqual(ok, nova_roadrunner:end_request()),
+    ?assertEqual(ok, nova_roadrunner:end_request()),
+    ?assertEqual([{sent, <<>>, fin}], sent()),
+    ?assertEqual(undefined, get({nova_roadrunner, stream})).
+
+sent() ->
+    receive
+        {sent, _Data, _IsFin} = Sent -> [Sent | sent()]
+    after 0 ->
+        []
     end.
 
 until_closed(Socket, Received) ->

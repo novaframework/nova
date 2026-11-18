@@ -19,11 +19,16 @@
          listener_exists/1,
          early_add/1,
          early_add_failure/1,
+         early_add_routes/1,
          cowboy_ws_http2/1,
          early_add_configured/1,
          server_restart/1,
+         restart_unserved_group/1,
+         kept_listener/1,
+         add_while_starting/1,
          start_error_secrets/1,
-         no_server_warning/1
+         no_server_warning/1,
+         server_grace/1
         ]).
 
 -include_lib("stdlib/include/assert.hrl").
@@ -45,11 +50,16 @@ all() ->
      listener_exists,
      early_add,
      early_add_failure,
+     early_add_routes,
      cowboy_ws_http2,
      early_add_configured,
      server_restart,
+     restart_unserved_group,
+     kept_listener,
+     add_while_starting,
      start_error_secrets,
-     no_server_warning
+     no_server_warning,
+     server_grace
     ].
 
 end_per_testcase(_Case, _Config) ->
@@ -236,6 +246,29 @@ early_add_failure(_Config) ->
         gen_tcp:close(Taken)
     end.
 
+%% As does one whose routes cannot be compiled.
+early_add_routes(_Config) ->
+    Port = nova_test_listener:free_port(),
+    Unserved = {"/where", fun nova_listeners_pages:where/1, #{methods => [get], http_versions => [http2]}},
+    Options = #{port => Port,
+                listeners => #{web => #{port => Port}},
+                host => [#{routes => [?WHERE]}],
+                mounted => [#{routes => [Unserved]}],
+                nova_apps => []},
+    ok = nova_test_listener:configure(Options),
+    {ok, _} = application:ensure_all_started(nova),
+    {ok, nova_test_sub_app, _Host, Port} = nova_sup:add_application(nova_test_sub_app, #{listener => web}),
+    {Booted, Events} = nova_test_log:collect(fun() -> nova_test_listener:boot(Options) end),
+    ?assertMatch({error, {_Server,
+                          {{shutdown, {failed_to_start_child, nova_listener,
+                                       {application_not_added, nova_test_sub_app,
+                                        {route_http_versions_not_served, "/where", [http2], web}}}}, _}}},
+                 Booted),
+    ?assertMatch([#{app := nova_test_sub_app}],
+                 [Report || Report = #{msg := <<"An application that was added", _/binary>>}
+                                <- nova_test_log:errors(Events)]),
+    ?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Port, [], 1000)).
+
 %% A library adds itself, and the listener it names lists it as well.
 early_add_configured(_Config) ->
     Port = nova_test_listener:free_port(),
@@ -272,6 +305,84 @@ server_restart(_Config) ->
     {ok, _} = application:ensure_all_started(Server),
     ?assertEqual({200, ~"web http1"}, nova_test_listener:get(Port, "/where")),
     ?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Other, [], 1000)).
+
+%% A route group that names a listener nothing has is a warning when its
+%% application is added, and again when the server package comes back.
+restart_unserved_group(_Config) ->
+    Port = nova_test_listener:free_port(),
+    {ok, Port} = nova_test_listener:try_start(#{port => Port,
+                                                listeners => #{web => #{port => Port}},
+                                                host => [#{routes => [?WHERE]}],
+                                                mounted => [#{prefix => "/admin", listener => amdin,
+                                                              routes => [?WHERE]},
+                                                            #{prefix => "/sub", routes => [?WHERE]}],
+                                                nova_apps => []}),
+    Server = nova_test_listener:server(#{}),
+    {ok, nova_test_sub_app, _Host, Port} = nova_sup:add_application(nova_test_sub_app, #{listener => web}),
+    ok = application:stop(Server),
+    {{ok, _}, Events} = nova_test_log:collect(fun() -> application:ensure_all_started(Server) end),
+    ?assertMatch([#{app := nova_test_sub_app, prefix := "/admin", listener := amdin}],
+                 [Report || {warning, {report, Report = #{listener := _, prefix := _}}} <- Events]),
+    ?assertEqual({200, ~"web http1"}, nova_test_listener:get(Port, "/where")),
+    ?assertEqual({200, ~"web http1"}, nova_test_listener:get(Port, "/sub/where")),
+    ?assertMatch({404, _}, nova_test_listener:get(Port, "/admin/where")).
+
+%% A listener that was started for an application is still that of the
+%% others on it when the application is removed, and comes back as it was.
+kept_listener(_Config) ->
+    Port = nova_test_listener:free_port(),
+    Other = nova_test_listener:free_port(),
+    {ok, Port} = nova_test_listener:try_start(#{port => Port,
+                                                listeners => #{web => #{port => Port}},
+                                                host => [#{routes => [?WHERE]}],
+                                                mounted => [#{prefix => "/sub", routes => [?WHERE]}],
+                                                nested => [#{routes => [?WHERE]}],
+                                                nova_apps => []}),
+    Server = nova_test_listener:server(#{}),
+    Named = #{listener => nova_test_sub_app},
+    {ok, nova_test_sub_app, Host, Other} = nova_sup:add_application(nova_test_sub_app, #{port => Other}),
+    {ok, nova_test_nested_app, Host, Other} = nova_sup:add_application(nova_test_nested_app, Named),
+    ok = nova_sup:remove_application(nova_test_sub_app),
+    Kept = [#{app => nova_test_app, host => Host, port => Port, listener => web},
+            #{app => nova_test_nested_app, host => Host, port => Other, listener => nova_test_sub_app}],
+    ?assertEqual(Kept, lists:sort(nova_sup:get_started_applications())),
+    ok = application:stop(Server),
+    {ok, _} = application:ensure_all_started(Server),
+    ?assertEqual(Kept, lists:sort(nova_sup:get_started_applications())),
+    ?assertEqual({200, ~"nova_test_sub_app http1"}, nova_test_listener:get(Other, "/where")),
+    ?assertMatch({404, _}, nova_test_listener:get(Other, "/sub/where")),
+    ok = nova_sup:remove_application(nova_test_nested_app),
+    ?assertEqual({error, {no_such_listener, nova_test_sub_app}},
+                 nova_sup:add_application(nova_test_nested_app, Named)),
+    ok = application:stop(Server),
+    {ok, _} = application:ensure_all_started(Server),
+    ?assertEqual([web], nova_sup:listeners()),
+    ?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Other, [], 1000)).
+
+%% The table of the listeners is there before they are. An application
+%% that is added then is added once they are started.
+add_while_starting(_Config) ->
+    Port = nova_test_listener:free_port(),
+    Other = nova_test_listener:free_port(),
+    Options = #{port => Port,
+                listeners => #{web => #{port => Port}},
+                host => [#{routes => [?WHERE]}],
+                mounted => [#{routes => [?WHERE]}],
+                nova_apps => []},
+    ok = nova_test_listener:configure(Options),
+    {ok, _} = application:ensure_all_started(nova),
+    Table = ets:new(nova_listeners, [named_table, public, set, {keypos, 3}]),
+    ?assertEqual({ok, nova_test_sub_app, {0, 0, 0, 0}, Other},
+                 nova_sup:add_application(nova_test_sub_app, #{port => Other})),
+    ?assertEqual({ok, nova_test_nested_app, {0, 0, 0, 0}, Other},
+                 nova_sup:add_application(nova_test_nested_app, #{listener => nova_test_sub_app})),
+    ?assertEqual([], ets:tab2list(Table)),
+    ?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Other, [], 1000)),
+    true = ets:delete(Table),
+    {ok, Port} = nova_test_listener:boot(Options),
+    ?assertEqual({200, ~"nova_test_sub_app http1"}, nova_test_listener:get(Other, "/where")),
+    ?assertEqual([nova_test_nested_app, nova_test_sub_app],
+                 lists:sort([App || #{app := App, port := On} <- nova_sup:get_started_applications(), On =:= Other])).
 
 %% Over HTTP/2 a WebSocket is an extended CONNECT, which Cowboy takes when
 %% it is told to. Without it the route could never be reached.
@@ -321,6 +432,35 @@ no_server_warning(_Config) ->
     ?assertEqual([nova_test_listener:server(#{})], Warned(NotStarted)),
     {ok, Port} = nova_test_listener:boot(Options),
     ?assertEqual({ok, []}, nova_test_log:collect(fun nova_app:note_no_listener/0)).
+
+%% The warning comes by itself once server_grace is over. It does not on a
+%% node that serves nothing on purpose, and a node that was stopped before
+%% then does not warn the one started after it.
+server_grace(_Config) ->
+    Port = nova_test_listener:free_port(),
+    Options = #{port => Port, listeners => #{web => #{port => Port}}, host => [#{routes => [?WHERE]}]},
+    Run = fun({Grace, Running}) ->
+                  application:set_env(nova, server_grace, Grace),
+                  {ok, _} = application:ensure_all_started(nova),
+                  timer:sleep(Running),
+                  ok = application:stop(nova)
+          end,
+    Warned = fun(Runs) ->
+                     ok = nova_test_listener:configure(Options),
+                     {_, Events} = nova_test_log:collect(fun() -> lists:foreach(Run, Runs) end),
+                     [Setting || {warning, {report, #{setting := Setting, server := _}}} <- Events]
+             end,
+    try
+        ?assertEqual([server_grace], Warned([{50, 300}])),
+        ?assertEqual([], Warned([{infinity, 300}])),
+        ?assertEqual([], Warned([{200, 0}, {infinity, 400}])),
+        ok = nova_test_listener:configure(Options),
+        application:set_env(nova, server_grace, "10s"),
+        ?assertMatch({error, {nova, {{{invalid_setting, server_grace, "10s"}, _}, _}}},
+                     application:ensure_all_started(nova))
+    after
+        application:unset_env(nova, server_grace)
+    end.
 
 two_listeners() ->
     two_listeners([http1]).

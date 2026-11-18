@@ -127,6 +127,7 @@ handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData, plugins
                                     {Cmds, maps:remove(hibernate, State4), hibernate}
                             end;
                         {stop, _} = Stopped ->
+                            ?LOG_WARNING(#{msg => ~"Got stop signal", signal => nova_redact:term(Stopped)}),
                             Stopped
                     end
             end;

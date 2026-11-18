@@ -6,9 +6,8 @@
 where(Req) ->
     {status, 200, #{}, iolist_to_binary(io_lib:format("~p ~p", [nova_req:listener(Req), nova_req:http_version(Req)]))}.
 
-%% Answers with the logger metadata the request found in its process, and
-%% leaves some of its own behind.
+%% Answers with the process that serves the request, and leaves logger
+%% metadata of its own behind.
 metadata(_Req) ->
-    Found = logger:get_process_metadata(),
     ok = logger:update_process_metadata(#{user => ~"alice"}),
-    {status, 200, #{}, iolist_to_binary(io_lib:format("~p", [Found]))}.
+    {status, 200, #{}, list_to_binary(pid_to_list(self()))}.

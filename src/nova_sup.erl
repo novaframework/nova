@@ -33,6 +33,7 @@ Each listener owns its own routing table, so an application started on a second 
 -define(SERVER, ?MODULE).
 -define(NOVA_LISTENERS_TABLE, nova_listeners).
 -define(NOVA_ADDED_TABLE, nova_added_applications).
+-define(NOVA_LISTENING_TABLE, nova_listening).
 
 -type nova_app() :: atom() | {atom(), map()}.
 
@@ -83,24 +84,33 @@ node does not start when it cannot be: the server package stops with
 
 Nova remembers the applications that were added until `remove_application/1`
 takes them out, and adds them again when the server package is started
-again.
+again. A route group of theirs that names a listener that does not serve it
+is logged as a warning then, as it was when they were added. A listener
+that was started for an application keeps its name and its settings for as
+long as an application is served on it, also when the one it was started
+for is removed.
 """.
 -spec add_application(App :: atom(), Settings :: map()) ->
           {ok, App :: atom(), Host :: inet:ip_address() | string(), Port :: inet:port_number()} |
           {error, Reason :: any()}.
 add_application(App, Settings) ->
-    case ets:whereis(?NOVA_LISTENERS_TABLE) of
-        undefined -> add_with_configured(App, Settings);
-        _Tid -> added(App, Settings, add_to_listener(App, Settings))
+    case listening() of
+        false -> add_with_configured(App, Settings);
+        true -> remember_added(App, Settings, add_to_listener(App, Settings))
     end.
+
+%% Whether the listeners of the configuration are started. Their table is
+%% there before they are, so it does not say.
+listening() ->
+    ets:whereis(?NOVA_LISTENING_TABLE) =/= undefined.
 
 %% The applications that were added are kept with nova_sup, which outlives
 %% the server package. Its listeners come and go with it, and what was added
 %% to them is added again when they are back.
-added(App, Settings, {ok, App, Host, Port} = Added) ->
+remember_added(App, Settings, {ok, App, Host, Port} = Added) ->
     ok = remember(App, Settings, {Host, Port}),
     Added;
-added(_App, _Settings, NotAdded) ->
+remember_added(_App, _Settings, NotAdded) ->
     NotAdded.
 
 remember(App, Settings, Bind) ->
@@ -118,10 +128,56 @@ remembered() ->
         Tid -> ets:tab2list(Tid)
     end.
 
+%% A listener that was started for an application, and that others were
+%% added to, is still theirs when the application is removed. How it was
+%% started is kept under its name for as long as one of them is remembered,
+%% so that it is the same listener when the server package starts again.
 forget(App) ->
     case ets:whereis(?NOVA_ADDED_TABLE) of
-        undefined -> false;
-        Tid -> ets:select_delete(Tid, [{{'_', App, '_', '_'}, [], [true]}]) > 0
+        undefined ->
+            false;
+        Tid ->
+            Rows = ets:tab2list(Tid),
+            Mine = [Row || {_Order, Who, _Settings, _Bind} = Row <- Rows, Who =:= App],
+            _ = [forget_row(Tid, Row, Rows) || Row <- Mine],
+            _ = [ets:delete(Tid, Order) || {Order, {listener, _Name}, _Settings, Bind} <- ets:tab2list(Tid),
+                                           not shared(Bind, ets:tab2list(Tid))],
+            Mine =/= []
+    end.
+
+forget_row(Tid, {Order, App, Settings, Bind} = Row, Rows) ->
+    case starts_listener(Row, Rows) andalso shared(Bind, Rows -- [Row]) of
+        true -> ets:insert(Tid, {Order, {listener, App}, Settings, Bind});
+        false -> ets:delete(Tid, Order)
+    end.
+
+%% The first application that was added on an address and port no listener
+%% of the configuration has is the one a listener was started for.
+starts_listener({Order, _App, Settings, Bind}, Rows) ->
+    not is_map_key(listener, Settings)
+        andalso not lists:member(Bind, configured_binds())
+        andalso [] =:= [Earlier || {Earlier, _Who, _Settings, On} <- Rows, On =:= Bind, Earlier < Order].
+
+shared(Bind, Rows) ->
+    [] =/= [App || {_Order, App, _Settings, On} <- Rows, is_atom(App), On =:= Bind].
+
+configured_binds() ->
+    case nova_listener:configured() of
+        {ok, Listeners} -> [{Host, Port} || #{ip := Host, port := Port} <- Listeners];
+        {error, _Reason} -> []
+    end.
+
+%% How the listener of that name, or on that address and port, was started,
+%% when it is one that was started for an application that is removed.
+kept_listener(#{listener := Name}, _Bind) ->
+    case [Settings || {_Order, {listener, Kept}, Settings, _On} <- remembered(), Kept =:= Name] of
+        [Settings | _] -> {ok, Name, Settings};
+        [] -> error
+    end;
+kept_listener(_Settings, Bind) ->
+    case [{Name, Settings} || {_Order, {listener, Name}, Settings, On} <- remembered(), On =:= Bind] of
+        [{Name, Settings} | _] -> {ok, Name, Settings};
+        [] -> error
     end.
 
 %% Before there is a listener to add to, the application is remembered and
@@ -148,10 +204,10 @@ add_with_configured(App, Settings) ->
 %% The server package may have started its listeners between the look for
 %% them and the note of the application, which it then did not see.
 added_meanwhile(App, Settings, Noted) ->
-    case ets:whereis(?NOVA_LISTENERS_TABLE) of
-        undefined ->
+    case listening() of
+        false ->
             Noted;
-        _Tid ->
+        true ->
             case add_to_listener(App, Settings) of
                 {error, {already_started, App}} ->
                     Noted;
@@ -163,11 +219,17 @@ added_meanwhile(App, Settings, Noted) ->
             end
     end.
 
+%% A listener is one of the configuration, or one that an application
+%% that was added before is going to be given.
 bind_of(_App, #{listener := Name}) ->
     case nova_listener:configured() of
         {ok, Listeners} ->
-            case [{Host, Port} || #{name := N, ip := Host, port := Port} <- Listeners, N =:= Name] of
-                [{Host, Port}] -> {ok, Host, Port};
+            Rows = remembered(),
+            Configured = [{Host, Port} || #{name := N, ip := Host, port := Port} <- Listeners, N =:= Name],
+            Added = [Bind || {_Order, Who, _Settings, Bind} = Row <- Rows,
+                             Who =:= {listener, Name} orelse (Who =:= Name andalso starts_listener(Row, Rows))],
+            case Configured ++ Added of
+                [{Host, Port} | _] -> {ok, Host, Port};
                 [] -> {error, {no_such_listener, Name}}
             end;
         {error, Reason} ->
@@ -183,16 +245,46 @@ bind_of(App, Settings) ->
 %% is served there already, which is what was asked for.
 add_remembered([]) ->
     ok;
-add_remembered([{_Order, App, Settings, _Bind} | Rest]) ->
-    case add_to_listener(App, Settings) of
+add_remembered([{_Order, {listener, _Name}, _Settings, _Bind} | Rest]) ->
+    add_remembered(Rest);
+add_remembered([{_Order, App, Settings, Bind} | Rest]) ->
+    try add_again(App, Settings, Bind) of
         {ok, App, _Host, _Port} ->
             add_remembered(Rest);
         {error, {already_started, App}} ->
             add_remembered(Rest);
         {error, Reason} ->
-            ?LOG_ERROR(#{msg => ~"An application that was added with nova_sup:add_application/2 cannot be served",
-                         app => App, reason => Reason}),
-            {error, {application_not_added, App, Reason}}
+            not_added(App, Reason)
+    catch
+        throw:{error, Reason} ->
+            not_added(App, Reason)
+    end.
+
+not_added(App, NotAdded) ->
+    Reason = nova_redact:tls_options(NotAdded),
+    ?LOG_ERROR(#{msg => ~"An application that was added with nova_sup:add_application/2 cannot be served",
+                 app => App, reason => Reason}),
+    {error, {application_not_added, App, Reason}}.
+
+%% The listener an application was added to may be one that was started
+%% for an application that is removed: it is started again, under its name,
+%% for the first application that was on it.
+add_again(App, Settings, {Host, Port} = Bind) ->
+    Running = case Settings of
+                  #{listener := Name} -> find_listener(Name);
+                  _ -> find_listener(Host, Port)
+              end,
+    case Running =:= error andalso kept_listener(Settings, Bind) of
+        {ok, Kept, StartedWith} ->
+            start_kept(Kept, App, StartedWith);
+        _NotKept ->
+            add_to_listener(App, Settings)
+    end.
+
+start_kept(Name, App, Settings) ->
+    case nova_listener:normalize(Name, nova_listener:runtime_settings(Settings), #{applications => [App]}) of
+        {ok, Listener} -> start_named(Name, App, Listener#{applications := [App]});
+        {error, Reason} -> {error, Reason}
     end.
 
 add_to_listener(App, #{listener := Name}) ->
@@ -214,9 +306,12 @@ add_to_listener(App, Settings) ->
 %% A listener started for an application has its name, which a listener of
 %% the configuration may have already.
 start_named_after(App, Listener) ->
-    case find_listener(App) of
+    start_named(App, App, Listener).
+
+start_named(Name, App, Listener) ->
+    case find_listener(Name) of
         {ok, _Named} ->
-            {error, {listener_exists, App}};
+            {error, {listener_exists, Name}};
         error ->
             Unserved = unserved_groups(),
             case start_checked(nova_server:module(), Listener) of
@@ -277,7 +372,7 @@ start_listeners(Server) ->
             %% Whatever stops the boot, a route that does not compile
             %% included, the listeners started before it are stopped: the
             %% owner that would stop them never comes to be.
-            try start_configured(Server) of
+            try started(start_configured(Server)) of
                 ok ->
                     ok;
                 {error, Reason} ->
@@ -296,6 +391,15 @@ start_listeners(Server) ->
                           started => Server, server => Other}),
             ok
     end.
+
+%% From here on an application is added to a listener as it is asked for.
+%% One that was asked for while the listeners were starting was remembered,
+%% and may not have been seen when those were added.
+started(ok) ->
+    ?NOVA_LISTENING_TABLE = ets:new(?NOVA_LISTENING_TABLE, [named_table, protected, set]),
+    add_remembered(remembered());
+started({error, Reason}) ->
+    {error, Reason}.
 
 -doc false.
 %% Stops taking connections, waits for the open ones and stops the listeners:
@@ -469,10 +573,12 @@ note_legacy_configuration() ->
 
 %% The listeners of the configuration, then the applications that were
 %% added: before there was a server to add them to, or to the listeners of
-%% an earlier start of the server package.
+%% an earlier start of the server package. Those are added as they were the
+%% first time, so a route group of theirs that no listener serves is said
+%% and does not stop the node.
 start_all(_Server, []) ->
-    case add_remembered(remembered()) of
-        ok -> check_route_groups();
+    case check_route_groups() of
+        ok -> add_remembered(remembered());
         {error, Reason} -> {error, Reason}
     end;
 start_all(Server, [Listener | Rest]) ->
@@ -507,7 +613,7 @@ start_checked(Server, Listener = #{name := Name}) ->
             start_listener(Server, Listener);
         {error, Reason} ->
             ?LOG_ERROR(#{msg => ~"Listener asks for what the server cannot do", listener => Name,
-                         server => Server, reason => Reason}),
+                         server => Server, reason => nova_redact:tls_options(Reason)}),
             {error, Reason}
     end.
 

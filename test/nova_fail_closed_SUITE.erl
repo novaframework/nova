@@ -10,10 +10,10 @@
          crashed_plugin_does_not_upgrade_protected_websocket/1,
          failed_plugin_does_not_upgrade_protected_websocket/1,
          failed_plugin_does_not_reach_controller/1,
-         crashed_plugin_does_not_reach_cowboy_handler/1,
-         failed_plugin_does_not_reach_cowboy_handler/1,
-         denied_request_does_not_reach_cowboy_handler/1,
-         allowed_request_reaches_cowboy_handler/1,
+         crashed_plugin_does_not_reach_module_handler/1,
+         failed_plugin_does_not_reach_module_handler/1,
+         denied_request_does_not_reach_module_handler/1,
+         allowed_request_reaches_module_handler/1,
          invalid_security_value_denies/1,
          crashing_security_callback_denies/1,
          unexpected_security_return_denies/1
@@ -35,10 +35,10 @@ all() ->
      crashed_plugin_does_not_upgrade_protected_websocket,
      failed_plugin_does_not_upgrade_protected_websocket,
      failed_plugin_does_not_reach_controller,
-     crashed_plugin_does_not_reach_cowboy_handler,
-     failed_plugin_does_not_reach_cowboy_handler,
-     denied_request_does_not_reach_cowboy_handler,
-     allowed_request_reaches_cowboy_handler,
+     crashed_plugin_does_not_reach_module_handler,
+     failed_plugin_does_not_reach_module_handler,
+     denied_request_does_not_reach_module_handler,
+     allowed_request_reaches_module_handler,
      invalid_security_value_denies,
      crashing_security_callback_denies,
      unexpected_security_return_denies
@@ -63,10 +63,10 @@ init_per_suite(Config) ->
            ],
     Port = nova_test_listener:start(#{host => Host}),
     persistent_term:put(?MODULE, counters:new(1, [])),
-    ok = add_cowboy_handler_route("/cowboy/crashing-plugin", fun nova_fail_closed_pages:deny/1, #{}),
-    ok = add_cowboy_handler_route("/cowboy/failing-plugin", fun nova_fail_closed_pages:deny/1, #{return => {error, refused}}),
-    ok = add_cowboy_handler_route("/cowboy/denied", fun nova_fail_closed_pages:deny/1, #{return => ok}),
-    ok = add_cowboy_handler_route("/cowboy/open", false, #{return => ok}),
+    ok = add_module_handler_route("/cowboy/crashing-plugin", fun nova_fail_closed_pages:deny/1, #{}),
+    ok = add_module_handler_route("/cowboy/failing-plugin", fun nova_fail_closed_pages:deny/1, #{return => {error, refused}}),
+    ok = add_module_handler_route("/cowboy/denied", fun nova_fail_closed_pages:deny/1, #{return => ok}),
+    ok = add_module_handler_route("/cowboy/open", false, #{return => ok}),
     ok = add_route_with_invalid_security("/invalid/"),
     [{port, Port} | Config].
 
@@ -74,9 +74,9 @@ end_per_suite(_Config) ->
     persistent_term:erase(?MODULE),
     nova_test_listener:stop().
 
-%% The router has no route syntax for a plain Cowboy handler yet, so the
+%% The router has no route syntax for a plain handler module yet, so the
 %% value such a route compiles to is put in the routing table directly.
-add_cowboy_handler_route(Path, Secure, PluginOptions) ->
+add_module_handler_route(Path, Secure, PluginOptions) ->
     Value = #nova_module_value{app = nova_test_app,
                                   handler = ?MODULE,
                                   arguments = #{},
@@ -145,26 +145,26 @@ failed_plugin_does_not_reach_controller(Config) ->
     ?assertEqual(500, Status),
     ?assertNotEqual(~"page", Body).
 
-crashed_plugin_does_not_reach_cowboy_handler(Config) ->
+crashed_plugin_does_not_reach_module_handler(Config) ->
     Before = handler_calls(),
     {Status, Body} = nova_test_listener:get(?config(port, Config), "/cowboy/crashing-plugin"),
     ?assertEqual(500, Status),
     ?assertNotEqual(~"handler", Body),
     ?assertEqual(Before, handler_calls()).
 
-failed_plugin_does_not_reach_cowboy_handler(Config) ->
+failed_plugin_does_not_reach_module_handler(Config) ->
     Before = handler_calls(),
     {Status, Body} = nova_test_listener:get(?config(port, Config), "/cowboy/failing-plugin"),
     ?assertEqual(500, Status),
     ?assertNotEqual(~"handler", Body),
     ?assertEqual(Before, handler_calls()).
 
-denied_request_does_not_reach_cowboy_handler(Config) ->
+denied_request_does_not_reach_module_handler(Config) ->
     Before = handler_calls(),
     ?assertMatch({401, _}, nova_test_listener:get(?config(port, Config), "/cowboy/denied")),
     ?assertEqual(Before, handler_calls()).
 
-allowed_request_reaches_cowboy_handler(Config) ->
+allowed_request_reaches_module_handler(Config) ->
     Before = handler_calls(),
     ?assertEqual({200, ~"handler"}, nova_test_listener:get(?config(port, Config), "/cowboy/open")),
     ?assertEqual(Before + 1, handler_calls()).

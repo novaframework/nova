@@ -133,7 +133,15 @@ runtime_group_warning(_Config) ->
     ?assertEqual({ok, nova_test_sub_app, {0, 0, 0, 0}, Port}, Added),
     ?assertMatch([#{app := nova_test_sub_app, prefix := "/admin", listener := amdin}],
                  [Report || {warning, {report, Report = #{listener := _}}} <- Events]),
-    ?assertMatch({404, _}, nova_test_listener:get(Port, "/admin/where")).
+    ?assertMatch({404, _}, nova_test_listener:get(Port, "/admin/where")),
+    %% The next application is warned of its own groups, not of those again.
+    nova_test_nested_router:set_routes([#{prefix => "/nested", listener => nope, routes => [?WHERE]}]),
+    application:set_env(nova_test_nested_app, router_module, nova_test_nested_router),
+    {AddedNext, NextEvents} = nova_test_log:collect(
+                                fun() -> nova_sup:add_application(nova_test_nested_app, #{listener => web}) end),
+    ?assertEqual({ok, nova_test_nested_app, {0, 0, 0, 0}, Port}, AddedNext),
+    ?assertMatch([#{app := nova_test_nested_app, prefix := "/nested", listener := nope, added := nova_test_nested_app}],
+                 [Report || {warning, {report, Report = #{listener := _}}} <- NextEvents]).
 
 one_listener(Settings, Routes) ->
     {ok, Port} = try_one_listener(Settings, Routes),

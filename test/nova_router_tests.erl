@@ -30,15 +30,15 @@ setup() ->
             callback = fun nova_file_controller:get_dir/1,
             extra_state = #{static => {priv_dir, test_app, "static"}}
         }, Tree3),
-    %% Cowboy handler (WebSocket)
-    CowboyValue = #nova_module_value{
+    %% Handler module (WebSocket)
+    ModuleValue = #nova_module_value{
         app = test_app,
         handler = nova_ws_handler,
         arguments = #{module => test_ws_mod},
         plugins = [{pre_request, []}],
         secure = false
     },
-    {ok, Tree5} = nova_routing_trie:insert('_', "/ws", '_', CowboyValue, Tree4),
+    {ok, Tree5} = nova_routing_trie:insert('_', "/ws", '_', ModuleValue, Tree4),
     %% Status code route (custom 404)
     ErrorCallback = fun(_Req) -> {status, 404, #{}, <<"Custom not found">>} end,
     ErrorValue = #nova_handler_value{
@@ -197,7 +197,7 @@ execute_method_not_allowed_test_() ->
         ?assertMatch(F when is_function(F), maps:get(callback, Env1))
     end}.
 
-execute_cowboy_handler_test_() ->
+execute_module_handler_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
         {ok, Req1, Env1} = nova_router:execute(Req, #{}),

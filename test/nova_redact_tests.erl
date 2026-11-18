@@ -258,4 +258,13 @@ tls_options_test() ->
                                                            {stateless_tickets_seed, ~"seed"}],
                                            port => 1})),
     ?assertEqual({options, {password, redacted}}, nova_redact:tls_options({options, {password, "hunter2"}})),
-    ?assertEqual(eaddrinuse, nova_redact:tls_options(eaddrinuse)).
+    ?assertEqual(eaddrinuse, nova_redact:tls_options(eaddrinuse)),
+    Secrets = [key, password, certs_keys, sni_hosts, sni_fun, user_lookup_fun, psk_identity, srp_identity,
+               stateless_tickets_seed],
+    ?assertEqual([{Secret, redacted} || Secret <- Secrets],
+                 nova_redact:tls_options([{Secret, ~"hunter2"} || Secret <- Secrets])),
+    ?assertEqual(#{Secret => redacted || Secret <- Secrets},
+                 nova_redact:tls_options(#{Secret => ~"hunter2" || Secret <- Secrets})),
+    ?assertEqual(nova_test_helper:improper_list([{port, 1}, {key, redacted}], {password, redacted}),
+                 nova_redact:tls_options(nova_test_helper:improper_list([{port, 1}, {key, Key}],
+                                                                        {password, "hunter2"}))).

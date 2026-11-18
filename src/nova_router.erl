@@ -493,11 +493,11 @@ remove_application(Application, DispatchKey) when is_atom(Application) ->
     nova:set_env(apps, lists:keydelete(Application, 1, mounted_apps())),
     ok.
 
-%% Both handler kinds carry the owning application, and dropping the cowboy
-%% one would silently strip every websocket route.
-route_app({_Host, _Path, _Method, #nova_handler_value{app = App}})   -> App;
-route_app({_Host, _Path, _Method, #nova_module_value{app = App}}) -> App;
-route_app(_Route)                                                    -> undefined.
+%% Both handler kinds carry the owning application, and dropping the one of
+%% a module would silently strip every websocket route.
+route_app({_Host, _Path, _Method, #nova_handler_value{app = App}}) -> App;
+route_app({_Host, _Path, _Method, #nova_module_value{app = App}})  -> App;
+route_app(_Route)                                                  -> undefined.
 
 
 %%--------------------------------------------------------------------

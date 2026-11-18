@@ -10,8 +10,6 @@
 -export([start/2, prep_stop/1, stop/1]).
 -export([note_no_listener/0]).
 
--define(SERVER_GRACE, 10000).
-
 %%====================================================================
 %% API
 %%====================================================================
@@ -25,7 +23,7 @@ start(_StartType, _StartArgs) ->
     nova_router:forget_plugins(),
     case nova_sup:start_link() of
         {ok, Pid} ->
-            {ok, Pid, no_listener_timer(application:get_env(nova, server_grace, ?SERVER_GRACE))};
+            {ok, Pid, no_listener_timer(nova_settings:value(server_grace))};
         NotStarted ->
             NotStarted
     end.
@@ -44,11 +42,11 @@ stop(Timer) ->
     ok.
 
 %% A node that serves nothing on purpose sets server_grace to infinity.
-no_listener_timer(Grace) when is_integer(Grace), Grace >= 0 ->
+no_listener_timer(infinity) ->
+    undefined;
+no_listener_timer(Grace) ->
     {ok, Timer} = timer:apply_after(Grace, ?MODULE, note_no_listener, []),
-    Timer;
-no_listener_timer(_Never) ->
-    undefined.
+    Timer.
 
 -doc false.
 %% A server package that is a dependency, and in the applications of
@@ -56,11 +54,11 @@ no_listener_timer(_Never) ->
 %% it starts, since the package starts after it, so it looks once more.
 -spec note_no_listener() -> ok.
 note_no_listener() ->
-    case whereis(nova_sup) =/= undefined andalso nova_sup:listeners() of
-        [] ->
+    case {whereis(nova_sup), nova_sup:listeners()} of
+        {Sup, []} when is_pid(Sup) ->
             ?LOG_WARNING(#{msg => ~"Nova is started and no server package has started a listener, so nothing is served. Add the server package to the applications of your application, after nova. A node that starts slowly, or serves nothing on purpose, sets server_grace",
                            server => nova_server:module(), setting => server_grace});
-        _Listening ->
+        _StoppedOrListening ->
             ok
     end.
 
