@@ -31,16 +31,47 @@ configured_test_() ->
       fun listeners_win_over_cowboy_configuration/0
      ]}.
 
+%% nova_sup:add_application/2 takes the settings of a listener, or those of
+%% before 1.0, which have keys of their own.
+runtime_settings_test() ->
+    ?assertEqual(#{port => 4000, ip => {127, 0, 0, 1}},
+                 nova_listener:runtime_settings(#{port => 4000, ip => {127, 0, 0, 1}})),
+    ?assertEqual(#{port => 4000,
+                   tls => false,
+                   protocols => [http1, http2],
+                   server_opts => #{compress => true},
+                   steps => nova_pipeline:steps()},
+                 nova_listener:runtime_settings(#{port => 4000, use_ssl => false})),
+    ?assertMatch(#{port := 4443, tls := [{certfile, "cert.pem"}, {cacertfile, "ca.pem"}]},
+                 nova_listener:runtime_settings(#{ssl_port => 4443, use_ssl => true,
+                                                  cert => "cert.pem", ca_cert => "ca.pem"})).
+
+%% What a server says of a listener it could not start may have the TLS
+%% options in it.
+reason_a_listener_did_not_start_with_has_no_secrets_test() ->
+    Key = {'RSAPrivateKey', ~"der"},
+    ?assertEqual({shutdown, {child, [{port, 8443}, {certfile, "cert.pem"}, {key, redacted}, {password, redacted}]}},
+                 nova_listener:without_secrets({shutdown, {child, [{port, 8443}, {certfile, "cert.pem"}, {key, Key},
+                                                                   {password, "hunter2"}]}})),
+    ?assertEqual(#{socket_opts => [{certs_keys, redacted}], port => 1},
+                 nova_listener:without_secrets(#{socket_opts => [{certs_keys, [#{key => Key}]}], port => 1})),
+    ?assertEqual({options, {password, redacted}}, nova_listener:without_secrets({options, {password, "hunter2"}})),
+    ?assertEqual(eaddrinuse, nova_listener:without_secrets(eaddrinuse)).
+
 without_configuration_there_is_one_listener() ->
-    ?assertEqual({ok, [#{name => default,
-                         ip => {0, 0, 0, 0},
-                         port => 8080,
-                         tls => false,
-                         protocols => [{http1, #{}}, {http2, #{}}],
-                         applications => [my_app],
-                         steps => nova_pipeline:steps(),
-                         server_opts => #{compress => true}}]},
-                 nova_listener:configured()).
+    {ok, [Listener]} = nova_listener:configured(),
+    ?assertEqual(#{name => default,
+                   ip => {0, 0, 0, 0},
+                   port => 8080,
+                   tls => false,
+                   protocols => [{http1, #{}}],
+                   applications => [my_app],
+                   steps => nova_pipeline:steps(),
+                   server_opts => #{}},
+                 Listener),
+    [?assertEqual(ok, nova_listener:check(Listener, Server, Server:capabilities()))
+     || Server <- [nova_cowboy, nova_roadrunner]],
+    ?assertEqual(ok, nova_roadrunner:check_listener(Listener)).
 
 the_only_listener_serves_the_bootstrap_application() ->
     application:set_env(nova, listeners, #{web => #{port => 4000}}),

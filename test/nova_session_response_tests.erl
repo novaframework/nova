@@ -319,7 +319,7 @@ event(Event, Req) ->
 %% The headers of a response to the request. Each call is a response of its
 %% own, as if nothing had been sent before.
 respond(Req) ->
-    ok = nova_req:start_request(),
+    ok = nova_req:forget_response(),
     _ = nova_req:reply(200, Req),
     [{reply, 200, Headers, <<>>}] = nova_fake_server:sent(),
     Headers.

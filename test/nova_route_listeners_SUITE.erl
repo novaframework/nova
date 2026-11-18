@@ -14,7 +14,9 @@
          route_takes_the_versions_of_its_group/1,
          http1_is_told_which_version_to_come_back_with/1,
          versions_the_listener_lacks_fail_the_boot/1,
-         versions_that_are_none_fail_the_boot/1
+         versions_that_are_none_fail_the_boot/1,
+         a_route_that_is_refused_stops_the_listeners_started_before_it/1,
+         a_group_added_at_runtime_for_a_listener_that_is_not_there_is_said/1
         ]).
 
 -include_lib("stdlib/include/assert.hrl").
@@ -33,7 +35,9 @@ all() ->
      route_takes_the_versions_of_its_group,
      http1_is_told_which_version_to_come_back_with,
      versions_the_listener_lacks_fail_the_boot,
-     versions_that_are_none_fail_the_boot
+     versions_that_are_none_fail_the_boot,
+     a_route_that_is_refused_stops_the_listeners_started_before_it,
+     a_group_added_at_runtime_for_a_listener_that_is_not_there_is_said
     ].
 
 end_per_testcase(_Case, _Config) ->
@@ -111,6 +115,26 @@ versions_that_are_none_fail_the_boot(_Config) ->
                   refusal(try_one_listener(#{}, [?WHERE("/where", Versions)])))
      || Versions <- [[], [spdy], http2, [http1, ~"http2"]]].
 
+%% `admin` is started first, and the route `public` cannot serve is found
+%% when its routing table is compiled.
+a_route_that_is_refused_stops_the_listeners_started_before_it(_Config) ->
+    Routes = #{host => [#{routes => [?WHERE("/two", [http2])]}], mounted => [#{routes => [?WHERE]}]},
+    ?assertEqual({route_http_versions_not_served, "/two", [http2], public},
+                 refusal(two_listeners([nova_test_sub_app], Routes))),
+    ?assertEqual([], nova_sup:listeners()),
+    [?assertEqual([], nova_router:compiled_apps({nova_dispatch, Name})) || Name <- [admin, public]].
+
+%% At boot it stops the node. At runtime the listener may be yet to come.
+a_group_added_at_runtime_for_a_listener_that_is_not_there_is_said(_Config) ->
+    Port = one_listener(#{}, [?WHERE]),
+    nova_test_mounted_router:set_routes([#{prefix => "/admin", listener => amdin, routes => [?WHERE]}]),
+    {Added, Events} = nova_test_log:collect(
+                        fun() -> nova_sup:add_application(nova_test_sub_app, #{listener => web}) end),
+    ?assertEqual({ok, nova_test_sub_app, {0, 0, 0, 0}, Port}, Added),
+    ?assertMatch([#{app := nova_test_sub_app, prefix := "/admin", listener := amdin}],
+                 [Report || {warning, {report, Report = #{listener := _}}} <- Events]),
+    ?assertMatch({404, _}, nova_test_listener:get(Port, "/admin/where")).
+
 one_listener(Settings, Routes) ->
     {ok, Port} = try_one_listener(Settings, Routes),
     Port.
@@ -125,7 +149,7 @@ try_one_listener(Settings, Routes) ->
                                             listeners => #{web => Settings#{port => Port}},
                                             host => Groups,
                                             nova_apps => []}),
-    refused_binds_nothing(Result, Port).
+    refused_binds_nothing(Result, [Port]).
 
 %% `public` serves nova_test_app, and `admin` the applications given.
 two_listeners(AdminApplications, Routes) ->
@@ -136,15 +160,15 @@ two_listeners(AdminApplications, Routes) ->
     case refused_binds_nothing(nova_test_listener:try_start(Routes#{port => Public,
                                                                     listeners => Listeners,
                                                                     nova_apps => []}),
-                               Public) of
+                               [Public, Admin]) of
         {ok, Public} -> {ok, Public, Admin};
         {error, Reason} -> {error, Reason}
     end.
 
-refused_binds_nothing({error, _} = Refused, Port) ->
-    ?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Port, [], 1000)),
+refused_binds_nothing({error, _} = Refused, Ports) ->
+    [?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Port, [], 1000)) || Port <- Ports],
     Refused;
-refused_binds_nothing(Started, _Port) ->
+refused_binds_nothing(Started, _Ports) ->
     Started.
 
 refusal({error, {_Server, {{shutdown, {failed_to_start_child, nova_listener, Reason}}, _Start}}}) ->

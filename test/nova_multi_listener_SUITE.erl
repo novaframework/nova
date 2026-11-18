@@ -160,7 +160,7 @@ an_explicit_host_does_not_match_the_wildcard_listener(Config) ->
 a_failed_bind_leaves_no_routing_table(_Config) ->
     {ok, Socket} = gen_tcp:listen(0, [{ip, {127, 0, 0, 1}}]),
     {ok, Port} = inet:port(Socket),
-    DispatchKey = {nova_dispatch, nova_test_sub_app, Port},
+    DispatchKey = {nova_dispatch, nova_test_sub_app},
     try
         ?assertMatch({error, _},
                      nova_sup:add_application(nova_test_sub_app,

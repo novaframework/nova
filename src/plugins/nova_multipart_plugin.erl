@@ -100,7 +100,7 @@ plugin_info() ->
 %%%%%%%%%%%%%%%%%%%%%%
 
 content_type(Req) ->
-    try nova_req:parse_header(<<"content-type">>, Req) of
+    try nova_req:parse_header(~"content-type", Req) of
         {<<"multipart">>, <<"form-data">>, Params} ->
             case has_boundary(Params) of
                 true -> multipart;

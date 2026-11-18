@@ -59,17 +59,10 @@ result({ok, State}, Session) ->
     {ok, Session#{state := State}};
 result({ok, State, hibernate}, Session) ->
     {ok, Session#{state := State}, [hibernate]};
-result({reply, Frames, State}, Session) ->
-    commands(frames(Frames), [], Session#{state := State});
-result({reply, Frames, State, hibernate}, Session) ->
-    commands(frames(Frames), [hibernate], Session#{state := State});
 result({Commands, State}, Session) when is_list(Commands) ->
     commands(Commands, [], Session#{state := State});
 result({Commands, State, hibernate}, Session) when is_list(Commands) ->
     commands(Commands, [hibernate], Session#{state := State}).
-
-frames(Frames) when is_list(Frames) -> Frames;
-frames(Frame) -> [Frame].
 
 %% The frames to send, up to a close. A command that tunes the connection of
 %% another server is skipped.

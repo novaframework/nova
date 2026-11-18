@@ -121,8 +121,8 @@ execute_controller(Req, Env = #{callback := Callback}, StatusPage) ->
     end.
 
 %% nova_req exits with request_error when the client sent something it
-%% cannot parse or did not send the body in time. Cowboy answers that with a
-%% 4xx when nothing catches it, so it is not a crash here either.
+%% cannot parse or did not send the body in time. That is the client's
+%% doing and is answered with a 4xx, so it is not a crash here either.
 render_request_error(Kind, Req, Env) ->
     Status = request_error_status(Kind),
     ?LOG_WARNING(#{msg => ~"Request error in controller", kind => nova_redact:term(Kind), status_code => Status}),
@@ -156,17 +156,15 @@ render_crash_page(Req, Env, _StatusPage) ->
 
 %% Whether the request has its answer, which is asked before an error page
 %% is rendered for a controller that failed: the page would run for nothing,
-%% and nova_stream_h would drop it. The request that comes back is marked as
+%% and a second answer is not sent. The request that comes back is marked as
 %% answered.
 -spec answered(Req) -> false | {true, Req} when Req :: nova_req:req().
 answered(Req) ->
-    case response_begun(Req) of
+    case nova_req:response_begun(Req) of
         false -> false;
         Sent -> {true, Req#{has_sent_resp => Sent}}
     end.
 
-response_begun(Req) ->
-    nova_req:response_begun(Req).
 
 without_error_page(Req, Env) ->
     ?LOG_WARNING(#{msg => ~"The response had begun when the controller failed, so no error page is sent"}),
@@ -293,14 +291,14 @@ send_response(Req, Env) when not is_map_key(resp_status_code, Req) ->
 
 %% Every response of a controller, a fallback controller or a status page
 %% leaves from here. A handler or a controller that streamed its response,
-%% or replied itself, hands back the request Cowboy marked as answered. When
-%% it does not, nova_stream_h drops the second answer.
+%% or replied itself, hands back the request marked as answered. When it
+%% does not, nova_req does not send the second answer.
 reply(_StatusCode, Req = #{has_sent_resp := _}, Env) ->
     {ok, Req, Env};
 reply(StatusCode, Req, Env) ->
     {ok, nova_req:reply(StatusCode, Req), Env}.
 
-%% A 204 and a 304 have no body, and Cowboy exits when given one.
+%% A 204 and a 304 have no body, and a server may refuse to send one.
 without_refused_body(StatusCode, Req) when StatusCode =:= 204; StatusCode =:= 304 ->
     maps:remove(resp_body, Req);
 without_refused_body(_StatusCode, Req) ->

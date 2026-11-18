@@ -6,7 +6,7 @@
 -include_lib("public_key/include/public_key.hrl").
 
 -export([start/1, try_start/1, configure/1, boot/1, port/0, stop/0, server/1, get/2, get/3, request/4, response/4, response/5,
-         websocket_handshake/2, websocket_handshake/3, websocket_texts/4, h2_websocket_connect/4, h2_get/2,
+         websocket_handshake/2, websocket_handshake/3, websocket_texts/4, h2_websocket_connect/4, h2_get/2, h2s_get/2,
          send_and_close/2, free_port/0, tls/0, https_get/2]).
 
 -spec start(map()) -> inet:port_number().
@@ -234,32 +234,47 @@ h2_get(Port, Path) ->
     h2_request(Port, fin, [{~":method", ~"GET"}, {~":scheme", ~"http"}, {~":path", Path},
                            {~":authority", ~"localhost"}]).
 
+%% As h2_get/2, to a listener with TLS.
+-spec h2s_get(inet:port_number(), binary()) -> 100..599.
+h2s_get(Port, Path) ->
+    {ok, Socket} = ssl:connect("localhost", Port, [binary, {active, false}, {verify, verify_none},
+                                                   {alpn_advertised_protocols, [~"h2"]}], 5000),
+    try
+        h2_exchange(ssl, Socket, fin, [{~":method", ~"GET"}, {~":scheme", ~"https"}, {~":path", Path},
+                                       {~":authority", ~"localhost"}])
+    after
+        ssl:close(Socket)
+    end.
+
 h2_request(Port, IsFin, Headers) ->
     {ok, Socket} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}, {packet, raw}]),
     try
-        ok = gen_tcp:send(Socket, [~"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", cow_http2:settings(#{})]),
-        {HeaderBlock, _Encoder} = cow_hpack:encode(Headers),
-        h2_status(Socket, <<>>, cow_http2:headers(1, IsFin, HeaderBlock))
+        h2_exchange(gen_tcp, Socket, IsFin, Headers)
     after
         gen_tcp:close(Socket)
     end.
 
+h2_exchange(Transport, Socket, IsFin, Headers) ->
+    ok = Transport:send(Socket, [~"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", cow_http2:settings(#{})]),
+    {HeaderBlock, _Encoder} = cow_hpack:encode(Headers),
+    h2_status(Transport, Socket, <<>>, cow_http2:headers(1, IsFin, HeaderBlock)).
+
 %% The request is sent once the settings of the server have arrived, since
 %% they are what allows an extended CONNECT.
-h2_status(Socket, Buffer, Request) ->
+h2_status(Transport, Socket, Buffer, Request) ->
     case cow_http2:parse(Buffer) of
         {ok, {settings, _Settings}, Rest} ->
-            ok = gen_tcp:send(Socket, [cow_http2:settings_ack(), Request]),
-            h2_status(Socket, Rest, Request);
+            ok = Transport:send(Socket, [cow_http2:settings_ack(), Request]),
+            h2_status(Transport, Socket, Rest, Request);
         {ok, {headers, 1, _IsFin, head_fin, HeaderBlock}, _Rest} ->
             {ResponseHeaders, _Decoder} = cow_hpack:decode(HeaderBlock),
             {~":status", <<Status/binary>>} = lists:keyfind(~":status", 1, ResponseHeaders),
             binary_to_integer(Status);
         {ok, _OtherFrame, Rest} ->
-            h2_status(Socket, Rest, Request);
+            h2_status(Transport, Socket, Rest, Request);
         more ->
-            {ok, <<Data/binary>>} = gen_tcp:recv(Socket, 0, 5000),
-            h2_status(Socket, <<Buffer/binary, Data/binary>>, Request)
+            {ok, <<Data/binary>>} = Transport:recv(Socket, 0, 5000),
+            h2_status(Transport, Socket, <<Buffer/binary, Data/binary>>, Request)
     end.
 
 after_handshake(Socket, Acc) ->

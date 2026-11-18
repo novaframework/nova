@@ -8,6 +8,9 @@
 
 %% Application callbacks
 -export([start/2, prep_stop/1, stop/1]).
+-export([note_no_listener/0]).
+
+-define(SERVER_GRACE, 10000).
 
 %%====================================================================
 %% API
@@ -20,7 +23,13 @@ start(_StartType, _StartArgs) ->
     %% here on. The list is stored outside the supervision tree and would
     %% otherwise still hold those of an earlier run in this VM.
     nova_router:forget_plugins(),
-    nova_sup:start_link().
+    case nova_sup:start_link() of
+        {ok, Pid} ->
+            {ok, Timer} = timer:apply_after(?SERVER_GRACE, ?MODULE, note_no_listener, []),
+            {ok, Pid, Timer};
+        NotStarted ->
+            NotStarted
+    end.
 
 %% The application of the server package stops before this one and takes
 %% its listeners down. Those that are still there, with that application
@@ -29,8 +38,23 @@ prep_stop(State) ->
     ok = nova_sup:shutdown_listeners(),
     State.
 
-stop(_State) ->
+stop(Timer) ->
+    _ = timer:cancel(Timer),
     ok.
+
+-doc false.
+%% A server package that is a dependency, and in the applications of
+%% nothing, is on the code path and is never started. Nova cannot tell as
+%% it starts, since the package starts after it, so it looks once more.
+-spec note_no_listener() -> ok.
+note_no_listener() ->
+    case whereis(nova_sup) =/= undefined andalso nova_sup:listeners() of
+        [] ->
+            ?LOG_WARNING(#{msg => ~"Nova is started and no server package has started a listener, so nothing is served. Add the server package to the applications of your application, after nova",
+                           server => nova_server:module()});
+        _Listening ->
+            ok
+    end.
 
 %%====================================================================
 %% Internal functions

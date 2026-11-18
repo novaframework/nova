@@ -8,7 +8,7 @@
 
 -export([capabilities/0, start_listener/2, stop_listener/1, drain_listeners/2,
          reply/4, stream_reply/3, stream_body/3, stream_trailers/2, inform/3,
-         read_body/2, upgrade_websocket/5]).
+         read_body/2, upgrade_websocket/6]).
 -export([req/0, req/1, sent/0]).
 
 capabilities() ->
@@ -47,8 +47,8 @@ read_body(Req = #{body_chunks := [Chunk | Rest]}, _Opts) ->
 read_body(Req, _Opts) ->
     {ok, <<>>, Req}.
 
-upgrade_websocket(Req, Env, Handler, State, Opts) ->
-    self() ! {?MODULE, {upgrade_websocket, Handler, State, Opts, maps:values(maps:get(resp_cookies, Req, #{}))}},
+upgrade_websocket(Headers, Req, Env, Handler, State, Opts) ->
+    self() ! {?MODULE, {upgrade_websocket, Handler, State, Opts, [Value || {~"set-cookie", Value} <- Headers]}},
     {ok, Req, Env}.
 
 req() ->

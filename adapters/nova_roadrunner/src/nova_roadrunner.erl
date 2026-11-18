@@ -74,6 +74,10 @@ do on any server. The request has Roadrunner's own under `roadrunner_req`.
   unless set, are answered `431`.
 - WebSockets are not served over HTTP/2, and a route that is a Cowboy
   handler is not served at all.
+- Every request of a connection over HTTP/1.1 runs in the process of the
+  connection, one after the other. What a request leaves in the process
+  dictionary or the mailbox is there for the next. Nova puts the logger
+  metadata of the process back after each request.
 
 Derived from [roadrunner_nova](https://github.com/arizona-framework/roadrunner_nova)
 by William Fank Thomé.
@@ -94,7 +98,7 @@ by William Fank Thomé.
          stream_trailers/2,
          inform/3,
          read_body/2,
-         upgrade_websocket/5
+         upgrade_websocket/6
         ]).
 
 %% Called by nova_roadrunner_handler
@@ -155,7 +159,7 @@ start_listener(#{name := Name, ip := Ip}, _Env) ->
 %% What kept the listener from starting, without the child specification
 %% Roadrunner's supervisor reports it with: that has the TLS options in it.
 why({{listen_failed, Reason}, _Child}) -> Reason;
-why({Reason, {child, _, _, _, _, _, _, _, _}}) -> Reason;
+why({Reason, Child}) when element(1, Child) =:= child -> Reason;
 why(Reason) -> Reason.
 
 protocol({Version, Opts}) when map_size(Opts) =:= 0 -> Version;
@@ -213,10 +217,10 @@ end_request() ->
               when Req :: nova_req:req().
 reply(Status, Headers, {sendfile, Offset, Length, Path}, Req) ->
     File = {filename(Path), Offset, Length},
-    sent(roadrunner_send:file(Status, with_content_length(Length, header_list(Headers)), File, rr(Req)),
+    sent(roadrunner_send:file(Status, with_content_length(Length, header_list(Headers)), File, roadrunner_req(Req)),
          Status, Req);
 reply(Status, Headers0, Body0, #{roadrunner_compress := Compress} = Req) ->
-    RR = rr(Req),
+    RR = roadrunner_req(Req),
     {Headers, Body} = case Compress of
                           true -> roadrunner_compress:buffered(RR, header_list(Headers0), Body0);
                           false -> {header_list(Headers0), Body0}
@@ -225,7 +229,7 @@ reply(Status, Headers0, Body0, #{roadrunner_compress := Compress} = Req) ->
 
 -spec stream_reply(nova_server:status(), nova_server:headers(), Req) -> Req when Req :: nova_req:req().
 stream_reply(Status, Headers, Req) ->
-    case roadrunner_send:stream(Status, header_list(Headers), rr(Req)) of
+    case roadrunner_send:stream(Status, header_list(Headers), roadrunner_req(Req)) of
         {ok, Send} ->
             _ = put(?STREAM, Send),
             Req;
@@ -258,7 +262,7 @@ stream(Data, IsFin) ->
 
 -spec inform(nova_server:status(), nova_server:headers(), nova_req:req()) -> ok.
 inform(Status, Headers, Req) ->
-    _ = roadrunner_send:inform(Status, header_list(Headers), rr(Req)),
+    _ = roadrunner_send:inform(Status, header_list(Headers), roadrunner_req(Req)),
     ok.
 
 filename(Path) when is_atom(Path) -> atom_to_list(Path);
@@ -268,8 +272,8 @@ filename(Path) -> Path.
               when Req :: nova_req:req().
 read_body(Req, Opts) ->
     Read = case maps:get(length, Opts, ?READ_BODY_LENGTH) of
-               infinity -> roadrunner_req:read_body(rr(Req));
-               Length -> roadrunner_req:read_body(rr(Req), #{length => Length})
+               infinity -> roadrunner_req:read_body(roadrunner_req(Req));
+               Length -> roadrunner_req:read_body(roadrunner_req(Req), #{length => Length})
            end,
     case Read of
         {ok, Data, RR} -> {ok, iolist_to_binary(Data), Req#{roadrunner_req := RR}};
@@ -280,22 +284,23 @@ read_body(Req, Opts) ->
 %% A request that does not ask for a WebSocket is told what the route is
 %% for, and one that asks for it over a version it is not served over that
 %% it is not there.
--spec upgrade_websocket(Req, Env, module(), term(), nova_server:ws_opts()) ->
+-spec upgrade_websocket(nova_server:headers(), Req, Env, module(), term(), nova_server:ws_opts()) ->
           {ok, Req, Env} | {stop, Req} when Req :: nova_req:req(), Env :: nova_server:env().
-upgrade_websocket(Req = #{version := 'HTTP/1.1'}, Env, Handler, State, Opts) ->
+upgrade_websocket(Headers, Req = #{version := 'HTTP/1.1'}, Env, Handler, State, Opts) ->
     case is_upgrade(Req) of
         true ->
             Session = #{handler => Handler,
                         state => State,
                         req => maps:without([roadrunner_req, roadrunner_compress], Req)},
-            {ok, sent(roadrunner_send:websocket(nova_roadrunner_ws, Session, ws_opts(Opts, Req), rr(Req)), 101, Req),
+            {ok, sent(roadrunner_send:websocket(nova_roadrunner_ws, Session, ws_opts(Opts, Headers), roadrunner_req(Req)), 101,
+                      Req),
              Env};
         false ->
             {ok, reply(426, [{~"connection", ~"upgrade"}, {~"upgrade", ~"websocket"}, {~"content-length", ~"0"}],
                        <<>>, Req),
              Env}
     end;
-upgrade_websocket(Req, Env, _Handler, _State, _Opts) ->
+upgrade_websocket(_Headers, Req, Env, _Handler, _State, _Opts) ->
     {ok, reply(501, [{~"content-length", ~"0"}], <<>>, Req), Env}.
 
 is_upgrade(Req) ->
@@ -306,10 +311,9 @@ is_upgrade(Req) ->
     end.
 
 %% The options of a connection that Roadrunner has a counterpart of, and the
-%% headers and cookies set on the request for the answer to the upgrade.
-ws_opts(Opts, Req) ->
-    Headers = #{headers => header_list(maps:to_list(maps:get(resp_headers, Req, #{}))) ++ cookie_headers(Req)},
-    with_ws_opts(maps:to_list(Opts), Headers).
+%% headers of the answer to the upgrade.
+ws_opts(Opts, Headers) ->
+    with_ws_opts(maps:to_list(Opts), #{headers => header_list(Headers)}).
 
 with_ws_opts([], Acc) ->
     Acc;
@@ -322,16 +326,11 @@ with_ws_opts([{compress, Compress} | Rest], Acc) ->
 with_ws_opts([_Other | Rest], Acc) ->
     with_ws_opts(Rest, Acc).
 
-cookie_headers(#{resp_cookies := Cookies}) ->
-    [{~"set-cookie", iolist_to_binary(Value)} || _Name := Value <- Cookies];
-cookie_headers(_Req) ->
-    [].
-
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
 
-rr(#{roadrunner_req := RR}) -> RR.
+roadrunner_req(#{roadrunner_req := RR}) -> RR.
 
 %% Roadrunner answers 500 itself for a response it could not send.
 sent(ok, _Status, Req) ->

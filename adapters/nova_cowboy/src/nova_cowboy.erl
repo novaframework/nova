@@ -25,7 +25,8 @@ proxy or gRPC. `http3` is not served: Cowboy's is experimental and needs a
 build of its own. A node that asks for it does not start.
 
 WebSockets are served over HTTP/1.1, and over HTTP/2 when `server_opts` has
-`enable_connect_protocol => true`.
+`enable_connect_protocol => true`. A WebSocket route on a listener that
+serves HTTP/2 alone without it stops the node from starting.
 
 ## `server_opts`
 
@@ -66,7 +67,8 @@ session cookie: `nova_req:reply/4` adds it.
          stream_trailers/2,
          inform/3,
          read_body/2,
-         upgrade_websocket/5,
+         upgrade_websocket/6,
+         websocket_protocols/1,
          response_begun/1
         ]).
 
@@ -228,10 +230,22 @@ read_body(Req, Opts) ->
             exit({request_error, timeout, 'The request body was not received within the configured time.'})
     end.
 
--spec upgrade_websocket(Req, Env, module(), term(), cowboy_websocket:opts()) ->
+%% Cowboy answers the upgrade with the headers and cookies of the request,
+%% so the request is given those Nova checked and no other.
+-spec upgrade_websocket(nova_server:headers(), Req, Env, module(), term(), cowboy_websocket:opts()) ->
           {ok, Req, Env} | {stop, Req} when Req :: nova_req:req(), Env :: nova_server:env().
-upgrade_websocket(Req, Env, Handler, State, Opts) ->
-    cowboy_websocket:upgrade(Req, Env, Handler, State, Opts).
+upgrade_websocket(Headers, Req, Env, Handler, State, Opts) ->
+    {HeaderMap, Req0} = cowboy_headers(Headers, Req),
+    cowboy_websocket:upgrade(Req0#{resp_headers => HeaderMap}, Env, Handler, State, Opts).
+
+%% Over HTTP/2 a WebSocket is an extended CONNECT, which Cowboy takes when
+%% the listener turns it on.
+-spec websocket_protocols(nova_listener:listener()) -> [nova_server:protocol()].
+websocket_protocols(#{protocols := Protocols, server_opts := ServerOpts}) ->
+    case with_version_opts(Protocols, ServerOpts) of
+        #{enable_connect_protocol := true} -> [http1, http2];
+        #{} -> [http1]
+    end.
 
 %% A response sent with cowboy_req went by the stream handler in the
 %% connection process, so that is where it is known.

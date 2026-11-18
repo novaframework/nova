@@ -23,17 +23,19 @@ A request that went through every step without an answer is answered `204`.
 -spec execute(Req, Env) -> {ok, Req, Env} | {stop, Req}
               when Req :: nova_req:req(), Env :: nova_server:env().
 execute(Req0, Env) ->
-    ok = nova_req:start_request(),
+    ok = nova_req:forget_response(),
     Req = nova_session:start_request(on_listener(Req0, Env)),
     try
         answered(run(maps:get(nova_steps, Env, steps()), Req, Env))
     after
         ok = nova_session:end_request(),
-        ok = nova_req:start_request()
+        ok = nova_req:forget_response()
     end.
 
-on_listener(Req, #{listener := Name}) -> Req#{listener => Name};
-on_listener(Req, _Env) -> Req.
+%% What the listener says of a request: its name, and the server that
+%% answers it.
+on_listener(Req, Env) ->
+    maps:merge(Req, maps:with([listener, nova_server], Env)).
 
 -doc "The steps of a listener that names none.".
 -spec steps() -> [module()].

@@ -99,7 +99,7 @@ A request is answered once. A second answer is not sent, and is logged.
         ]).
 
 -export([
-         start_request/0,
+         forget_response/0,
          upgrade_websocket/5
         ]).
 
@@ -525,8 +525,13 @@ inform(Status, Req) ->
 inform(Status, Headers, Req) ->
     Server = nova_server:of_req(Req),
     case response_begun(Req) =:= false andalso nova_server:supports(Server, {inform, 3}) of
-        true -> Server:inform(status(Status), header_list(Headers), Req);
-        false -> ok
+        true ->
+            case checked_headers(maps:to_list(Headers), Req) of
+                {ok, Out} -> Server:inform(status(Status), Out, Req);
+                refused -> ok
+            end;
+        false ->
+            ok
     end.
 
 -spec reply(http_status(), Req) -> Req when Req :: req().
@@ -597,13 +602,17 @@ stream_body(Data, IsFin, Req) ->
         false -> (nova_server:of_req(Req)):stream_body(Data, IsFin, Req)
     end.
 
--doc "End a streamed response with trailers. A server that cannot send them ends the response without.".
+-doc """
+End a streamed response with trailers. A server that cannot send them ends
+the response without, and so does one that is given a trailer that is not a
+header.
+""".
 -spec stream_trailers(http_headers(), req()) -> ok.
 stream_trailers(Trailers, Req) ->
     Server = nova_server:of_req(Req),
-    case nova_server:supports(Server, {stream_trailers, 2}) of
-        true -> Server:stream_trailers(header_list(Trailers), Req);
-        false -> Server:stream_body(<<>>, fin, Req)
+    case nova_server:supports(Server, {stream_trailers, 2}) andalso checked_headers(maps:to_list(Trailers), Req) of
+        {ok, Out} -> Server:stream_trailers(Out, Req);
+        _Without -> Server:stream_body(<<>>, fin, Req)
     end.
 
 -doc """
@@ -623,21 +632,26 @@ response_begun(Req) ->
 -doc false.
 %% The request process serves one request after the other on some servers,
 %% so what it remembers of the last one is forgotten.
--spec start_request() -> ok.
-start_request() ->
+-spec forget_response() -> ok.
+forget_response() ->
     _ = erase(nova_response_begun),
     ok.
 
 -doc false.
-%% The answer to a websocket upgrade is the server's to send. It carries the
-%% headers and cookies set on the request.
+%% The answer to a websocket upgrade is the server's to send, with the
+%% headers and cookies set on the request, checked as those of any response.
 -spec upgrade_websocket(Req, Env, module(), term(), nova_server:ws_opts()) ->
           {ok, Req, Env} | {stop, Req} when Req :: req(), Env :: nova_server:env().
-upgrade_websocket(Req0, Env, Handler, State, Opts) ->
-    Req = nova_session:with_response_cookies(Req0),
-    Result = (nova_server:of_req(Req)):upgrade_websocket(Req, Env, Handler, State, Opts),
-    _ = put(nova_response_begun, true),
-    Result.
+upgrade_websocket(Req, Env, Handler, State, Opts) ->
+    Server = nova_server:of_req(Req),
+    case response_headers(#{}, Req) of
+        {ok, Headers} ->
+            Result = Server:upgrade_websocket(Headers, Req, Env, Handler, State, Opts),
+            _ = put(nova_response_begun, true),
+            Result;
+        refused ->
+            {ok, answered(Server:reply(500, [{~"content-length", ~"0"}], <<>>, Req), true), Env}
+    end.
 
 %%%===================================================================
 %%% Internal functions
@@ -701,24 +715,24 @@ body_to_send(Body, _Req) -> Body.
 %% A header whose name is not a token, or whose value has a line break or a
 %% NUL in it, would let whoever chose the value write headers of their own,
 %% or a second response. Nothing of such a response is sent: the request is
-%% answered 500 instead.
+%% answered 500 instead. An informational response or the trailers that have
+%% such a header are left out.
 -spec response_headers(http_headers(), req()) -> {ok, nova_server:headers()} | refused.
 response_headers(Headers, Req) ->
     Merged = maps:merge(maps:get(resp_headers, Req, #{}), Headers),
     Cookies = maps:values(maps:get(resp_cookies, Req, #{})) ++ nova_session:response_cookies(Req),
-    Out = header_list(Merged) ++ [{~"set-cookie", Cookie} || Cookie <- Cookies],
-    case [Name || {Name, Value} <- Out, not (valid_header_name(Name) andalso valid_header_value(Value))] of
+    checked_headers(maps:to_list(Merged) ++ [{~"set-cookie", Cookie} || Cookie <- Cookies], Req).
+
+checked_headers(Headers, Req) ->
+    case [Name || {Name, Value} <- Headers, not (valid_header_name(Name) andalso valid_header_value(Value))] of
         [] ->
-            {ok, Out};
+            {ok, Headers};
         Refused ->
-            ?LOG_ERROR(#{msg => ~"Response not sent: a header name is not a token, or a header value has a line break or a NUL in it. The request is answered 500",
+            ?LOG_ERROR(#{msg => ~"Headers not sent: a header name is not a token, or a header value has a line break or a NUL in it. A response is answered 500 instead",
                          headers => Refused, method => maps:get(method, Req, undefined),
                          path => maps:get(path, Req, undefined)}),
             refused
     end.
-
-header_list(Headers) ->
-    maps:to_list(Headers).
 
 valid_header_name(Name) when is_binary(Name), Name =/= <<>> ->
     lists:all(fun is_token_character/1, binary_to_list(Name));

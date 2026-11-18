@@ -111,6 +111,28 @@ header_that_would_split_the_response_is_not_sent_test() ->
     _ = nova_req:reply(200, nova_req:set_resp_header(~"x-a", ~"a\nb", ?REQ())),
     ?assertEqual([{reply, 500, [{~"content-length", ~"0"}], <<>>}], nova_fake_server:sent()).
 
+%% The answer to an upgrade, an informational response and the trailers
+%% are checked as the headers of a response are.
+upgrade_with_a_header_that_would_split_it_is_answered_500_test() ->
+    Req = nova_req:set_resp_header(~"x-a", ~"a\r\nb", ?REQ()),
+    {ok, Answered, #{}} = nova_req:upgrade_websocket(Req, #{}, nova_ws_handler, ws_state, #{}),
+    ?assertEqual(true, nova_req:response_begun(Answered)),
+    ?assertEqual([{reply, 500, [{~"content-length", ~"0"}], <<>>}], nova_fake_server:sent()).
+
+upgrade_is_given_the_headers_set_on_the_request_test() ->
+    Req = nova_req:set_resp_header(~"x-a", ~"1", ?REQ()),
+    {ok, _Req, #{}} = nova_req:upgrade_websocket(Req, #{}, nova_ws_handler, ws_state, #{}),
+    ?assertEqual([{upgrade_websocket, nova_ws_handler, ws_state, #{}, []}], nova_fake_server:sent()).
+
+inform_with_a_header_that_would_split_it_is_left_out_test() ->
+    ok = nova_req:inform(103, #{~"link" => ~"</a>\r\nx-b: 1"}, ?REQ()),
+    ?assertEqual([], nova_fake_server:sent()).
+
+trailers_with_a_header_that_would_split_them_are_left_out_test() ->
+    Req = nova_req:stream_reply(200, #{}, ?REQ()),
+    ok = nova_req:stream_trailers(#{~"x-end" => ~"1\nx-b: 1"}, Req),
+    ?assertMatch([{stream_reply, 200, _}, {stream_body, <<>>, fin}], nova_fake_server:sent()).
+
 second_answer_is_not_sent_test() ->
     Req0 = ?REQ(),
     Req1 = nova_req:reply(200, Req0),

@@ -20,13 +20,27 @@ handle(Req) ->
 -spec run(roadrunner_req:request()) -> roadrunner_req:request().
 run(RR) ->
     {Env, Compress} = listener_state(roadrunner_req:state(RR)),
+    Metadata = logger:get_process_metadata(),
     ok = nova_roadrunner:start_request(),
     try nova_pipeline:execute(request(RR, Compress), Env) of
         {ok, #{roadrunner_req := Last}, _Env} -> Last;
         {stop, #{roadrunner_req := Last}} -> Last
+    catch
+        %% Roadrunner logs what escapes and answers 500. What is logged
+        %% may hold the request, so it leaves as Nova logs a crash.
+        Class:Reason:Stacktrace ->
+            erlang:raise(Class, nova_redact:term(Reason), nova_redact:stacktrace(Stacktrace))
     after
-        ok = nova_roadrunner:end_request()
+        ok = nova_roadrunner:end_request(),
+        ok = restore_metadata(Metadata)
     end.
+
+%% The requests of a connection share its process. Roadrunner replaces the
+%% logger metadata as a request starts, and what the request added, a
+%% correlation id or a user, is taken off again as it ends, so it labels
+%% nothing the connection logs afterwards.
+restore_metadata(undefined) -> logger:unset_process_metadata();
+restore_metadata(Metadata) -> logger:set_process_metadata(Metadata).
 
 %% What nova_roadrunner:start_listener/2 gave the listener.
 -spec listener_state(term()) -> {nova_server:env(), boolean()}.

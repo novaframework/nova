@@ -5,7 +5,7 @@
 -moduledoc "Router module for nova. This module is responsible for compiling routes, dispatching requests to the correct handler and managing the routing table. It also exposes an API for modulating the routing table at runtime.".
 -behaviour(nova_pipeline).
 
-%% Cowboy middleware-callbacks
+%% nova_pipeline callbacks
 -export([
          execute/2
         ]).
@@ -105,7 +105,7 @@ it returns after the routes of `routes/1`.
 -define(NOVA_PLUGINS, nova_plugins).
 -define(NOVA_DISPATCH, nova_dispatch).
 
-%% Each Cowboy listener owns a routing table, addressed by a dispatch key.
+%% Each listener owns a routing table, addressed by a dispatch key.
 %% Listeners started by nova_sup:add_application/2 get their own, so two
 %% listeners on different ports do not serve each other's routes. The default
 %% listener uses nova_dispatch, which is also what every existing caller and
@@ -231,8 +231,8 @@ bound_groups(DispatchKey) ->
 execute(Req0 = #{path := Path}, Env) ->
     StorageBackend = storage_backend(),
     DispatchKey = dispatch_key(Env),
-    %% nova_session only tells nova_stream_h about session changes made by the
-    %% process serving the request.
+    %% nova_session only acts on the session changes made by the process
+    %% serving the request.
     Req = Req0#{nova_dispatch_key => DispatchKey, nova_session_owner => self()},
     case is_origin_form(Path) andalso
         (nova_settings:value(non_canonical_paths) =:= resolve orelse nova_routing_trie:is_canonical(Path)) of
@@ -301,7 +301,7 @@ routed(Found, Req = #{host := Host, path := Path, method := Method}, Env, Dispat
             Allowed = [AllowedMethod || AllowedMethod <- AllowedMethods, is_binary(AllowedMethod)],
             AllowHeader = iolist_to_binary(lists:join(<<", ">>, Allowed)),
             %% Set the 'allow'-header
-            Req1 = nova_req:set_resp_header(<<"allow">>, AllowHeader, Req),
+            Req1 = nova_req:set_resp_header(~"allow", AllowHeader, Req),
             {ok, Req2, Env1} = render_status_page('_', 405, #{error => "Method not allowed"}, Req1, Env),
             {ok, with_preflight_plugins(Req2, Host, Path, Dispatch), Env1};
         {ok, Bindings, #nova_handler_value{app = App, callback = Callback, secure = Secure, plugins = RoutePlugins,
@@ -465,11 +465,19 @@ insert_route_maps(App, Routes, DispatchKey) ->
     Options = with_serving(#{app => App, router_file => undefined, dispatch_key => DispatchKey,
                              insert_opts => #{on_duplicate => overwrite}}),
 
+    Skipped = skipped_groups(DispatchKey),
     {ok, Dispatch1, _Options0} = compile_paths(Routes, Dispatch, Options),
+    _ = [?LOG_NOTICE(#{msg => ~"Route group is for other listeners and is not added to this routing table",
+                       app => GroupApp, prefix => Prefix, listeners => Names,
+                       listener => maps:get(name, maps:get(serving, Options, #{}), undefined)})
+         || {GroupApp, Prefix, Names} <- skipped_groups(DispatchKey) -- Skipped],
 
     StorageBackend:put(AppsKey, CompiledApps0),
     StorageBackend:put(DispatchKey, Dispatch1),
     ok.
+
+skipped_groups(DispatchKey) ->
+    [{App, Prefix, Names} || {skipped, App, Prefix, Names} <- bound_groups(DispatchKey)].
 
 
 %%--------------------------------------------------------------------
@@ -492,6 +500,9 @@ remove_application(Application, DispatchKey) when is_atom(Application) ->
     AppsKey = apps_key(DispatchKey),
     StorageBackend:put(DispatchKey, Dispatch0),
     StorageBackend:put(AppsKey, lists:keydelete(Application, 1, StorageBackend:get(AppsKey, []))),
+    StorageBackend:put(bound_key(DispatchKey),
+                       [Group || {_Status, App, _Prefix, _Names} = Group <- bound_groups(DispatchKey),
+                                 App =/= Application]),
     nova:set_env(apps, lists:keydelete(Application, 1, mounted_apps())),
     ok.
 
@@ -672,27 +683,41 @@ first_module([Name | Names]) ->
 
 compile_paths([], Dispatch, Options) -> {ok, Dispatch, Options};
 compile_paths([RouteInfo|Tl], Dispatch, Options) ->
-    case is_for_listener(RouteInfo, Options) of
-        true -> compile_paths(Tl, compile_group(RouteInfo, Dispatch, Options), Options);
-        false -> compile_paths(Tl, Dispatch, Options)
+    case place_group(RouteInfo, Options) of
+        served -> compile_paths(Tl, compile_group(RouteInfo, Dispatch, Options), Options);
+        skipped -> compile_paths(Tl, Dispatch, Options)
     end.
 
 %% A route group that names listeners is compiled into their tables alone,
-%% and into none when the table is not known to be one of theirs.
-is_for_listener(RouteInfo = #{listener := Listener}, Options = #{app := App}) ->
+%% and into none when the table is not known to be one of theirs. Where it
+%% went is noted with the table, for nova_sup to see that every listener it
+%% names has it.
+place_group(RouteInfo = #{listener := Listener}, Options = #{app := App}) ->
     Names = listener_names(Listener, App),
-    Served = case Options of
-                 #{serving := #{name := Name}} -> lists:member(Name, Names);
-                 #{} -> false
+    Status = case Options of
+                 #{serving := #{name := Name}} ->
+                     case lists:member(Name, Names) of
+                         true -> served;
+                         false -> skipped
+                     end;
+                 #{} ->
+                     skipped
              end,
-    Status = case Served of true -> served; false -> skipped end,
     Prefix = concat_strings(maps:get(prefix, Options, ""), maps:get(prefix, RouteInfo, "")),
+    ok = note_bound_group({Status, App, Prefix, Names}, maps:get(dispatch_key, Options, ?NOVA_DISPATCH)),
+    Status;
+place_group(_RouteInfo, _Options) ->
+    served.
+
+note_bound_group(Group, DispatchKey) ->
     StorageBackend = storage_backend(),
-    BoundKey = bound_key(maps:get(dispatch_key, Options, ?NOVA_DISPATCH)),
-    StorageBackend:put(BoundKey, StorageBackend:get(BoundKey, []) ++ [{Status, App, Prefix, Names}]),
-    Served;
-is_for_listener(_RouteInfo, _Options) ->
-    true.
+    BoundKey = bound_key(DispatchKey),
+    Noted = StorageBackend:get(BoundKey, []),
+    case lists:member(Group, Noted) of
+        true -> ok;
+        false -> StorageBackend:put(BoundKey, Noted ++ [Group])
+    end,
+    ok.
 
 listener_names(Name, _App) when is_atom(Name) ->
     [Name];
@@ -869,8 +894,8 @@ render_status_page(StatusCode, Data, Req) ->
     render_status_page('_', StatusCode, Data, Req, #{nova_dispatch_key => dispatch_key(Req)}).
 
 -doc """
-Points a request at the status page for `StatusCode`. For a Cowboy
-middleware: nothing is sent here, the page is rendered by the controller step
+Points a request at the status page for `StatusCode`. For a step of the
+pipeline: nothing is sent here, the page is rendered by the controller step
 that the returned `{ok, Req, Env}` is handed to.
 
 The page is the route registered for `StatusCode` on `Host`, or the page of
@@ -968,7 +993,7 @@ served_versions(Options, Group, Path) ->
                                          router_file => maps:get(router_file, Group, undefined)}),
                             throw({error, {route_http_versions_not_served, Path, Versions, Listener}});
                         Served ->
-                            Served
+                            lists:usort(Served)
                     end;
                 #{} ->
                     lists:usort(Versions)

@@ -3,7 +3,7 @@
  {<<"cowlib">>,{pkg,<<"cowlib">>,<<"2.22.0">>},0},
  {<<"erlydtl">>,{pkg,<<"erlydtl">>,<<"0.14.0">>},0},
  {<<"jhn_stdlib">>,{pkg,<<"jhn_stdlib">>,<<"5.11.2">>},0},
- {<<"ranch">>,{pkg,<<"ranch">>,<<"2.4.0">>},1},
+ {<<"ranch">>,{pkg,<<"ranch">>,<<"2.4.0">>},0},
  {<<"roadrunner">>,{pkg,<<"roadrunner">>,<<"0.16.2">>},0},
  {<<"telemetry">>,{pkg,<<"telemetry">>,<<"1.4.2">>},0}]}.
 [

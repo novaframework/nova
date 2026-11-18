@@ -54,6 +54,15 @@ router_listener_test_() ->
                [?assertThrow({error, {invalid_route_listener, test_app, Value}}, compiled(?SERVING, [group(Value)]))
                 || Value <- [[], "admin", [admin, ~"public"], ~"admin"]]
        end},
+      {"group is noted once, and forgotten with its application",
+       fun() ->
+               ok = compiled(?SERVING, [group(admin), group(public)]),
+               ok = nova_router:add_routes(test_app, [group(admin), group(public)], ?KEY),
+               ?assertEqual([{served, test_app, "/admin", [admin]}, {skipped, test_app, "/admin", [public]}],
+                            nova_router:bound_groups(?KEY)),
+               ok = nova_router:remove_application(test_app, ?KEY),
+               ?assertEqual([], nova_router:bound_groups(?KEY))
+       end},
       {"table that is deleted forgets its listener and its groups",
        fun() ->
                ok = compiled(?SERVING, [group(admin)]),

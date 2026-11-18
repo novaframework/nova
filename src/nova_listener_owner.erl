@@ -4,16 +4,20 @@ The process a server package puts in its supervision tree to run Nova's
 listeners on its server.
 
 ```erlang
-#{id => nova_listener,
-  start => {nova_listener_owner, start_link, [my_server]}}
+{ok, {#{strategy => one_for_one, auto_shutdown => any_significant},
+      [#{id => nova_listener,
+         start => {nova_listener_owner, start_link, [my_server]},
+         restart => temporary,
+         significant => true}]}}
 ```
 
 It starts the listeners of the configuration as it starts, and a listener
 that cannot be started stops the application of the package from starting.
 The listeners stop when it does. They also stop when the `nova` application
 goes down under them, since nothing they hand a request to is there any
-longer: the process then exits, and takes the application of the package
-with it when its supervisor allows no restarts.
+longer: the process then exits, and as a significant child that is not
+restarted it takes its supervisor and the application of the package with
+it.
 
 `shutdown/1` is for the `prep_stop/1` of that application: it stops the
 listeners the slow way, waiting for the connections that are open.

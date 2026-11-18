@@ -34,7 +34,7 @@
 init(StreamID, Req, Opts) ->
     %% Set the correct server-header information. The marker says that this
     %% handler can be asked whether a response began.
-    Req1 = cowboy_req:set_resp_header(<<"server">>, <<"Cowboy/Nova">>, Req#{nova_stream => true}),
+    Req1 = cowboy_req:set_resp_header(~"server", ~"Cowboy/Nova", Req#{nova_stream => true}),
     {Commands, Next} = cowboy_stream:init(StreamID, Req1, Opts),
     {Commands, #state{req = Req, next = Next,
                       invalid_headers = invalid_headers(Opts)}}.

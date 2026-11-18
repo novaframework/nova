@@ -44,13 +44,14 @@ The node does not start when a listener asks for something the server
 cannot do, such as `http3` on a server without it, or `http2` without `tls`
 on a server that only speaks it encrypted.
 
-A node without `listeners` has one listener named `default` on port `8080`
-that serves the bootstrap application.
+A node with neither `listeners` nor `cowboy_configuration` has one listener
+named `default` with these defaults, which serves the bootstrap application.
 """.
 
 -export([
          configured/0,
-         from_legacy/2,
+         from_legacy/1,
+         without_secrets/1,
          runtime_settings/1,
          normalize/3,
          check/3,
@@ -88,8 +89,11 @@ configured() ->
         {ok, Other} ->
             {error, {invalid_listeners, Other}};
         undefined ->
-            Legacy = application:get_env(nova, cowboy_configuration, #{}),
-            normalize_all([{default, from_legacy(Legacy, undefined)}], defaults(Bootstrap, true), [])
+            Settings = case application:get_env(nova, cowboy_configuration) of
+                           {ok, Legacy} -> from_legacy(Legacy);
+                           undefined -> #{}
+                       end,
+            normalize_all([{default, Settings}], defaults(Bootstrap, true), [])
     end.
 
 %% The applications of a listener that names none: the bootstrap application,
@@ -117,8 +121,8 @@ no_two_on_one_port(Listeners) ->
 %% The settings of the `cowboy_configuration` key of Nova before 1.0 as those
 %% of a listener. `use_ssl` picked `ssl_port` over `port`, and Cowboy served
 %% HTTP/2 next to HTTP/1.1 with or without TLS.
--spec from_legacy(map(), atom() | undefined) -> map().
-from_legacy(Legacy, _Name) ->
+-spec from_legacy(map()) -> map().
+from_legacy(Legacy) ->
     Tls = case maps:get(use_ssl, Legacy, false) of
               false -> false;
               _ -> legacy_tls(Legacy)
@@ -147,7 +151,7 @@ from_legacy(Legacy, _Name) ->
 runtime_settings(Settings) ->
     case maps:size(maps:with(?LEGACY_KEYS, Settings)) of
         0 -> Settings;
-        _ -> from_legacy(Settings, undefined)
+        _ -> from_legacy(Settings)
     end.
 
 legacy_tls(#{ca_cert := CACert, cert := Cert}) ->
@@ -242,7 +246,35 @@ server_opts(Other) -> throw({invalid, server_opts, Other}).
 protocol_names(Protocols) ->
     [Name || {Name, _Options} <- Protocols].
 
--doc "Whether a server can serve the listener: every HTTP version it asks for, with or without TLS as it asks.".
+-doc false.
+%% Why a listener did not start is logged, and is what the node does not
+%% start with. A server may hand back the options it was given with it, and
+%% those of TLS hold a key and its password.
+-spec without_secrets(term()) -> term().
+without_secrets({Option, Value}) ->
+    case is_secret(Option) of
+        true -> {Option, redacted};
+        false -> {without_secrets(Option), without_secrets(Value)}
+    end;
+without_secrets(Tuple) when is_tuple(Tuple) ->
+    list_to_tuple([without_secrets(Element) || Element <- tuple_to_list(Tuple)]);
+without_secrets(List) when is_list(List), length(List) >= 0 ->
+    [without_secrets(Element) || Element <- List];
+without_secrets(Map) when is_map(Map) ->
+    #{Key => case is_secret(Key) of
+                 true -> redacted;
+                 false -> without_secrets(Value)
+             end || Key := Value <- Map};
+without_secrets(Other) ->
+    Other.
+
+is_secret(Option) ->
+    lists:member(Option, [key, password, certs_keys, sni_hosts, sni_fun, user_lookup_fun, psk_identity,
+                          srp_identity]).
+
+-doc false.
+%% Whether a server can serve the listener: every HTTP version it asks for,
+%% with or without TLS as it asks.
 -spec check(listener(), module(), nova_server:capabilities()) -> ok | {error, term()}.
 check(#{name := Name, tls := Tls, protocols := Protocols}, Server,
       #{protocols := Supported, cleartext := Cleartext}) ->

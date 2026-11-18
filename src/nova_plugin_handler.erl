@@ -59,8 +59,8 @@ run_plugins([{Callback, Options}|Tl], CallbackType, Req, Env) when is_function(C
             nova_telemetry:stop(Span, #{result => plugin_result(Result)}),
             handle_result(Result, Callback, State, Tl, CallbackType, Req, Env)
     catch
-        %% The client's doing, which Cowboy answers with a 4xx when nothing
-        %% catches it. After the controller the response is already out.
+        %% The client's doing, which is answered with a 4xx. After the
+        %% controller the response is already out.
         exit:{request_error, Kind, _Message} when CallbackType =:= pre_request ->
             Status = nova_handler:request_error_status(Kind),
             nova_telemetry:stop(Span, #{result => stop}),
@@ -105,9 +105,9 @@ handle_result({stop, Req0}, Callback, _State, _Tl, _CallbackType, _Req, _Env) wh
     deprecated_stop(Callback),
     {stop, Req0};
 %% The controller has answered by the time the post_request plugins run, and
-%% a plugin may have answered itself before it asks Nova to. Cowboy exits on
-%% a reply to a request it marked as answered. A second answer to a request
-%% without the mark is dropped by nova_stream_h.
+%% a plugin may have answered itself before it asks Nova to. A request that
+%% is marked as answered is not answered again, and a second answer to one
+%% without the mark is not sent by nova_req.
 handle_result({stop, _Reply, Req0, State0}, Callback, State, _Tl, _CallbackType, _Req, _Env)
   when is_map_key(has_sent_resp, Req0) ->
     set_state(Callback, State, State0),

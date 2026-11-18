@@ -32,6 +32,7 @@ Each listener owns its own routing table, so an application started on a second 
 
 -define(SERVER, ?MODULE).
 -define(NOVA_LISTENERS_TABLE, nova_listeners).
+-define(NOVA_PENDING_TABLE, nova_pending_applications).
 
 -type nova_app() :: atom() | {atom(), map()}.
 
@@ -71,15 +72,77 @@ those of `cowboy_configuration` as Nova took them before 1.0. With
 `#{listener => Name}` the routes of the application are added to the
 listener of that name. Without it they are added to the listener already
 bound to the `ip` and `port` of the settings, and when there is none a
-listener named after the application is started with them.
+listener named after the application is started with them, unless a
+listener has that name already: `{error, {listener_exists, App}}`.
+
+An application that starts before the server package has, as a library that
+calls this from its `start/2` may, is added once the listeners of the
+configuration are started. The answer is where it will be served, and the
+node does not start when it cannot be: the server package stops with
+`{application_not_added, App, Reason}`.
 """.
 -spec add_application(App :: atom(), Settings :: map()) ->
           {ok, App :: atom(), Host :: inet:ip_address() | string(), Port :: inet:port_number()} |
           {error, Reason :: any()}.
 add_application(App, Settings) ->
     case ets:whereis(?NOVA_LISTENERS_TABLE) of
-        undefined -> {error, server_not_started};
+        undefined -> add_with_configured(App, Settings);
         _Tid -> add_to_listener(App, Settings)
+    end.
+
+add_with_configured(App, Settings) ->
+    case ets:whereis(?NOVA_PENDING_TABLE) of
+        undefined ->
+            {error, server_not_started};
+        Tid ->
+            case {ets:match_object(Tid, {'_', App, '_'}), bind_of(App, Settings)} of
+                {[], {ok, Host, Port}} ->
+                    true = ets:insert(Tid, {erlang:unique_integer([monotonic]), App, Settings}),
+                    {ok, App, Host, Port};
+                {[], {error, Reason}} ->
+                    {error, Reason};
+                {[_Pending], _Bind} ->
+                    {error, {already_started, App}}
+            end
+    end.
+
+%% Where the settings put an application, before there is a listener to ask.
+bind_of(_App, #{listener := Name}) ->
+    case nova_listener:configured() of
+        {ok, Listeners} ->
+            case [{Host, Port} || #{name := N, ip := Host, port := Port} <- Listeners, N =:= Name] of
+                [{Host, Port}] -> {ok, Host, Port};
+                [] -> {error, {no_such_listener, Name}}
+            end;
+        {error, Reason} ->
+            {error, Reason}
+    end;
+bind_of(App, Settings) ->
+    case nova_listener:normalize(App, nova_listener:runtime_settings(Settings), #{applications => [App]}) of
+        {ok, #{ip := Host, port := Port}} -> {ok, Host, Port};
+        {error, Reason} -> {error, Reason}
+    end.
+
+add_pending([]) ->
+    ok;
+add_pending([{_Order, App, Settings} | Rest]) ->
+    case add_to_listener(App, Settings) of
+        {ok, App, _Host, _Port} ->
+            add_pending(Rest);
+        {error, Reason} ->
+            ?LOG_ERROR(#{msg => ~"An application that was added before the server package started cannot be served",
+                         app => App, reason => Reason}),
+            {error, {application_not_added, App, Reason}}
+    end.
+
+take_pending() ->
+    case ets:whereis(?NOVA_PENDING_TABLE) of
+        undefined ->
+            [];
+        Tid ->
+            Pending = ets:tab2list(Tid),
+            true = ets:delete_all_objects(Tid),
+            Pending
     end.
 
 add_to_listener(App, #{listener := Name}) ->
@@ -92,10 +155,22 @@ add_to_listener(App, Settings) ->
         {ok, #{ip := Host, port := Port} = Listener} ->
             case find_listener(Host, Port) of
                 {ok, Bound} -> attach_application(App, Bound);
-                error -> start_checked(nova_server:module(), Listener#{applications := [App]})
+                error -> start_named_after(App, Listener#{applications := [App]})
             end;
         {error, Reason} ->
             {error, Reason}
+    end.
+
+%% A listener started for an application has its name, which a listener of
+%% the configuration may have already.
+start_named_after(App, Listener) ->
+    case find_listener(App) of
+        {ok, _Named} ->
+            {error, {listener_exists, App}};
+        error ->
+            Started = start_checked(nova_server:module(), Listener),
+            ok = warn_about_route_groups(App),
+            Started
     end.
 
 %%--------------------------------------------------------------------
@@ -104,10 +179,23 @@ add_to_listener(App, Settings) ->
 remove_application(App) ->
     case [L || L = #nova_listener{apps = Apps} <- all_listeners(), lists:member(App, Apps)] of
         [] ->
-            ?LOG_ERROR(#{msg => <<"Application not found">>, app => App}),
-            {error, not_found};
+            remove_pending(App);
         Listeners ->
             [detach_application(App, Listener) || Listener <- Listeners],
+            ok
+    end.
+
+remove_pending(App) ->
+    Pending = case ets:whereis(?NOVA_PENDING_TABLE) of
+                  undefined -> [];
+                  Tid -> ets:match_object(Tid, {'_', App, '_'})
+              end,
+    case Pending of
+        [] ->
+            ?LOG_ERROR(#{msg => ~"Application not found", app => App}),
+            {error, not_found};
+        [Entry] ->
+            true = ets:delete_object(?NOVA_PENDING_TABLE, Entry),
             ok
     end.
 
@@ -141,10 +229,22 @@ start_listeners(Server) ->
         Server ->
             ?NOVA_LISTENERS_TABLE = ets:new(?NOVA_LISTENERS_TABLE,
                                             [named_table, public, set, {keypos, #nova_listener.bind}]),
-            try
-                start_configured(Server)
+            %% Whatever stops the boot, a route that does not compile
+            %% included, the listeners started before it are stopped: the
+            %% owner that would stop them never comes to be.
+            try start_configured(Server) of
+                ok ->
+                    ok;
+                {error, Reason} ->
+                    ok = stop_listeners(Server),
+                    {error, Reason}
             catch
-                throw:{error, Reason} -> {error, Reason}
+                throw:{error, Reason} ->
+                    ok = stop_listeners(Server),
+                    {error, Reason};
+                Class:Reason:Stacktrace ->
+                    ok = stop_listeners(Server),
+                    erlang:raise(Class, Reason, Stacktrace)
             end;
         Other ->
             ?LOG_NOTICE(#{msg => ~"Server package is started but not used: the server key of the nova application names another",
@@ -199,9 +299,11 @@ init([]) ->
 
     Environment = nova:get_environment(),
 
-    ?LOG_NOTICE(#{msg => <<"Starting nova">>, environment => Environment}),
+    ?LOG_NOTICE(#{msg => ~"Starting nova", environment => Environment}),
 
     ok = nova_settings:validate(),
+
+    ?NOVA_PENDING_TABLE = ets:new(?NOVA_PENDING_TABLE, [named_table, public, ordered_set]),
 
     persistent_term:put(nova_use_stacktrace, application:get_env(nova, use_stacktrace, false)),
 
@@ -296,13 +398,13 @@ find_listener(Name) ->
 start_configured(Server) ->
     case application:get_env(nova, bootstrap_application, undefined) of
         undefined ->
-            ?LOG_ERROR(#{msg => <<"You need to define bootstrap_application option in configuration">>}),
+            ?LOG_ERROR(#{msg => ~"You need to define bootstrap_application option in configuration"}),
             {error, no_nova_app_defined};
         _Bootstrap ->
             case nova_listener:configured() of
                 {ok, Listeners} ->
                     note_legacy_configuration(),
-                    start_all(Server, Listeners, []);
+                    start_all(Server, Listeners);
                 {error, Reason} ->
                     ?LOG_ERROR(#{msg => ~"The listeners of the nova application are not configured as nova_listener describes",
                                  reason => Reason}),
@@ -320,25 +422,27 @@ note_legacy_configuration() ->
             ok
     end.
 
-%% A listener that cannot start takes those started before it down again, so
-%% a boot that fails leaves nothing bound.
-start_all(_Server, [], Started) ->
+%% The listeners of the configuration, then the applications that were
+%% added before there was a server to add them to.
+start_all(_Server, []) ->
+    case add_pending(take_pending()) of
+        ok -> all_route_groups_served();
+        {error, Reason} -> {error, Reason}
+    end;
+start_all(Server, [Listener | Rest]) ->
+    case start_checked(Server, Listener) of
+        {ok, _App, _Host, _Port} -> start_all(Server, Rest);
+        {error, Reason} -> {error, Reason}
+    end.
+
+all_route_groups_served() ->
     case route_groups_not_served() of
         [] ->
             ok;
         [{App, Prefix, Listener} | _] ->
             ?LOG_ERROR(#{msg => ~"A route group names a listener that is not configured or does not serve its application",
                          app => App, prefix => Prefix, listener => Listener, listeners => listeners()}),
-            _ = [stop_listener(Name) || #{name := Name} <- Started],
             {error, {route_group_not_served, App, Prefix, Listener}}
-    end;
-start_all(Server, [Listener | Rest], Started) ->
-    case start_checked(Server, Listener) of
-        {ok, _App, _Host, _Port} ->
-            start_all(Server, Rest, [Listener | Started]);
-        {error, Reason} ->
-            _ = [stop_listener(Name) || #{name := Name} <- Started],
-            {error, Reason}
     end.
 
 %% The route groups that name a listener whose routing table they are not
@@ -394,10 +498,16 @@ start_listener(Server, Listener = #{name := Name, ip := Host, port := Port, tls 
     Names = nova_listener:protocol_names(Protocols),
     Serving = #{name => Name,
                 protocols => Names,
-                websocket => [Version || Version <- maps:get(websocket, nova_server:capabilities(Server)),
+                websocket => [Version || Version <- websocket_protocols(Server, Listener),
                                          lists:member(Version, Names)]},
-    Dispatch = nova_router:compile_fresh(resolve_nova_apps(NovaApps), DispatchKey, Serving),
-    case Server:start_listener(Listener, env(Listener, DispatchKey, Dispatch)) of
+    Dispatch = try
+                   nova_router:compile_fresh(resolve_nova_apps(NovaApps), DispatchKey, Serving)
+               catch
+                   Class:NotCompiled:Stacktrace ->
+                       ok = nova_router:delete_dispatch(DispatchKey),
+                       erlang:raise(Class, NotCompiled, Stacktrace)
+               end,
+    case Server:start_listener(Listener, env(Server, Listener, DispatchKey, Dispatch)) of
         {ok, _Pid} ->
             register_listener(#nova_listener{name = Name,
                                              bind = {Host, Port},
@@ -406,7 +516,7 @@ start_listener(Server, Listener = #{name := Name, ip := Host, port := Port, tls 
                                              dispatch_key = DispatchKey}),
             say_what_the_session_cookie_needs(Tls =/= false),
             say_how_http3_alone_is_found(Name, Names),
-            ?LOG_NOTICE(#{msg => <<"Nova is running">>,
+            ?LOG_NOTICE(#{msg => ~"Nova is running",
                           url => unicode:characters_to_binary(
                                    io_lib:format("~s://~s:~B", [scheme(Tls), format_host(Host), Port])),
                           listener => Name,
@@ -415,11 +525,20 @@ start_listener(Server, Listener = #{name := Name, ip := Host, port := Port, tls 
                           nova_version => get_version(nova),
                           apps => Apps}),
             {ok, App, Host, Port};
-        {error, Reason} ->
+        {error, NotStarted} ->
+            Reason = nova_listener:without_secrets(NotStarted),
             ok = nova_router:delete_dispatch(DispatchKey),
-            ?LOG_ERROR(#{msg => <<"Could not start listener">>,
+            ?LOG_ERROR(#{msg => ~"Could not start listener",
                          listener => Name, port => Port, server => Server, reason => Reason}),
             {error, {listener_not_started, Reason}}
+    end.
+
+%% The versions a server takes WebSockets over can depend on how the
+%% listener is set up, which the server then says itself.
+websocket_protocols(Server, Listener) ->
+    case nova_server:supports(Server, {websocket_protocols, 1}) of
+        true -> Server:websocket_protocols(Listener);
+        false -> maps:get(websocket, nova_server:capabilities(Server))
     end.
 
 %% A client tries HTTP/3 once it is told of it: by the alt-svc header of an
@@ -436,8 +555,8 @@ scheme(_Tls) -> "https".
 %% What every request of a listener runs with. nova_router reads its routing
 %% table out of it, so a listener always carries the key of the table it
 %% serves.
-env(#{name := Name, steps := Steps}, DispatchKey, Dispatch) ->
-    Env = #{nova_dispatch_key => DispatchKey, nova_steps => Steps, listener => Name},
+env(Server, #{name := Name, steps := Steps}, DispatchKey, Dispatch) ->
+    Env = #{nova_dispatch_key => DispatchKey, nova_steps => Steps, listener => Name, nova_server => Server},
     case application:get_env(nova, use_persistent_term, true) of
         true -> Env;
         _    -> Env#{dispatch => Dispatch}
@@ -471,16 +590,25 @@ attach_application(App, Listener = #nova_listener{name = Name, apps = Apps, bind
         false ->
             nova_router:compile(resolve_nova_apps(with_nova_apps(App)), DispatchKey),
             register_listener(Listener#nova_listener{apps = Apps ++ [App]}),
-            ?LOG_NOTICE(#{msg => <<"Added Nova application to an existing listener">>,
+            ok = warn_about_route_groups(App),
+            ?LOG_NOTICE(#{msg => ~"Added Nova application to an existing listener",
                           app => App, port => Port, listener => Name}),
             {ok, App, Host, Port}
     end.
+
+%% At boot a route group that no listener it names serves stops the node.
+%% At runtime the listener it names may still be to come, so it is said.
+warn_about_route_groups(App) ->
+    _ = [?LOG_WARNING(#{msg => ~"A route group names a listener that is not started or does not serve its application, so the group is not served there",
+                        app => GroupApp, prefix => Prefix, listener => Listener, added => App})
+         || {GroupApp, Prefix, Listener} <- route_groups_not_served()],
+    ok.
 
 detach_application(App, #nova_listener{name = Name, apps = Apps, dispatch_key = DispatchKey} = Listener) ->
     ok = nova_router:remove_application(App, DispatchKey),
     case lists:delete(App, Apps) of
         [] ->
-            ?LOG_NOTICE(#{msg => <<"Stopping listener">>, app => App, listener => Name}),
+            ?LOG_NOTICE(#{msg => ~"Stopping listener", app => App, listener => Name}),
             stop_listener(Name);
         Remaining ->
             register_listener(Listener#nova_listener{apps = Remaining}),
@@ -494,7 +622,7 @@ stop_listener(Name) ->
                 ok ->
                     ok;
                 {error, Reason} ->
-                    ?LOG_ERROR(#{msg => <<"Could not stop listener">>, listener => Name, reason => Reason})
+                    ?LOG_ERROR(#{msg => ~"Could not stop listener", listener => Name, reason => Reason})
             end,
             ets:delete(?NOVA_LISTENERS_TABLE, Bind),
             ok = nova_router:delete_dispatch(DispatchKey);
@@ -516,17 +644,17 @@ graceful_shutdown(Listeners) ->
     Delay = application:get_env(nova, shutdown_delay, 0),
     case Delay > 0 of
         true ->
-            ?LOG_NOTICE(#{msg => <<"Graceful shutdown started">>, delay_ms => Delay}),
+            ?LOG_NOTICE(#{msg => ~"Graceful shutdown started", delay_ms => Delay}),
             timer:sleep(Delay);
         false ->
             ok
     end,
     DrainTimeout = application:get_env(nova, shutdown_drain_timeout, 15000),
     Names = [Name || #nova_listener{name = Name} <- Listeners],
-    ?LOG_NOTICE(#{msg => <<"Draining connections">>, listeners => Names, timeout_ms => DrainTimeout}),
+    ?LOG_NOTICE(#{msg => ~"Draining connections", listeners => Names, timeout_ms => DrainTimeout}),
     _ = [drain(Server, [Name || #nova_listener{name = Name, server = S} <- Listeners, S =:= Server], DrainTimeout)
          || Server <- lists:usort([Server || #nova_listener{server = Server} <- Listeners])],
-    ?LOG_NOTICE(#{msg => <<"Stopping listeners">>}),
+    ?LOG_NOTICE(#{msg => ~"Stopping listeners"}),
     _ = [stop_listener(Name) || Name <- Names],
     ok.
 

@@ -90,7 +90,7 @@ exception is logged.
 -doc """
 Called for every HTTP request on a route that lists the plugin under
 `pre_request`, ahead of the security callback of the route. `Env` is the
-Cowboy middleware environment, `Options` the options the plugin is configured
+environment the request runs in, `Options` the options the plugin is configured
 with and `PluginState` the state of the plugin. It can modify the request and
 the state, and returns what `c:pre_request/4` can. It must not read the
 request body.

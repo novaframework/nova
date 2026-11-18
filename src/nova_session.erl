@@ -72,8 +72,7 @@ The cookie goes out with the response Nova sends, or one sent with
          start_request/1,
          end_request/0,
          response_event/1,
-         response_cookies/1,
-         with_response_cookies/1
+         response_cookies/1
         ]).
 
 -export([
@@ -868,19 +867,6 @@ response_cookies(Req) ->
             cookie(<<>>, (cookie_opts(Req))#{max_age => 0});
         _ ->
             []
-    end.
-
--doc false.
-%% For a response the server builds from the request, as the 101 of a
-%% websocket upgrade is.
--spec with_response_cookies(Req) -> Req when Req :: nova_req:req().
-with_response_cookies(Req) ->
-    case response_cookies(Req) of
-        [] ->
-            Req;
-        [Cookie] ->
-            Cookies = maps:get(resp_cookies, Req, #{}),
-            Req#{resp_cookies => Cookies#{cookie_name() => Cookie}}
     end.
 
 %% A raise here would turn every response into a 500, so a cookie Nova or

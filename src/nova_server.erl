@@ -45,11 +45,13 @@ and 400 for these.
 
 ## WebSockets
 
-`upgrade_websocket/5` hands the connection to `Handler`, which is
-`nova_ws_handler`. The server calls its `websocket_init/1`,
-`websocket_handle/2`, `websocket_info/2` and `terminate/3`. Each of the first
-three returns `{Commands, State}`, `{Commands, State, hibernate}` or
-`{stop, State}`, where a command is a frame to send: `{text, Data}`,
+`upgrade_websocket/6` hands the connection to `Handler`, which is
+`nova_ws_handler`, and answers the upgrade with the headers it is given: the
+complete list, as `reply/4` gets it. The server calls the handler's
+`websocket_init/1`, `websocket_handle/2`, `websocket_info/2` and
+`terminate/3`. Each of the first three returns `{ok, State}`,
+`{Commands, State}`, `{Commands, State, hibernate}` or `{stop, State}`,
+where a command is a frame to send: `{text, Data}`,
 `{binary, Data}`, `ping`, `pong`, `{ping, Data}`, `{pong, Data}`, `close` or
 `{close, Code, Reason}`. A command the server does not know is skipped.
 
@@ -89,7 +91,8 @@ What a server can do.
 """.
 -type capabilities() :: #{protocols := [protocol()],
                           cleartext := [protocol()],
-                          websocket := [protocol()]}.
+                          websocket := [protocol()],
+                          _ => _}.
 
 -doc "The environment a listener's requests run in. Nova's own.".
 -type env() :: map().
@@ -123,7 +126,7 @@ Start a listener. `Listener` is checked and complete: the server reads
 `name`, `ip`, `port`, `tls`, `protocols` and `server_opts` from it. Every
 request it serves runs `nova_pipeline:execute/2` with `Env`.
 """.
--callback start_listener(Listener :: map(), Env :: env()) ->
+-callback start_listener(Listener :: nova_listener:listener(), Env :: env()) ->
     {ok, pid() | undefined} | {error, term()}.
 
 -callback stop_listener(Name :: atom()) -> ok | {error, term()}.
@@ -152,7 +155,7 @@ the time is up. Nova stops the listeners afterwards.
 -callback read_body(Req, read_body_opts()) ->
     {ok, binary(), Req} | {more, binary(), Req} when Req :: nova_req:req().
 
--callback upgrade_websocket(Req, Env, Handler :: module(), State :: term(), ws_opts()) ->
+-callback upgrade_websocket(headers(), Req, Env, Handler :: module(), State :: term(), ws_opts()) ->
     {ok, Req, Env} | {stop, Req} when Req :: nova_req:req(), Env :: env().
 
 -doc """
@@ -168,7 +171,14 @@ does not start with a listener that is refused.
 """.
 -callback check_listener(nova_listener:listener()) -> ok | {error, term()}.
 
--optional_callbacks([stream_trailers/2, inform/3, response_begun/1, check_listener/1]).
+-doc """
+The HTTP versions the server takes WebSockets over on this listener, for a
+server where that depends on how the listener is set up. Without it they
+are the `websocket` of `capabilities/0`.
+""".
+-callback websocket_protocols(nova_listener:listener()) -> [protocol()].
+
+-optional_callbacks([stream_trailers/2, inform/3, response_begun/1, check_listener/1, websocket_protocols/1]).
 
 %%--------------------------------------------------------------------
 -doc "The server module of the node.".
@@ -179,7 +189,7 @@ module() ->
         undefined -> default_module()
     end.
 
--doc "The server module serving a request.".
+-doc false.
 -spec of_req(nova_req:req()) -> module().
 of_req(#{nova_server := Server}) -> Server;
 of_req(_Req) -> module().
@@ -189,11 +199,12 @@ of_req(_Req) -> module().
 capabilities() ->
     capabilities(module()).
 
+-doc false.
 -spec capabilities(module()) -> capabilities().
 capabilities(Server) ->
     Server:capabilities().
 
--doc "Whether a server has one of the optional callbacks.".
+-doc false.
 -spec supports(module(), {atom(), arity()}) -> boolean().
 supports(Server, {Function, Arity}) ->
     _ = code:ensure_loaded(Server),
