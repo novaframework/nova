@@ -151,7 +151,9 @@ not be applied, so an application that comes with them is not added to it:
 `{error, {listener_settings_ignored, Name, Keys}}`, with either form. Add it
 with `listener` or the address alone, or on a port of its own. The settings
 a listener was started with for an application are those it has, so another
-application can be added with the same ones. `port => 0` is refused with
+application can be added with the same ones. They are compared as they are
+written: the same settings in another form, or with a default spelled out,
+are refused. `port => 0` is refused with
 `{error, {invalid_listener_setting, App, port, 0}}`: which port that would
 be is not known when the application is added. See
 [Multiple applications](multi-app.md#starting-an-application-at-runtime).
@@ -189,7 +191,8 @@ table for one, goes with it. One that does not return keeps the next
 application from being added, so it should not wait for something that adds
 one itself. The server package waits `shutdown_drain_timeout` for it when it
 stops. An application that is still being added by then is not added: the
-call exits with `killed`, and Nova logs a warning with the application.
+call exits with `killed`, and Nova logs a warning with the application. One
+that was waiting behind it is given a second more.
 
 An application is added again to the listener it was served on. One that
 was added by `ip` and `port` to a listener that was there already stays
@@ -225,9 +228,12 @@ logs an error. The applications are still served, and can be added and
 removed. How a listener was started for one of them is lost with the
 process, so the server package does not start again before the applications
 on that listener are removed: `{application_not_added, App,
-{no_such_listener, Name}}`. Should it be started again while the server
-package is stopped, nothing says what was added. Nova logs an error, and the
-applications are not served when the server package starts: add them again.
+{no_such_listener, Name}}`. That an application was added by the name of
+its listener is lost too. It is kept by the address the listener had, and
+does not follow the listener when the configuration moves it. Should it be
+started again while the server package is stopped, nothing says what was
+added. Nova logs an error, and the applications are not served when the
+server package starts: add them again.
 
 A route group of an application added to running listeners that names a
 listener which is not started, or which does not serve the application, is

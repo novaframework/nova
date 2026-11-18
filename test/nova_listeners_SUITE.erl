@@ -37,11 +37,13 @@
          address_taken/1,
          settings_ignored/1,
          listener_replaced/1,
+         table_replaced/1,
          registry_dies_adding/1,
          registry_restart/1,
          restart_keeps_added/1,
          registry_restart_stopped/1,
          registry_first_start/1,
+         registry_after_failed_start/1,
          listeners_gone/1,
          gone_while_starting/1,
          owner_gone/1,
@@ -101,11 +103,13 @@ all() ->
      address_taken,
      settings_ignored,
      listener_replaced,
+     table_replaced,
      registry_dies_adding,
      registry_restart,
      restart_keeps_added,
      registry_restart_stopped,
      registry_first_start,
+     registry_after_failed_start,
      listeners_gone,
      gone_while_starting,
      owner_gone,
@@ -733,6 +737,32 @@ listener_replaced(_Config) ->
         Server:stop_listener(web)
     end.
 
+%% A listener whose routing table is replaced while the router runs is not
+%% the one the application was to be added to, and the new table does not
+%% list it.
+table_replaced(_Config) ->
+    Port = nova_test_listener:free_port(),
+    {ok, Port} = nova_test_listener:try_start(#{port => Port,
+                                                listeners => #{web => #{port => Port}},
+                                                host => [#{routes => [?WHERE]}],
+                                                mounted => [#{prefix => "/sub", routes => [?WHERE]}],
+                                                nova_apps => []}),
+    [Key] = nova_router:dispatch_keys(),
+    ok = meck:new(nova_test_mounted_router, [passthrough, no_link]),
+    try
+        ok = meck:expect(nova_test_mounted_router, routes,
+                         fun(Env) ->
+                                 _ = nova_router:compile_fresh([nova_test_app], Key),
+                                 meck:passthrough([Env])
+                         end),
+        ?assertEqual({error, {no_such_listener, web}},
+                     nova_sup:add_application(nova_test_sub_app, #{listener => web}))
+    after
+        meck:unload(nova_test_mounted_router)
+    end,
+    ?assertEqual([nova_test_app], [App || {App, _Prefix} <- nova_router:compiled_apps(Key)]),
+    ?assertMatch({404, _}, nova_test_listener:get(Port, "/sub/where")).
+
 %% What is added goes with the process that keeps it: an application that
 %% is being added as that process goes down is not added behind its back.
 registry_dies_adding(_Config) ->
@@ -904,6 +934,22 @@ registry_first_start(_Config) ->
     ok = application:stop(nova),
     {{ok, _}, Again} = nova_test_log:collect(fun() -> application:ensure_all_started(nova) end),
     ?assertEqual([], nova_test_log:errors(Again)).
+
+%% A start that fails leaves nothing that makes the next one say it was
+%% started again.
+registry_after_failed_start(_Config) ->
+    Port = nova_test_listener:free_port(),
+    ok = nova_test_listener:configure(#{port => Port,
+                                        listeners => #{web => #{port => Port}},
+                                        host => [#{routes => [?WHERE]}],
+                                        nova_apps => []}),
+    Squat = spawn(fun() -> receive stop -> ok end end),
+    true = register(nova_watcher, Squat),
+    ?assertMatch({error, _}, application:ensure_all_started(nova)),
+    true = unregister(nova_watcher),
+    Squat ! stop,
+    {{ok, _}, Events} = nova_test_log:collect(fun() -> application:ensure_all_started(nova) end),
+    ?assertEqual([], nova_test_log:errors(Events)).
 
 %% The listeners can be gone before the process that keeps the
 %% applications is told. An application is then kept for the next start,

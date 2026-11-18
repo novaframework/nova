@@ -232,7 +232,9 @@ What happens depends on whether the host and port are already bound:
   that listener's existing routing table, and the two applications are served
   side by side. The listener serves as it was started, so settings other
   than the address are refused with
-  `{error, {listener_settings_ignored, Name, Keys}}`.
+  `{error, {listener_settings_ignored, Name, Keys}}`. A listener that was
+  started for an application takes another with the settings it was started
+  with, written the same way.
 
 Adding an application to a listener a second time returns
 `{error, {already_started, App}}`. One the configuration lists on the

@@ -579,7 +579,7 @@ started(Server, #{name := Name, ip := Host, port := Port, tls := Tls, applicatio
                   protocols := Protocols},
         Listener = #nova_listener{dispatch_key = DispatchKey}) ->
     Names = nova_listener:protocol_names(Protocols),
-    case registered(Listener) of
+    case register_listener(Listener) of
         ok ->
             say_what_the_session_cookie_needs(Tls =/= false),
             note_http3_only(Name, Names),
@@ -654,23 +654,30 @@ attach_application(App, #nova_listener{name = Name, apps = Apps, bind = {Host, P
         true ->
             {error, {already_started, App}};
         false ->
-            nova_router:compile(resolve_nova_apps(with_nova_apps(App)), DispatchKey),
-            %% The router of the application ran meanwhile, so the listener
-            %% is what it is now and not what it was before.
-            case find_listener(Name) of
-                {ok, Listener = #nova_listener{apps = Now, added = Added, bind = {Host, Port},
-                                               dispatch_key = DispatchKey}} ->
-                    case registered(Listener#nova_listener{apps = Now ++ [App], added = Added ++ [App]}) of
-                        ok ->
-                            ?LOG_NOTICE(#{msg => ~"Added Nova application to an existing listener",
-                                          app => App, port => Port, listener => Name}),
-                            {ok, App, Host, Port};
-                        {error, listeners_stopped} ->
-                            {error, {no_such_listener, Name}}
-                    end;
-                _GoneOrAnother ->
-                    {error, {no_such_listener, Name}}
+            try nova_router:compile(resolve_nova_apps(with_nova_apps(App)), DispatchKey) of
+                _Dispatch -> listed(App, Name, {Host, Port}, DispatchKey)
+            catch
+                %% The listener was started again as the router ran.
+                error:{routing_table_replaced, DispatchKey} -> {error, {no_such_listener, Name}}
             end
+    end.
+
+%% The router of the application ran meanwhile, so the listener is what it
+%% is now and not what it was before.
+listed(App, Name, {Host, Port}, DispatchKey) ->
+    case find_listener(Name) of
+        {ok, Listener = #nova_listener{apps = Now, added = Added, bind = {Host, Port},
+                                       dispatch_key = DispatchKey}} ->
+            case register_listener(Listener#nova_listener{apps = Now ++ [App], added = Added ++ [App]}) of
+                ok ->
+                    ?LOG_NOTICE(#{msg => ~"Added Nova application to an existing listener",
+                                  app => App, port => Port, listener => Name}),
+                    {ok, App, Host, Port};
+                {error, listeners_stopped} ->
+                    {error, {no_such_listener, Name}}
+            end;
+        _GoneOrAnother ->
+            {error, {no_such_listener, Name}}
     end.
 
 %% A listener that is started for an application says so, and that the
@@ -678,7 +685,7 @@ attach_application(App, #nova_listener{name = Name, apps = Apps, bind = {Host, P
 for_application(Name, App) ->
     case find_listener(Name) of
         {ok, Listener} ->
-            _ = registered(Listener#nova_listener{added = [App], for_application = true}),
+            _ = register_listener(Listener#nova_listener{added = [App], for_application = true}),
             ok;
         error ->
             ok
@@ -692,7 +699,7 @@ detach_application(App, #nova_listener{name = Name, apps = Apps, added = Added,
             ?LOG_NOTICE(#{msg => ~"Stopping listener", app => App, listener => Name}),
             stop_listener(Name);
         Remaining ->
-            register_listener(Listener#nova_listener{apps = Remaining, added = lists:delete(App, Added)}),
+            _ = register_listener(Listener#nova_listener{apps = Remaining, added = lists:delete(App, Added)}),
             ok
     end.
 
@@ -712,13 +719,8 @@ stop_listener(Name) ->
     end.
 
 register_listener(Listener) ->
-    true = ets:insert(?NOVA_LISTENERS_TABLE, Listener),
-    ok.
-
-%% The table goes with the owner of the listeners.
-registered(Listener) ->
-    try
-        register_listener(Listener)
+    try ets:insert(?NOVA_LISTENERS_TABLE, Listener) of
+        true -> ok
     catch
         error:badarg -> {error, listeners_stopped}
     end.

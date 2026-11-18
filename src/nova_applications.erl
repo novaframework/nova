@@ -16,13 +16,14 @@
 
 -include_lib("kernel/include/logger.hrl").
 
--export([start_link/0, add/2, remove/1, listening/1, draining/0, stopped/0]).
+-export([start_link/0, add/2, remove/1, listening/1, draining/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, format_status/1]).
 -export([work/4]).
 
 -define(ADDING, nova_adding_application).
 -define(WORKER, nova_applications_worker).
 -define(STARTED, {?MODULE, started}).
+-define(QUEUED_TIMEOUT, 1000).
 
 -type bind() :: {inet:ip_address() | string(), inet:port_number()}.
 
@@ -90,15 +91,19 @@ listening(Owner) ->
 %% the listeners once they are stopped, or to those of the next start.
 -spec draining() -> ok.
 draining() ->
-    Timeout = application:get_env(nova, shutdown_drain_timeout, 15000),
+    draining(application:get_env(nova, shutdown_drain_timeout, 15000)).
+
+%% The time the listeners have to drain is waited for once. An application
+%% that was queued behind the one that is stopped has had it too.
+draining(Timeout) ->
     case call(draining, Timeout) of
         timeout ->
             case whereis(?WORKER) of
                 Worker when is_pid(Worker) ->
                     ?LOG_WARNING(#{msg => ~"An application was still being added as the listeners stop, and is not added",
-                                   app => added_by(Worker), timeout_ms => Timeout}),
+                                   app => adding_app(Worker), timeout_ms => Timeout}),
                     exit(Worker, kill),
-                    draining();
+                    draining(min(Timeout, ?QUEUED_TIMEOUT));
                 undefined ->
                     ?LOG_WARNING(#{msg => ~"The listeners are stopped without the process that keeps the added applications knowing of it",
                                    timeout_ms => Timeout}),
@@ -107,13 +112,6 @@ draining() ->
         _Told ->
             ok
     end.
-
-%% The `nova` application has stopped, and the applications that were added
-%% went with it.
--spec stopped() -> ok.
-stopped() ->
-    _ = persistent_term:erase(?STARTED),
-    ok.
 
 %% A router that adds an application as its own routes are compiled asks
 %% the process that is waiting for those.
@@ -139,8 +137,11 @@ call(Request, Timeout) ->
 -spec init([]) -> {ok, #state{}}.
 init([]) ->
     process_flag(trap_exit, true),
-    Again = persistent_term:get(?STARTED, false),
-    ok = persistent_term:put(?STARTED, true),
+    %% Started again is under the supervisor it was under before. A start
+    %% of `nova` that failed had another.
+    Supervisor = whereis(nova_sup),
+    Again = is_pid(Supervisor) andalso persistent_term:get(?STARTED, undefined) =:= Supervisor,
+    ok = persistent_term:put(?STARTED, Supervisor),
     case nova_sup:listeners_owner() of
         undefined when Again ->
             %% Nothing says what was added while no listeners are up.
@@ -261,14 +262,16 @@ in_worker(Request, State) ->
 work(Registry, Tag, Request, State) ->
     put(?ADDING, true),
     true = register(?WORKER, self()),
-    Registry ! {Tag, handled(Request, State)},
+    Answer = handled(Request, State),
+    %% The next one is started on the answer, and takes the name.
+    true = unregister(?WORKER),
+    Registry ! {Tag, Answer},
     ok.
 
-%% The label of a worker says which application it is adding.
 adding(App) ->
     proc_lib:set_label({?MODULE, App}).
 
-added_by(Worker) ->
+adding_app(Worker) ->
     case proc_lib:get_label(Worker) of
         {?MODULE, App} -> App;
         _None -> undefined

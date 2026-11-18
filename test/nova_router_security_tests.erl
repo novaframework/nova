@@ -59,7 +59,9 @@ replaced_table_test_() ->
                  meck:unload(nova_test_mounted_router)
              end,
              ?assertEqual(error, element(1, nova_routing_trie:find('_', ~"/admin/", ~"GET",
-                                                                   persistent_term:get(?KEY))))
+                                                                   persistent_term:get(?KEY)))),
+             ?assertEqual([], nova_router:compiled_apps(?KEY)),
+             ?assertEqual([], nova_router:bound_groups(?KEY))
      end}.
 
 precedence_test_() ->
