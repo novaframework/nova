@@ -15,13 +15,13 @@ change it.
 | A controller returns something no handler knows | The fallback controller of the module if it has one, otherwise the `500` page | |
 | A view names a template that does not exist | The `500` page. In `dev` the page names the template | `Nova could not render template` |
 | A controller or a handler fails after the response has begun | What was sent already. No page | The failure, and a warning that no page is sent |
-| A request that was answered already is answered again, for instance by a controller that replied with `cowboy_req:reply/4` and returned without the request that call gave back | The response that was sent first. The second one is dropped, and the connection stays open | `The request was answered already, so this response is not sent ...`, once per request |
+| A request that was answered already is answered again, for instance by a controller that replied with `nova_req:reply/4` and returned without the request that call gave back | The response that was sent first. The second one is dropped, and the connection stays open | `The request was answered already, so this response is not sent ...`, once per request |
 | A `pre_request` plugin crashes or returns `{error, Reason}`, in `pre_security/4` or in `pre_request/4` | The `500` page | `Plugin crashed` |
 | A request to a websocket route comes from an origin that is not allowed | `403` with the text `Origin not allowed`. No page is rendered | |
 | `nova_csrf_plugin` refuses a request | `403` with the text `Forbidden - request from another origin` or `Forbidden - CSRF token invalid`. No page is rendered | |
 | The security callback crashes | The `500` page | `Security handler crashed` |
 | The security callback refuses the request | `401`, or what the callback returned. No page is rendered | |
-| The client sent something Cowboy cannot parse, or sent the body too slowly | `400`, `408` or `413` | A warning |
+| The client sent something that cannot be parsed, or sent the body too slowly | `400`, `408` or `413` | A warning |
 
 A page is the response of the status code route for that code. Nova has
 routes for `404` and `500`. For other codes without a route the response is
@@ -122,7 +122,7 @@ on how the page was reached:
 | A request no method matches (`405`) | `#{error => "Method not allowed"}` | No |
 | A crash in a plugin or in a security callback | `#{}` | Yes |
 | A controller that crashed, threw `{StatusCode, Reason}` or returned something no handler knows | `#{}` | Yes |
-| A request `cowboy_req` could not parse in a controller (`400`, `408`, `413`) | `#{}` | No |
+| A request `nova_req` could not parse in a controller (`400`, `408`, `413`) | `#{}` | No |
 | Your own call of `nova_router:render_status_page/2,3,5` | The map it was given, `#{}` with `render_status_page/2` | No |
 
 ```erlang

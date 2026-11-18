@@ -30,15 +30,15 @@ setup() ->
             callback = fun nova_file_controller:get_dir/1,
             extra_state = #{static => {priv_dir, test_app, "static"}}
         }, Tree3),
-    %% Cowboy handler (WebSocket)
-    CowboyValue = #cowboy_handler_value{
+    %% Handler module (WebSocket)
+    ModuleValue = #nova_module_value{
         app = test_app,
         handler = nova_ws_handler,
         arguments = #{module => test_ws_mod},
         plugins = [{pre_request, []}],
         secure = false
     },
-    {ok, Tree5} = nova_routing_trie:insert('_', "/ws", '_', CowboyValue, Tree4),
+    {ok, Tree5} = nova_routing_trie:insert('_', "/ws", '_', ModuleValue, Tree4),
     %% Status code route (custom 404)
     ErrorCallback = fun(_Req) -> {status, 404, #{}, <<"Custom not found">>} end,
     ErrorValue = #nova_handler_value{
@@ -197,12 +197,12 @@ execute_method_not_allowed_test_() ->
         ?assertMatch(F when is_function(F), maps:get(callback, Env1))
     end}.
 
-execute_cowboy_handler_test_() ->
+execute_module_handler_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
         {ok, Req1, Env1} = nova_router:execute(Req, #{}),
         ?assertEqual(test_app, maps:get(app, Env1)),
-        ?assertEqual(nova_ws_handler, maps:get(cowboy_handler, Env1)),
+        ?assertEqual(nova_ws_handler, maps:get(handler_module, Env1)),
         ?assertEqual(#{module => test_ws_mod}, maps:get(arguments, Env1)),
         ?assertEqual(false, maps:get(secure, Env1)),
         ?assert(is_list(maps:get(plugins, Req1)))
@@ -842,6 +842,8 @@ route_template_absent_on_404_and_405_test_() ->
         ?assertNot(maps:is_key(nova_route, NotAllowed))
     end}.
 
-route_template_record_arity_test() ->
-    ?assertEqual(8, tuple_size(#nova_handler_value{})),
-    ?assertEqual(6, tuple_size(#cowboy_handler_value{})).
+%% Tools that carry a copy of the records, as rebar3_nova does, match them by
+%% size. A field more is theirs to follow.
+record_size_test() ->
+    ?assertEqual(9, tuple_size(#nova_handler_value{})),
+    ?assertEqual(7, tuple_size(#nova_module_value{})).

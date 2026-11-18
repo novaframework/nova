@@ -38,6 +38,8 @@ A route group is a map. Its keys are all optional:
 | `host` | Serve the group only for requests to this host, a string or a binary. A host that has groups of its own is served by those alone: groups without `host` are not consulted for it |
 | `extra_state` | A term handed to the controllers of the routes of the group that set no `extra_state` themselves |
 | `apps` | Other Nova applications to mount under the prefix of the group, see [Multiple applications](multi-app.md) |
+| `listener` | The listeners the group is served on, a name or a list of names, see [The listeners of a route group](#the-listeners-of-a-route-group) |
+| `http_versions` | The HTTP versions the routes of the group are served over, see [The HTTP versions of a route](#the-http-versions-of-a-route) |
 
 You can also defer the routing information to the controllers, like this:
 ```erlang
@@ -125,7 +127,7 @@ A route ending in `[...]` matches any number of trailing segments. They reach th
 
 A websocket route takes `extra_state` like an HTTP route does, and falls back to the `extra_state` of its route group. The controller finds it in the upgrade request, under `req` in its controller data.
 
-The `init/1` callback of a websocket controller returns `{ok, State}` to accept the connection. Any other return refuses the upgrade with a `500`. It can return `{ok, State, Options}` to also set the options of the connection, where `Options` is a `nova_websocket:opts()` map such as `#{max_frame_size => 65536, idle_timeout => 30000}`. It takes the options of [cowboy_websocket](https://ninenines.eu/docs/en/cowboy/2.21/manual/cowboy_websocket/).
+The `init/1` callback of a websocket controller returns `{ok, State}` to accept the connection. Any other return refuses the upgrade with a `500`. It can return `{ok, State, Options}` to also set the options of the connection, where `Options` is a `nova_websocket:opts()` map such as `#{max_frame_size => 65536, idle_timeout => 30000}`. `idle_timeout`, `max_frame_size` and `compress` are taken by every server. Other keys are the server's own, such as those of [cowboy_websocket](https://ninenines.eu/docs/en/cowboy/2.21/manual/cowboy_websocket/) on Cowboy.
 
 A browser sends the cookies of your site with a websocket upgrade started by any page. Nova therefore checks where every request to a websocket route comes from, by its `Origin` and `Sec-Fetch-Site` headers, against `trusted_origins`, and answers one from another origin with `403`. See [The origin check](websockets.md#the-origin-check).
 
@@ -355,6 +357,92 @@ callback when that returns `{true, Data}`, and otherwise the data of the
 with a callback that returns `true`.
 
 
+## The listeners of a route group
+
+A node can have several listeners, see [Servers and listeners](listeners.md).
+A route group is served on every listener that serves its application. With
+`listener` it is served on the listeners it names and on no other:
+
+```erlang
+routes(_Environment) ->
+    [#{prefix => "/",
+       routes => [{"/", fun my_controller:index/1, #{methods => [get]}}]},
+     #{prefix => "/admin",
+       listener => admin,
+       security => fun my_auth:admin/1,
+       routes => [{"/users", fun my_admin_controller:users/1, #{methods => [get]}}]}].
+```
+
+```erlang
+{listeners, #{
+    public => #{port => 8443, tls => Tls, applications => [my_app]},
+    admin => #{ip => {127, 0, 0, 1}, port => 9090, applications => [my_app]}
+}}
+```
+
+`/admin/users` is answered on port 9090 and is a `404` on port 8443. The
+applications the group mounts with `apps` are served where the group is.
+
+Every listener the group names has to serve the application. A name that is
+not a listener, or a listener without the application in its `applications`,
+stops the node from starting with
+`{route_group_not_served, App, Prefix, Listener}`.
+
+Routes added at runtime with `nova_router:add_routes/2,3` follow the same
+rule: a group that names listeners is added to the table of one of them
+alone, and Nova logs a notice for a table the group is left out of. An
+application added with `nova_sup:add_application/2` whose group names a
+listener that does not serve it gets a warning in the log, not a stopped
+node.
+
+`listener` is not a security callback. It keeps a group off the listeners
+that do not have it, and whoever reaches the listener that has it still
+needs to be let through.
+
+## The HTTP versions of a route
+
+A route is served over every HTTP version its listener speaks. With
+`http_versions`, a list out of `http1`, `http2` and `http3`, it is served
+over those alone. The key goes in the options of a route, or in a route
+group for every route of the group that has none of its own:
+
+```erlang
+#{prefix => "/api",
+  http_versions => [http2, http3],
+  routes => [
+      {"/stream", fun my_api:stream/1, #{methods => [get]}},
+      {"/hook", fun my_api:hook/1, #{methods => [post], http_versions => [http1, http2]}}
+  ]}
+```
+
+A request over another version is not routed. Over HTTP/1.1 it is answered
+with `426` and an `upgrade` header that names the versions to come back
+with. Over HTTP/2 and HTTP/3, which have no such header, it is answered with
+`505`. Both go through the [status-code routes](#status-code-routes), and no
+plugin or security callback runs.
+
+The `upgrade` header is there because a `426` has to have one, and for
+whoever reads the response. A client cannot switch on it: HTTP/2 is agreed
+on in the TLS handshake and HTTP/3 is found through `alt-svc` or DNS, so a
+client that speaks the version comes back on a new connection. What the
+header holds may change between releases.
+
+The version is that of the connection Nova gets. Behind a proxy or a load
+balancer that speaks HTTP/1.1 to the node, every request is `http1`
+whatever the client spoke, and a route for `[http2, http3]` alone answers
+`426` to all of them. Use `http_versions` where clients reach the listener
+directly, or where the proxy keeps the version.
+
+A route that asks for versions its listener serves none of stops the node
+from starting with
+`{route_http_versions_not_served, Path, Versions, Listener}`. So does a
+websocket route on a listener without a version the server takes websockets
+over, with `{websocket_route_not_served, Path, Listener}`. A route group
+that is only meant for some listeners names them with `listener`.
+
+`nova_req:http_version/1` tells a controller which version a request came
+over.
+
 ## Route precedence
 
 More than one route can match a request. Nova resolves that the same way every
@@ -445,7 +533,7 @@ A status-code route that crashes, or throws `{Status, Reason}` itself, is not re
 ## The matched route
 
 When a request matches a route, Nova stores the route's template in the
-request map under `nova_route`. Controllers, plugins, Cowboy handlers and
+request map under `nova_route`. Controllers, plugins and
 websocket controllers (through `req` in their controller data) can all read
 it:
 
@@ -495,6 +583,26 @@ This will add the routes defined in the second argument to the `my_app` applicat
 
 **Note**: If a route already exists it will be overwritten. This is the one
 place where a later route wins; routes compiled at startup keep the first.
+
+Routes are added to the table as it was when the call began. When another
+process stored routes into the table meanwhile, or removed an application
+from it, yours are compiled again into the table as it is by then, so
+nothing either of you stored is lost. After a few tries the call raises the
+error `{routing_table_changed, DispatchKey}`. Of a list of route lists,
+those that were stored before that stay in the table: the others are not in
+it. `{routing_table_replaced, DispatchKey}` is raised when the listener of
+the table was started again meanwhile, or is being started.
+
+These two are raised as errors: the table moved under the call, and calling
+again is the answer to the first. What a router got wrong is thrown, as
+`{error, Reason}`, and calling again does not help. One of those is a
+router that adds routes to the table it is being compiled into, compiles
+into it or removes an application from it: `{error, {routing_table_in_use,
+DispatchKey}}` is thrown from that call, at boot and at runtime alike, and
+nothing is stored by it. The routes of a router are the ones it returns. A
+router that has another process store into the table and waits for it is
+not told apart from any other process that stores: its own routes are
+answered `routing_table_changed`, and what that process stored stays.
 
 Routes added this way live in the routing table of the running listener. When
 Nova starts, each listener compiles its table from the routers again, so

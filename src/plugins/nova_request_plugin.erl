@@ -53,9 +53,9 @@ callback. It reads nothing from the client. Returns `{ok, Req, State}` with
 `parsed_qs` set in the request, or a `stop` with a `400` for a malformed
 query string.
 """.
--spec pre_security(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
-                          {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
-                          {stop, {status, 400}, Req0 :: cowboy_req:req(), NewState :: any()}.
+-spec pre_security(Req :: nova_req:req(), Env :: any(), Options :: map(), State :: any()) ->
+                          {ok, Req0 :: nova_req:req(), NewState :: any()} |
+                          {stop, {status, 400}, Req0 :: nova_req:req(), NewState :: any()}.
 pre_security(Req, _Env, Options, State) ->
     case [Option || {parse_qs, _Type} = Option <- maps:to_list(Options)] of
         [] -> {ok, Req, State};
@@ -69,11 +69,11 @@ Reads the body when an option asks for it and applies every option but
 `{ok, Req, State}` with the keys described above set in the request, or a
 `stop` with the `400`, `408` or `413` that refuses the request.
 """.
--spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
-                         {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
-                         {stop, Req0 :: cowboy_req:req(), NewState :: any()} |
+-spec pre_request(Req :: nova_req:req(), Env :: any(), Options :: map(), State :: any()) ->
+                         {ok, Req0 :: nova_req:req(), NewState :: any()} |
+                         {stop, Req0 :: nova_req:req(), NewState :: any()} |
                          {stop, {status, 400 | 413} | {status, 408 | 413, #{binary() => binary()}},
-                          Req0 :: cowboy_req:req(), NewState :: any()}.
+                          Req0 :: nova_req:req(), NewState :: any()}.
 pre_request(Req, _Env, Options, State) ->
     ListOptions = [Option || {Key, _Value} = Option <- maps:to_list(Options), Key =/= parse_qs],
     MaxLength = limit(max_body_length, Options, ?DEFAULT_MAX_BODY_LENGTH, 0),
@@ -87,8 +87,8 @@ pre_request(Req, _Env, Options, State) ->
 
 %%--------------------------------------------------------------------
 -doc "Does nothing: the plugin works in `pre_security/4` and `pre_request/4`.".
--spec post_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
-          {ok, Req0 :: cowboy_req:req(), NewState :: any()}.
+-spec post_request(Req :: nova_req:req(), Env :: any(), Options :: map(), State :: any()) ->
+          {ok, Req0 :: nova_req:req(), NewState :: any()}.
 post_request(Req, _Env, _Options, State) ->
     {ok, Req, State}.
 
@@ -144,7 +144,7 @@ modulate_state(Req = #{body := Body}, [{read_urlencoded_body, true}|Tl], State) 
             modulate_state(Req, Tl, State)
     end;
 modulate_state(Req, [{parse_qs, Type}|Tl], State) when Type =:= true; Type =:= list ->
-    try cowboy_req:parse_qs(Req) of
+    try nova_req:parse_qs(Req) of
         Qs when Type =:= true -> modulate_state(Req#{parsed_qs => maps:from_list(Qs)}, Tl, State);
         Qs -> modulate_state(Req#{parsed_qs => Qs}, Tl, State)
     catch
@@ -162,14 +162,14 @@ refuse(Status, Reason, Req, State) ->
 %% library, which can hold bytes of the body.
 decode_json(Req, <<>>, _Tl, State) ->
     ?LOG_WARNING(#{msg => ~"Request refused", reason => ~"Empty JSON body", status_code => 400}),
-    {stop, cowboy_req:reply(400, Req), State};
+    {stop, nova_req:reply(400, Req), State};
 decode_json(Req, Body, Tl, State) ->
     case nova_json:try_decode(Body) of
         {ok, JSON} ->
             modulate_state(Req#{json => JSON}, Tl, State);
         {error, _Reason, Why} ->
             ?LOG_WARNING(Why#{msg => ~"Request refused", reason => ~"Malformed JSON body", status_code => 400}),
-            {stop, cowboy_req:reply(400, Req), State}
+            {stop, nova_req:reply(400, Req), State}
     end.
 
 %% application/json, or any application type with the +json structured
@@ -181,10 +181,10 @@ is_json({~"application", SubType}) when byte_size(SubType) > 5 ->
 is_json(_) ->
     false.
 
-%% cowboy_req:parse_header/2 lowercases the type and subtype, which are
+%% nova_req:parse_header/2 lowercases the type and subtype, which are
 %% case-insensitive (RFC 9110 8.3.1).
 content_type(Req) ->
-    try cowboy_req:parse_header(~"content-type", Req) of
+    try nova_req:parse_header(~"content-type", Req) of
         {Type, SubType, _Params} -> {Type, SubType};
         _ -> undefined
     catch
@@ -194,7 +194,7 @@ content_type(Req) ->
 %% A multipart body is never buffered here; nova_multipart_plugin or the
 %% controller reads the parts from the stream.
 read_request_body(Req, Options, MaxLength, Timeout) ->
-    case not is_multipart(Req) andalso should_read_body(Options) andalso cowboy_req:has_body(Req) of
+    case not is_multipart(Req) andalso should_read_body(Options) andalso nova_req:has_body(Req) of
         true -> read_body(Req, MaxLength, Timeout);
         false -> {ok, Req#{body => <<>>}}
     end.
@@ -231,13 +231,13 @@ read_body(Req, MaxLength, Timeout) ->
                    infinity -> infinity;
                    _ -> erlang:monotonic_time(millisecond) + Timeout
                end,
-    case cowboy_req:body_length(Req) of
+    case nova_req:body_length(Req) of
         Length when is_integer(Length), MaxLength =/= infinity, Length > MaxLength -> {too_large, Req};
         _ -> read_body(Req, MaxLength, Deadline, <<>>)
     end.
 
--spec read_body(cowboy_req:req(), non_neg_integer() | infinity, integer() | infinity, binary()) ->
-          {ok | too_large | timeout, cowboy_req:req()}.
+-spec read_body(nova_req:req(), non_neg_integer() | infinity, integer() | infinity, binary()) ->
+          {ok | too_large | timeout, nova_req:req()}.
 read_body(Req, MaxLength, Deadline, Acc) ->
     case time_left(Deadline) of
         0 ->
@@ -251,7 +251,7 @@ read_body(Req, MaxLength, Deadline, Acc) ->
                          infinity -> ?CHUNK_PERIOD;
                          _ -> min(?CHUNK_PERIOD, TimeLeft)
                      end,
-            {Status, Data, Req0} = cowboy_req:read_body(Req, #{length => ReadLength, period => Period}),
+            {Status, Data, Req0} = nova_req:read_body(Req, #{length => ReadLength, period => Period}),
             Body = <<Acc/binary, Data/binary>>,
             case {Status, MaxLength =/= infinity andalso byte_size(Body) > MaxLength} of
                 {_, true} -> {too_large, Req0};

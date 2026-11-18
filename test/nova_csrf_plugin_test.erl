@@ -164,41 +164,41 @@ safe_method_no_session_proceeds_without_token_test() ->
     end.
 
 unsafe_method_valid_token_from_header_test() ->
-    setup_meck([nova_session, cowboy_req]),
+    setup_meck([nova_session, nova_req]),
     try
         Token = <<"valid-token">>,
         meck:expect(nova_session, get, fun(_Req, <<"_csrf_token">>) -> {ok, Token} end),
-        meck:expect(cowboy_req, header, fun(<<"x-csrf-token">>, _Req) -> Token end),
+        meck:expect(nova_req, header, fun(<<"x-csrf-token">>, _Req) -> Token end),
         Req = nova_test_helper:with_header(~"x-csrf-token", Token, nova_test_helper:mock_req(~"POST", ~"/submit")),
         {ok, Req1, _State} = nova_csrf_plugin:pre_request(Req, #{}, #{}, #{}),
         ?assertEqual(Token, unmasked(maps:get(csrf_token, Req1)))
     after
-        cleanup_meck([cowboy_req, nova_session])
+        cleanup_meck([nova_req, nova_session])
     end.
 
 unsafe_method_valid_token_from_params_test() ->
-    setup_meck([nova_session, cowboy_req]),
+    setup_meck([nova_session, nova_req]),
     try
         Token = <<"valid-token">>,
         meck:expect(nova_session, get, fun(_Req, <<"_csrf_token">>) -> {ok, Token} end),
-        meck:expect(cowboy_req, header, fun(<<"x-csrf-token">>, _Req) -> undefined end),
+        meck:expect(nova_req, header, fun(<<"x-csrf-token">>, _Req) -> undefined end),
         Req = (nova_test_helper:mock_req(~"POST", ~"/submit"))#{params => #{~"_csrf_token" => Token}},
         {ok, Req1, _State} = nova_csrf_plugin:pre_request(Req, #{}, #{}, #{}),
         ?assertEqual(Token, unmasked(maps:get(csrf_token, Req1)))
     after
-        cleanup_meck([cowboy_req, nova_session])
+        cleanup_meck([nova_req, nova_session])
     end.
 
 unsafe_method_invalid_token_test() ->
-    setup_meck([nova_session, cowboy_req]),
+    setup_meck([nova_session, nova_req]),
     try
         meck:expect(nova_session, get, fun(_Req, <<"_csrf_token">>) -> {ok, <<"real-token0">>} end),
-        meck:expect(cowboy_req, header, fun(<<"x-csrf-token">>, _Req) -> <<"wrong-token">> end),
+        meck:expect(nova_req, header, fun(<<"x-csrf-token">>, _Req) -> <<"wrong-token">> end),
         Req = nova_test_helper:with_header(~"x-csrf-token", ~"wrong-token",
                                            nova_test_helper:mock_req(~"POST", ~"/submit")),
         {stop, {reply, 403, _, _}, _Req1, _State} = nova_csrf_plugin:pre_request(Req, #{}, #{}, #{})
     after
-        cleanup_meck([cowboy_req, nova_session])
+        cleanup_meck([nova_req, nova_session])
     end.
 
 unsafe_method_no_session_test() ->
@@ -212,14 +212,14 @@ unsafe_method_no_session_test() ->
     end.
 
 unsafe_method_missing_submitted_token_test() ->
-    setup_meck([nova_session, cowboy_req]),
+    setup_meck([nova_session, nova_req]),
     try
         meck:expect(nova_session, get, fun(_Req, <<"_csrf_token">>) -> {ok, <<"real-token">>} end),
-        meck:expect(cowboy_req, header, fun(<<"x-csrf-token">>, _Req) -> undefined end),
+        meck:expect(nova_req, header, fun(<<"x-csrf-token">>, _Req) -> undefined end),
         Req = nova_test_helper:mock_req(~"DELETE", ~"/resource/1"),
         {stop, {reply, 403, _, _}, _Req1, _State} = nova_csrf_plugin:pre_request(Req, #{}, #{}, #{})
     after
-        cleanup_meck([cowboy_req, nova_session])
+        cleanup_meck([nova_req, nova_session])
     end.
 
 excluded_path_skips_validation_test() ->
@@ -235,11 +235,11 @@ excluded_path_skips_validation_test() ->
     end.
 
 custom_field_name_test() ->
-    setup_meck([nova_session, cowboy_req]),
+    setup_meck([nova_session, nova_req]),
     try
         Token = <<"custom-token">>,
         meck:expect(nova_session, get, fun(_Req, <<"csrf">>) -> {ok, Token} end),
-        meck:expect(cowboy_req, header, fun(<<"x-my-csrf">>, _Req) -> undefined end),
+        meck:expect(nova_req, header, fun(<<"x-my-csrf">>, _Req) -> undefined end),
         Req = (nova_test_helper:mock_req(~"POST", ~"/submit"))#{params => #{~"my_csrf" => Token}},
         Options = #{field_name => <<"my_csrf">>,
                     header_name => <<"x-my-csrf">>,
@@ -247,7 +247,7 @@ custom_field_name_test() ->
         {ok, Req1, _State} = nova_csrf_plugin:pre_request(Req, #{}, Options, #{}),
         ?assertEqual(Token, unmasked(maps:get(csrf_token, Req1)))
     after
-        cleanup_meck([cowboy_req, nova_session])
+        cleanup_meck([nova_req, nova_session])
     end.
 
 %%====================================================================
@@ -267,7 +267,7 @@ unmasked(Masked) ->
     crypto:exor(Mask, Token).
 
 masked_token_is_accepted_test() ->
-    setup_meck([nova_session, cowboy_req]),
+    setup_meck([nova_session, nova_req]),
     try
         Token = ~"the-token-of-the-session",
         meck:expect(nova_session, get, fun(_Req, ~"_csrf_token") -> {ok, Token} end),
@@ -278,11 +278,11 @@ masked_token_is_accepted_test() ->
         ?assertEqual(nomatch, binary:match(Masked, Token)),
         Post = nova_test_helper:mock_req(~"POST", ~"/submit"),
         [begin
-             meck:expect(cowboy_req, header, fun(~"x-csrf-token", _Req) -> Submitted end),
+             meck:expect(nova_req, header, fun(~"x-csrf-token", _Req) -> Submitted end),
              ?assertMatch({Submitted, {ok, _, _}}, {Submitted, nova_csrf_plugin:pre_request(Post, #{}, #{}, #{})})
          end || Submitted <- [Masked, Again, Token]],
         [begin
-             meck:expect(cowboy_req, header, fun(~"x-csrf-token", _Req) -> Submitted end),
+             meck:expect(nova_req, header, fun(~"x-csrf-token", _Req) -> Submitted end),
              ?assertMatch({Submitted, {stop, {reply, 403, _, _}, _, _}},
                           {Submitted, nova_csrf_plugin:pre_request(Post, #{}, #{}, #{})})
          end || Submitted <- [binary:part(Masked, 0, byte_size(Masked) - 1), <<Masked/binary, "A">>,
@@ -290,7 +290,7 @@ masked_token_is_accepted_test() ->
                                             #{mode => urlsafe, padding => false}),
                               ~"", undefined]]
     after
-        cleanup_meck([cowboy_req, nova_session])
+        cleanup_meck([nova_req, nova_session])
     end.
 
 -define(SECRET, ~"a secret of thirty-two bytes or more, for the tests").

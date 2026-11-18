@@ -11,7 +11,7 @@
 %% that says nothing about where it is, and is allowed. Every clause answers
 %% for whatever a client put in `Origin` and `Host`, and for an Allowed that
 %% is none of the values, which allows no origin.
--spec is_allowed(Origin :: binary() | undefined, Req :: cowboy_req:req(), Allowed :: term()) -> boolean().
+-spec is_allowed(Origin :: binary() | undefined, Req :: nova_req:req(), Allowed :: term()) -> boolean().
 is_allowed(undefined, _Req, _Allowed) ->
     true;
 is_allowed(_Origin, _Req, any) ->
@@ -65,7 +65,7 @@ host_and_port(Authority) ->
 %% no setting that names a proxy whose `X-Forwarded-Proto` or `Forwarded`
 %% could be believed, so neither header is read. A list of origins or
 %% `same_origin` is the rule for a site that needs the scheme checked there.
--spec is_as_safe_as(Scheme :: binary(), cowboy_req:req()) -> boolean().
+-spec is_as_safe_as(Scheme :: binary(), nova_req:req()) -> boolean().
 is_as_safe_as(Scheme, #{scheme := ~"https"}) ->
     Scheme =:= ~"https";
 is_as_safe_as(_Scheme, _Req) ->
@@ -77,7 +77,7 @@ is_as_safe_as(_Scheme, _Req) ->
 %% proxy sending `$host:$server_port` does, names the port of the origin.
 %% HTTP/2 and HTTP/3 send the authority outside the headers, and Cowboy keeps
 %% it as host and port, with the port of the scheme where none was sent.
--spec is_sent_to(binary(), binary(), non_neg_integer() | undefined, cowboy_req:req()) -> boolean().
+-spec is_sent_to(binary(), binary(), non_neg_integer() | undefined, nova_req:req()) -> boolean().
 is_sent_to(Scheme, Host, Port, Req) ->
     case requested_host(Req) of
         {Host, undefined} -> Port =:= undefined orelse Port =:= port(Scheme, undefined);
@@ -85,7 +85,7 @@ is_sent_to(Scheme, Host, Port, Req) ->
         _AnotherHost -> false
     end.
 
--spec requested_host(cowboy_req:req()) -> {Host :: binary(), Port :: non_neg_integer() | undefined} | undefined.
+-spec requested_host(nova_req:req()) -> {Host :: binary(), Port :: non_neg_integer() | undefined} | undefined.
 requested_host(#{headers := #{~"host" := Host}}) when is_binary(Host) ->
     host_and_port(Host);
 requested_host(#{host := Host, port := Port}) when is_binary(Host), Host =/= <<>>, is_integer(Port) ->

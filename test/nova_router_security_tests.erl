@@ -19,6 +19,25 @@ cleanup(Prev) ->
     nova_test_mounted_router:set_routes([]),
     nova_test_helper:cleanup_nova_env(Prev).
 
+%% A router does not store into the table it is compiled into, so what is
+%% stored as it runs is stored by another process.
+elsewhere(Store) ->
+    {Storing, Monitor} = spawn_monitor(fun() ->
+                                               exit({stored, try
+                                                                 Store()
+                                                             catch
+                                                                 Class:Reason -> {Class, Reason}
+                                                             end})
+                                       end),
+    receive
+        {'DOWN', Monitor, process, Storing, {stored, Stored}} -> Stored
+    after 5000 -> error(not_stored)
+    end.
+
+%% A build that a failed test left waiting holds its table for ever.
+stopped(undefined) -> ok;
+stopped(Builder) -> exit(Builder, kill).
+
 group_callback(_Req) -> true.
 host_callback(_Req) -> true.
 page(_Req) -> {status, 200}.
@@ -37,6 +56,449 @@ secure_of(GroupSecurity, AppOptions) ->
         nova_routing_trie:find('_', ~"/admin/", ~"GET", Dispatch),
     nova_router:delete_dispatch(?KEY),
     Secure.
+
+%% A router that takes its time can find the table of its listener
+%% replaced, by a listener that was started again. What it read before is
+%% not written over the new one.
+replaced_table_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             Open = group(unset),
+             Bound = Open#{prefix => "/bound", listener => web},
+             nova_test_mounted_router:set_routes([Open]),
+             _ = nova_router:compile_fresh([nova_test_sub_app], ?KEY),
+             ok = meck:new(nova_test_mounted_router, [passthrough, no_link]),
+             try
+                 ok = meck:expect(nova_test_mounted_router, routes,
+                                  fun(_Env) ->
+                                          _ = nova_router:compile_fresh([], ?KEY),
+                                          [Open, Bound]
+                                  end),
+                 ?assertError({routing_table_replaced, ?KEY}, nova_router:compile([nova_test_sub_app], ?KEY))
+             after
+                 meck:unload(nova_test_mounted_router)
+             end,
+             ?assertEqual(error, element(1, nova_routing_trie:find('_', ~"/admin/", ~"GET",
+                                                                   persistent_term:get(?KEY)))),
+             ?assertEqual([], nova_router:compiled_apps(?KEY)),
+             ?assertEqual([], nova_router:bound_groups(?KEY))
+     end}.
+
+%% Nothing is merged into the table of a listener while the one that takes
+%% its place is built. What is under the key then is the table before it,
+%% and a merge into that would be stored over the one that was built.
+rebuilt_table_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             Open = group(unset),
+             Test = self(),
+             nova_test_mounted_router:set_routes([Open]),
+             _ = nova_router:compile_fresh([nova_test_sub_app], ?KEY),
+             ok = meck:new(nova_test_mounted_router, [passthrough, no_link]),
+             try
+                 ok = meck:expect(nova_test_mounted_router, routes,
+                                  fun(_Env) when self() =:= Test ->
+                                          Test ! {merged, elsewhere(fun() ->
+                                                                            nova_router:compile([nova_test_sub_app], ?KEY)
+                                                                    end)},
+                                          Test ! {added, elsewhere(fun() ->
+                                                                           nova_router:add_routes(
+                                                                             nova_test_app, Open#{prefix => "/added"}, ?KEY)
+                                                                   end)},
+                                          Test ! {removed, elsewhere(fun() ->
+                                                                             nova_router:remove_application(
+                                                                               nova_test_sub_app, ?KEY)
+                                                                     end)},
+                                          Test ! {built, elsewhere(fun() ->
+                                                                           nova_router:compile_fresh([], ?KEY)
+                                                                   end)},
+                                          [Open#{prefix => "/fresh"}];
+                                     (_Env) ->
+                                          [Open]
+                                  end),
+                 _ = nova_router:compile_fresh([nova_test_sub_app], ?KEY)
+             after
+                 meck:unload(nova_test_mounted_router)
+             end,
+             Refused = {error, {routing_table_replaced, ?KEY}},
+             ?assertEqual(Refused, receive {merged, Merged} -> Merged after 0 -> none end),
+             ?assertEqual(Refused, receive {added, Added} -> Added after 0 -> none end),
+             ?assertEqual(Refused, receive {removed, Removed} -> Removed after 0 -> none end),
+             ?assertEqual(Refused, receive {built, Built} -> Built after 0 -> none end),
+             Found = fun(Path) -> element(1, nova_routing_trie:find('_', Path, ~"GET", persistent_term:get(?KEY))) end,
+             ?assertEqual([error, error, ok], [Found(Path) || Path <- [~"/admin/", ~"/added/", ~"/fresh/"]]),
+             ?assertEqual([{nova_test_sub_app, "/"}], nova_router:compiled_apps(?KEY)),
+             ok = nova_router:add_routes(nova_test_app, Open#{prefix => "/after"}, ?KEY),
+             ?assertEqual(ok, Found(~"/after/"))
+     end}.
+
+%% A router that stores into the table it is compiled into would leave
+%% what it stored there while its own routes are refused. It is thrown at,
+%% as for its other mistakes, as a listener starts and as routes are
+%% merged alike, and nothing is stored.
+own_table_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             Open = group(unset),
+             Side = Open#{prefix => "/side"},
+             InUse = {error, {routing_table_in_use, ?KEY}},
+             Found = fun(Path) -> element(1, nova_routing_trie:find('_', Path, ~"GET", persistent_term:get(?KEY))) end,
+             Stores = [fun() -> nova_router:add_routes(nova_test_app, Side, ?KEY) end,
+                       fun() -> nova_router:compile([nova_test_app], ?KEY) end,
+                       fun() -> nova_router:remove_application(nova_test_sub_app, ?KEY) end],
+             Group = #{prefix => "/g", apps => [nova_test_sub_app], routes => []},
+             Compiles = [fun() -> nova_router:compile_fresh([nova_test_sub_app], ?KEY) end,
+                         fun() -> nova_router:compile([nova_test_sub_app], ?KEY) end,
+                         fun() -> nova_router:add_routes(nova_test_app, Group, ?KEY) end],
+             nova_test_mounted_router:set_routes([Open]),
+             _ = nova_router:compile_fresh([nova_test_sub_app], ?KEY),
+             ok = meck:new(nova_test_mounted_router, [passthrough, no_link]),
+             try
+                 _ = [begin
+                          ok = meck:expect(nova_test_mounted_router, routes,
+                                           fun(_Env) ->
+                                                   _ = Store(),
+                                                   [Open#{prefix => "/own"}]
+                                           end),
+                          ?assertThrow(InUse, Compile()),
+                          ?assertEqual([ok, error, error], [Found(Path) || Path <- [~"/admin/", ~"/side/", ~"/own/"]]),
+                          ?assertEqual([{nova_test_sub_app, "/"}], nova_router:compiled_apps(?KEY))
+                      end || Store <- Stores, Compile <- Compiles],
+                 ok = meck:expect(nova_test_mounted_router, routes, fun(_Env) -> [Open#{prefix => "/own"}] end),
+                 _ = nova_router:compile([nova_test_sub_app], ?KEY),
+                 ?assertEqual(ok, Found(~"/own/")),
+                 ?assertEqual(ok, nova_router:add_routes(nova_test_app, Side, ?KEY))
+             after
+                 meck:unload(nova_test_mounted_router)
+             end
+     end}.
+
+%% A table that does not compile for a listener that starts is not left as
+%% one that is being built: the one before it takes routes again.
+failed_build_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             _ = nova_router:compile_fresh([], ?KEY),
+             ?assertThrow({error, _}, nova_router:compile_fresh([nova_test_no_such_app], ?KEY)),
+             nova_test_mounted_router:set_routes([group(unset)]),
+             _ = nova_router:compile([nova_test_sub_app], ?KEY),
+             ?assertEqual([{nova_test_sub_app, "/"}], nova_router:compiled_apps(?KEY))
+     end}.
+
+%% Routes are added to the table that was read. One that was replaced
+%% while the routers of the group ran takes none of them.
+added_replaced_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             _ = nova_router:compile_fresh([], ?KEY),
+             ok = meck:new(nova_test_mounted_router, [passthrough, no_link]),
+             try
+                 ok = meck:expect(nova_test_mounted_router, routes,
+                                  fun(_Env) ->
+                                          _ = nova_router:compile_fresh([], ?KEY),
+                                          [group(unset)]
+                                  end),
+                 ?assertError({routing_table_replaced, ?KEY},
+                              nova_router:add_routes(nova_test_app,
+                                                     #{prefix => "/g", apps => [nova_test_sub_app], routes => []},
+                                                     ?KEY))
+             after
+                 meck:unload(nova_test_mounted_router)
+             end,
+             ?assertEqual([], nova_router:compiled_apps(?KEY))
+     end}.
+
+%% The applications a group of added routes mounts are listed with the
+%% table, as those of a compile are.
+added_sub_apps_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             _ = nova_router:compile_fresh([], ?KEY),
+             nova_test_mounted_router:set_routes([group(unset)]),
+             ok = nova_router:add_routes(nova_test_app, #{prefix => "/g", apps => [nova_test_sub_app], routes => []},
+                                         ?KEY),
+             ?assertEqual([{nova_test_sub_app, "/g"}, {nova_test_app, "/"}], nova_router:compiled_apps(?KEY))
+     end}.
+
+%% A build that fails while another process asks to build the table is
+%% the one whose mark is taken away: the other was refused, and left none.
+failed_beside_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             Open = group(unset),
+             _ = nova_router:compile_fresh([], ?KEY),
+             ok = meck:new(nova_test_mounted_router, [passthrough, no_link]),
+             try
+                 ok = meck:expect(nova_test_mounted_router, routes,
+                                  fun(_Env) ->
+                                          case get(?FUNCTION_NAME) of
+                                              undefined ->
+                                                  put(?FUNCTION_NAME,
+                                                      elsewhere(fun() -> nova_router:compile_fresh([], ?KEY) end)),
+                                                  error(fails);
+                                              _Failed ->
+                                                  [Open]
+                                          end
+                                  end),
+                 ?assertError(fails, nova_router:compile_fresh([nova_test_sub_app], ?KEY)),
+                 ?assertEqual({error, {routing_table_replaced, ?KEY}}, get(?FUNCTION_NAME)),
+                 _ = nova_router:compile([nova_test_sub_app], ?KEY)
+             after
+                 erase(?FUNCTION_NAME),
+                 meck:unload(nova_test_mounted_router)
+             end,
+             ?assertEqual([{nova_test_sub_app, "/"}], nova_router:compiled_apps(?KEY))
+     end}.
+
+%% A process that is stopped as it builds a table leaves it marked. The
+%% table before it takes routes again, as no table is being built.
+stopped_build_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             Test = self(),
+             _ = nova_router:compile_fresh([], ?KEY),
+             ok = meck:new(nova_test_mounted_router, [passthrough, no_link]),
+             try
+                 ok = meck:expect(nova_test_mounted_router, routes,
+                                  fun(_Env) when self() =:= Test ->
+                                          [group(unset)];
+                                     (_Env) ->
+                                          Test ! building,
+                                          receive after infinity -> [] end
+                                  end),
+                 {Builder, Monitor} = spawn_monitor(fun() -> nova_router:compile_fresh([nova_test_sub_app], ?KEY) end),
+                 put(?FUNCTION_NAME, Builder),
+                 receive building -> ok after 5000 -> error(not_building) end,
+                 ?assertError({routing_table_replaced, ?KEY}, nova_router:compile([nova_test_sub_app], ?KEY)),
+                 exit(Builder, kill),
+                 receive {'DOWN', Monitor, process, Builder, killed} -> ok after 5000 -> error(not_stopped) end,
+                 _ = nova_router:compile([nova_test_sub_app], ?KEY)
+             after
+                 stopped(erase(?FUNCTION_NAME)),
+                 meck:unload(nova_test_mounted_router)
+             end,
+             ?assertEqual([{nova_test_sub_app, "/"}], nova_router:compiled_apps(?KEY))
+     end}.
+
+%% The mark a stopped build left is the build of the table until routes
+%% are stored into it. Two merges that read it are two merges into one
+%% table: the one that stores last is told that the table changed, and is
+%% compiled again where routes are added.
+dead_build_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             Test = self(),
+             Open = group(unset),
+             Group = #{prefix => "/g", apps => [nova_test_sub_app], routes => []},
+             Found = fun(Path) -> element(1, nova_routing_trie:find('_', Path, ~"GET", persistent_term:get(?KEY))) end,
+             _ = nova_router:compile_fresh([], ?KEY),
+             ok = meck:new(nova_test_mounted_router, [passthrough, no_link]),
+             try
+                 ok = meck:expect(nova_test_mounted_router, routes,
+                                  fun(_Env) when self() =:= Test ->
+                                          case put(?FUNCTION_NAME, stored) of
+                                              undefined ->
+                                                  ok = elsewhere(fun() ->
+                                                                         nova_router:add_routes(
+                                                                           nova_test_app, Open#{prefix => "/other"}, ?KEY)
+                                                                 end);
+                                              stored ->
+                                                  ok
+                                          end,
+                                          [Open];
+                                     (_Env) ->
+                                          Test ! building,
+                                          receive after infinity -> [] end
+                                  end),
+                 {Builder, Monitor} = spawn_monitor(fun() -> nova_router:compile_fresh([nova_test_sub_app], ?KEY) end),
+                 put(builder, Builder),
+                 receive building -> ok after 5000 -> error(not_building) end,
+                 exit(Builder, kill),
+                 receive {'DOWN', Monitor, process, Builder, killed} -> ok after 5000 -> error(not_stopped) end,
+                 ?assertEqual(ok, nova_router:add_routes(nova_test_app, Group, ?KEY)),
+                 ?assertEqual([ok, ok], [Found(Path) || Path <- [~"/other/", ~"/g/admin/"]])
+             after
+                 erase(?FUNCTION_NAME),
+                 stopped(erase(builder)),
+                 meck:unload(nova_test_mounted_router)
+             end
+     end}.
+
+%% An application that is removed while the routers of a compile run is
+%% not put back by what that compile read before.
+removed_meanwhile_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             Open = group(unset),
+             nova_test_mounted_router:set_routes([Open]),
+             _ = nova_router:compile_fresh([nova_test_sub_app], ?KEY),
+             ok = meck:new(nova_test_mounted_router, [passthrough, no_link]),
+             try
+                 ok = meck:expect(nova_test_mounted_router, routes,
+                                  fun(_Env) ->
+                                          ok = elsewhere(fun() ->
+                                                                 nova_router:remove_application(nova_test_sub_app, ?KEY)
+                                                         end),
+                                          [Open#{prefix => "/again"}]
+                                  end),
+                 ?assertError({routing_table_changed, ?KEY}, nova_router:compile([nova_test_sub_app], ?KEY))
+             after
+                 meck:unload(nova_test_mounted_router)
+             end,
+             ?assertEqual(error, element(1, nova_routing_trie:find('_', ~"/admin/", ~"GET", persistent_term:get(?KEY)))),
+             ?assertEqual([], nova_router:compiled_apps(?KEY))
+     end}.
+
+%% Of two merges that read the same table, the one that stores last has
+%% none of what the other one stored. A route that was given a security
+%% callback meanwhile is not left open by it.
+secured_meanwhile_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             Open = group(unset),
+             Callback = fun ?MODULE:group_callback/1,
+             _ = nova_router:compile_fresh([], ?KEY),
+             ok = nova_router:add_routes(nova_test_app, Open, ?KEY),
+             ok = meck:new(nova_test_mounted_router, [passthrough, no_link]),
+             try
+                 ok = meck:expect(nova_test_mounted_router, routes,
+                                  fun(_Env) ->
+                                          ok = elsewhere(fun() ->
+                                                                 nova_router:add_routes(nova_test_app, group(Callback), ?KEY)
+                                                         end),
+                                          [Open#{prefix => "/sub"}]
+                                  end),
+                 ?assertError({routing_table_changed, ?KEY}, nova_router:compile([nova_test_sub_app], ?KEY))
+             after
+                 meck:unload(nova_test_mounted_router)
+             end,
+             ?assertMatch({ok, _Bindings, #nova_handler_value{secure = Callback}},
+                          nova_routing_trie:find('_', ~"/admin/", ~"GET", persistent_term:get(?KEY))),
+             nova_test_mounted_router:set_routes([Open#{prefix => "/sub"}]),
+             _ = nova_router:compile([nova_test_sub_app], ?KEY),
+             ?assertMatch({ok, _Bindings, #nova_handler_value{secure = Callback}},
+                          nova_routing_trie:find('_', ~"/admin/", ~"GET", persistent_term:get(?KEY))),
+             ?assertEqual(ok, element(1, nova_routing_trie:find('_', ~"/sub/", ~"GET", persistent_term:get(?KEY))))
+     end}.
+
+%% Routes that are stored as others are added to the table are no reason
+%% not to add those: they are compiled again into the table as it is by
+%% then. Not for ever: a table that changes each time is given up on.
+added_again_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             Open = group(unset),
+             Group = #{prefix => "/g", apps => [nova_test_sub_app], routes => []},
+             Other = fun() ->
+                             elsewhere(fun() -> nova_router:add_routes(nova_test_app, Open#{prefix => "/other"}, ?KEY) end)
+                     end,
+             Found = fun(Path) -> element(1, nova_routing_trie:find('_', Path, ~"GET", persistent_term:get(?KEY))) end,
+             _ = nova_router:compile_fresh([], ?KEY),
+             ok = meck:new(nova_test_mounted_router, [passthrough, no_link]),
+             try
+                 ok = meck:expect(nova_test_mounted_router, routes,
+                                  fun(_Env) ->
+                                          case put(?FUNCTION_NAME, stored) of
+                                              undefined -> ok = Other();
+                                              stored -> ok
+                                          end,
+                                          [Open]
+                                  end),
+                 ?assertEqual(ok, nova_router:add_routes(nova_test_app, Group, ?KEY)),
+                 ?assertEqual(2, meck:num_calls(nova_test_mounted_router, routes, '_')),
+                 ?assertEqual([ok, ok], [Found(Path) || Path <- [~"/other/", ~"/g/admin/"]]),
+                 ok = meck:reset(nova_test_mounted_router),
+                 ok = meck:expect(nova_test_mounted_router, routes,
+                                  fun(_Env) ->
+                                          ok = Other(),
+                                          [Open#{prefix => "/never"}]
+                                  end),
+                 ?assertError({routing_table_changed, ?KEY}, nova_router:add_routes(nova_test_app, Group, ?KEY)),
+                 ?assertEqual(3, meck:num_calls(nova_test_mounted_router, routes, '_')),
+                 ?assertEqual(error, Found(~"/g/never/"))
+             after
+                 erase(?FUNCTION_NAME),
+                 meck:unload(nova_test_mounted_router)
+             end
+     end}.
+
+%% Of merges that store at once, none is stored over another: every one
+%% that is answered is in the table.
+racing_merges_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     {timeout, 60,
+      fun() ->
+              _ = nova_router:compile_fresh([], ?KEY),
+              Test = self(),
+              Open = group(unset),
+              Add = fun(Prefix) ->
+                            try nova_router:add_routes(nova_test_app, Open#{prefix => Prefix}, ?KEY) of
+                                ok -> {added, Prefix}
+                            catch
+                                error:{routing_table_changed, ?KEY} -> refused;
+                                Class:Reason -> {Class, Reason}
+                            end
+                    end,
+              Racers = [spawn(fun() -> receive go -> Test ! {raced, self(), Add("/r" ++ integer_to_list(I))} end end)
+                        || I <- lists:seq(1, 16)],
+              _ = [Racer ! go || Racer <- Racers],
+              Results = [receive {raced, Racer, Result} -> Result after 30000 -> error(not_raced) end
+                         || Racer <- Racers],
+              Found = fun(Prefix) ->
+                              element(1, nova_routing_trie:find('_', list_to_binary(Prefix ++ "/"), ~"GET",
+                                                                persistent_term:get(?KEY)))
+                      end,
+              ?assertEqual([], [Result || Result <- Results, Result =/= refused, element(1, Result) =/= added]),
+              ?assertNotEqual([], [Prefix || {added, Prefix} <- Results]),
+              ?assertEqual([], [Prefix || {added, Prefix} <- Results, Found(Prefix) =/= ok])
+      end}}.
+
+%% Routes that are stored as an application is taken out of the table are
+%% kept: the application is taken out of the table as it is by then.
+removed_again_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             Open = group(unset),
+             nova_test_mounted_router:set_routes([Open]),
+             _ = nova_router:compile_fresh([nova_test_sub_app], ?KEY),
+             ok = meck:new(nova_routing_trie, [passthrough, no_link]),
+             try
+                 ok = meck:expect(nova_routing_trie, foldl,
+                                  fun(Trie, Each) ->
+                                          case put(?FUNCTION_NAME, stored) of
+                                              undefined ->
+                                                  ok = nova_router:add_routes(nova_test_app, Open#{prefix => "/added"},
+                                                                              ?KEY);
+                                              stored ->
+                                                  ok
+                                          end,
+                                          meck:passthrough([Trie, Each])
+                                  end),
+                 ?assertEqual(ok, nova_router:remove_application(nova_test_sub_app, ?KEY))
+             after
+                 erase(?FUNCTION_NAME),
+                 meck:unload(nova_routing_trie)
+             end,
+             Found = fun(Path) -> element(1, nova_routing_trie:find('_', Path, ~"GET", persistent_term:get(?KEY))) end,
+             ?assertEqual([error, ok], [Found(Path) || Path <- [~"/admin/", ~"/added/"]]),
+             ?assertEqual([{nova_test_app, "/"}], nova_router:compiled_apps(?KEY))
+     end}.
+
+failed_compile_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             Open = group(unset),
+             _ = nova_router:compile_fresh([], ?KEY),
+             nova_test_mounted_router:set_routes([Open, Open#{prefix => "/bound", listener => web}]),
+             ?assertThrow({error, _}, nova_router:compile([nova_test_sub_app, nova_test_no_such_app], ?KEY)),
+             ?assertEqual([], nova_router:compiled_apps(?KEY)),
+             ?assertEqual([], nova_router:bound_groups(?KEY)),
+             ?assertEqual(error, element(1, nova_routing_trie:find('_', ~"/admin/", ~"GET",
+                                                                   persistent_term:get(?KEY)))),
+             _ = nova_router:compile([nova_test_sub_app], ?KEY),
+             ?assertEqual([{nova_test_sub_app, "/"}], nova_router:compiled_apps(?KEY)),
+             ?assertEqual([{skipped, nova_test_sub_app, "/bound", [web]}], nova_router:bound_groups(?KEY))
+     end}.
 
 precedence_test_() ->
     Group = fun ?MODULE:group_callback/1,

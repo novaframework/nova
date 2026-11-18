@@ -206,6 +206,7 @@ h2_statuses(Socket, Buffer, Requests, Decoder, Statuses) ->
 %% reports logged at warning level.
 answered_once(Config, Path) ->
     nova_once:forget({nova_stream_h, dropped}),
+    nova_once:forget({nova_req, dropped}),
     {Received, Events} = nova_test_log:collect(fun() -> two_requests(?config(port, Config), Path) end),
     ?assertEqual(2, length(binary:matches(Received, ~"HTTP/1.1 "))),
     ?assertEqual(2, length(binary:matches(Received, ~"HTTP/1.1 200"))),

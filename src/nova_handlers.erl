@@ -59,7 +59,7 @@ What a handler returns: `{ok, Req}`. Nova replies with the status, headers
 and body set on that `Req`. Any other return fails the match in the
 controller step and is handled as a crash of the controller.
 """.
--type handler_return() :: {ok, Req :: cowboy_req:req()}.
+-type handler_return() :: {ok, Req :: nova_req:req()}.
 
 -export_type([handler_return/0]).
 

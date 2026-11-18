@@ -7,4 +7,4 @@ page(_Req) ->
     {status, 200, #{}, ~"page"}.
 
 require_token(Req) ->
-    cowboy_req:header(~"authorization", Req) =:= ~"let-me-in".
+    nova_req:header(~"authorization", Req) =:= ~"let-me-in".

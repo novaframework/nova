@@ -58,6 +58,7 @@ init_per_suite(Config) ->
 %% nova_stream_h.
 init_per_group(without_stream_h, Config) ->
     application:stop(nova_test_app),
+    application:stop(nova_cowboy),
     application:stop(nova),
     start(#{stream_handlers => [cowboy_compress_h, cowboy_stream_h]}, proplists:delete(base, Config)).
 
@@ -73,6 +74,7 @@ start(Configuration, Config) ->
 end_per_suite(_Config) ->
     persistent_term:erase(nova_test_app_plugin),
     application:stop(nova_test_app),
+    application:stop(nova_cowboy),
     application:stop(nova),
     ok.
 
@@ -218,6 +220,7 @@ invalid_cookie_name_at_runtime_drops_the_cookie(Config) ->
 %% Leaves Nova stopped; the next group starts it again.
 invalid_cookie_name_fails_boot(_Config) ->
     application:stop(nova_test_app),
+    application:stop(nova_cowboy),
     application:stop(nova),
     application:set_env(nova, session_cookie_name, ~"app:sid"),
     try

@@ -377,7 +377,7 @@ handle_websocket_success_test_() ->
         meck:expect(test_ws_ctrl, init, fun(CD) -> {ok, CD#{initialized => true}} end),
         Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
         Callback = fun test_ws_ctrl:handle/1,
-        {cowboy_websocket, Req1, _State} = nova_basic_handler:websocket_upgrade(#{data => test}, Callback, Req),
+        {websocket, Req1, _State} = nova_basic_handler:websocket_upgrade(#{data => test}, Callback, Req),
         ?assertEqual(#{data => test, initialized => true}, maps:get(controller_data, Req1)),
         meck:unload(test_ws_ctrl)
     end}.
@@ -392,7 +392,7 @@ handle_websocket_req_passthrough_test_() ->
         Req = nova_test_helper:mock_req(~"GET", ~"/ws"),
         Own = Req#{custom => true},
         Return = {websocket, #{data => test}, Own},
-        {cowboy_websocket, Req1, _State} =
+        {websocket, Req1, _State} =
             apply(nova_basic_handler, handle_websocket, [Return, fun test_ws_ctrl3:handle/1, Req]),
         ?assertEqual(true, maps:get(custom, Req1)),
         ?assertEqual(#{data => test}, maps:get(controller_data, Req1)),

@@ -3,9 +3,11 @@
 %%% listener untouched.
 -module(nova_test_listener).
 
--export([start/1, try_start/1, configure/1, stop/0, get/2, get/3, request/4, response/4, response/5,
-         websocket_handshake/2, websocket_handshake/3, websocket_texts/4, h2_websocket_connect/4, h2_get/2,
-         send_and_close/2, free_port/0]).
+-include_lib("public_key/include/public_key.hrl").
+
+-export([start/1, try_start/1, configure/1, boot/1, port/0, stop/0, server/1, get/2, get/3, request/4, response/4, response/5,
+         websocket_handshake/2, websocket_handshake/3, websocket_texts/4, h2_websocket_connect/4, h2_get/2, h2s_get/2,
+         send_and_close/2, free_port/0, tls/0, https_get/2]).
 
 -spec start(map()) -> inet:port_number().
 start(Options) ->
@@ -23,8 +25,8 @@ try_start(Options) ->
 
 try_start(Options, Attempts) ->
     case boot(Options, free_port()) of
-        {error, {nova, {{shutdown, {failed_to_start_child, nova_listener, {listener_not_started, eaddrinuse}}},
-                        _Start}}} when Attempts > 1 ->
+        {error, {_Server, {{shutdown, {failed_to_start_child, nova_listener, {listener_not_started, eaddrinuse}}},
+                           _Start}}} when Attempts > 1 ->
             ok = stop(),
             try_start(Options, Attempts - 1);
         Result ->
@@ -33,10 +35,45 @@ try_start(Options, Attempts) ->
 
 boot(Options, Port) ->
     ok = configure(Options#{port => Port}),
-    case application:ensure_all_started(nova_test_app) of
-        {ok, _Started} -> {ok, Port};
-        {error, Reason} -> {error, Reason}
+    boot(Options#{port => Port}).
+
+%% Starts what configure/1 set up, as application:ensure_all_started/1 of
+%% the test application does: the server package first, since it is the one
+%% that serves.
+-spec boot(map()) -> {ok, inet:port_number()} | {error, term()}.
+boot(Options) ->
+    Port = case Options of
+               #{port := Given} -> Given;
+               #{} -> port()
+           end,
+    case application:ensure_all_started(server(Options)) of
+        {ok, _} ->
+            case application:ensure_all_started(nova_test_app) of
+                {ok, _Started} -> {ok, Port};
+                {error, Reason} -> {error, Reason}
+            end;
+        {error, Reason} ->
+            {error, Reason}
     end.
+
+%% The server package a suite runs on: the one it asks for, or the one named
+%% by NOVA_TEST_SERVER, so that every suite that boots through here can be
+%% run on another server than Cowboy:
+%%
+%%     NOVA_TEST_SERVER=nova_roadrunner rebar3 ct
+%% The port of the listener configure/1 set up.
+-spec port() -> inet:port_number().
+port() ->
+    case application:get_env(nova, listeners) of
+        {ok, #{default := #{port := Port}}} -> Port;
+        _ ->
+            #{port := Port} = application:get_env(nova, cowboy_configuration, #{}),
+            Port
+    end.
+
+-spec server(map()) -> module().
+server(#{server := Server}) -> Server;
+server(_Options) -> list_to_atom(os:getenv("NOVA_TEST_SERVER", "nova_cowboy")).
 
 %% Sets the environment a boot reads, without starting anything.
 %% nova_test_nested_app and nova_test_deep_app are not applications on
@@ -54,8 +91,18 @@ configure(Options) ->
     nova_test_nested_router:set_routes(maps:get(nested, Options, [])),
     nova_test_deep_router:set_routes(maps:get(deep, Options, [])),
     application:set_env(nova, bootstrap_application, nova_test_app),
-    application:set_env(nova, cowboy_configuration,
-                        #{port => Port, options => maps:get(cowboy_options, Options, #{})}),
+    Server = server(Options),
+    application:set_env(nova, server, Server),
+    case Options of
+        #{listeners := Listeners} ->
+            application:set_env(nova, listeners, Listeners);
+        #{} when Server =:= nova_cowboy ->
+            application:set_env(nova, cowboy_configuration,
+                                #{port => Port, options => maps:get(cowboy_options, Options, #{})});
+        #{} ->
+            application:set_env(nova, listeners,
+                                #{default => #{port => Port, server_opts => maps:get(server_opts, Options, #{})}})
+    end,
     application:set_env(nova, environment, test),
     application:set_env(nova, plugins, []),
     application:set_env(nova_test_app, router_module, nova_test_host_router),
@@ -73,10 +120,14 @@ configure(Options) ->
 -spec stop() -> ok.
 stop() ->
     application:stop(nova_test_app),
+    application:stop(nova_roadrunner),
+    application:stop(nova_cowboy),
     application:stop(nova),
+    application:unset_env(nova, server),
     application:unload(nova_test_app),
     application:unload(nova_test_sub_app),
     application:unset_env(nova, cowboy_configuration),
+    application:unset_env(nova, listeners),
     application:unset_env(nova_test_nested_app, router_module),
     application:unset_env(nova_test_nested_app, nova_apps),
     application:unset_env(nova_test_deep_app, router_module),
@@ -183,32 +234,47 @@ h2_get(Port, Path) ->
     h2_request(Port, fin, [{~":method", ~"GET"}, {~":scheme", ~"http"}, {~":path", Path},
                            {~":authority", ~"localhost"}]).
 
+%% As h2_get/2, to a listener with TLS.
+-spec h2s_get(inet:port_number(), binary()) -> 100..599.
+h2s_get(Port, Path) ->
+    {ok, Socket} = ssl:connect("localhost", Port, [binary, {active, false}, {verify, verify_none},
+                                                   {alpn_advertised_protocols, [~"h2"]}], 5000),
+    try
+        h2_exchange(ssl, Socket, fin, [{~":method", ~"GET"}, {~":scheme", ~"https"}, {~":path", Path},
+                                       {~":authority", ~"localhost"}])
+    after
+        ssl:close(Socket)
+    end.
+
 h2_request(Port, IsFin, Headers) ->
     {ok, Socket} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}, {packet, raw}]),
     try
-        ok = gen_tcp:send(Socket, [~"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", cow_http2:settings(#{})]),
-        {HeaderBlock, _Encoder} = cow_hpack:encode(Headers),
-        h2_status(Socket, <<>>, cow_http2:headers(1, IsFin, HeaderBlock))
+        h2_exchange(gen_tcp, Socket, IsFin, Headers)
     after
         gen_tcp:close(Socket)
     end.
 
+h2_exchange(Transport, Socket, IsFin, Headers) ->
+    ok = Transport:send(Socket, [~"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", cow_http2:settings(#{})]),
+    {HeaderBlock, _Encoder} = cow_hpack:encode(Headers),
+    h2_status(Transport, Socket, <<>>, cow_http2:headers(1, IsFin, HeaderBlock)).
+
 %% The request is sent once the settings of the server have arrived, since
 %% they are what allows an extended CONNECT.
-h2_status(Socket, Buffer, Request) ->
+h2_status(Transport, Socket, Buffer, Request) ->
     case cow_http2:parse(Buffer) of
         {ok, {settings, _Settings}, Rest} ->
-            ok = gen_tcp:send(Socket, [cow_http2:settings_ack(), Request]),
-            h2_status(Socket, Rest, Request);
+            ok = Transport:send(Socket, [cow_http2:settings_ack(), Request]),
+            h2_status(Transport, Socket, Rest, Request);
         {ok, {headers, 1, _IsFin, head_fin, HeaderBlock}, _Rest} ->
             {ResponseHeaders, _Decoder} = cow_hpack:decode(HeaderBlock),
             {~":status", <<Status/binary>>} = lists:keyfind(~":status", 1, ResponseHeaders),
             binary_to_integer(Status);
         {ok, _OtherFrame, Rest} ->
-            h2_status(Socket, Rest, Request);
+            h2_status(Transport, Socket, Rest, Request);
         more ->
-            {ok, <<Data/binary>>} = gen_tcp:recv(Socket, 0, 5000),
-            h2_status(Socket, <<Buffer/binary, Data/binary>>, Request)
+            {ok, <<Data/binary>>} = Transport:recv(Socket, 0, 5000),
+            h2_status(Transport, Socket, <<Buffer/binary, Data/binary>>, Request)
     end.
 
 after_handshake(Socket, Acc) ->
@@ -267,9 +333,21 @@ send_and_close(Port, Data) ->
 %% ports of outgoing connections and of a listen on port 0 from. A port out
 %% of that range is given to another process between this call and the
 %% listener that binds it, when several suites run on the machine.
+%% A port that is free, and that the calling test was not given before.
 -spec free_port() -> inet:port_number().
 free_port() ->
-    free_port(50).
+    Port = free_port(50),
+    Given = case get(nova_test_ports) of
+                undefined -> [];
+                Ports -> Ports
+            end,
+    case lists:member(Port, Given) of
+        true ->
+            free_port();
+        false ->
+            put(nova_test_ports, [Port | Given]),
+            Port
+    end.
 
 free_port(Attempts) when Attempts > 0 ->
     Port = 20000 + rand:uniform(9999),
@@ -279,4 +357,36 @@ free_port(Attempts) when Attempts > 0 ->
             Port;
         {error, eaddrinuse} ->
             free_port(Attempts - 1)
+    end.
+
+%% The `tls` of a listener: a certificate made for the run, with its key.
+-spec tls() -> [{atom(), term()}].
+tls() ->
+    Chain = #{root => [{key, {namedCurve, ?secp256r1}}, {digest, sha256}],
+              peer => [{key, {namedCurve, ?secp256r1}}, {digest, sha256}]},
+    #{server_config := Config} = public_key:pkix_test_data(#{server_chain => Chain, client_chain => Chain}),
+    Config.
+
+%% A GET over HTTP/1.1 to a listener with TLS, with the response headers
+%% under lowercase names.
+-spec https_get(inet:port_number(), iodata()) -> {100..599, #{binary() => binary()}, binary()}.
+https_get(Port, Path) ->
+    {ok, Socket} = ssl:connect("localhost", Port, [binary, {active, false}, {verify, verify_none},
+                                                   {alpn_advertised_protocols, [~"http/1.1"]}], 5000),
+    try
+        ok = ssl:send(Socket, ["GET ", Path, " HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n"]),
+        Response = until_closed(Socket, <<>>),
+        [Head, Body] = binary:split(Response, ~"\r\n\r\n"),
+        [<<"HTTP/1.1 ", Status:3/binary, _/binary>> | Lines] = binary:split(Head, ~"\r\n", [global]),
+        {binary_to_integer(Status),
+         #{string:lowercase(Name) => string:trim(Value) || Line <- Lines, [Name, Value] <- [binary:split(Line, ~":")]},
+         Body}
+    after
+        ssl:close(Socket)
+    end.
+
+until_closed(Socket, Acc) ->
+    case ssl:recv(Socket, 0, 5000) of
+        {ok, Data} when is_binary(Data) -> until_closed(Socket, <<Acc/binary, Data/binary>>);
+        {error, closed} -> Acc
     end.

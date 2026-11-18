@@ -16,20 +16,20 @@ setup() ->
     persistent_term:put(nova_use_stacktrace, false),
     %% Start nova_handlers gen_server (registers ETS table + default handlers)
     {ok, Pid} = nova_handlers:start_link(),
-    %% Need meck for cowboy_req:reply
-    meck:new(cowboy_req, [passthrough, no_link]),
-    meck:expect(cowboy_req, reply, fun nova_test_helper:reply/2),
-    meck:expect(cowboy_req, reply, fun(Status, Headers, Body, Req) ->
+    %% Need meck for nova_req:reply
+    meck:new(nova_req, [passthrough, no_link]),
+    meck:expect(nova_req, reply, fun nova_test_helper:reply/2),
+    meck:expect(nova_req, reply, fun(Status, Headers, Body, Req) ->
         Req#{resp_status_code => Status, resp_headers => Headers, resp_body => Body}
     end),
-    meck:expect(cowboy_req, set_resp_header, fun(Name, Value, Req) ->
+    meck:expect(nova_req, set_resp_header, fun(Name, Value, Req) ->
         Headers = maps:get(resp_headers, Req, #{}),
         Req#{resp_headers => Headers#{Name => Value}}
     end),
     {Prev, Pid}.
 
 cleanup({Prev, Pid}) ->
-    meck:unload(cowboy_req),
+    meck:unload(nova_req),
     gen_server:stop(Pid),
     persistent_term:erase(nova_dispatch),
     persistent_term:erase(nova_use_stacktrace),
@@ -135,82 +135,73 @@ execute_controller_crash_with_stacktrace_test_() ->
     end}.
 
 %%====================================================================
-%% execute/2 — cowboy_handler path
+%% execute/2 — handler_module path
 %%====================================================================
 
-execute_cowboy_handler_ok_test_() ->
+execute_module_handler_ok_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        meck:new(test_cowboy_handler, [non_strict, no_link]),
-        meck:expect(test_cowboy_handler, init, fun(Req, _Args) -> {ok, Req, #{}} end),
+        meck:new(test_module_handler, [non_strict, no_link]),
+        meck:expect(test_module_handler, init, fun(Req, _Args) -> {ok, Req, #{}} end),
         Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
-        Env = #{cowboy_handler => test_cowboy_handler, arguments => #{}, app => test_app},
+        Env = #{handler_module => test_module_handler, arguments => #{}, app => test_app},
         {ok, Req1, Env1} = nova_handler:execute(Req, Env),
         ?assertMatch(Req1 when is_map(Req1), Req1),
         ?assert(maps:is_key(result, Env1)),
-        meck:unload(test_cowboy_handler)
+        meck:unload(test_module_handler)
     end}.
 
-execute_cowboy_handler_crash_test_() ->
+execute_module_handler_crash_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        meck:new(test_cowboy_handler2, [non_strict, no_link]),
-        meck:expect(test_cowboy_handler2, init, fun(_Req, _Args) -> error(crash) end),
+        meck:new(test_module_handler2, [non_strict, no_link]),
+        meck:expect(test_module_handler2, init, fun(_Req, _Args) -> error(crash) end),
         Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
-        Env = #{cowboy_handler => test_cowboy_handler2, arguments => #{}, app => test_app},
+        Env = #{handler_module => test_module_handler2, arguments => #{}, app => test_app},
         {ok, Req1, Env1} = nova_handler:execute(Req, Env),
         ?assertEqual(500, maps:get(resp_status_code, Req1)),
         ?assertMatch(#{crash_info := #{status_code := 500}}, Req1),
-        ?assertNot(maps:is_key(cowboy_handler, Env1)),
-        meck:unload(test_cowboy_handler2)
+        ?assertNot(maps:is_key(handler_module, Env1)),
+        meck:unload(test_module_handler2)
     end}.
 
-execute_cowboy_handler_crash_with_stacktrace_test_() ->
+execute_module_handler_crash_with_stacktrace_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         persistent_term:put(nova_use_stacktrace, true),
-        meck:new(test_cowboy_handler3, [non_strict, no_link]),
-        meck:expect(test_cowboy_handler3, init, fun(_Req, _Args) -> error(boom) end),
+        meck:new(test_module_handler3, [non_strict, no_link]),
+        meck:expect(test_module_handler3, init, fun(_Req, _Args) -> error(boom) end),
         Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
-        Env = #{cowboy_handler => test_cowboy_handler3, arguments => #{}, app => test_app},
+        Env = #{handler_module => test_module_handler3, arguments => #{}, app => test_app},
         {ok, Req1, Env1} = nova_handler:execute(Req, Env),
-        ?assertNot(maps:is_key(cowboy_handler, Env1)),
+        ?assertNot(maps:is_key(handler_module, Env1)),
         ?assertEqual(500, maps:get(resp_status_code, Req1)),
         ?assertMatch(#{crash_info := #{stacktrace := _, status_code := 500}}, Req1),
-        meck:unload(test_cowboy_handler3)
+        meck:unload(test_module_handler3)
     end}.
 
-execute_cowboy_handler_upgrade_test_() ->
+execute_websocket_upgrade_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         meck:new(test_upgrade_handler, [non_strict, no_link]),
         meck:expect(test_upgrade_handler, init, fun(Req, _Args) ->
-            {test_upgrade_mod, Req, my_state}
+            {websocket, Req, my_state}
         end),
-        meck:new(test_upgrade_mod, [non_strict, no_link]),
-        meck:expect(test_upgrade_mod, upgrade, fun(Req, Env, _Handler, _State) ->
-            {ok, Req, Env}
-        end),
-        Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
-        Env = #{cowboy_handler => test_upgrade_handler, arguments => #{}},
+        Req = nova_fake_server:req(#{path => ~"/ws"}),
+        Env = #{handler_module => test_upgrade_handler, arguments => #{}},
         {ok, _Req1, _Env1} = nova_handler:execute(Req, Env),
-        ?assert(meck:called(test_upgrade_mod, upgrade, '_')),
-        meck:unload(test_upgrade_handler),
-        meck:unload(test_upgrade_mod)
+        ?assertEqual([{upgrade_websocket, test_upgrade_handler, my_state, #{}, []}], nova_fake_server:sent()),
+        meck:unload(test_upgrade_handler)
     end}.
 
-execute_cowboy_handler_upgrade_with_opts_test_() ->
+upgrade_opts_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         meck:new(test_upgrade_handler4, [non_strict, no_link]),
         meck:expect(test_upgrade_handler4, init, fun(Req, _Args) ->
-            {test_upgrade_mod4, Req, my_state, my_opts}
+            {websocket, Req, my_state, #{idle_timeout => 1000}}
         end),
-        meck:new(test_upgrade_mod4, [non_strict, no_link]),
-        meck:expect(test_upgrade_mod4, upgrade, fun(Req, Env, _Handler, _State, _Opts) ->
-            {ok, Req, Env}
-        end),
-        Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
-        Env = #{cowboy_handler => test_upgrade_handler4, arguments => #{}},
+        Req = nova_fake_server:req(#{path => ~"/ws"}),
+        Env = #{handler_module => test_upgrade_handler4, arguments => #{}},
         {ok, _Req1, _Env1} = nova_handler:execute(Req, Env),
-        ?assert(meck:called(test_upgrade_mod4, upgrade, '_')),
-        meck:unload(test_upgrade_handler4),
-        meck:unload(test_upgrade_mod4)
+        ?assertEqual([{upgrade_websocket, test_upgrade_handler4, my_state, #{idle_timeout => 1000}, []}],
+                     nova_fake_server:sent()),
+        meck:unload(test_upgrade_handler4)
     end}.
 
 %%====================================================================
@@ -234,17 +225,17 @@ terminate_called_with_three_arguments_test_() ->
         ?assertEqual({terminated, boom, #{}}, receive {terminated, _, _} = M -> M after 0 -> none end)
     end}.
 
-cowboy_handler_terminate_gets_its_state_test_() ->
+module_handler_terminate_gets_its_state_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        meck:new(test_cowboy_terminate, [non_strict, no_link]),
+        meck:new(test_module_terminate, [non_strict, no_link]),
         Self = self(),
-        meck:expect(test_cowboy_terminate, init, fun(Req, _Args) -> {ok, Req, handler_state} end),
-        meck:expect(test_cowboy_terminate, terminate,
+        meck:expect(test_module_terminate, init, fun(Req, _Args) -> {ok, Req, handler_state} end),
+        meck:expect(test_module_terminate, terminate,
                     fun(Reason, _Req, State) -> Self ! {terminated, Reason, State}, ok end),
-        Env = #{cowboy_handler => test_cowboy_terminate, arguments => #{}, app => test_app},
+        Env = #{handler_module => test_module_terminate, arguments => #{}, app => test_app},
         {ok, _Req1, _Env1} = nova_handler:execute(nova_test_helper:mock_req(~"GET", ~"/"), Env),
         ?assertEqual({terminated, normal, handler_state}, receive {terminated, _, _} = M -> M after 1000 -> none end),
-        meck:unload(test_cowboy_terminate)
+        meck:unload(test_module_terminate)
     end}.
 
 %% A non-tuple return used to raise badarg in element/2 and never reach the
@@ -322,11 +313,11 @@ controller_telemetry_metadata() ->
             controller_data => #{}},
     %% Cowboy's reply does not record the status in the Req, so the span
     %% falls back to 200 when the handler set none.
-    meck:expect(cowboy_req, reply, fun(_Status, R) -> R end),
+    meck:expect(nova_req, reply, fun(_Status, R) -> R end),
     try
         {ok, _Req1, _Env1} = nova_handler:execute(Req, Env)
     after
-        meck:expect(cowboy_req, reply, fun nova_test_helper:reply/2)
+        meck:expect(nova_req, reply, fun nova_test_helper:reply/2)
     end,
     Expected = #{method => ~"GET", host => ~"localhost", scheme => ~"https",
                  version => 'HTTP/2', app => test_app,

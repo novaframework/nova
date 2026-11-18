@@ -1,17 +1,21 @@
 %%% End-to-end suite for Nova.
 %%%
 %%% This boots a real Nova application (nova_test_app, plus nova_test_sub_app
-%%% mounted under a prefix) on a real Cowboy listener and drives it over HTTP
-%%% and WebSocket. It exists so that framework-level regressions - a router
+%%% mounted under a prefix) on a real listener and drives it over HTTP and
+%%% WebSocket. It exists so that framework-level regressions - a router
 %%% that will not compile, a dispatch table that cannot be looked up, a
 %%% listener that never binds - fail here rather than in a downstream
 %%% application.
+%%%
+%%% Every case runs once on each server Nova has a package for, so what a
+%%% case asserts is what an application gets whichever server it picks.
 %%%
 %%% If you add a feature to Nova, add a route for it to nova_test_app_router
 %%% and a case here.
 -module(nova_full_app_SUITE).
 
 -export([all/0, groups/0, init_per_suite/1, end_per_suite/1,
+         init_per_group/2, end_per_group/2,
          init_per_testcase/2, end_per_testcase/2]).
 -export([forward_event/4]).
 
@@ -84,7 +88,12 @@
 -define(WS_CONNECTION_META, [module, app, route, telemetry_span_context]).
 -define(EXCEPTION_META, [kind, reason, stacktrace]).
 
+-define(SERVERS, #{cowboy => nova_cowboy, roadrunner => nova_roadrunner}).
+
 all() ->
+    [{group, Server} || Server <- lists:sort(maps:keys(?SERVERS))].
+
+features() ->
     [
      {group, routing},
      {group, static_files},
@@ -99,6 +108,7 @@ all() ->
     ].
 
 groups() ->
+    [{Server, [], features()} || Server <- maps:keys(?SERVERS)] ++
     [
      {routing, [parallel], [
                             root_route,
@@ -180,18 +190,50 @@ groups() ->
 %%====================================================================
 
 init_per_suite(Config) ->
+    {ok, _} = application:ensure_all_started(inets),
+    Config.
+
+end_per_suite(_Config) ->
+    ok.
+
+init_per_group(Group, Config) when is_map_key(Group, ?SERVERS) ->
+    #{Group := Server} = ?SERVERS,
     Port = nova_test_listener:free_port(),
     application:load(nova),
+    application:set_env(nova, server, Server),
     application:set_env(nova, bootstrap_application, nova_test_app),
-    application:set_env(nova, cowboy_configuration, #{port => Port}),
+    application:set_env(nova, listeners, #{default => #{port => Port, server_opts => server_opts(Server)}}),
     application:set_env(nova, environment, test),
     application:set_env(nova, use_stacktrace, true),
     application:set_env(nova, plugins, []),
     %% nova_test_app_plugin counts the phases it runs in through this.
     persistent_term:put(nova_test_app_plugin, counters:new(2, [write_concurrency])),
+    %% Loaded before the server starts the listeners, as in a release, so the
+    %% applications it mounts are known when its routes are compiled.
+    _ = application:load(nova_test_app),
+    {ok, _} = application:ensure_all_started(Server),
     {ok, _Started} = application:ensure_all_started(nova_test_app),
-    {ok, _} = application:ensure_all_started(inets),
-    [{port, Port}, {base, "http://localhost:" ++ integer_to_list(Port)} | Config].
+    [{server, Server}, {port, Port}, {base, "http://localhost:" ++ integer_to_list(Port)} | Config];
+init_per_group(_Group, Config) ->
+    Config.
+
+%% Cowboy gives a body the time its route allows. Roadrunner gives every
+%% request of a listener the same time, so the listener is given little.
+server_opts(nova_cowboy) -> #{};
+server_opts(nova_roadrunner) -> #{request_timeout => 1000}.
+
+end_per_group(Group, _Config) when is_map_key(Group, ?SERVERS) ->
+    #{Group := Server} = ?SERVERS,
+    persistent_term:erase(nova_test_app_plugin),
+    application:stop(nova_test_app),
+    application:stop(Server),
+    application:stop(nova_cowboy),
+    application:stop(nova),
+    application:unset_env(nova, server),
+    application:unset_env(nova, listeners),
+    ok;
+end_per_group(_Group, _Config) ->
+    ok.
 
 init_per_testcase(Case, Config) ->
     case lists:prefix("telemetry_", atom_to_list(Case)) of
@@ -208,12 +250,6 @@ end_per_testcase(_Case, Config) ->
         undefined -> ok;
         Id        -> telemetry:detach(Id)
     end.
-
-end_per_suite(_Config) ->
-    persistent_term:erase(nova_test_app_plugin),
-    application:stop(nova_test_app),
-    application:stop(nova),
-    ok.
 
 %%====================================================================
 %% Routing
@@ -389,7 +425,15 @@ pre_and_post_request_plugins_run(Config) ->
     ?assertEqual(<<"1">>, header(<<"x-nova-pre-request">>, Headers)),
 
     ?assert(counters:get(Counters, 1) > PreBefore),
-    ?assert(counters:get(Counters, 2) > PostBefore).
+    ?assert(counted(Counters, 2, PostBefore, 100)).
+
+%% post_request runs once the response has gone, so its count can follow it.
+counted(Counters, Index, Before, Tries) ->
+    case counters:get(Counters, Index) > Before of
+        true -> true;
+        false when Tries > 0 -> timer:sleep(20), counted(Counters, Index, Before, Tries - 1);
+        false -> false
+    end.
 
 %% {break, ...} is a deprecated alias of stop: it must never let the request
 %% through to the controller (nova_oidcc answers anonymous users this way).
@@ -460,7 +504,8 @@ request_body_limit(Config) ->
     ?assertMatch(<<"HTTP/1.1 413", _/binary>>, Response).
 
 %% The route allows 300 ms for the body. A chunked body that trickles in one
-%% byte at a time gets a 408 at the deadline.
+%% byte at a time gets a 408 at the deadline: that of the route on Cowboy,
+%% and that of the listener on Roadrunner.
 request_body_read_timeout(Config) ->
     Port = ?config(port, Config),
     {ok, Socket} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, raw}]),
@@ -497,7 +542,14 @@ request_body_limit_closes_connection(Config) ->
     Next = gen_tcp:recv(Socket, 0, 2000),
     gen_tcp:close(Socket),
     ?assertMatch(<<"HTTP/1.1 413", _/binary>>, Response),
-    ?assertEqual({error, closed}, Next).
+    case ?config(server, Config) of
+        nova_cowboy ->
+            ?assertEqual({error, closed}, Next);
+        nova_roadrunner ->
+            %% Roadrunner waits for the body it was promised before it
+            %% closes, and answers nothing more meanwhile.
+            ?assertMatch({error, _}, Next)
+    end.
 
 send_post_headers(Config, Path, Header) ->
     Port = ?config(port, Config),
@@ -563,7 +615,13 @@ repeated_accept_headers_are_cheap(Config) ->
                                                 gen_tcp:recv(Socket, 0, 10000)
                                         end),
     gen_tcp:close(Socket),
-    ?assertMatch(<<"HTTP/1.1 500", _/binary>>, Response),
+    case ?config(server, Config) of
+        nova_cowboy ->
+            ?assertMatch(<<"HTTP/1.1 500", _/binary>>, Response);
+        nova_roadrunner ->
+            %% Roadrunner takes fewer bytes of headers than this by default.
+            ?assertMatch(<<"HTTP/1.1 431", _/binary>>, Response)
+    end,
     ?assert(Micros < 1000000).
 
 handler_init_crash_is_a_500(Config) ->

@@ -30,7 +30,7 @@ make_tmp_dir(Name) ->
     ok = file:make_dir(Dir),
     Dir.
 
-%% Build a minimal cowboy_req-like map for testing pure handler logic.
+%% Build a minimal nova_req-like map for testing pure handler logic.
 %% We avoid depending on nova_test (circular dep) and cowboy internals.
 -spec mock_req(Method :: binary(), Path :: binary()) -> map().
 mock_req(Method, Path) ->
@@ -91,7 +91,7 @@ cleanup_nova_env({ok, Val}) ->
     application:set_env(nova, bootstrap_application, Val),
     ok.
 
-%% Stands in for cowboy_req:reply/2 where a test mocks it. It refuses what
+%% Stands in for nova_req:reply/2 where a test mocks it. It refuses what
 %% Cowboy refuses: a second reply, and a body with a 204 or a 304. Unlike
 %% Cowboy it leaves the response in the request and adds the status, for the
 %% test to look at.

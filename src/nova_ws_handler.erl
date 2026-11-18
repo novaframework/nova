@@ -40,9 +40,9 @@ with_auth_data(_Req, ControllerData) ->
 upgrade_ws(Module, Req, State, ControllerData) ->
     case Module:init(ControllerData) of
         {ok, NewControllerData} ->
-            {cowboy_websocket, Req, State#{controller_data => NewControllerData}};
+            {websocket, Req, State#{controller_data => NewControllerData}};
         {ok, NewControllerData, WebsocketOptions} when is_map(WebsocketOptions) ->
-            {cowboy_websocket, Req, State#{controller_data => NewControllerData}, WebsocketOptions};
+            {websocket, Req, State#{controller_data => NewControllerData}, WebsocketOptions};
         Error ->
             ?LOG_ERROR(#{msg => ~"Websocket handler returned unknown result", handler => Module,
                          returned => nova_redact:term(Error)}),
@@ -114,21 +114,27 @@ handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData, plugins
                 State2 ->
                     %% Run the post-plugins
                     PostPlugins = proplists:get_value(post_ws_request, Plugins, []),
-                    {ok, State3 = #{commands := Cmds}} = run_plugins(PostPlugins, post_ws_request,
-                                                                     ControllerState, State2),
-                    %% Remove the commands from the map
-                    State4 = maps:remove(commands, State3),
+                    case run_plugins(PostPlugins, post_ws_request, ControllerState, State2) of
+                        {ok, State3 = #{commands := Cmds}} ->
+                            %% Remove the commands from the map
+                            State4 = maps:remove(commands, State3),
 
-                    %% Check if we are hibernating
-                    case maps:get(hibernate, State4, false) of
-                        false ->
-                            {Cmds, State4};
-                        _ ->
-                            {Cmds, maps:remove(hibernate, State4), hibernate}
+                            %% Check if we are hibernating
+                            case maps:get(hibernate, State4, false) of
+                                false ->
+                                    {Cmds, State4};
+                                _ ->
+                                    {Cmds, maps:remove(hibernate, State4), hibernate}
+                            end;
+                        {stop, _} = Stopped ->
+                            ?LOG_WARNING(#{msg => ~"A plugin stopped the connection", phase => post_ws_request,
+                                           module => Mod, function => Func}),
+                            Stopped
                     end
             end;
         {stop, _} = Stop ->
-            ?LOG_WARNING(#{msg => ~"Got stop signal", signal => nova_redact:term(Stop)}),
+            ?LOG_WARNING(#{msg => ~"A plugin stopped the connection", phase => pre_ws_request,
+                           module => Mod, function => Func}),
             Stop
     end;
 handle_ws(Mod, Func, Args, State) ->

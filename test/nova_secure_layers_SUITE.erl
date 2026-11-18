@@ -1,7 +1,7 @@
 %%% A route group with a `security` callback in an application mounted with
 %%% `secure`: both callbacks have to allow a request, the one of the mount
 %%% first. Every combination of what the two can answer is sent to a
-%%% controller, a websocket and a plain Cowboy handler.
+%%% controller, a websocket and a plain handler module.
 -module(nova_secure_layers_SUITE).
 
 -export([all/0, groups/0, init_per_group/2, end_per_group/2, init_per_testcase/2, end_per_testcase/2]).
@@ -11,14 +11,14 @@
          websocket_needs_both/1,
          websocket_gets_the_data/1,
          group_sees_the_data_of_the_mount/1,
-         cowboy_handler_needs_both/1,
+         module_handler_needs_both/1,
          group_without_a_callback_has_the_one_of_the_mount/1,
          group_of_an_application_that_is_not_mounted_has_its_own/1,
          apps_of_a_route_group_need_both/1,
          nothing_is_logged_about_the_two_callbacks/1,
          override_replaces_both_for_a_controller/1,
          override_replaces_both_for_a_websocket/1,
-         override_replaces_both_for_a_cowboy_handler/1
+         override_replaces_both_for_a_module_handler/1
         ]).
 
 -include_lib("nova/include/nova_router.hrl").
@@ -40,14 +40,14 @@ groups() ->
                             websocket_needs_both,
                             websocket_gets_the_data,
                             group_sees_the_data_of_the_mount,
-                            cowboy_handler_needs_both,
+                            module_handler_needs_both,
                             group_without_a_callback_has_the_one_of_the_mount,
                             group_of_an_application_that_is_not_mounted_has_its_own,
                             apps_of_a_route_group_need_both,
                             nothing_is_logged_about_the_two_callbacks]},
      {with_override, [], [override_replaces_both_for_a_controller,
                           override_replaces_both_for_a_websocket,
-                          override_replaces_both_for_a_cowboy_handler]}].
+                          override_replaces_both_for_a_module_handler]}].
 
 init_per_group(mount_and_group, Config) ->
     start(#{prefix => "/mounted", secure => ?MOUNT}, Config);
@@ -77,15 +77,15 @@ start(MountedOptions, Config) ->
                            #{prefix => "/tools", apps => [nova_test_nested_app]}],
                nested => [#{prefix => "/nested", security => ?GROUP, routes => Routes}]}),
     BootLog = nova_test_log:stop(),
-    ok = add_cowboy_handler_route("/mounted/both/cowboy", MountedOptions, #{security => ?GROUP}),
+    ok = add_module_handler_route("/mounted/both/cowboy", MountedOptions, #{security => ?GROUP}),
     [{port, Port}, {boot_log, BootLog} | Config].
 
-%% The router has no route syntax for a plain Cowboy handler yet, so the
+%% The router has no route syntax for a plain handler module yet, so the
 %% value such a route compiles to is put in the routing table directly, with
 %% the security the router works out for the mount and the route group.
 %% Compiling no applications gives the table as it is.
-add_cowboy_handler_route(Path, MountedOptions, RouteGroup) ->
-    Value = #cowboy_handler_value{app = nova_test_sub_app,
+add_module_handler_route(Path, MountedOptions, RouteGroup) ->
+    Value = #nova_module_value{app = nova_test_sub_app,
                                   handler = nova_secure_layers_pages,
                                   arguments = #{},
                                   secure = nova_router:resolve_secure(MountedOptions, RouteGroup, undefined)},
@@ -127,7 +127,7 @@ group_sees_the_data_of_the_mount(Config) ->
                                                          [{mount, ~"allow"}, {group, ~"data-seen"}]),
                                                     ~"who", 1)).
 
-cowboy_handler_needs_both(Config) ->
+module_handler_needs_both(Config) ->
     [?assertEqual({Mount, Group, both_layers(200, Mount, Group)},
                   {Mount, Group, request(Config, "/mounted/both/cowboy", [{mount, Mount}, {group, Group}])})
      || Mount <- ?DECISIONS, Group <- ?DECISIONS].
@@ -168,7 +168,7 @@ override_replaces_both_for_a_websocket(Config) ->
                                                          [{override, ~"data"}, {mount, ~"data"}, {group, ~"data"}]),
                                                     ~"who", 1)).
 
-override_replaces_both_for_a_cowboy_handler(Config) ->
+override_replaces_both_for_a_module_handler(Config) ->
     [?assertEqual({Override, one_layer(200, override, Override)},
                   {Override, request(Config, "/mounted/both/cowboy",
                                      [{override, Override}, {mount, ~"deny"}, {group, ~"deny"}])})

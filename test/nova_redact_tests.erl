@@ -19,14 +19,14 @@ req() ->
     (nova_test_helper:mock_req(~"POST", ~"/login"))#{headers => #{~"cookie" => ?SECRET}}.
 
 request_map_is_reduced_to_method_and_path_test() ->
-    ?assertEqual(#{method => ~"POST", path => ~"/login", redacted => cowboy_req},
+    ?assertEqual(#{method => ~"POST", path => ~"/login", redacted => nova_req},
                  nova_redact:term(req())).
 
 nested_request_is_redacted_test() ->
     Reason = {case_clause, {stop, req()}},
-    ?assertEqual({case_clause, {stop, #{method => ~"POST", path => ~"/login", redacted => cowboy_req}}},
+    ?assertEqual({case_clause, {stop, #{method => ~"POST", path => ~"/login", redacted => nova_req}}},
                  nova_redact:term(Reason)),
-    ?assertEqual([a, #{req => #{method => ~"POST", path => ~"/login", redacted => cowboy_req}}],
+    ?assertEqual([a, #{req => #{method => ~"POST", path => ~"/login", redacted => nova_req}}],
                  nova_redact:term([a, #{req => req()}])).
 
 other_terms_are_untouched_test() ->
@@ -159,7 +159,7 @@ query_string_behind_a_badmatch_is_not_logged_test_() ->
     {setup, fun setup/0, fun cleanup/1,
      fun() ->
              capture_logs(),
-             Callback = fun(Req) -> [] = cowboy_req:parse_qs(Req) end,
+             Callback = fun(Req) -> [] = nova_req:parse_qs(Req) end,
              Env = #{callback => Callback, app => test_app, secure => false, controller_data => #{}},
              Req0 = (nova_test_helper:mock_req(~"GET", ~"/login"))#{qs => ~"password=SECRETPW"},
              {ok, Req1, _Env} = nova_handler:execute(Req0, Env),
@@ -213,13 +213,13 @@ setup() ->
     persistent_term:put(nova_dispatch, nova_routing_trie:new(#{})),
     persistent_term:put(nova_use_stacktrace, true),
     {ok, Pid} = nova_handlers:start_link(),
-    meck:new(cowboy_req, [passthrough, no_link]),
-    meck:expect(cowboy_req, reply, fun nova_test_helper:reply/2),
+    meck:new(nova_req, [passthrough, no_link]),
+    meck:expect(nova_req, reply, fun nova_test_helper:reply/2),
     {Prev, Pid}.
 
 cleanup({Prev, Pid}) ->
     logger:remove_handler(nova_redact_tests),
-    meck:unload(cowboy_req),
+    meck:unload(nova_req),
     gen_server:stop(Pid),
     persistent_term:erase(nova_dispatch),
     persistent_term:erase(nova_use_stacktrace),
@@ -245,3 +245,26 @@ logged() ->
 assert_not_leaked(Term) ->
     Text = iolist_to_binary(io_lib:format("~p", [Term])),
     ?assertEqual(nomatch, binary:match(Text, ~"do-not-log-me")).
+
+%% What a server says of a listener it could not start may have the TLS
+%% options in it.
+tls_options_test() ->
+    Key = {'RSAPrivateKey', ~"der"},
+    ?assertEqual({shutdown, {child, [{port, 8443}, {certfile, "cert.pem"}, {key, redacted}, {password, redacted}]}},
+                 nova_redact:tls_options({shutdown, {child, [{port, 8443}, {certfile, "cert.pem"}, {key, Key},
+                                                             {password, "hunter2"}]}})),
+    ?assertEqual(#{socket_opts => [{certs_keys, redacted}, {stateless_tickets_seed, redacted}], port => 1},
+                 nova_redact:tls_options(#{socket_opts => [{certs_keys, [#{key => Key}]},
+                                                           {stateless_tickets_seed, ~"seed"}],
+                                           port => 1})),
+    ?assertEqual({options, {password, redacted}}, nova_redact:tls_options({options, {password, "hunter2"}})),
+    ?assertEqual(eaddrinuse, nova_redact:tls_options(eaddrinuse)),
+    Secrets = [key, password, certs_keys, sni_hosts, sni_fun, user_lookup_fun, psk_identity, srp_identity,
+               stateless_tickets_seed],
+    ?assertEqual([{Secret, redacted} || Secret <- Secrets],
+                 nova_redact:tls_options([{Secret, ~"hunter2"} || Secret <- Secrets])),
+    ?assertEqual(#{Secret => redacted || Secret <- Secrets},
+                 nova_redact:tls_options(#{Secret => ~"hunter2" || Secret <- Secrets})),
+    ?assertEqual(nova_test_helper:improper_list([{port, 1}, {key, redacted}], {password, redacted}),
+                 nova_redact:tls_options(nova_test_helper:improper_list([{port, 1}, {key, Key}],
+                                                                        {password, "hunter2"}))).

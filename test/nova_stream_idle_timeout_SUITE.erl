@@ -43,12 +43,12 @@ handle_stream({test_stream, IdleTimeout}, _Callback, Req0) ->
         listener_default -> ok;
         _ -> cowboy_req:cast({set_options, #{idle_timeout => IdleTimeout}}, Req0)
     end,
-    Req = cowboy_req:stream_reply(200, #{~"content-type" => ~"text/event-stream"}, Req0),
+    Req = nova_req:stream_reply(200, #{~"content-type" => ~"text/event-stream"}, Req0),
     [begin
          timer:sleep(?IDLE_TIMEOUT div 2),
-         cowboy_req:stream_body([~"data: chunk-", integer_to_binary(N), ~"\n\n"], nofin, Req)
+         nova_req:stream_body([~"data: chunk-", integer_to_binary(N), ~"\n\n"], nofin, Req)
      end || N <- lists:seq(1, 5)],
-    cowboy_req:stream_body(<<>>, fin, Req),
+    nova_req:stream_body(<<>>, fin, Req),
     {ok, Req}.
 
 stream_is_cut_at_the_idle_timeout(Config) ->

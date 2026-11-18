@@ -134,7 +134,7 @@ unparseable_upgrade() ->
 
 unparseable_upgrade_is_checked_test() ->
     Req = unparseable_upgrade(),
-    ?assertExit({request_error, _Header, _Text}, cowboy_websocket:is_upgrade_request(Req)),
+    ?assertExit({request_error, _Header, _Text}, nova_req:is_websocket_upgrade(Req)),
     ?assertMatch({stop, {reply, 403, _Body}, _Req, undefined}, pre_request(Req, #{})),
     ?assertMatch({ok, _Req, undefined}, pre_request(Req, #{trusted_origins => [?EVIL]})).
 
@@ -156,10 +156,10 @@ plugin_without_origins_of_its_own_test_() ->
 %% Nova lists the plugin first on every websocket route, where it checks
 %% every request and not only the ones that ask for an upgrade.
 request_to_a_websocket_route_that_is_no_upgrade_test_() ->
-    Websocket = #{cowboy_handler => nova_ws_handler},
+    Websocket = #{handler_module => nova_ws_handler},
     [?_assertMatch({stop, {reply, 403, _Body}, _Req, undefined}, get_from_another_origin(Websocket, #{})),
      ?_assertMatch({ok, _Req, undefined}, get_from_another_origin(Websocket, #{trusted_origins => [?EVIL]})),
-     ?_assertMatch({ok, _Req, undefined}, get_from_another_origin(#{cowboy_handler => nova_handler}, #{})),
+     ?_assertMatch({ok, _Req, undefined}, get_from_another_origin(#{handler_module => nova_handler}, #{})),
      ?_assertMatch({ok, _Req, undefined}, get_from_another_origin(#{}, #{}))].
 
 get_from_another_origin(Env, Options) ->

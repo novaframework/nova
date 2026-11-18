@@ -27,7 +27,7 @@ Nova is the web framework for the **BEAM**. Whether you write Erlang, Elixir, or
 - **Template rendering**: ErlyDTL (Django Template Language) with hot reload
 - **OTP-native**: your web app is a proper OTP application with supervision trees, hot code upgrades, and releases
 
-Nova runs on [Cowboy](https://github.com/ninenines/cowboy) and supports **Erlang**, **Elixir**, and **LFE**.
+Nova runs on [Cowboy](https://github.com/ninenines/cowboy) or [Roadrunner](https://github.com/arizona-framework/roadrunner), over HTTP/1.1, HTTP/2 and HTTP/3, and supports **Erlang**, **Elixir**, and **LFE**.
 
 ## Quick start
 
@@ -113,7 +113,7 @@ there because the route group runs `nova_request_plugin` with
 ## Request pipeline
 
 ```
-Request → Cowboy → Nova Router → Plugins (pre) → Security → Controller → Plugins (post) → Response
+Request → Server (Cowboy or Roadrunner) → Nova Router → Plugins (pre) → Security → Controller → Plugins (post) → Response
 ```
 
 The [request lifecycle guide](guides/request-lifecycle.md) describes each step.

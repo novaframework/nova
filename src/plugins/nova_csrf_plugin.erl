@@ -104,9 +104,9 @@ tokens() ->
 
 %%--------------------------------------------------------------------
 -doc "Stops a request that changes state and that the browser says another site sent with a 403, ahead of the security callback and before anything of its body is read.".
--spec pre_security(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
-          {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
-          {stop, nova_plugin:reply(), Req0 :: cowboy_req:req(), NewState :: any()}.
+-spec pre_security(Req :: nova_req:req(), Env :: any(), Options :: map(), State :: any()) ->
+          {ok, Req0 :: nova_req:req(), NewState :: any()} |
+          {stop, nova_plugin:reply(), Req0 :: nova_req:req(), NewState :: any()}.
 pre_security(Req = #{method := Method, path := Path}, _Env, Options, State) ->
     case is_safe_method(Method) orelse is_excluded_path(Path, maps:get(excluded_paths, Options, []))
         orelse is_sent_by_the_site(Req, Options) of
@@ -123,11 +123,11 @@ pre_security(Req = #{method := Method, path := Path}, _Env, Options, State) ->
 %% add, so only an origin that is listed is let in. A browser that does not
 %% send it is taken by its `Origin`, and a client that sends neither is not
 %% a page that some other site could have made send the request.
--spec is_sent_by_the_site(Req :: cowboy_req:req(), Options :: map()) -> boolean().
+-spec is_sent_by_the_site(Req :: nova_req:req(), Options :: map()) -> boolean().
 is_sent_by_the_site(Req, Options) ->
     Trusted = trusted_origins(Options),
-    Origin = cowboy_req:header(~"origin", Req),
-    case cowboy_req:header(~"sec-fetch-site", Req) of
+    Origin = nova_req:header(~"origin", Req),
+    case nova_req:header(~"sec-fetch-site", Req) of
         Site when Site =:= ~"same-origin"; Site =:= ~"none"; Trusted =:= any ->
             true;
         undefined ->
@@ -150,9 +150,9 @@ trusted_origins(_Options) ->
 
 %%--------------------------------------------------------------------
 -doc "Pre-request callback. On safe methods, puts a CSRF token into the Req map. On unsafe methods, validates the submitted token.".
--spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
-    {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
-    {stop, nova_plugin:reply(), Req0 :: cowboy_req:req(), NewState :: any()}.
+-spec pre_request(Req :: nova_req:req(), Env :: any(), Options :: map(), State :: any()) ->
+    {ok, Req0 :: nova_req:req(), NewState :: any()} |
+    {stop, nova_plugin:reply(), Req0 :: nova_req:req(), NewState :: any()}.
 pre_request(Req = #{method := Method, path := Path}, _Env, Options, State) ->
     FieldName = maps:get(field_name, Options, <<"_csrf_token">>),
     HeaderName = maps:get(header_name, Options, <<"x-csrf-token">>),
@@ -177,8 +177,8 @@ pre_request(Req = #{method := Method, path := Path}, _Env, Options, State) ->
 
 %%--------------------------------------------------------------------
 -doc "Post-request callback. Pass-through.".
--spec post_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
-    {ok, Req0 :: cowboy_req:req(), NewState :: any()}.
+-spec post_request(Req :: nova_req:req(), Env :: any(), Options :: map(), State :: any()) ->
+    {ok, Req0 :: nova_req:req(), NewState :: any()}.
 post_request(Req, _Env, _Options, State) ->
     {ok, Req, State}.
 
@@ -286,7 +286,7 @@ decoded(_Submitted) ->
     undefined.
 
 -spec with_signed_token(SessionId :: {ok, term()} | {error, term()}, Keys :: [binary()], Req) -> Req
-              when Req :: cowboy_req:req().
+              when Req :: nova_req:req().
 with_signed_token({ok, SessionId}, [Key | _], Req) when is_binary(SessionId) ->
     Nonce = crypto:strong_rand_bytes(?NONCE_BYTES),
     Signed = <<Nonce/binary, (signature(Key, SessionId, Nonce))/binary>>,
@@ -314,7 +314,7 @@ is_signed_for(_SessionId, _Submitted, _Keys) ->
     false.
 
 %% The token of a form that was rendered before secret_key_base was set.
--spec is_session_token(Req :: cowboy_req:req(), SessionKey :: binary(), Submitted :: term()) -> boolean().
+-spec is_session_token(Req :: nova_req:req(), SessionKey :: binary(), Submitted :: term()) -> boolean().
 is_session_token(Req, SessionKey, Submitted) ->
     case nova_session:get(Req, SessionKey) of
         {ok, SessionToken} -> is_token(SessionToken, Submitted);
@@ -344,7 +344,7 @@ routed_segments(Path) ->
     binary:split(nova_router:canonical_path(Path), ~"/", [global, trim_all]).
 
 get_submitted_token(Req, FieldName, HeaderName) ->
-    case cowboy_req:header(HeaderName, Req) of
+    case nova_req:header(HeaderName, Req) of
         undefined ->
             case Req of
                 #{params := Params} when is_map(Params) ->

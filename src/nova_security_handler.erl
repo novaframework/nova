@@ -1,6 +1,6 @@
 -module(nova_security_handler).
 -moduledoc false.
--behaviour(cowboy_middleware).
+-behaviour(nova_pipeline).
 
 -export([
          execute/2,
@@ -73,7 +73,7 @@ all_allow([Callback | Rest], Returned, Req, Env) ->
 %% routes. This stands in for one that reaches a request some other way, so
 %% the route is closed rather than left open.
 -doc false.
--spec deny(Req :: cowboy_req:req()) -> false.
+-spec deny(Req :: nova_req:req()) -> false.
 deny(_Req) ->
     false.
 
@@ -91,11 +91,11 @@ handle_response({false, StatusCode, Headers, Body}, Req = #{host := Host}, Env) 
             false ->
                 {ok, _Req0, _Env0} = nova_router:render_status_page(Host, StatusCode, #{}, Req, Env);
             _ ->
-                Req0 = cowboy_req:set_resp_body(Body, Req),
+                Req0 = nova_req:set_resp_body(Body, Req),
                 {ok, Req0, Env}
         end,
-    Req2 = cowboy_req:set_resp_headers(Headers, Req1),
-    Req3 = cowboy_req:reply(StatusCode, Req2),
+    Req2 = nova_req:set_resp_headers(Headers, Req1),
+    Req3 = nova_req:reply(StatusCode, Req2),
     {answered, {stop, Req3}};
 handle_response({redirect, Route}, Req, Env) when is_binary(Route); is_list(Route) ->
     case nova_basic_handler:location(Route) of
@@ -103,8 +103,8 @@ handle_response({redirect, Route}, Req, Env) when is_binary(Route); is_list(Rout
             ?LOG_ERROR(#{msg => ~"Security callback redirected to an invalid location"}),
             handle_response(invalid_redirect, Req, Env);
         Location ->
-            Req0 = cowboy_req:set_resp_headers(#{~"location" => Location}, Req),
-            Req1 = cowboy_req:reply(302, Req0),
+            Req0 = nova_req:set_resp_headers(#{~"location" => Location}, Req),
+            Req1 = nova_req:reply(302, Req0),
             {answered, {stop, Req1}}
     end;
 handle_response({redirect_local, Route}, Req, _Env) when is_binary(Route); is_list(Route) ->
@@ -112,12 +112,12 @@ handle_response({redirect_local, Route}, Req, _Env) when is_binary(Route); is_li
         error ->
             ?LOG_WARNING(#{msg => ~"Security callback refused to redirect to a location that is not a local path",
                            location => nova_basic_handler:loggable_location(Route)}),
-            {answered, {stop, cowboy_req:reply(400, Req)}};
+            {answered, {stop, nova_req:reply(400, Req)}};
         Location ->
-            Req0 = cowboy_req:set_resp_headers(#{~"location" => Location}, Req),
-            {answered, {stop, cowboy_req:reply(302, Req0)}}
+            Req0 = nova_req:set_resp_headers(#{~"location" => Location}, Req),
+            {answered, {stop, nova_req:reply(302, Req0)}}
     end;
 handle_response(_, Req = #{host := Host}, Env) ->
     {ok, Req0, _Env0} = nova_router:render_status_page(Host, 401, #{}, Req, Env),
-    Req1 = cowboy_req:reply(401, Req0),
+    Req1 = nova_req:reply(401, Req0),
     {answered, {stop, Req1}}.

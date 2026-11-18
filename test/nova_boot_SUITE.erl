@@ -101,10 +101,14 @@ listener_starts_after_the_processes_it_needs(_Config) ->
     ok = nova_test_listener:configure(#{}),
     {ok, {_SupFlags, Children}} = nova_sup:init([]),
     Ids = [Id || #{id := Id} <- Children],
-    ?assertEqual(nova_listener, lists:last(Ids)),
-    ?assertEqual([], [nova_handlers, nova_plugin_manager, nova_session_ets] -- lists:droplast(Ids)),
-    ?assertEqual([], nova_sup:listeners()).
+    ?assertEqual([], [nova_handlers, nova_plugin_manager, nova_session_ets] -- Ids),
+    ?assertEqual([], nova_sup:listeners()),
+    _ = application:load(nova_cowboy),
+    {ok, StartedBefore} = application:get_key(nova_cowboy, applications),
+    ?assert(lists:member(nova, StartedBefore)).
 
+%% The listeners cannot serve without the nova application, so they go when
+%% it does, and the server package with them. Starting it serves again.
 restarted_supervisor_serves_again(_Config) ->
     Routes = [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}],
     Port = nova_test_listener:start(#{host => [#{routes => Routes}]}),
@@ -113,37 +117,41 @@ restarted_supervisor_serves_again(_Config) ->
     exit(Supervisor, kill),
     receive {'DOWN', Monitor, process, Supervisor, killed} -> ok end,
     ?assert(stopped(nova, 50)),
-    ?assertMatch({ok, _}, application:ensure_all_started(nova)),
+    Server = nova_test_listener:server(#{}),
+    ?assert(stopped(Server, 50)),
+    ?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Port, [], 1000)),
+    ?assertMatch({ok, _}, application:ensure_all_started(Server)),
     ?assertEqual({200, ~"page"}, nova_test_listener:get(Port, "/")),
-    ?assertEqual([nova_listener], nova_sup:listeners()).
+    ?assertEqual([default], nova_sup:listeners()).
 
 listener_of_another_owner_fails_the_boot(_Config) ->
     Port = nova_test_listener:free_port(),
+    Ref = nova_cowboy:ranch_ref(default),
     {ok, _} = application:ensure_all_started(cowboy),
-    {ok, _} = cowboy:start_clear(nova_listener, [{port, Port}], #{env => #{dispatch => cowboy_router:compile([])}}),
+    {ok, _} = cowboy:start_clear(Ref, [{port, Port}], #{env => #{dispatch => cowboy_router:compile([])}}),
     try
         ?assertMatch({error, _}, nova_test_listener:try_start(#{port => nova_test_listener:free_port()})),
-        ?assertEqual(Port, ranch:get_port(nova_listener))
+        ?assertEqual(Port, ranch:get_port(Ref))
     after
-        cowboy:stop_listener(nova_listener)
+        cowboy:stop_listener(Ref)
     end.
 
 invalid_security_fails_the_boot(_Config) ->
     Routes = [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}],
-    ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener, {invalid_security, true}}}, _}}},
+    ?assertMatch({error, {_Server, {{shutdown, {failed_to_start_child, nova_listener, {invalid_security, true}}}, _}}},
                  nova_test_listener:try_start(#{host => [#{security => true, routes => Routes}]})),
     ?assertEqual(undefined, whereis(nova_sup)).
 
 invalid_security_of_a_mounted_application_fails_the_boot(_Config) ->
     Routes = [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}],
-    ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener, {invalid_security, yes}}}, _}}},
+    ?assertMatch({error, {_Server, {{shutdown, {failed_to_start_child, nova_listener, {invalid_security, yes}}}, _}}},
                  nova_test_listener:try_start(#{mounted => [#{routes => Routes}],
                                                 mounted_options => #{prefix => "/mounted", secure => yes}})),
     ?assertEqual(undefined, whereis(nova_sup)).
 
 invalid_security_of_a_mounted_application_fails_the_boot_next_to_a_group_callback(_Config) ->
     Routes = [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}],
-    ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener, {invalid_security, yes}}}, _}}},
+    ?assertMatch({error, {_Server, {{shutdown, {failed_to_start_child, nova_listener, {invalid_security, yes}}}, _}}},
                  nova_test_listener:try_start(#{mounted => [#{security => fun nova_boot_pages:allow/1,
                                                               routes => Routes}],
                                                 mounted_options => #{prefix => "/mounted", secure => yes}})),
@@ -154,11 +162,11 @@ invalid_security_of_a_mounted_application_fails_the_boot_next_to_a_group_callbac
 invalid_security_replaced_by_an_override_fails_the_boot(_Config) ->
     Routes = [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}],
     Override = #{prefix => "/mounted", override_secure => fun nova_boot_pages:allow/1},
-    ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener, {invalid_security, true}}}, _}}},
+    ?assertMatch({error, {_Server, {{shutdown, {failed_to_start_child, nova_listener, {invalid_security, true}}}, _}}},
                  nova_test_listener:try_start(#{mounted => [#{security => true, routes => Routes}],
                                                 mounted_options => Override})),
     ?assertEqual(undefined, whereis(nova_sup)),
-    ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener, {invalid_security, yes}}}, _}}},
+    ?assertMatch({error, {_Server, {{shutdown, {failed_to_start_child, nova_listener, {invalid_security, yes}}}, _}}},
                  nova_test_listener:try_start(#{mounted => [#{routes => Routes}],
                                                 mounted_options => Override#{secure => yes}})),
     ?assertEqual(undefined, whereis(nova_sup)).
@@ -171,7 +179,7 @@ misplaced_security_callback_fails_the_boot(_Config) ->
     Route = fun(Key) -> [{"/page", fun nova_boot_pages:page/1, #{methods => [get], Key => Allow}}] end,
     [begin
          {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(Options) end),
-         ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
+         ?assertMatch({error, {_Server, {{shutdown, {failed_to_start_child, nova_listener,
                                                   {misplaced_security, App, Key, Path}}}, _}}},
                       Result),
          ?assertMatch([#{app := App, key := Key, path := Path} | _], nova_test_log:errors(Events)),
@@ -244,11 +252,11 @@ unset_environment_is_prod_and_said_once(_Config) ->
     ok = nova_test_listener:configure(#{}),
     application:set_env(nova_test_app, router_module, nova_boot_pages),
     application:unset_env(nova, environment),
-    {{ok, _Started}, Events} = nova_test_log:collect(fun() -> application:ensure_all_started(nova_test_app) end),
+    {{ok, _Started}, Events} = nova_test_log:collect(fun() -> nova_test_listener:boot(#{}) end),
     ?assertMatch([#{key := environment, read_as := prod}], environment_notices(Events)),
     ?assertEqual(prod, nova:get_environment()),
     ?assertNot(nova:is_dev_environment()),
-    Port = maps:get(port, application:get_env(nova, cowboy_configuration, #{})),
+    Port = nova_test_listener:port(),
     ?assertMatch({200, _}, nova_test_listener:get(Port, "/environment/prod")),
     ?assertMatch({404, _}, nova_test_listener:get(Port, "/environment/dev")).
 
@@ -257,9 +265,9 @@ set_environment_is_not_mentioned(_Config) ->
          ok = nova_test_listener:configure(#{}),
          application:set_env(nova_test_app, router_module, nova_boot_pages),
          application:set_env(nova, environment, Environment),
-         {{ok, _Started}, Events} = nova_test_log:collect(fun() -> application:ensure_all_started(nova_test_app) end),
+         {{ok, _Started}, Events} = nova_test_log:collect(fun() -> nova_test_listener:boot(#{}) end),
          ?assertEqual([], environment_notices(Events)),
-         Port = maps:get(port, application:get_env(nova, cowboy_configuration, #{})),
+         Port = nova_test_listener:port(),
          ?assertMatch({200, _}, nova_test_listener:get(Port, ["/environment/", atom_to_list(Environment)])),
          ok = nova_test_listener:stop()
      end || Environment <- [dev, prod]].
@@ -277,7 +285,7 @@ unknown_trusted_origins_of_a_plugin_fails_the_boot(_Config) ->
          Group = #{prefix => "/forms", plugins => [{pre_request, Plugin, #{trusted_origins => same_hosts}}],
                    routes => Routes},
          {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => [Group]}) end),
-         ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
+         ?assertMatch({error, {_Server, {{shutdown, {failed_to_start_child, nova_listener,
                                                   {invalid_setting, trusted_origins, same_hosts}}}, _}}},
                       Result),
          ?assertMatch([#{setting := trusted_origins, value := same_hosts, plugin := Plugin, app := nova_test_app,
@@ -293,7 +301,7 @@ allowed_origins_of_a_plugin_fails_the_boot(_Config) ->
          Group = #{prefix => "/forms", plugins => [{pre_request, Plugin, #{allowed_origins => any}}],
                    routes => Routes},
          {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => [Group]}) end),
-         ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
+         ?assertMatch({error, {_Server, {{shutdown, {failed_to_start_child, nova_listener,
                                                   {invalid_setting, allowed_origins,
                                                    {replaced_by, trusted_origins}}}}, _}}},
                       Result),
@@ -318,7 +326,7 @@ plugins_before_security_of_a_route_group_that_names_none_of_its_plugins_fails_th
     [begin
          Group = #{prefix => "/admin", plugins => [Request], plugins_before_security => Value, routes => Routes},
          {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => [Group]}) end),
-         ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
+         ?assertMatch({error, {_Server, {{shutdown, {failed_to_start_child, nova_listener,
                                                   {invalid_setting, plugins_before_security, Value}}}, _}}},
                       Result),
          ?assertMatch([#{setting := plugins_before_security, value := Value, app := nova_test_app,
@@ -340,7 +348,7 @@ plugins_after_security_of_a_route_group_fails_the_boot(_Config) ->
               plugins_after_security => [nova_request_plugin],
               routes => [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}]},
     {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => [Group]}) end),
-    ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
+    ?assertMatch({error, {_Server, {{shutdown, {failed_to_start_child, nova_listener,
                                              {invalid_setting, plugins_after_security,
                                               {replaced_by, plugins_before_security}}}}, _}}},
                  Result),
@@ -407,7 +415,7 @@ csrf_plugin_without_sessions_fails_the_boot(_Config) ->
          [application:set_env(nova, Key, Value) || {Key, Value} <- [{use_sessions, false} | Settings]],
          try
              {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => [Csrf]}) end),
-             ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
+             ?assertMatch({error, {_Server, {{shutdown, {failed_to_start_child, nova_listener,
                                                       {invalid_setting, use_sessions,
                                                        {required_by, nova_csrf_plugin}}}}, _}}},
                           Result),
@@ -484,7 +492,7 @@ security_reads_body_of_a_route_group_is_checked_by_the_boot(_Config) ->
             end,
     [begin
          {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => [Group(Value)]}) end),
-         ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
+         ?assertMatch({error, {_Server, {{shutdown, {failed_to_start_child, nova_listener,
                                                   {invalid_setting, security_reads_body, Reason}}}, _}}},
                       Result),
          ?assertMatch([#{setting := security_reads_body, value := Reason, app := nova_test_app,
@@ -607,7 +615,7 @@ session_cookie_notices(Settings) ->
     ok = nova_test_listener:configure(#{}),
     [application:set_env(nova, Key, Value) || {Key, Value} <- Settings],
     try
-        {{ok, _Started}, Events} = nova_test_log:collect(fun() -> application:ensure_all_started(nova_test_app) end),
+        {{ok, _Started}, Events} = nova_test_log:collect(fun() -> nova_test_listener:boot(#{}) end),
         [Report || {notice, {report, #{notice := session_cookie_needs_https} = Report}} <- Events]
     after
         [application:unset_env(nova, Key) || {Key, _Value} <- Settings],

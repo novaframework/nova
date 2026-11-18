@@ -215,8 +215,9 @@ the `routes` of the group.
 ## Starting an application at runtime
 
 `nova_sup:add_application/2` starts a Nova application while the node is
-running. The second argument takes the same shape as the `cowboy_configuration`
-environment key.
+running. The second argument is `#{listener => Name}` for a listener that is
+running, or the settings of a listener, see
+[Servers and listeners](listeners.md).
 
 ```erlang
 {ok, App, Host, Port} = nova_sup:add_application(my_other_app, #{port => 8081}).
@@ -224,15 +225,29 @@ environment key.
 
 What happens depends on whether the host and port are already bound:
 
-- **A free port.** A new Cowboy listener is started with a routing table of its
+- **A free port.** A new listener is started with a routing table of its
   own, holding that application, anything in its `nova_apps`, and Nova's own
   error pages. The listener serves only those routes.
 - **A port Nova already listens on.** The application's routes are added to
   that listener's existing routing table, and the two applications are served
-  side by side.
+  side by side. The listener serves as it was started, so settings other
+  than the address are refused with
+  `{error, {listener_settings_ignored, Name, Keys}}`. A listener that was
+  started for an application takes another with the settings it was started
+  with, written the same way.
 
-Starting an application that is already running returns
-`{error, {already_started, App}}`.
+Adding an application to a listener a second time returns
+`{error, {already_started, App}}`. One the configuration lists on the
+listener is served there already, and the answer says where. A new listener
+is named after the application, so when a listener has that name the answer is
+`{error, {listener_exists, App}}`. That is a listener of the configuration,
+or one that was started for the application before and still serves
+another: see [Servers and listeners](listeners.md#at-runtime).
+
+Before the server package has started there is no listener to add to. The
+application is then added once the listeners of the configuration are up,
+which lets a library call this from its `start/2`. See
+[Servers and listeners](listeners.md#at-runtime).
 
 Because each listener has its own routing table, two applications on two ports
 do not serve each other's routes. That is the point of binding a second port:
@@ -251,6 +266,7 @@ routing table discarded, releasing the port. Other applications on the same
 listener are unaffected.
 
 Removing an application that was never started returns `{error, not_found}`.
+The other answers are with `nova_sup:remove_application/1`.
 
 ## Inspecting what is running
 

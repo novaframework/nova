@@ -24,23 +24,23 @@ setup() ->
     Tree = nova_routing_trie:new(#{use_strict => false, convert_to_binary => true}),
     persistent_term:put(nova_dispatch, Tree),
     persistent_term:put(nova_use_stacktrace, false),
-    meck:new(cowboy_req, [passthrough, no_link]),
-    meck:expect(cowboy_req, reply, fun nova_test_helper:reply/2),
-    meck:expect(cowboy_req, set_resp_headers, fun(Headers, Req) ->
+    meck:new(nova_req, [passthrough, no_link]),
+    meck:expect(nova_req, reply, fun nova_test_helper:reply/2),
+    meck:expect(nova_req, set_resp_headers, fun(Headers, Req) ->
         ExistingHeaders = maps:get(resp_headers, Req, #{}),
         Req#{resp_headers => maps:merge(ExistingHeaders, Headers)}
     end),
-    meck:expect(cowboy_req, set_resp_body, fun(Body, Req) ->
+    meck:expect(nova_req, set_resp_body, fun(Body, Req) ->
         Req#{resp_body => Body}
     end),
-    meck:expect(cowboy_req, set_resp_header, fun(Name, Value, Req) ->
+    meck:expect(nova_req, set_resp_header, fun(Name, Value, Req) ->
         Headers = maps:get(resp_headers, Req, #{}),
         Req#{resp_headers => Headers#{Name => Value}}
     end),
     Prev.
 
 cleanup(Prev) ->
-    meck:unload(cowboy_req),
+    meck:unload(nova_req),
     persistent_term:erase(nova_dispatch),
     persistent_term:erase(nova_use_stacktrace),
     nova_test_helper:cleanup_nova_env(Prev).
@@ -98,7 +98,7 @@ callback_true_auth_data_websocket_test_() ->
         AuthData = #{user_id => 99},
         Callback = fun(_) -> {true, AuthData} end,
         Env = (env())#{secure => Callback,
-                     cowboy_handler => nova_ws_handler,
+                     handler_module => nova_ws_handler,
                      arguments => #{existing => data}},
         %% nova_ws_handler takes it from the request, as a controller does.
         ?assertEqual({ok, Req#{auth_data => AuthData}, Env}, nova_security_handler:execute(Req, Env))
@@ -316,7 +316,7 @@ several_callbacks_allow_test_() ->
        end},
       {"the data of a websocket route follows the same rule, and is in the request alone",
        [fun() ->
-                Env = (env())#{cowboy_handler => nova_ws_handler, arguments => #{module => a_controller}},
+                Env = (env())#{handler_module => nova_ws_handler, arguments => #{module => a_controller}},
                 {{ok, Req, Env1}, _Called} = execute_all([answering(first, First), answering(second, Second)], Env),
                 ?assertEqual({Expected, #{module => a_controller}},
                              {maps:get(auth_data, Req, none), maps:get(arguments, Env1)})

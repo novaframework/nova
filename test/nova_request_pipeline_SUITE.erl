@@ -50,7 +50,7 @@ init_per_suite(Config) ->
     Port = nova_test_listener:free_port(),
     ok = nova_test_listener:configure(#{port => Port, host => Host}),
     application:set_env(nova, plugins, [{pre_request, ?MODULE, #{}}, {post_request, ?MODULE, #{}}]),
-    {ok, _Started} = application:ensure_all_started(nova_test_app),
+    {ok, Port} = nova_test_listener:boot(#{}),
     [{port, Port} | Config].
 
 end_per_suite(_Config) ->
@@ -72,14 +72,14 @@ pre_security(Req, _Env, #{stop := true}, State) ->
     {stop, {reply, 403, ~"stopped by a plugin"}, Req, State};
 pre_security(Req, _Env, _Options, State) ->
     ran(pre_security),
-    {ok, cowboy_req:set_resp_header(~"x-pipeline", ~"pre_security", Req), State}.
+    {ok, nova_req:set_resp_header(~"x-pipeline", ~"pre_security", Req), State}.
 
 pre_request(Req, _Env, #{stop := late}, State) ->
     ran(pre_request),
     {stop, {reply, 403, ~"stopped by a plugin"}, Req, State};
 pre_request(Req, _Env, _Options, State) ->
     ran(pre_request),
-    {ok, cowboy_req:set_resp_header(~"x-pipeline", ~"pre_request", Req), State}.
+    {ok, nova_req:set_resp_header(~"x-pipeline", ~"pre_request", Req), State}.
 
 post_request(Req, _Env, _Options, State) ->
     ran(post_request),

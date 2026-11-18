@@ -9,7 +9,7 @@ Sessions are on by default. With `{use_sessions, false}` every function of `nova
 ### `nova_session:set/3`
 
 ```erlang
--spec set(Req :: cowboy_req:req(), Key :: binary(), Value :: term()) ->
+-spec set(Req :: nova_req:req(), Key :: binary(), Value :: term()) ->
                  ok | {error, Reason :: atom()} | no_return().
 ```
 
@@ -24,7 +24,7 @@ Use it for what a signed-in client stores. For a visitor who is not signed in, u
 ### `nova_session:set_provisional/3`
 
 ```erlang
--spec set_provisional(Req :: cowboy_req:req(), Key :: binary(), Value :: term()) ->
+-spec set_provisional(Req :: nova_req:req(), Key :: binary(), Value :: term()) ->
           ok | {error, Reason :: atom()} | no_return().
 ```
 
@@ -37,7 +37,7 @@ ok = nova_session:set_provisional(Req, ~"flash", ~"Saved").
 ### `nova_session:get/2`
 
 ```erlang
--spec get(Req :: cowboy_req:req(), Key :: binary()) ->
+-spec get(Req :: nova_req:req(), Key :: binary()) ->
           {ok, Value :: term()} | {error, Reason :: atom()} | no_return().
 ```
 
@@ -50,7 +50,7 @@ Gets a session value. It takes two arguments: the request and the key. It return
 ### `nova_session:delete/2`
 
 ```erlang
--spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} | no_return().
+-spec delete(Req :: nova_req:req(), Key :: binary()) -> {ok, Req :: nova_req:req()} | no_return().
 ```
 
 Deletes a value. It takes two arguments: the request and the key. The rest of the session is kept.
@@ -62,7 +62,7 @@ Deletes a value. It takes two arguments: the request and the key. The rest of th
 ### `nova_session:delete/1`
 
 ```erlang
--spec delete(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} | no_return().
+-spec delete(Req :: nova_req:req()) -> {ok, Req :: nova_req:req()} | no_return().
 ```
 
 This function deletes the whole session and clears the session cookie, which is how a user is signed out. The returned request carries a fresh session id, so a later `set/3` on it in the same request starts a new session instead of reviving the deleted one.
@@ -76,8 +76,8 @@ logout(Req) ->
 ### `nova_session:sign_in/3`
 
 ```erlang
--spec sign_in(Req :: cowboy_req:req(), Key :: binary(), Value :: term()) ->
-          {ok, Req :: cowboy_req:req()} | {error, Reason :: atom()} | no_return().
+-spec sign_in(Req :: nova_req:req(), Key :: binary(), Value :: term()) ->
+          {ok, Req :: nova_req:req()} | {error, Reason :: atom()} | no_return().
 ```
 
 Signs a user in. It moves the client to a new session id, stores `Value` under `Key` in the new session and returns the request that carries the new id. Call it where a user signs in, and go on with the request it returns:
@@ -98,7 +98,7 @@ A token of `nova_csrf_plugin` that was made for the old id is refused once the u
 ### `nova_session:renew/1`
 
 ```erlang
--spec renew(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} | no_return().
+-spec renew(Req :: nova_req:req()) -> {ok, Req :: nova_req:req()} | no_return().
 ```
 
 Moves the client to a new, empty session: the old session's data is deleted and the response carries a new session cookie. It is the lower-level piece of `sign_in/3`, which is what to call where a user signs in, and `delete/1` is what signs out. Call `renew/1` itself for another change of what the client may do, such as a second factor or a password change, and use the returned request for the `set/3` calls that follow.
@@ -168,7 +168,7 @@ With one of those three in `session_cookie_opts` and no `session_cookie_name`, o
 
 Changing the name of the cookie signs every client out once, and so does an upgrade from a Nova that named it `session_id`: the old cookie is no longer read, so clients get a new session under the new name. The old cookie stays in the browser until it expires. To keep the sessions there are, set `{session_cookie_name, <<"session_id">>}`.
 
-`session_cookie_opts` takes the options of `cowboy_req:set_resp_cookie/4` (`path`, `domain`, `secure`, `http_only`, `same_site`, `max_age`) and is merged over the defaults above. Other keys, and values of the wrong type (a `path` that is not a binary, for example), are ignored. The cookie name must be an RFC 6265 token and `path` and `domain` plain ASCII without control characters or `;`; Nova checks both at boot and refuses to start otherwise, as it does for a name that is empty or not a binary. Changed at runtime to something invalid, `nova_stream_h` (one of the default `stream_handlers`) leaves the cookie off the response and logs one error per cookie name. Without `nova_stream_h`, `sign_in/3`, `renew/1` and `delete/1` set the cookie themselves, and an invalid setting makes them raise, so the request gets a 500.
+`session_cookie_opts` takes the options of `nova_req:set_resp_cookie/4` (`path`, `domain`, `secure`, `http_only`, `same_site`, `max_age`) and is merged over the defaults above. Other keys, and values of the wrong type (a `path` that is not a binary, for example), are ignored. The cookie name must be an RFC 6265 token and `path` and `domain` plain ASCII without control characters or `;`; Nova checks both at boot and refuses to start otherwise, as it does for a name that is empty or not a binary. Changed at runtime to something invalid, `nova_stream_h` (one of the default `stream_handlers`) leaves the cookie off the response and logs one error per cookie name. Without `nova_stream_h`, `sign_in/3`, `renew/1` and `delete/1` set the cookie themselves, and an invalid setting makes them raise, so the request gets a 500.
 
 `session_max_age` (seconds, 14 days by default) limits how long a session lives from the moment it was created, whatever happens in between. It sets `Max-Age` on the cookie, and the default `nova_session_ets` backend drops the session once it has passed. With `infinity` the cookie has no `Max-Age` and sessions live until they are deleted or the node restarts.
 

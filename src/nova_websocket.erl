@@ -77,9 +77,9 @@ the connection.
 """.
 -type call_result() :: {ok, State :: map()} |
                        {ok, State :: map(), hibernate} |
-                       {reply, OutFrame :: cow_ws:frame() | [OutFrame :: cow_ws:frame()],
+                       {reply, OutFrame :: nova_server:ws_frame() | [OutFrame :: nova_server:ws_frame()],
                         State :: map()} |
-                       {reply, OutFrame :: cow_ws:frame() | [OutFrame :: cow_ws:frame()],
+                       {reply, OutFrame :: nova_server:ws_frame() | [OutFrame :: nova_server:ws_frame()],
                         State :: map(), hibernate} |
                        {stop, State :: map()}.
 -export_type([call_result/0]).
@@ -96,19 +96,17 @@ idle for too long, `{error, Reason}` for a socket or protocol error, and
 `{crash, Class, Reason}` when the connection process crashed.
 """.
 -type reason() ::  normal | stop | timeout | remote |
-                   {remote, cow_ws:close_code(), binary()} |
+                   {remote, Code :: 1000..4999, binary()} |
                    {error, badencoding | badframe | closed | atom()} |
                    {crash, error | exit | throw, any()}.
 -export_type([reason/0]).
 
-%% The options of the connection. They are Cowboy's today; the callback
-%% names Nova's type so that can change without changing the callback.
 -doc """
 The options of a connection, as `init/1` returns them in
-`{ok, State, Options}`: those of `cowboy_websocket`, such as `idle_timeout`
-and `max_frame_size`.
+`{ok, State, Options}`: `idle_timeout`, `max_frame_size` and `compress`, and
+whatever else the server package takes.
 """.
--type opts() :: cowboy_websocket:opts().
+-type opts() :: nova_server:ws_opts().
 -export_type([opts/0]).
 
 -doc """

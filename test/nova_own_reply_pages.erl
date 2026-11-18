@@ -94,5 +94,5 @@ plugin_info() ->
       description => ~"Replies after the controller, with a request that does not say it was answered"}.
 
 answer(Req) ->
-    _ = cowboy_req:reply(200, #{~"content-type" => ~"text/plain"}, ~"own-reply", Req),
+    _ = nova_req:reply(200, #{~"content-type" => ~"text/plain"}, ~"own-reply", Req),
     ok.

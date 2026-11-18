@@ -4,7 +4,8 @@
 -export([
          term/1,
          stacktrace/1,
-         crash_info/3
+         crash_info/3,
+         tls_options/1
         ]).
 
 -define(DEFAULT_FRAGMENTS, [~"passw", ~"secret", ~"token", ~"apikey", ~"authorization", ~"cookie",
@@ -41,8 +42,8 @@ term(Term) ->
     term(Term, keys()).
 
 -spec term(term(), keys()) -> term().
-term(#{pid := Pid, streamid := _, headers := _} = Req, _Keys) when is_pid(Pid) ->
-    (maps:with([method, path], Req))#{redacted => cowboy_req};
+term(#{method := _, headers := Headers} = Req, _Keys) when is_map(Headers) ->
+    (maps:with([method, path], Req))#{redacted => nova_req};
 term(Map, Keys) when is_map(Map) ->
     maps:map(fun(Key, Value) -> member_value(Key, Value, Keys) end, Map);
 term(List, Keys) when is_list(List) ->
@@ -156,3 +157,38 @@ formatted `stacktrace`.
 -spec crash_info(Class :: atom(), Reason :: term(), Extra :: map()) -> map().
 crash_info(Class, Reason, Extra) ->
     Extra#{class => Class, reason => term(Reason)}.
+
+-doc """
+Replaces what the TLS options of a listener keep secret, wherever they are
+in `Term`: the key, its password, the keys of `certs_keys` and `sni_hosts`,
+the seed of the session tickets and the like. For what a server says of a
+listener it could not start, which may have the options it was given in it.
+""".
+-spec tls_options(term()) -> term().
+tls_options({Option, Value}) ->
+    case is_tls_secret(Option) of
+        true -> {Option, redacted};
+        false -> {tls_options(Option), tls_options(Value)}
+    end;
+tls_options(Tuple) when is_tuple(Tuple) ->
+    list_to_tuple([tls_options(Element) || Element <- tuple_to_list(Tuple)]);
+tls_options(List) when is_list(List) ->
+    tls_list(List);
+tls_options(Map) when is_map(Map) ->
+    #{Key => case is_tls_secret(Key) of
+                 true -> redacted;
+                 false -> tls_options(Value)
+             end || Key := Value <- Map};
+tls_options(Other) ->
+    Other.
+
+tls_list([Head | Tail]) ->
+    [tls_options(Head) | tls_list(Tail)];
+tls_list([]) ->
+    [];
+tls_list(Tail) ->
+    tls_options(Tail).
+
+is_tls_secret(Option) ->
+    lists:member(Option, [key, password, certs_keys, sni_hosts, sni_fun, user_lookup_fun, psk_identity,
+                          srp_identity, stateless_tickets_seed]).

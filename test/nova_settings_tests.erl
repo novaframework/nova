@@ -4,7 +4,7 @@
 
 -define(SECRET, ~"a secret of thirty-two bytes or more, for the tests").
 -define(KEYS, [trusted_origins, secret_key_base, csrf_token, max_sessions, non_canonical_paths,
-               plugins_before_security]).
+               plugins_before_security, server_grace, shutdown_delay, shutdown_drain_timeout]).
 
 %% The settings as a boot finds them with Env in the nova environment: the
 %% value of every key, or what the boot is stopped with.
@@ -22,7 +22,8 @@ booted_with(Env) ->
 
 defaults_test() ->
     ?assertEqual(#{trusted_origins => same_host, secret_key_base => [], csrf_token => undefined,
-                   max_sessions => 1000000, non_canonical_paths => reject, plugins_before_security => []},
+                   max_sessions => 1000000, non_canonical_paths => reject, plugins_before_security => [],
+                   server_grace => 10000, shutdown_delay => 0, shutdown_drain_timeout => 15000},
                  booted_with([])).
 
 values_that_can_be_used_test_() ->
@@ -41,6 +42,16 @@ values_that_can_be_used_test_() ->
                                 [nova_secret:derived(?SECRET), nova_secret:derived(<<?SECRET/binary, "2">>)]},
                                {max_sessions, 1, 1},
                                {max_sessions, infinity, infinity},
+                               {server_grace, 0, 0},
+                               {server_grace, 60000, 60000},
+                               {server_grace, 16#FFFFFFFF, 16#FFFFFFFF},
+                               {server_grace, infinity, infinity},
+                               {shutdown_delay, 0, 0},
+                               {shutdown_delay, 5000, 5000},
+                               {shutdown_delay, 16#FFFFFFFF, 16#FFFFFFFF},
+                               {shutdown_drain_timeout, 0, 0},
+                               {shutdown_drain_timeout, 200, 200},
+                               {shutdown_drain_timeout, 16#FFFFFFFF, 16#FFFFFFFF},
                                {plugins_before_security, all, all},
                                {plugins_before_security, [nova_request_plugin], [nova_request_plugin]}]].
 
@@ -62,6 +73,21 @@ values_that_stop_the_boot_test_() ->
                          {max_sessions, -1},
                          {max_sessions, many},
                          {max_sessions, 1.5},
+                         {server_grace, -1},
+                         {server_grace, 16#FFFFFFFF + 1},
+                         {server_grace, "10s"},
+                         {server_grace, 1.5},
+                         {server_grace, never},
+                         {shutdown_delay, -1},
+                         {shutdown_delay, 16#FFFFFFFF + 1},
+                         {shutdown_delay, infinity},
+                         {shutdown_delay, "5000"},
+                         {shutdown_delay, 0.5},
+                         {shutdown_drain_timeout, -1},
+                         {shutdown_drain_timeout, 16#FFFFFFFF + 1},
+                         {shutdown_drain_timeout, infinity},
+                         {shutdown_drain_timeout, "15s"},
+                         {shutdown_drain_timeout, 1.5},
                          {plugins_before_security, none},
                          {plugins_before_security, nova_request_plugin},
                          {plugins_before_security, [~"nova_request_plugin"]},
@@ -72,6 +98,47 @@ values_that_stop_the_boot_test_() ->
                          {plugins_before_security, [nova_request_plugin, nova_reqeust_plugin]},
                          {plugins_before_security, [nova_cors_plugin]},
                          {plugins_before_security, [lists]}]].
+
+%% How long the node waits as it stops is read when it does, so what is
+%% set while it runs applies. One that cannot be used then is not what the
+%% node waits.
+current_test_() ->
+    Current = fun(Booted, Now) -> current(shutdown_drain_timeout, Booted, Now) end,
+    Warned = fun(Events) -> [Value || {warning, {report, #{setting := shutdown_drain_timeout, value := Value,
+                                                           used := 300}}} <- Events]
+             end,
+    [fun() ->
+             {Value, Events} = Current(300, 200),
+             ?assertEqual({200, []}, {Value, Warned(Events)})
+     end,
+     fun() ->
+             {Value, Events} = Current(300, never),
+             ?assertEqual({300, [never]}, {Value, Warned(Events)})
+     end,
+     fun() ->
+             {Value, Events} = Current(300, -6000),
+             ?assertEqual({300, [-6000]}, {Value, Warned(Events)})
+     end,
+     fun() ->
+             application:unset_env(nova, shutdown_drain_timeout),
+             ?assertEqual(15000, nova_settings:current(shutdown_drain_timeout))
+     end,
+     ?_assertMatch({2000, []}, current(shutdown_delay, 1000, 2000)),
+     ?_assertMatch({1000, [{warning, {report, #{setting := shutdown_delay, value := infinity, used := 1000}}}]},
+                   current(shutdown_delay, 1000, infinity)),
+     ?_assertMatch({1000, [{warning, {report, #{setting := shutdown_delay, value := "2000", used := 1000}}}]},
+                   current(shutdown_delay, 1000, "2000"))].
+
+current(Key, Booted, Now) ->
+    application:set_env(nova, Key, Booted),
+    try
+        ok = nova_settings:validate(),
+        application:set_env(nova, Key, Now),
+        nova_test_log:collect(fun() -> nova_settings:current(Key) end)
+    after
+        application:unset_env(nova, Key),
+        nova_settings:validate()
+    end.
 
 csrf_settings_test_() ->
     Short = binary:copy(~"s", 31),

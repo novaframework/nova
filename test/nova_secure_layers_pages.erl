@@ -24,7 +24,7 @@ override(Req) ->
 decide(Layer, Req) ->
     ?MODULE ! {?MODULE, Layer},
     Name = atom_to_binary(Layer),
-    case proplists:get_value(Name, cowboy_req:parse_qs(Req), ~"allow") of
+    case proplists:get_value(Name, nova_req:parse_qs(Req), ~"allow") of
         ~"allow" -> true;
         ~"data" -> {true, Layer};
         ~"data-seen" -> {true, {Layer, saw, maps:get(auth_data, Req, none)}};
@@ -54,10 +54,10 @@ websocket_handle(_Frame, ControllerData) ->
 websocket_info(_Info, ControllerData) ->
     {ok, ControllerData}.
 
-%% The plain Cowboy handler.
--spec init(cowboy_req:req(), term()) -> {ok, cowboy_req:req(), term()}.
+%% The plain handler module.
+-spec init(nova_req:req(), term()) -> {ok, nova_req:req(), term()}.
 init(Req, State) ->
-    {ok, cowboy_req:reply(200, #{}, auth_data(Req), Req), State}.
+    {ok, nova_req:reply(200, #{}, auth_data(Req), Req), State}.
 
 auth_data(ReqOrControllerData) ->
     unicode:characters_to_binary(io_lib:format("~0p", [maps:get(auth_data, ReqOrControllerData, none)])).

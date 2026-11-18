@@ -67,7 +67,22 @@ of `{Module, Function}` in Nova.
 
 ## Next release
 
-These changes are part of the release that follows 0.18.3.
+These changes are part of the release that follows 0.18.3, which is 1.0.
+
+### The server
+
+- **Cowboy is no longer part of Nova.** A server package starts the
+  listeners: `nova_cowboy`, or `nova_roadrunner` for HTTP/3. See
+  [Servers and listeners](listeners.md) and the
+  [Upgrading](upgrading.md#the-server-and-its-listeners) guide.
+- **`cowboy_configuration` is deprecated** in favour of `listeners`, which
+  names each listener and the HTTP versions it serves. The key is still read
+  when `listeners` is not set, and Nova logs a notice at boot.
+- **`nova_req`** reads and answers a request on any server. `cowboy_req`
+  keeps working on `nova_cowboy`.
+- **A route group names its listeners with `listener`**, and a route or its
+  group the HTTP versions it is served over with `http_versions`. See
+  [Routing](routing.md#the-listeners-of-a-route-group).
 
 ### Defaults that changed
 
@@ -232,7 +247,7 @@ these affects and how to get the earlier behaviour back.
 
 - **`terminate/3` is called with three arguments.** `nova_handler` checked
   for `terminate/3` and called `terminate/2`. Controllers get
-  `terminate(Reason, Req, #{})`; plain Cowboy handlers get their own state. A
+  `terminate(Reason, Req, #{})`; plain handler modules get their own state. A
   controller that only exports `terminate/2` is not called, as before.
 
 - **A handler registered as `{Module, Function}` is called with arity 3.**

@@ -19,8 +19,8 @@ setup() ->
     application:set_env(nova, use_sessions, true),
     application:set_env(nova, session_manager, nova_session_ets),
     {ok, Pid} = nova_session_ets:start_link(),
-    meck:new(cowboy_req, [non_strict]),
-    meck:expect(cowboy_req, parse_cookies,
+    meck:new(nova_req, [non_strict]),
+    meck:expect(nova_req, parse_cookies,
                 fun(Req) ->
                     case maps:get(cookie_session_id, Req, undefined) of
                         undefined -> [];
@@ -28,15 +28,22 @@ setup() ->
                         SId -> [{nova_session:cookie_name(), SId}]
                     end
                 end),
-    meck:expect(cowboy_req, set_resp_cookie,
+    meck:expect(nova_req, set_resp_cookie,
                 fun(Name, Value, Req, Opts) ->
                     Req#{resp_cookie => #{name => Name, value => Value, opts => Opts}}
                 end),
-    meck:expect(cowboy_req, cast, fun(Event, Req) -> meck:passthrough([Event, Req]) end),
+    %% What nova_session keeps for the response is seen here as it is told.
+    meck:new(nova_session, [passthrough]),
+    meck:expect(nova_session, response_event,
+                fun(Event) ->
+                    self() ! {stream_event, {nova_session, Event}},
+                    ok
+                end),
     Pid.
 
 cleanup(Pid) ->
-    meck:unload(cowboy_req),
+    meck:unload(nova_session),
+    meck:unload(nova_req),
     gen_server:stop(Pid),
     application:unset_env(nova, bootstrap_application),
     application:unset_env(nova, use_sessions),
@@ -53,18 +60,13 @@ req_with_session(SessionId) ->
 req_with_cookie(SessionId) ->
     #{cookie_session_id => SessionId}.
 
-%% A request whose connection process is a stand-in that forwards what
-%% nova_session tells the stream handler.
+%% A request of the process serving it, as nova_session:start_request/1 and
+%% nova_router hand it over.
 stream_req(SessionId) ->
-    Self = self(),
-    Conn = spawn_link(fun() ->
-                              receive
-                                  {{_Pid, 7}, Event} -> Self ! {stream_event, Event}
-                              end
-                      end),
-    #{nova_session_id => SessionId, pid => Conn, streamid => 7, nova_session_owner => self()}.
+    #{nova_session_id => SessionId, nova_session_owner => self()}.
 
-%% The request as nova_stream_h hands it over when the client sent a cookie.
+%% The request as nova_session:start_request/1 hands it over when the client
+%% sent a cookie.
 presented_req(Presented, Pending) ->
     (maps:remove(nova_session_id, stream_req(Pending)))#{nova_session_presented => Presented,
                                                          nova_session_pending => Pending}.
@@ -297,7 +299,7 @@ delete_expires_cookie_without_stream_handler() ->
     {ok, Req1} = nova_session:delete(req_with_cookie(SId)),
     #{resp_cookie := #{name := ~"__Host-session_id", value := <<>>, opts := #{max_age := 0}}} = Req1.
 
-%% cowboy_req:set_resp_cookie/4 is mocked here, so the refusal is Nova's own
+%% nova_req:set_resp_cookie/4 is mocked here, so the refusal is Nova's own
 %% and does not depend on the cowlib version.
 invalid_cookie_name_raises_without_stream_handler() ->
     application:set_env(nova, session_cookie_name, ~"app:sid"),

@@ -2,32 +2,49 @@
 
 Nova is configured through the application environment, normally in *sys.config*. This page lists every key Nova reads.
 
-## Cowboy configuration
+## The server and its listeners
 
-Nova uses Cowboy as the webserver. The listener is configured with a map under the `cowboy_configuration` key of the `nova` application:
+Nova runs on a server package, `nova_cowboy` or `nova_roadrunner`, which
+starts the listeners of the node. They are configured under the `listeners`
+key of the `nova` application, each under a name:
 
 ```erlang
 {nova, [
-    {cowboy_configuration, #{port => 8080}}
+    {listeners, #{
+        default => #{port => 8080}
+    }}
 ]}
 ```
 
-| Key | Description | Value | Default |
+| Setting | Description | Value | Default |
 |-----|-------------|-------|---------|
-| `stream_handlers` | The Cowboy stream handlers, in order. `nova_stream_h` sets the `server` header and issues the session cookie. A list of your own replaces the default, so keep `nova_stream_h` in it when you use sessions | `list()` | `[nova_stream_h, cowboy_compress_h, cowboy_stream_h]` |
-| `middleware_handlers` | The Cowboy middlewares, in order. The default is the Nova request pipeline, see [Request lifecycle](request-lifecycle.md). A list of your own replaces it | `list()` | `[nova_router, nova_plugin_handler, nova_security_handler, nova_handler, nova_plugin_handler]` |
-| `options` | Cowboy protocol options, see [`cowboy_http`](https://ninenines.eu/docs/en/cowboy/2.21/manual/cowboy_http/). Nova sets `stream_handlers`, `middlewares` and its own keys in `env` | `map()` | `#{compress => true}` |
+| `port` | Port to bind to | `integer()` | `8080`, or `8443` with `tls` |
 | `ip` | IP to bind to | `tuple` | `{0, 0, 0, 0}` |
-| `port` | Port to bind to | `integer()` | `8080` |
-| `use_ssl` | Serve TLS on `ssl_port` instead of plain HTTP on `port`. There is one listener | `boolean()` | `false` |
-| `ssl_options` | Transport options for the TLS listener, as a map. Nova passes them to `ranch_ssl`, see [its manual](https://ninenines.eu/docs/en/ranch/2.4/manual/ranch_ssl/). A TLS listener needs at least a certificate and a key, for instance `#{certfile => "/path/to/fullchain.pem", keyfile => "/path/to/privkey.pem"}` | `map()` | `#{}` |
-| `ssl_port` | Port to bind to when using SSL | `integer()` | `8443` |
-| `ca_cert` | Path to CA-cert *Deprecated since 0.10.3 - Replaced with `ssl_options`*| `string()` | `undefined` |
-| `cert` | Path to cert *Deprecated since 0.10.3 - Replaced with `ssl_options`*| `string()` | `undefined` |
+| `tls` | The options of the `ssl` application for a server. A listener with TLS needs at least a certificate and a key, for instance `#{certfile => "/path/to/fullchain.pem", keyfile => "/path/to/privkey.pem"}` | `map() \| list() \| false` | `false` |
+| `protocols` | The HTTP versions the listener serves | `[http1 \| http2 \| http3 \| {Version, map()}]` | `[http1, http2]` with `tls`, `[http1]` without |
+| `applications` | The Nova applications the listener serves | `[atom()]` | The bootstrap application, for the only listener |
+| `steps` | The steps of a request, in order. The default is the Nova request pipeline, see [Request lifecycle](request-lifecycle.md). A list of your own replaces it | `[module()]` | `[nova_router, nova_plugin_handler, nova_security_handler, nova_handler, nova_plugin_handler]` |
+| `server_opts` | Options of the server package. For Cowboy these are its protocol options, see `nova_cowboy`. For Roadrunner see `nova_roadrunner` | `map()` | `#{}` |
 
-The listener is started last, after everything a request needs is running. If it cannot be started, for instance because the port is in use or a certificate cannot be read, Nova logs `Cowboy could not start` and fails to start with `{listener_not_started, Reason}`. Earlier releases logged the error and kept running without a listener.
+[Servers and listeners](listeners.md) describes them, with what a server can
+be asked for and what is checked when the node starts.
 
-The listener belongs to ranch, so it is still there when `nova_sup` goes down without the `nova` application being stopped, for instance when `nova_sup` runs under a supervisor of your own. When `nova_sup` starts again it stops that listener and binds a new one. A listener named `nova_listener` that Nova did not start is left alone and stops the boot.
+The listeners are started by the application of the server package, after
+everything a request needs is running. If one cannot be started, for
+instance because the port is in use or a certificate cannot be read, Nova
+logs `Could not start listener`, stops the listeners it had started and the
+application of the server package fails to start with
+`{listener_not_started, Reason}`.
+
+The listeners go down with `nova_sup`: when it stops without the `nova`
+application being stopped, for instance when it runs under a supervisor of
+your own, the application of the server package stops as well. Start that
+application again to serve again.
+
+A node without `listeners` reads `cowboy_configuration`, the key of earlier
+releases, as one listener named `default`. With neither key it has one
+listener named `default` with the defaults above. See
+[Servers and listeners](listeners.md#cowboy_configuration).
 
 
 ## Nova specific configurations
@@ -36,8 +53,9 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 
 | Key | Description | Value | Default |
 |-----|-------------|-------|---------|
-| `use_persistent_term` | When `false`, the compiled routing table is also added to the Cowboy environment under `dispatch` | `boolean()` | `true` |
-| `dispatch_backend` | Module that stores the routing table and the plugin list. It has to export `get/1`, `get/2` and `put/2` as `persistent_term` does. Anything but a module name logs `dispatch_backend must be a module` and the default is used | `module()` | `persistent_term` |
+| `use_persistent_term` | When `false`, the compiled routing table is also added to the environment of the request steps under `dispatch` | `boolean()` | `true` |
+| `dispatch_backend` | Module that stores the routing table and the plugin list. It has to export `get/1`, `get/2` and `put/2` as `persistent_term` does. `put/2` is called from a process that may not outlive the call, so storage it creates there must not be owned by the caller. Anything but a module name logs `dispatch_backend must be a module` and the default is used | `module()` | `persistent_term` |
+| `server_grace` | How long after it started Nova warns that no server package has started a listener, in milliseconds. `infinity` for a node that serves nothing on purpose. Anything else stops the boot with `{invalid_setting, server_grace, Value}`. *Checked at boot.* | `0..4294967295 \| infinity` | `10000` |
 | `use_stacktrace` | If Nova should include the stacktrace in crash logs and, in the `dev` environment, on error pages. Read when the listener starts. What is redacted from both is listed under *Redaction in logs and error pages*. | `boolean()` | `false` |
 | `redact_keys` | Extra key fragments whose values are redacted from crash logs and error pages, on top of the built-in list. Atoms, binaries or strings; a key matches when its name contains the fragment, see *Redaction in logs and error pages*. | `[atom() \| binary() \| string()]` | `[]` |
 | `render_error_pages` | With `false`, the `404` and `500` pages that come with Nova send the bare status code to every client, without a body. The status code routes of your application run either way. See [Error handling](error-handling.md#the-default-pages) | `boolean()` | `true` |
@@ -54,13 +72,15 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 | `secret_key_base` | The one secret of the node, from which Nova makes a key for the tokens of `nova_csrf_plugin` and a key for session ids. A binary of at least 32 bytes out of a random source, or a list of such, where the first signs and all of them verify. See [The secret of the node](#the-secret-of-the-node). *Checked at boot.* | `binary() \| [binary()]` | not set |
 | `csrf_token` | How `nova_csrf_plugin` makes its tokens: `stateless` or `session`. When it is not set, tokens are `stateless` with a `secret_key_base` and `session` without one. `stateless` stops the boot without a `secret_key_base`, and with `use_sessions` set to `false`. See [Plugins](plugins.md#csrf-token-modes). *Checked at boot.* | `stateless \| session` | not set |
 | `bootstrap_application` | Define which application to bootstrap with Nova. This should be the name of your application. | `atom()` | *Will crash if not defined* |
-| `cowboy_configuration` | The listener configuration, see *Cowboy configuration* above. | `map()` | `#{}` |
+| `server` | The module of the server package Nova runs on. Only needed when the release has more than one | `module()` | `nova_cowboy` when it is in the release, else `nova_roadrunner` |
+| `listeners` | The listeners of the node, see *The server and its listeners* above. | `map()` | One listener named `default` |
+| `cowboy_configuration` | The one listener of releases before 1.0. Read when `listeners` is not set, with a notice at boot. | `map()` | `#{}` |
 | `plugins` | The global plugins, a list of `{Phase, Module, Options}`. They run for every route group that declares no `plugins` of its own. See the [Plugins](plugins.md) guide. | `[{atom(), module(), map()}]` | `[]` |
 | `plugins_before_security` | Plugin modules whose `pre_request/4` runs ahead of the security callback, as it did up to 0.18, for route groups that do not set the key themselves. `all`, or a list of modules that export `pre_request/4`. See [Plugins](plugins.md#running-a-plugin-ahead-of-the-security-callback). *Checked at boot.* | `all \| [module()]` | `[]` |
 | `multipart_spool` | Bounds on the upload files spooled at one time by `nova_multipart_file_handler`: `max_files` and `max_bytes`, each an integer or `infinity`. A part past a bound gets a `503`. See the [Plugins](plugins.md#nova-multipart) guide. | `map()` | `#{max_files => infinity, max_bytes => 8000000000}` |
 | `telemetry_request_fields` | Request fields to add to the controller telemetry metadata. `path` (the raw request path) and `peer` (the client's address) are the only ones accepted and are left out by default. See the [Telemetry](telemetry.md) guide. | `[path \| peer]` | `[]` |
-| `shutdown_delay` | Milliseconds to wait before suspending the listener during shutdown. Useful for letting load balancers drain traffic. See the [Graceful shutdown](graceful-shutdown.md) guide. | `integer()` | `0` |
-| `shutdown_drain_timeout` | Maximum milliseconds to wait for active connections to finish during shutdown. See the [Graceful shutdown](graceful-shutdown.md) guide. | `integer()` | `15000` |
+| `shutdown_delay` | Milliseconds to wait before suspending the listener during shutdown, from `0` to `4294967295`. Useful for letting load balancers drain traffic. See the [Graceful shutdown](graceful-shutdown.md) guide. *Checked at boot, read as the node stops.* | `non_neg_integer()` | `0` |
+| `shutdown_drain_timeout` | Maximum milliseconds to wait for active connections to finish during shutdown, from `0` to `4294967295`. See the [Graceful shutdown](graceful-shutdown.md) guide. *Checked at boot, read as the node stops.* | `non_neg_integer()` | `15000` |
 
 ### Where Nova reads a setting
 
@@ -76,6 +96,8 @@ The other keys in the table above are only read from `nova`.
 ### Settings checked at boot
 
 The rows marked *Checked at boot* are read once, when Nova starts, and from the `nova` environment only. The same key in the environment of the bootstrap application is not read.
+
+`shutdown_delay` and `shutdown_drain_timeout` are checked when Nova starts as well, and a value that cannot be used stops the boot. They are read again as the node stops, so a value that is set while the node runs applies. One that cannot be used by then is logged as a warning, and the value from the boot is used.
 
 ```erlang
 {nova, [
@@ -207,7 +229,7 @@ A browser also says where the page that sends a request is, in the `Sec-Fetch-Si
 
 Crash reasons, plugin and controller results, and stacktraces can hold request data. Before Nova writes them to a log line or a crash report, or renders them on an error page, it:
 
-- replaces every Cowboy request map with its method and path, so headers, cookies, the query string and the body are left out;
+- replaces every request map with its method and path, so headers, cookies, the query string and the body are left out;
 - replaces the argument list of every stacktrace frame with its arity;
 - replaces the value of every sensitive key with `redacted`, in maps and in lists of `{Key, Value}` pairs such as proplists and header or query string lists.
 
@@ -229,8 +251,6 @@ These parameters are set in the environment of your own application, not under `
 | `watchers` | Watchers are external programs that will run together with Nova, in every environment. Each one is a tuple `{Command}`, `{Command, Arguments}`, `{Command, Options}`, `{App, Command, Options}` or `{App, Command, Arguments, Options}` (Like `[{my_app, "npm", ["run", "watch"], #{workdir => "priv/assets/js/my-app"}}]`). See the [Watchers](watchers.md) guide. | `[{string()}] | [{string(), [string()]}] | [{string(), map()}] | [{atom(), string(), map()}] | [{atom(), string(), [string()], map()}]` |
 | `router_module` | Module that contains the `routes/1` callback. Defaults to the application name followed by `_router`, such as `my_app_router` | `atom()` |
 | `nova_apps` | Other Nova applications to serve from the same listener, each an application name or `{Name, Options}`. See [Multiple applications](multi-app.md) | `[atom() \| {atom(), map()}]` |
-
-Nova writes a key `apps` to the environment of the bootstrap application for its own use. Do not set it.
 
 
 ### Configure json_lib

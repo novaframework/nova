@@ -21,8 +21,8 @@ create(#{json := Item}) ->
     {json, #{created => Item}}.
 ```
 
-The request is the Cowboy request map with the keys Nova adds to it, see
-[the request map](request-lifecycle.md#the-request-map). Use the `cowboy_req`
+The request is a map, see
+[the request map](request-lifecycle.md#the-request-map). Use the `nova_req`
 functions to read headers, the query string and cookies.
 
 ## Return values
@@ -37,19 +37,19 @@ response header:
 
 ```erlang
 remember(Req) ->
-    Req1 = cowboy_req:set_resp_cookie(~"seen", ~"1", Req, #{path => ~"/"}),
+    Req1 = nova_req:set_resp_cookie(~"seen", ~"1", Req, #{path => ~"/"}),
     {json, 200, #{}, #{ok => true}, Req1}.
 ```
 
-Set cookies with `cowboy_req:set_resp_cookie/4`. A `set-cookie` key in a
-headers map is refused by Cowboy and the response becomes a `500`.
+Set cookies with `nova_req:set_resp_cookie/4`. A `set-cookie` key in a
+headers map is refused and the response becomes a `500`.
 
-A controller that answers the request itself, with `cowboy_req:reply/4` for
+A controller that answers the request itself, with `nova_req:reply/4` for
 instance, also uses that variant, with the request the call gave back:
 
 ```erlang
 download(Req) ->
-    Req1 = cowboy_req:reply(200, #{~"content-type" => ~"text/plain"}, ~"done", Req),
+    Req1 = nova_req:reply(200, #{~"content-type" => ~"text/plain"}, ~"done", Req),
     {status, 200, #{}, <<>>, Req1}.
 ```
 
@@ -160,7 +160,7 @@ Use `redirect_local` for a target that comes from the request, such as the
 
 ```erlang
 login_done(Req) ->
-    #{next := Next} = cowboy_req:match_qs([{next, [], ~"/"}], Req),
+    Next = proplists:get_value(~"next", nova_req:parse_qs(Req), ~"/"),
     {redirect_local, Next}.
 ```
 
@@ -180,9 +180,7 @@ download(_Req) ->
     {sendfile, 200, #{}, {0, filelib:file_size(Path), Path}, ~"text/plain"}.
 ```
 
-The file is sent with Cowboy's sendfile support, see
-[Sending files](https://ninenines.eu/docs/en/cowboy/2.21/guide/resp/) in the
-Cowboy guide. To serve a directory of files, use a static route instead, see
+The file is sent with the sendfile support of the server. To serve a directory of files, use a static route instead, see
 [Routing](routing.md).
 
 Incoming files are handled by `nova_multipart_plugin` and not by a return
