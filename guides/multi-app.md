@@ -233,7 +233,14 @@ What happens depends on whether the host and port are already bound:
   side by side.
 
 Starting an application that is already running returns
-`{error, {already_started, App}}`.
+`{error, {already_started, App}}`. A new listener is named after the
+application, so when a listener of the configuration has that name the
+answer is `{error, {listener_exists, App}}`.
+
+Before the server package has started there is no listener to add to. The
+application is then added once the listeners of the configuration are up,
+which lets a library call this from its `start/2`. See
+[Servers and listeners](listeners.md#at-runtime).
 
 Because each listener has its own routing table, two applications on two ports
 do not serve each other's routes. That is the point of binding a second port:

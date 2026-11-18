@@ -67,8 +67,9 @@ of the `nova` application:
 | `steps` | The steps a request goes through, see [Request lifecycle](request-lifecycle.md) | Those of `nova_pipeline` |
 | `server_opts` | Options of the server package, as it documents them | `#{}` |
 
-A node without `listeners` has one listener named `default`, on port `8080`,
-that serves the bootstrap application.
+A node with neither `listeners` nor `cowboy_configuration` has one listener
+named `default` with the defaults above: port `8080`, `[http1]`, and the
+bootstrap application.
 
 Each listener has a routing table of its own. An application that two
 listeners list is served by both.
@@ -86,6 +87,10 @@ route.
 
 | Reason | What it says |
 |---|---|
+| `no_nova_app_defined` | `bootstrap_application` is not set |
+| `{invalid_listeners, Value}` | `listeners` is not a map with a listener in it |
+| `{invalid_listener_name, Name}` | A listener is configured under a key that is not an atom |
+| `{invalid_listener, Name, Value}` | The settings of a listener are not a map |
 | `{unknown_listener_settings, Name, Keys}` | The listener has settings Nova does not know, such as those of `cowboy_configuration` |
 | `{invalid_listener_setting, Name, Setting, Value}` | A setting has a value it cannot take |
 | `{listeners_on_one_port, Ip, Port}` | Two listeners bind the same address and port |
@@ -95,8 +100,18 @@ route.
 | `{listener_not_started, Reason}` | The server could not start the listener, for instance because the port is taken |
 | `{route_group_not_served, App, Prefix, Listener}` | A route group names a listener that is not configured, or one that does not serve its application |
 | `{route_http_versions_not_served, Path, Versions, Listener}` | A route asks for HTTP versions its listener serves none of |
+| `{invalid_route_listener, App, Value}` | `listener` in a route group is not a name or a list of names |
 | `{invalid_http_versions, Path, Versions}` | `http_versions` is not a list of `http1`, `http2` and `http3` |
-| `{websocket_route_not_served, Path, Listener}` | A WebSocket route is on a listener that serves no version the server takes WebSockets over |
+| `{websocket_route_not_served, Path, Listener}` | A WebSocket route is on a listener that serves no version the server takes WebSockets over. Cowboy takes them over `http2` when `server_opts` has `enable_connect_protocol => true` |
+| `{application_not_added, App, Reason}` | An application that was added before the server package started cannot be served, see [At runtime](#at-runtime) |
+
+A boot that fails leaves no listener behind: those that were started before
+the one that failed are stopped. What a server reports of a listener it
+could not start is logged without the key, the password and the like of its
+`tls` options.
+
+The table is what this release checks. A later release may check more and
+add reasons to it.
 
 A listener that serves `http3` alone starts, with a notice: browsers only
 come to it when an `HTTPS` record in DNS says it is there.
@@ -126,8 +141,21 @@ on a listener that is running, or on a new one.
 ```
 
 The second form takes the settings of a listener. On a port Nova already
-listens on, the application is added to that listener. See
+listens on, the application is added to that listener. On a free port a
+listener named after the application is started, and when a listener has
+that name already the answer is `{error, {listener_exists, App}}`. See
 [Multiple applications](multi-app.md#starting-an-application-at-runtime).
+
+A library can call `nova_sup:add_application/2` from its `start/2` without
+depending on a server package. When the server package has not started yet,
+the application is added once the listeners of the configuration are up, and
+the answer is where it will be served. If it cannot be served there, the
+node does not start: `{application_not_added, App, Reason}`.
+
+A route group of an application added at runtime that names a listener
+which is not started, or which does not serve the application, is not
+served there. Nova logs a warning with the application, the prefix and the
+listener, where a boot would have stopped.
 
 ## `cowboy_configuration`
 
@@ -151,4 +179,5 @@ Roadrunner such a listener is refused, so write the listener out.
 
 A server package is an application that implements the `nova_server`
 behaviour and supervises `nova_listener_owner` with its module as the
-argument. `nova_cowboy` is the one to read.
+argument, as a significant child that is not restarted: see
+`nova_listener_owner`. `nova_cowboy` is the one to read.

@@ -390,7 +390,10 @@ stops the node from starting with
 
 Routes added at runtime with `nova_router:add_routes/2,3` follow the same
 rule: a group that names listeners is added to the table of one of them
-alone.
+alone, and Nova logs a notice for a table the group is left out of. An
+application added with `nova_sup:add_application/2` whose group names a
+listener that does not serve it gets a warning in the log, not a stopped
+node.
 
 `listener` is not a security callback. It keeps a group off the listeners
 that do not have it, and whoever reaches the listener that has it still
@@ -417,6 +420,18 @@ with `426` and an `upgrade` header that names the versions to come back
 with. Over HTTP/2 and HTTP/3, which have no such header, it is answered with
 `505`. Both go through the [status-code routes](#status-code-routes), and no
 plugin or security callback runs.
+
+The `upgrade` header is there because a `426` has to have one, and for
+whoever reads the response. A client cannot switch on it: HTTP/2 is agreed
+on in the TLS handshake and HTTP/3 is found through `alt-svc` or DNS, so a
+client that speaks the version comes back on a new connection. What the
+header holds may change between releases.
+
+The version is that of the connection Nova gets. Behind a proxy or a load
+balancer that speaks HTTP/1.1 to the node, every request is `http1`
+whatever the client spoke, and a route for `[http2, http3]` alone answers
+`426` to all of them. Use `http_versions` where clients reach the listener
+directly, or where the proxy keeps the version.
 
 A route that asks for versions its listener serves none of stops the node
 from starting with

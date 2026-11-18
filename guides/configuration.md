@@ -42,7 +42,8 @@ your own, the application of the server package stops as well. Start that
 application again to serve again.
 
 A node without `listeners` reads `cowboy_configuration`, the key of earlier
-releases, as one listener named `default`. See
+releases, as one listener named `default`. With neither key it has one
+listener named `default` with the defaults above. See
 [Servers and listeners](listeners.md#cowboy_configuration).
 
 
