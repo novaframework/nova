@@ -31,7 +31,7 @@ setup() ->
             extra_state = #{static => {priv_dir, test_app, "static"}}
         }, Tree3),
     %% Cowboy handler (WebSocket)
-    CowboyValue = #cowboy_handler_value{
+    CowboyValue = #nova_module_value{
         app = test_app,
         handler = nova_ws_handler,
         arguments = #{module => test_ws_mod},
@@ -202,7 +202,7 @@ execute_cowboy_handler_test_() ->
         Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
         {ok, Req1, Env1} = nova_router:execute(Req, #{}),
         ?assertEqual(test_app, maps:get(app, Env1)),
-        ?assertEqual(nova_ws_handler, maps:get(cowboy_handler, Env1)),
+        ?assertEqual(nova_ws_handler, maps:get(handler_module, Env1)),
         ?assertEqual(#{module => test_ws_mod}, maps:get(arguments, Env1)),
         ?assertEqual(false, maps:get(secure, Env1)),
         ?assert(is_list(maps:get(plugins, Req1)))
@@ -844,4 +844,4 @@ route_template_absent_on_404_and_405_test_() ->
 
 route_template_record_arity_test() ->
     ?assertEqual(8, tuple_size(#nova_handler_value{})),
-    ?assertEqual(6, tuple_size(#cowboy_handler_value{})).
+    ?assertEqual(6, tuple_size(#nova_module_value{})).

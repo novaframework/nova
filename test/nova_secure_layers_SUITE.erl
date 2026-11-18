@@ -85,7 +85,7 @@ start(MountedOptions, Config) ->
 %% the security the router works out for the mount and the route group.
 %% Compiling no applications gives the table as it is.
 add_cowboy_handler_route(Path, MountedOptions, RouteGroup) ->
-    Value = #cowboy_handler_value{app = nova_test_sub_app,
+    Value = #nova_module_value{app = nova_test_sub_app,
                                   handler = nova_secure_layers_pages,
                                   arguments = #{},
                                   secure = nova_router:resolve_secure(MountedOptions, RouteGroup, undefined)},

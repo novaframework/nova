@@ -22,12 +22,12 @@
 
 -spec execute(Req, Env) -> {ok, Req, Env} | {stop, Req}
                                when Req::nova_req:req(), Env::nova_server:env().
-execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) when is_atom(Handler) ->
+execute(Req, Env = #{handler_module := Handler, arguments := Arguments}) when is_atom(Handler) ->
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
     try Handler:init(Req, Arguments) of
         %% nova_ws_handler refusing the upgrade
         {status, StatusCode, Req2, _State} when is_integer(StatusCode) ->
-            render_response(Req2, maps:remove(cowboy_handler, Env), StatusCode);
+            render_response(Req2, maps:remove(handler_module, Env), StatusCode);
         {ok, Req2, State} ->
             Result = call_terminate(Handler, normal, Req2, State),
             {ok, Req2, Env#{result => Result}};
@@ -37,19 +37,19 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) when is
             nova_req:upgrade_websocket(Req2, Env, Handler, State, Opts)
     catch
         exit:{request_error, Kind, _Message} ->
-            render_request_error(Kind, Req, maps:remove(cowboy_handler, Env));
+            render_request_error(Kind, Req, maps:remove(handler_module, Env));
         Class:Reason0:Stacktrace when UseStacktrace == true ->
             Reason = nova_redact:term(Reason0),
             FormattedStacktrace = nova:format_stacktrace(Stacktrace),
             Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 500,
                                                               stacktrace => FormattedStacktrace}),
             ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class, reason => Reason, stacktrace => FormattedStacktrace}),
-            render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 500);
+            render_response(Req#{crash_info => Payload}, maps:remove(handler_module, Env), 500);
         Class:Reason0 ->
             Reason = nova_redact:term(Reason0),
             Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 500}),
             ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class, reason => Reason}),
-            render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 500)
+            render_response(Req#{crash_info => Payload}, maps:remove(handler_module, Env), 500)
     end;
 execute(Req, Env = #{callback := _Callback}) ->
     %% nova_router:render_status_page/5 says which status the page it put in

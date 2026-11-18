@@ -117,7 +117,7 @@ plugin_info() ->
 
 %% Every request to a websocket route is checked, also one that does not ask
 %% for the upgrade: its controller is started before the server turns it down.
-is_for_a_websocket(_Req, #{cowboy_handler := nova_ws_handler}) ->
+is_for_a_websocket(_Req, #{handler_module := nova_ws_handler}) ->
     true;
 is_for_a_websocket(Req, _Env) ->
     is_websocket_upgrade(Req).

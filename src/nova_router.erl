@@ -330,28 +330,28 @@ routed(Found, Req = #{host := Host, path := Path, method := Method}, Env, Dispat
                   controller_data => #{}
                  }
             };
-        {ok, Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
-                                              plugins = RoutePlugins, secure = Secure}} ->
+        {ok, Bindings, #nova_module_value{app = App, handler = Handler, arguments = Args,
+                                          plugins = RoutePlugins, secure = Secure}} ->
             {Route, Plugins} = take_route(RoutePlugins),
             {ok,
              put_route(Route, put_extra_state(handler_extra_state(Args),
                                               Req#{plugins => Plugins,
                                                    bindings => Bindings})),
              Env#{app => App,
-                  cowboy_handler => Handler,
+                  handler_module => Handler,
                   arguments => Args,
                   secure => Secure
                  }
             };
-        {ok, Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
-                                              plugins = RoutePlugins, secure = Secure}, Pathinfo} ->
+        {ok, Bindings, #nova_module_value{app = App, handler = Handler, arguments = Args,
+                                          plugins = RoutePlugins, secure = Secure}, Pathinfo} ->
             {Route, Plugins} = take_route(RoutePlugins),
             {ok,
              put_route(Route, Req#{plugins => Plugins,
                                    extra_state => with_pathinfo(handler_extra_state(Args), Pathinfo),
                                    bindings => Bindings}),
              Env#{app => App,
-                  cowboy_handler => Handler,
+                  handler_module => Handler,
                   arguments => Args,
                   secure => Secure
                  }
@@ -501,7 +501,7 @@ remove_application(Application, DispatchKey) when is_atom(Application) ->
 %% Both handler kinds carry the owning application, and dropping the cowboy
 %% one would silently strip every websocket route.
 route_app({_Host, _Path, _Method, #nova_handler_value{app = App}})   -> App;
-route_app({_Host, _Path, _Method, #cowboy_handler_value{app = App}}) -> App;
+route_app({_Host, _Path, _Method, #nova_module_value{app = App}}) -> App;
 route_app(_Route)                                                    -> undefined.
 
 
@@ -864,7 +864,7 @@ parse_url(Host,
           T = #{prefix := Prefix}, #nova_handler_value{app = App, secure = Secure} = Value,
           Tree) when is_atom(Mod) ->
     RealPath = concat_strings(Prefix, Path),
-    Value0 =  #cowboy_handler_value{
+    Value0 =  #nova_module_value{
                   app = App,
                   handler = nova_ws_handler,
                   arguments = websocket_arguments(Mod, App, Options, T),
@@ -913,7 +913,7 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
     Dispatch = StorageBackend:get(dispatch_key(Env)),
     %% A status page is rendered by a controller. Left in place, the handler
     %% of a websocket route would run instead and upgrade the connection.
-    Env1 = maps:without([cowboy_handler, arguments], Env),
+    Env1 = maps:without([handler_module, arguments], Env),
     ControllerData = #{status => StatusCode, data => Data},
     {Req0, Env0} =
         case nova_routing_trie:find(Host, StatusCode, '_', Dispatch) of
@@ -1071,7 +1071,7 @@ with_preflight_plugins(Req, _Host, _Path, _Dispatch) ->
 route_plugins({ok, _Bindings, Value})            -> route_plugins(Value);
 route_plugins({ok, _Bindings, Value, _Pathinfo}) -> route_plugins(Value);
 route_plugins(#nova_handler_value{plugins = Plugins})   -> Plugins;
-route_plugins(#cowboy_handler_value{plugins = Plugins}) -> Plugins;
+route_plugins(#nova_module_value{plugins = Plugins}) -> Plugins;
 route_plugins(_NoRoute)                          -> undefined.
 
 %% A route without an extra_state of its own takes the one its route group

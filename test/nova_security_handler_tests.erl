@@ -98,7 +98,7 @@ callback_true_auth_data_websocket_test_() ->
         AuthData = #{user_id => 99},
         Callback = fun(_) -> {true, AuthData} end,
         Env = (env())#{secure => Callback,
-                     cowboy_handler => nova_ws_handler,
+                     handler_module => nova_ws_handler,
                      arguments => #{existing => data}},
         %% nova_ws_handler takes it from the request, as a controller does.
         ?assertEqual({ok, Req#{auth_data => AuthData}, Env}, nova_security_handler:execute(Req, Env))
@@ -316,7 +316,7 @@ several_callbacks_allow_test_() ->
        end},
       {"the data of a websocket route follows the same rule, and is in the request alone",
        [fun() ->
-                Env = (env())#{cowboy_handler => nova_ws_handler, arguments => #{module => a_controller}},
+                Env = (env())#{handler_module => nova_ws_handler, arguments => #{module => a_controller}},
                 {{ok, Req, Env1}, _Called} = execute_all([answering(first, First), answering(second, Second)], Env),
                 ?assertEqual({Expected, #{module => a_controller}},
                              {maps:get(auth_data, Req, none), maps:get(arguments, Env1)})

@@ -77,7 +77,7 @@ end_per_suite(_Config) ->
 %% The router has no route syntax for a plain Cowboy handler yet, so the
 %% value such a route compiles to is put in the routing table directly.
 add_cowboy_handler_route(Path, Secure, PluginOptions) ->
-    Value = #cowboy_handler_value{app = nova_test_app,
+    Value = #nova_module_value{app = nova_test_app,
                                   handler = ?MODULE,
                                   arguments = #{},
                                   plugins = [{pre_request, [{fun ?MODULE:pre_security/4, PluginOptions}]}],
