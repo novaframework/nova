@@ -186,10 +186,8 @@ normalize_settings(Name, Settings) ->
                steps => steps(maps:get(steps, Settings, nova_pipeline:steps())),
                server_opts => server_opts(maps:get(server_opts, Settings, #{}))}}
     catch
-        throw:{invalid, tls, _Value} ->
-            {error, {invalid_listener_setting, Name, tls, redacted}};
         throw:{invalid, Setting, Value} ->
-            {error, {invalid_listener_setting, Name, Setting, Value}}
+            {error, {invalid_listener_setting, Name, Setting, nova_redact:tls_options(Value)}}
     end.
 
 tls(false) -> false;

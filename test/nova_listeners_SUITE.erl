@@ -207,7 +207,7 @@ early_add(_Config) ->
     ?assertEqual({ok, nova_test_sub_app, {0, 0, 0, 0}, Other},
                  nova_sup:add_application(nova_test_sub_app, #{port => Other})),
     ?assertEqual({error, {already_started, nova_test_sub_app}},
-                 nova_sup:add_application(nova_test_sub_app, #{listener => web})),
+                 nova_sup:add_application(nova_test_sub_app, #{port => Other})),
     ?assertEqual([], nova_sup:get_started_applications()),
     {ok, Port} = nova_test_listener:boot(Options),
     ?assertEqual({200, ~"web http1"}, nova_test_listener:get(Port, "/where")),

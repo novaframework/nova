@@ -48,7 +48,7 @@ runtime_settings_test() ->
 
 %% The settings of a listener that are refused may be its TLS options.
 refused_tls_test() ->
-    ?assertEqual({error, {invalid_listener_setting, web, tls, redacted}},
+    ?assertEqual({error, {invalid_listener_setting, web, tls, {key, redacted}}},
                  nova_listener:normalize(web, #{tls => {key, ~"der"}}, #{applications => [my_app]})),
     ?assertEqual({error, {invalid_listener, web, [{port, 8443}, {tls, [{password, redacted}]}]}},
                  nova_listener:normalize(web, [{port, 8443}, {tls, [{password, "hunter2"}]}], #{})).
