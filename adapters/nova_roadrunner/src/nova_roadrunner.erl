@@ -153,12 +153,25 @@ start_listener(#{name := Name, ip := Ip, port := Port, tls := Tls, protocols := 
                false -> Opts0;
                _ -> Opts0#{tls => Tls}
            end,
-    case roadrunner:start_listener(roadrunner_name(Name), Opts) of
+    case started(roadrunner_name(Name), Opts) of
         {ok, Pid} -> {ok, Pid};
         {error, Reason} -> {error, why(Reason)}
     end;
 start_listener(#{name := Name, ip := Ip}, _Env) ->
     {error, {invalid_listener_setting, Name, ip, Ip}}.
+
+%% Roadrunner owns the listener, so it outlives a node part that went down
+%% without stopping it. Its name is one that only this module gives, so a
+%% listener that has it is one Nova started.
+started(Ref, Opts) ->
+    case roadrunner:start_listener(Ref, Opts) of
+        {error, {already_started, _Pid}} ->
+            ?LOG_NOTICE(#{msg => ~"Replacing a listener that an earlier start of Nova left behind", listener => Ref}),
+            _ = roadrunner:stop_listener(Ref),
+            roadrunner:start_listener(Ref, Opts);
+        Result ->
+            Result
+    end.
 
 %% What kept the listener from starting, without the child specification
 %% Roadrunner's supervisor reports it with: that has the TLS options in it.

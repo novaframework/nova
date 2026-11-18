@@ -232,7 +232,7 @@ What happens depends on whether the host and port are already bound:
   that listener's existing routing table, and the two applications are served
   side by side.
 
-Starting an application that is already running returns
+Adding an application to a listener that serves it already returns
 `{error, {already_started, App}}`. A new listener is named after the
 application, so when a listener has that name the answer is
 `{error, {listener_exists, App}}`. That is a listener of the configuration,

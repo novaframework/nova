@@ -39,7 +39,8 @@ Each listener owns its own routing table, so an application started on a second 
 -export([start_listeners/1, shutdown_listeners/0, shutdown_listeners/1, stop_listeners/1]).
 
 %% Called by nova_applications
--export([add_to_listener/3, detach_application/1, unserved_groups/0, check_route_groups/1]).
+-export([running/0, listeners_owner/0, attach_to_listener/2, start_listener_for/3, detach_application/1,
+         unserved_groups/0, check_route_groups/1]).
 
 %% Started by the supervisor as its first child
 -export([start_pubsub_scope/0]).
@@ -95,10 +96,15 @@ it, also when the one it was started for is removed.
 An application is added again to the listener it was served on. When it
 was added by `ip` and `port` to a listener that was there already, and that
 listener is gone or moved, none is started for it and the server package
-stops with `{application_not_added, App, {no_such_listener, Name}}`.
+stops with `{application_not_added, App, {no_such_listener, Name}}`. When
+the address of a listener that was started for an application is that of
+another by then, it stops with `{address_in_use, Other}` as the reason.
 
-Applications are added and removed one at a time. A router that calls this
-while its own routes are compiled gets `{error, adding_an_application}`.
+Applications are added and removed one at a time. The routes of an added
+application are compiled in a process of Nova's, and a router that calls
+this from there gets `{error, adding_an_application}`.
+
+`{error, server_not_started}` when the `nova` application is not running.
 """.
 -spec add_application(App :: atom(), Settings :: map()) ->
           {ok, App :: atom(), Host :: inet:ip_address() | string(), Port :: inet:port_number()} |
@@ -107,75 +113,75 @@ add_application(App, Settings) ->
     nova_applications:add(App, Settings).
 
 -doc false.
-%% For nova_applications, which adds one application at a time. `Was` is
-%% where the application was served before, when it is added again:
-%% `{on, Name}` on a listener of that name, which is not started for it
-%% when it is gone, and `{kept, Name, Settings, Bind}` on one that was
-%% started for an application that is removed since, which is started
-%% again as it was. `new` is an application that was not served yet, or
-%% that a listener was started for.
--spec add_to_listener(App :: atom(), Settings :: map(), Was) ->
-          {ok, attached | already | started | kept, nova_listener:name(), Host :: inet:ip_address() | string(),
-           Port :: inet:port_number()} |
-          {error, Reason :: any()}
-              when Was :: new | {on, nova_listener:name()} |
-                          {kept, nova_listener:name(), map(), {inet:ip_address() | string(), inet:port_number()}}.
-add_to_listener(App, #{listener := Name}, Was) ->
-    case {find_listener(Name), Was} of
-        {{ok, Listener}, _Was} -> attach(App, Listener);
-        {error, {kept, Name, StartedWith, Bind}} -> start_kept(Name, App, StartedWith, Bind);
-        {error, _NotKept} -> {error, {no_such_listener, Name}}
-    end;
-add_to_listener(App, Settings, Was) ->
-    case nova_listener:normalize(App, nova_listener:runtime_settings(Settings), #{applications => [App]}) of
+%% For nova_applications: the listeners that are up, each with where it is
+%% bound and the applications on it.
+-spec running() -> [{nova_listener:name(), {inet:ip_address() | string(), inet:port_number()}, [atom()]}].
+running() ->
+    [{Name, Bind, Apps} || #nova_listener{name = Name, bind = Bind, apps = Apps} <- all_listeners()].
+
+-doc false.
+%% For nova_applications: the process that has the listeners, when there
+%% are any.
+-spec listeners_owner() -> pid() | undefined.
+listeners_owner() ->
+    case ets:info(?NOVA_LISTENERS_TABLE, owner) of
+        Owner when is_pid(Owner) -> Owner;
+        _NoTable -> undefined
+    end.
+
+-doc false.
+%% For nova_applications, which adds one application at a time. An
+%% application the configuration lists on the listener is served there
+%% already, which is what was asked for.
+-spec attach_to_listener(App :: atom(), Name) ->
+          {ok, Host :: inet:ip_address() | string(), Port :: inet:port_number()} |
+          {error, {no_such_listener, Name}}
+              when Name :: nova_listener:name().
+attach_to_listener(App, Name) ->
+    case find_listener(Name) of
+        {ok, Listener = #nova_listener{bind = {Host, Port}}} ->
+            _ = attach_application(App, Listener),
+            {ok, Host, Port};
+        error ->
+            {error, {no_such_listener, Name}}
+    end.
+
+-doc false.
+%% For nova_applications. A listener that is started for an application
+%% has the name of the one it was first started for, which a listener of
+%% the configuration may have by now, and its own address, which one may be
+%% bound to.
+-spec start_listener_for(Name :: nova_listener:name(), App :: atom(), Settings :: map()) ->
+          {ok, Host :: inet:ip_address() | string(), Port :: inet:port_number()} |
+          {error, Reason :: any()}.
+start_listener_for(Name, App, Settings) ->
+    case nova_listener:normalize(Name, nova_listener:runtime_settings(Settings), #{applications => [App]}) of
         {ok, #{ip := Host, port := Port} = Listener} ->
-            case {find_listener(Host, Port), Was} of
-                {{ok, Bound}, _Was} ->
-                    attach(App, Bound);
-                {error, {kept, Name, StartedWith, Bind}} ->
-                    start_kept(Name, App, StartedWith, Bind);
-                {error, {on, Name}} ->
-                    {error, {no_such_listener, Name}};
-                {error, new} ->
-                    added(started, App, start_named(App, App, Listener#{applications := [App]}))
+            case {find_listener(Name), find_listener(Host, Port)} of
+                {{ok, _Named}, _Bound} ->
+                    {error, {listener_exists, Name}};
+                {error, {ok, #nova_listener{name = By}}} ->
+                    {error, {address_in_use, By}};
+                {error, error} ->
+                    case start_checked(nova_server:module(), Listener#{applications := [App]}) of
+                        {ok, App, Host, Port} -> {ok, Host, Port};
+                        {error, Reason} -> {error, Reason}
+                    end
             end;
         {error, Reason} ->
             {error, Reason}
     end.
 
-%% An application the configuration lists on the listener it was added to
-%% is served there already, which is what was asked for.
-attach(App, Listener = #nova_listener{name = Name, bind = {Host, Port}}) ->
-    case attach_application(App, Listener) of
-        {ok, App, Host, Port} -> {ok, attached, Name, Host, Port};
-        {error, {already_started, App}} -> {ok, already, Name, Host, Port}
-    end.
-
-added(How, Name, {ok, _App, Host, Port}) -> {ok, How, Name, Host, Port};
-added(_How, _Name, {error, Reason}) -> {error, Reason}.
-
-%% Where it is bound is kept with how it was started, and the two agree.
-start_kept(Name, App, Settings, {Host, Port}) ->
-    case nova_listener:normalize(Name, nova_listener:runtime_settings(Settings), #{applications => [App]}) of
-        {ok, #{ip := Host, port := Port} = Listener} ->
-            added(kept, Name, start_named(Name, App, Listener#{applications := [App]}));
-        {ok, _Elsewhere} ->
-            {error, {kept_listener_moved, Name}};
-        {error, Reason} ->
-            {error, Reason}
-    end.
-
-%% A listener started for an application has its name, which a listener of
-%% the configuration may have already.
-start_named(Name, _App, Listener) ->
-    case find_listener(Name) of
-        {ok, _Named} -> {error, {listener_exists, Name}};
-        error -> start_checked(nova_server:module(), Listener)
-    end.
-
 %%--------------------------------------------------------------------
--doc "Stop a Nova application. Its routes are removed from the listener serving it, and the listener itself is stopped once no applications are left on it.".
--spec remove_application(App :: atom()) -> ok | {error, not_found}.
+-doc """
+Stop a Nova application. Its routes are removed from the listener serving
+it, and the listener itself is stopped once no applications are left on it.
+
+`{error, not_found}` when it is not served and was not added, and
+`{error, adding_an_application}` to a router that calls this while an
+application is added and its routes are compiled.
+""".
+-spec remove_application(App :: atom()) -> ok | {error, not_found | adding_an_application}.
 remove_application(App) ->
     nova_applications:remove(App).
 
@@ -263,12 +269,12 @@ shutdown_listeners() ->
 
 -spec shutdown_listeners(Server :: module()) -> ok.
 shutdown_listeners(Server) ->
-    case listeners_of(Server) of
-        [] ->
-            ok;
-        Listeners ->
+    case nova_server:module() of
+        Server ->
             ok = nova_applications:draining(),
-            graceful_shutdown(Listeners)
+            graceful_shutdown(listeners_of(Server));
+        _Other ->
+            ok
     end.
 
 -doc false.

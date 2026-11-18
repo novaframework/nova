@@ -333,9 +333,21 @@ send_and_close(Port, Data) ->
 %% ports of outgoing connections and of a listen on port 0 from. A port out
 %% of that range is given to another process between this call and the
 %% listener that binds it, when several suites run on the machine.
+%% A port that is free, and that the calling test was not given before.
 -spec free_port() -> inet:port_number().
 free_port() ->
-    free_port(50).
+    Port = free_port(50),
+    Given = case get(nova_test_ports) of
+                undefined -> [];
+                Ports -> Ports
+            end,
+    case lists:member(Port, Given) of
+        true ->
+            free_port();
+        false ->
+            put(nova_test_ports, [Port | Given]),
+            Port
+    end.
 
 free_port(Attempts) when Attempts > 0 ->
     Port = 20000 + rand:uniform(9999),
