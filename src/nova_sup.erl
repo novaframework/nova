@@ -119,9 +119,18 @@ application to a listener a second time.
 Applications are added and removed one at a time. The routes of an added
 application are compiled in a process of Nova's that does not outlive the
 call, and a router that calls this from there gets
-`{error, adding_an_application}`. An application that is still being added
-`shutdown_drain_timeout` after the server package began to stop is not
-added, and the call exits with `killed`.
+`{error, adding_an_application}`.
+
+When the server package begins to stop, the application that is being
+added is waited for: `shutdown_drain_timeout`, before the connections of
+the listeners are. One that is still being added by then is not added, and
+the call exits with `killed`. An application that is added from then on,
+or that waited behind that one, is kept for the next start of the server
+package, as one that is added before the first.
+
+`{error, {no_such_listener, Name}}` when no listener has the name, and when
+the listener was stopped or started again while the router of the
+application ran. Its routes are then not served.
 
 `{error, server_not_started}` when the `nova` application is not running.
 """.
@@ -558,29 +567,43 @@ start_listener(Server, Listener = #{name := Name, ip := Host, port := Port, appl
                        ok = nova_router:delete_dispatch(DispatchKey),
                        erlang:raise(Class, NotCompiled, Stacktrace)
                end,
-    case Server:start_listener(Listener, env(Server, Listener, DispatchKey, Dispatch)) of
-        {ok, _Pid} ->
-            started(Server, Listener, #nova_listener{name = Name,
-                                                     bind = {Host, Port},
-                                                     server = Server,
-                                                     apps = Apps,
-                                                     dispatch_key = DispatchKey});
-        {error, NotStarted} ->
-            Reason = nova_redact:tls_options(NotStarted),
-            ok = nova_router:delete_dispatch(DispatchKey),
-            ?LOG_ERROR(#{msg => ~"Could not start listener",
-                         listener => Name, port => Port, server => Server, reason => Reason}),
-            {error, {listener_not_started, Reason}}
+    %% The listener is listed before the server binds it. What stops the
+    %% listeners stops the ones that are listed, and the process that
+    %% starts this one can be stopped as the server binds: it is then not
+    %% left serving with nothing that knows of it.
+    case reserve_listener(#nova_listener{name = Name, bind = {Host, Port}, server = Server, apps = Apps,
+                                         dispatch_key = DispatchKey}) of
+        ok ->
+            try Server:start_listener(Listener, env(Server, Listener, DispatchKey, Dispatch)) of
+                {ok, _Pid} ->
+                    started(Server, Listener, DispatchKey);
+                {error, NotStarted} ->
+                    ok = forget_listener({Host, Port}),
+                    not_started(Server, Listener, DispatchKey, nova_redact:tls_options(NotStarted))
+            catch
+                Kind:Raised:Where ->
+                    ok = forget_listener({Host, Port}),
+                    ok = nova_router:delete_dispatch(DispatchKey),
+                    erlang:raise(Kind, Raised, Where)
+            end;
+        {error, NotListed} ->
+            not_started(Server, Listener, DispatchKey, NotListed)
     end.
+
+not_started(Server, #{name := Name, port := Port}, DispatchKey, Reason) ->
+    ok = nova_router:delete_dispatch(DispatchKey),
+    ?LOG_ERROR(#{msg => ~"Could not start listener",
+                 listener => Name, port => Port, server => Server, reason => Reason}),
+    {error, {listener_not_started, Reason}}.
 
 %% The listeners go with their owner, and that can be as one is started for
 %% an application. It is then not left serving with nothing that stops it.
 started(Server, #{name := Name, ip := Host, port := Port, tls := Tls, applications := [App | _] = Apps,
                   protocols := Protocols},
-        Listener = #nova_listener{dispatch_key = DispatchKey}) ->
+        DispatchKey) ->
     Names = nova_listener:protocol_names(Protocols),
-    case register_listener(Listener) of
-        ok ->
+    case find_listener(Host, Port) of
+        {ok, #nova_listener{name = Name}} ->
             say_what_the_session_cookie_needs(Tls =/= false),
             note_http3_only(Name, Names),
             ?LOG_NOTICE(#{msg => ~"Nova is running",
@@ -592,7 +615,7 @@ started(Server, #{name := Name, ip := Host, port := Port, tls := Tls, applicatio
                           nova_version => get_version(nova),
                           apps => Apps}),
             {ok, App, Host, Port};
-        {error, listeners_stopped} ->
+        _Gone ->
             _ = Server:stop_listener(Name),
             ok = nova_router:delete_dispatch(DispatchKey),
             ?LOG_ERROR(#{msg => ~"The listeners were stopped as one was started, which is stopped with them",
@@ -712,7 +735,7 @@ stop_listener(Name) ->
                 {error, Reason} ->
                     ?LOG_ERROR(#{msg => ~"Could not stop listener", listener => Name, reason => Reason})
             end,
-            ets:delete(?NOVA_LISTENERS_TABLE, Bind),
+            ok = forget_listener(Bind),
             ok = nova_router:delete_dispatch(DispatchKey);
         error ->
             ok
@@ -723,6 +746,22 @@ register_listener(Listener) ->
         true -> ok
     catch
         error:badarg -> {error, listeners_stopped}
+    end.
+
+%% Under an address no other listener of Nova's has.
+reserve_listener(Listener) ->
+    try ets:insert_new(?NOVA_LISTENERS_TABLE, Listener) of
+        true -> ok;
+        false -> {error, eaddrinuse}
+    catch
+        error:badarg -> {error, listeners_stopped}
+    end.
+
+forget_listener(Bind) ->
+    try ets:delete(?NOVA_LISTENERS_TABLE, Bind) of
+        true -> ok
+    catch
+        error:badarg -> ok
     end.
 
 %%--------------------------------------------------------------------

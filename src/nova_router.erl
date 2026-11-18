@@ -126,6 +126,11 @@ serves and those of them the server takes WebSockets over.
                      websocket := [nova_server:protocol()]}.
 -export_type([serving/0]).
 
+-type table() :: #{routes := nova_routing_trie:trie(),
+                   apps := [{App :: atom(), Prefix :: list()}],
+                   bound := [{served | skipped, App :: atom(), Prefix :: string(), [nova_listener:name()]}],
+                   mounted := [{App :: atom(), map()}]}.
+
 -type plugin() :: {Type :: atom(), Module :: module(), Options :: term()}.
 -type callback() :: {Callback :: fun(), Options :: term()}.
 -type phased() :: [{Phase :: atom(), [callback()]}].
@@ -176,40 +181,60 @@ compile(Apps) ->
 Compile the given applications into the routing table addressed by
 `DispatchKey`, merging into whatever is already stored there.
 
-Raises `{routing_table_replaced, DispatchKey}` when the table was replaced
-while the routers of the applications ran, as it is when its listener is
-started again. Nothing is written to the new table then.
+The table is stored once every application is compiled. When a router is
+missing, or one raises, the table is as it was: it has none of the routes,
+and lists none of the applications.
+
+A mistake in a router is thrown as `{error, Reason}`. The error
+`{routing_table_replaced, DispatchKey}` is raised when the table was
+replaced while the routers of the applications ran, as it is when its
+listener is started again. What was compiled is then not stored.
 """.
 -spec compile(Apps :: [atom() | {atom(), map()}], DispatchKey :: dispatch_key()) ->
           nova_routing_trie:trie().
 compile(Apps, DispatchKey) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
-    StorageBackend = storage_backend(),
-
-    Generation = StorageBackend:get(generation_key(DispatchKey), undefined),
-    StoredDispatch = StorageBackend:get(DispatchKey,
-                                        nova_routing_trie:new(#{strict => UseStrict})),
-    Options = with_serving(#{dispatch_key => DispatchKey, generation => Generation}),
-    Dispatch = compile(Apps, StoredDispatch, Options),
-    ok = store(DispatchKey, Dispatch, Options),
+    Generation = generation(DispatchKey),
+    Stored = stored(DispatchKey, nova_routing_trie:new(#{strict => UseStrict})),
+    Table = #{routes := Dispatch} = compile(Apps, Stored, with_serving(#{dispatch_key => DispatchKey})),
+    ok = commit(DispatchKey, Table, Generation),
     Dispatch.
 
-%% The routers of the applications run as a table is compiled. A listener
-%% that was started again by then has a table of its own, and nothing of
-%% what was read before is written to it: not the routes and their security
-%% callbacks, nor which applications and route groups it has.
-store(Key, Value, Options) ->
+generation(DispatchKey) ->
     StorageBackend = storage_backend(),
-    case Options of
-        #{generation := Generation, dispatch_key := DispatchKey} ->
-            case StorageBackend:get(generation_key(DispatchKey), undefined) of
-                Generation -> StorageBackend:put(Key, Value);
-                _Replaced -> error({routing_table_replaced, DispatchKey})
-            end;
-        #{} ->
-            StorageBackend:put(Key, Value)
-    end,
-    ok.
+    StorageBackend:get(generation_key(DispatchKey), undefined).
+
+%% A table as it is compiled: its routes, the applications and the route
+%% groups it lists, and the applications that are mounted on the node.
+-spec stored(dispatch_key(), nova_routing_trie:trie()) -> table().
+stored(DispatchKey, Empty) ->
+    StorageBackend = storage_backend(),
+    #{routes => StorageBackend:get(DispatchKey, Empty),
+      apps => StorageBackend:get(apps_key(DispatchKey), []),
+      bound => StorageBackend:get(bound_key(DispatchKey), []),
+      mounted => mounted_apps()}.
+
+%% Nothing of a table is stored before all of it is compiled, so one that
+%% does not compile leaves no application listed whose routes are not
+%% there. The routers of the applications ran meanwhile. A listener that
+%% was started again by then has a table of its own, and what was read
+%% from the one before is not written to it: not the routes and their
+%% security callbacks, nor which applications and route groups it has.
+%% The generation is read and the table then written, which no backend
+%% does as one step.
+-spec commit(dispatch_key(), table(), term()) -> ok.
+commit(DispatchKey, #{routes := Dispatch, apps := Apps, bound := Bound, mounted := Mounted}, Generation) ->
+    StorageBackend = storage_backend(),
+    case StorageBackend:get(generation_key(DispatchKey), undefined) of
+        Generation ->
+            StorageBackend:put(apps_key(DispatchKey), Apps),
+            StorageBackend:put(bound_key(DispatchKey), Bound),
+            StorageBackend:put(DispatchKey, Dispatch),
+            nova:set_env(apps, Mounted),
+            ok;
+        _Replaced ->
+            error({routing_table_replaced, DispatchKey})
+    end.
 
 %%--------------------------------------------------------------------
 %% As compile/2, but starting from an empty routing table that replaces
@@ -232,13 +257,18 @@ compile_fresh(Apps, DispatchKey) ->
 compile_fresh(Apps, DispatchKey, Serving) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
     StorageBackend = storage_backend(),
-    StorageBackend:put(generation_key(DispatchKey), make_ref()),
-    StorageBackend:put(apps_key(DispatchKey), []),
+    %% A compile that merges into the table before this one is refused
+    %% from here on.
+    Generation = make_ref(),
+    StorageBackend:put(generation_key(DispatchKey), Generation),
     StorageBackend:put(serving_key(DispatchKey), Serving),
-    StorageBackend:put(bound_key(DispatchKey), []),
-    Dispatch = compile(Apps, nova_routing_trie:new(#{strict => UseStrict}),
-                       with_serving(#{dispatch_key => DispatchKey})),
-    StorageBackend:put(DispatchKey, Dispatch),
+    Empty = #{routes => nova_routing_trie:new(#{strict => UseStrict}), apps => [], bound => [],
+              mounted => mounted_apps()},
+    Table = #{routes := Dispatch} = compile(Apps, Empty, with_serving(#{dispatch_key => DispatchKey})),
+    ok = commit(DispatchKey, Table, Generation),
+    %% And so is one that began while this table was built: the table it
+    %% read is the one before, which it would write over this one.
+    StorageBackend:put(generation_key(DispatchKey), make_ref()),
     Dispatch.
 
 %% The route groups of a table that name the listeners they are for, each
@@ -451,7 +481,7 @@ add_routes(App, Routes) ->
     add_routes(App, Routes, ?NOVA_DISPATCH).
 
 %%--------------------------------------------------------------------
--doc "As add_routes/2, but against the routing table addressed by `DispatchKey`.".
+-doc "As add_routes/2, but against the routing table addressed by `DispatchKey`. Raises the error `{routing_table_replaced, DispatchKey}` when the table was replaced meanwhile, as `compile/2` does.".
 -spec add_routes(App :: atom(), Routes :: [map() | [map()]] | map(), DispatchKey :: dispatch_key()) -> ok.
 add_routes(_App, [], _DispatchKey) ->
     ok;
@@ -470,27 +500,23 @@ add_routes(App, Routes, _DispatchKey) ->
 
 insert_route_maps(App, Routes, DispatchKey) ->
     StorageBackend = storage_backend(),
-    Dispatch = StorageBackend:get(DispatchKey),
-
-    %% Take out the prefix for the app and store it in the persistent store
-    AppsKey = apps_key(DispatchKey),
-    CompiledApps = StorageBackend:get(AppsKey, []),
-    CompiledApps0 =
-        case lists:keyfind(App, 1, CompiledApps) of
-            false      -> CompiledApps ++ [{App, "/"}];
-            _StoredApp -> CompiledApps
-        end,
+    Generation = generation(DispatchKey),
+    Stored = stored(DispatchKey, StorageBackend:get(DispatchKey)),
 
     %% Routes added at runtime replace any route already registered on the
     %% same path and method, which is what the routing guide promises.
     Options = with_serving(#{app => App, router_file => undefined, dispatch_key => DispatchKey,
                              insert_opts => #{on_duplicate => overwrite}, runtime => true}),
 
-    {ok, Dispatch1, _Options0} = compile_paths(Routes, Dispatch, Options),
+    {ok, Table = #{apps := CompiledApps}, _Options0} = compile_paths(Routes, Stored, Options),
 
-    StorageBackend:put(AppsKey, CompiledApps0),
-    StorageBackend:put(DispatchKey, Dispatch1),
-    ok.
+    %% Take out the prefix for the app and store it in the persistent store
+    CompiledApps0 =
+        case lists:keyfind(App, 1, CompiledApps) of
+            false      -> CompiledApps ++ [{App, "/"}];
+            _StoredApp -> CompiledApps
+        end,
+    commit(DispatchKey, Table#{apps := CompiledApps0}, Generation).
 
 
 %%--------------------------------------------------------------------
@@ -568,17 +594,17 @@ apply_callback(Module, Function, Args) ->
             []
     end.
 
--spec compile(Apps :: [atom() | {atom(), map()}], Dispatch :: nova_routing_trie:trie(), Options :: map()) -> nova_routing_trie:trie().
-compile([], Dispatch, _Options) -> Dispatch;
-compile([{App, AppOptions}|Tl], Dispatch, GlobalOptions) ->
+-spec compile(Apps :: [atom() | {atom(), map()}], Table :: table(), Options :: map()) -> table().
+compile([], Table, _Options) -> Table;
+compile([{App, AppOptions}|Tl], Table, GlobalOptions) ->
     %% Per-application options win over the global ones, and must not leak
     %% into the applications compiled after this one.
     ok = misplaced_security([{security, Value, mount_path(GlobalOptions, AppOptions)}
                              || security := Value <- AppOptions],
                             App, maps:get(router_file, GlobalOptions, undefined)),
-    Dispatch0 = compile([App], Dispatch, mount_options(GlobalOptions, AppOptions)),
-    compile(Tl, Dispatch0, GlobalOptions);
-compile([App|Tl], Dispatch, Options) ->
+    Table0 = compile([App], Table, mount_options(GlobalOptions, AppOptions)),
+    compile(Tl, Table0, GlobalOptions);
+compile([App|Tl], Table, Options) ->
     Router = router_module(App),
 
     Env = nova:get_environment(),
@@ -589,19 +615,12 @@ compile([App|Tl], Dispatch, Options) ->
     RouterFile = proplists:get_value(source, CompileParameters),
     Options1 = Options#{app => App, router_file => RouterFile},
 
-    {ok, Dispatch1, _Options2} = compile_paths(Routes, Dispatch, Options1),
+    {ok, Table1 = #{apps := CompiledApps}, _Options2} = compile_paths(Routes, Table, Options1),
 
-    %% Take out the prefix for the app and store it in the persistent store
-    StorageBackend = storage_backend(),
-    AppsKey = apps_key(maps:get(dispatch_key, Options, ?NOVA_DISPATCH)),
-
-    CompiledApps = StorageBackend:get(AppsKey, []),
-
+    %% Take out the prefix for the app, to store it with the table
     CompiledApps0 = lists:keystore(App, 1, CompiledApps, {App, maps:get(prefix, Options, "/")}),
 
-    ok = store(AppsKey, CompiledApps0, Options),
-
-    compile(Tl, Dispatch1, Options).
+    compile(Tl, Table1#{apps := CompiledApps0}, Options).
 
 %% The secure and the override_secure that are in force around an
 %% application are the options its own entry does not replace. They stay in
@@ -696,18 +715,18 @@ first_module([Name | Names]) ->
             first_module(Names)
     end.
 
-compile_paths([], Dispatch, Options) -> {ok, Dispatch, Options};
-compile_paths([RouteInfo|Tl], Dispatch, Options) ->
-    case place_group(RouteInfo, Options) of
-        served -> compile_paths(Tl, compile_group(RouteInfo, Dispatch, Options), Options);
-        skipped -> compile_paths(Tl, Dispatch, Options)
+compile_paths([], Table, Options) -> {ok, Table, Options};
+compile_paths([RouteInfo|Tl], Table, Options) ->
+    case place_group(RouteInfo, Table, Options) of
+        {served, Placed} -> compile_paths(Tl, compile_group(RouteInfo, Placed, Options), Options);
+        {skipped, Placed} -> compile_paths(Tl, Placed, Options)
     end.
 
 %% A route group that names listeners is compiled into their tables alone,
 %% and into none when the table is not known to be one of theirs. Where it
 %% went is noted with the table, for nova_sup to see that every listener it
 %% names has it.
-place_group(RouteInfo = #{listener := Listener}, Options = #{app := App}) ->
+place_group(RouteInfo = #{listener := Listener}, Table = #{bound := Noted}, Options = #{app := App}) ->
     Names = listener_names(Listener, App),
     Status = case Options of
                  #{serving := #{name := Name}} ->
@@ -719,7 +738,7 @@ place_group(RouteInfo = #{listener := Listener}, Options = #{app := App}) ->
                      skipped
              end,
     Prefix = concat_strings(maps:get(prefix, Options, ""), maps:get(prefix, RouteInfo, "")),
-    ok = note_bound_group({Status, App, Prefix, Names}, Options),
+    Group = {Status, App, Prefix, Names},
     case {Status, Options} of
         {skipped, #{runtime := true}} ->
             ?LOG_NOTICE(#{msg => ~"Route group is for other listeners and is not added to this routing table",
@@ -728,18 +747,12 @@ place_group(RouteInfo = #{listener := Listener}, Options = #{app := App}) ->
         _Quiet ->
             ok
     end,
-    Status;
-place_group(_RouteInfo, _Options) ->
-    served.
-
-note_bound_group(Group, Options) ->
-    StorageBackend = storage_backend(),
-    BoundKey = bound_key(maps:get(dispatch_key, Options, ?NOVA_DISPATCH)),
-    Noted = StorageBackend:get(BoundKey, []),
     case lists:member(Group, Noted) of
-        true -> ok;
-        false -> store(BoundKey, Noted ++ [Group], Options)
-    end.
+        true -> {Status, Table};
+        false -> {Status, Table#{bound := Noted ++ [Group]}}
+    end;
+place_group(_RouteInfo, Table, _Options) ->
+    {served, Table}.
 
 listener_names(Name, _App) when is_atom(Name) ->
     [Name];
@@ -751,7 +764,7 @@ listener_names([_ | _] = Names, App) ->
 listener_names(Other, App) ->
     throw({error, {invalid_route_listener, App, Other}}).
 
-compile_group(RouteInfo, Dispatch, Options) ->
+compile_group(RouteInfo, Table = #{routes := Dispatch, mounted := Mounted}, Options) ->
     App = maps:get(app, Options),
     RouterFile = maps:get(router_file, Options),
 
@@ -776,9 +789,6 @@ compile_group(RouteInfo, Dispatch, Options) ->
     SubApps = maps:get(apps, RouteInfo, []),
     ok = misplaced_security(misplaced_in_group(Prefix, RouteInfo), App, RouterFile),
 
-    %% We need to add this app info to nova-env
-    nova:set_env(apps, lists:keystore(App, 1, mounted_apps(), {App, #{prefix => Prefix}})),
-
     Group = maps:merge(maps:with([serving], Options), maps:with([extra_state, http_versions], RouteInfo)),
     {ok, Dispatch1} = parse_url(Host, maps:get(routes, RouteInfo, []),
                                 Group#{prefix => Prefix,
@@ -787,8 +797,10 @@ compile_group(RouteInfo, Dispatch, Options) ->
                                        insert_opts => maps:get(insert_opts, Options, #{})},
                                 Value, Dispatch),
 
-    %% The applications the group lists are behind its security as well.
-    compile(SubApps, Dispatch1,
+    %% This app info goes to nova-env with the table. The applications the
+    %% group lists are behind its security as well.
+    compile(SubApps, Table#{routes := Dispatch1,
+                            mounted := lists:keystore(App, 1, Mounted, {App, #{prefix => Prefix}})},
             Options#{value => Value, prefix => Prefix, secure => false,
                      inherited_secure => secures_in_force(Options) ++
                          [Security || security := Security <- RouteInfo, Security =/= false]}).

@@ -16,7 +16,7 @@ The following parameters can be set under the `nova` key in your `sys.config`:
 | Key | Description | Default |
 |-----|-------------|---------|
 | `shutdown_delay` | Milliseconds to wait before suspending the listener. Gives load balancers time to remove the node from their routing pool. | `0` |
-| `shutdown_drain_timeout` | Maximum milliseconds to wait for active connections to finish after the listener is suspended. | `15000` |
+| `shutdown_drain_timeout` | Maximum milliseconds to wait for active connections to finish after the listener is suspended. An application that is being added at runtime is waited for as long, before that. | `15000` |
 
 Example configuration:
 
@@ -72,9 +72,14 @@ If you use readiness probes, your health endpoint should reflect the application
 
 The application of the server package implements graceful shutdown in its `prep_stop` callback, which is called by OTP before the supervision tree is terminated, and so does the `nova` application for whatever listeners are left. The sequence is:
 
-1. **Delay**: Sleep for `shutdown_delay` milliseconds. During this time, the listener is still active and serving requests normally. This covers the load balancer propagation window.
-2. **Suspend**: Every listener stops accepting connections. Existing connections continue to be served.
-3. **Drain**: Wait until active connections reach zero or `shutdown_drain_timeout` is exceeded.
-4. **Stop**: Every listener is stopped.
+1. **Applications being added**: An application that `nova_sup:add_application/2` is adding at that moment is waited for, for at most `shutdown_drain_timeout`. This takes no time unless a router is running, see below.
+2. **Delay**: Sleep for `shutdown_delay` milliseconds. During this time, the listener is still active and serving requests normally. This covers the load balancer propagation window.
+3. **Suspend**: Every listener stops accepting connections. Existing connections continue to be served.
+4. **Drain**: Wait until active connections reach zero or `shutdown_drain_timeout` is exceeded.
+5. **Stop**: Every listener is stopped.
 
 After `prep_stop` returns, OTP proceeds with the normal supervision tree shutdown.
+
+### Applications added at runtime
+
+A node that adds applications with `nova_sup:add_application/2` can be asked to stop while the router of one is running. Nova waits for that router before the delay, for at most `shutdown_drain_timeout`, and stops it after that. Applications that were waiting to be added are not waited for. So a router that does not return makes the shutdown take up to `shutdown_delay` plus twice `shutdown_drain_timeout`. Where that can happen, set `terminationGracePeriodSeconds` higher than that sum.

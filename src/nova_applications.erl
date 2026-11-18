@@ -21,9 +21,8 @@
 -export([work/4]).
 
 -define(ADDING, nova_adding_application).
--define(WORKER, nova_applications_worker).
 -define(STARTED, {?MODULE, started}).
--define(QUEUED_TIMEOUT, 1000).
+-define(DRAINING_SLACK, 5000).
 
 -type bind() :: {inet:ip_address() | string(), inet:port_number()}.
 
@@ -85,33 +84,39 @@ listening(Owner) ->
         not_started -> {error, server_not_started}
     end.
 
-%% The listeners take no more connections and are about to stop. An
-%% application that is still being added by then is not added: what its
-%% router waits for is not waited for, and nothing is left to add it to
-%% the listeners once they are stopped, or to those of the next start.
+%% The listeners take no more connections and are about to stop. The
+%% application that is being added by then is waited for as long as the
+%% connections of the listeners are, and is not added after that: what its
+%% router waits for is not waited for. One that is added from here on is
+%% kept for the next start, also when it asked before this did and waited
+%% behind the one that was being added.
+%%
+%% It is not a call, which the process would come to after the
+%% applications that wait: it has to know while it waits for a router.
 -spec draining() -> ok.
 draining() ->
-    draining(application:get_env(nova, shutdown_drain_timeout, 15000)).
-
-%% The time the listeners have to drain is waited for once. An application
-%% that was queued behind the one that is stopped has had it too.
-draining(Timeout) ->
-    case call(draining, Timeout) of
-        timeout ->
-            case whereis(?WORKER) of
-                Worker when is_pid(Worker) ->
-                    ?LOG_WARNING(#{msg => ~"An application was still being added as the listeners stop, and is not added",
-                                   app => adding_app(Worker), timeout_ms => Timeout}),
-                    exit(Worker, kill),
-                    draining(min(Timeout, ?QUEUED_TIMEOUT));
-                undefined ->
+    Timeout = application:get_env(nova, shutdown_drain_timeout, 15000),
+    case whereis(?MODULE) of
+        undefined ->
+            ok;
+        Registry when is_pid(Registry) ->
+            Alias = monitor(process, Registry, [{alias, reply_demonitor}]),
+            Registry ! {draining, Alias, Timeout},
+            receive
+                {Alias, drained} ->
+                    ok;
+                {'DOWN', Alias, process, Registry, _Reason} ->
+                    ok
+            after unanswered(Timeout) ->
+                    true = demonitor(Alias, [flush]),
                     ?LOG_WARNING(#{msg => ~"The listeners are stopped without the process that keeps the added applications knowing of it",
                                    timeout_ms => Timeout}),
                     ok
-            end;
-        _Told ->
-            ok
+            end
     end.
+
+unanswered(Timeout) when is_integer(Timeout) -> Timeout + ?DRAINING_SLACK;
+unanswered(_Timeout) -> infinity.
 
 %% A router that adds an application as its own routes are compiled asks
 %% the process that is waiting for those.
@@ -126,7 +131,6 @@ call(Request, Timeout) ->
                 Reply -> Reply
             catch
                 exit:{noproc, _Call} -> not_started;
-                exit:{timeout, _Call} -> timeout;
                 %% The call has the settings of the request in it.
                 exit:{Reason, _Call} -> exit({Reason, ?MODULE})
             end
@@ -174,10 +178,12 @@ recovered(Owner) ->
 %% caller, as it was when the caller added it itself.
 -spec handle_call(term(), gen_server:from(), #state{}) -> {reply, term(), #state{}}.
 handle_call(Request, _From, State) ->
-    case answer(Request, State) of
-        {raised, Class, Reason, Stacktrace} -> {reply, {raised, Class, Reason, Stacktrace}, State};
-        {Reply, NewState} -> {reply, Reply, watching(Request, Reply, NewState)}
-    end.
+    {Answer, Drainers} = answer(Request, State),
+    {Reply, Kept} = case Answer of
+                        {raised, Class, Reason, Stacktrace} -> {{raised, Class, Reason, Stacktrace}, State};
+                        {Answered, NewState} -> {Answered, watching(Request, Answered, NewState)}
+                    end,
+    {reply, Reply, drained(Drainers, Kept)}.
 
 -spec handle_cast(term(), #state{}) -> {noreply, #state{}}.
 handle_cast(_Request, State) ->
@@ -186,6 +192,8 @@ handle_cast(_Request, State) ->
 -spec handle_info(term(), #state{}) -> {noreply, #state{}}.
 handle_info({'DOWN', Monitor, process, Owner, _Reason}, State = #state{owner = {Owner, Monitor}}) ->
     {noreply, State#state{owner = undefined}};
+handle_info({draining, Drainer, _Timeout}, State) ->
+    {noreply, drained([Drainer], State)};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -203,10 +211,16 @@ format_status(Status) ->
 watching({listening, Owner}, ok, State) ->
     Unwatched = unwatched(State),
     Unwatched#state{owner = {Owner, monitor(process, Owner)}};
-watching(draining, ok, State) ->
-    unwatched(State);
 watching(_Request, _Reply, State) ->
     State.
+
+%% Those that stop the listeners are told once no application is being
+%% added to them, and none is from here on.
+drained([], State) ->
+    State;
+drained(Drainers, State) ->
+    _ = [Drainer ! {Drainer, drained} || Drainer <- Drainers],
+    unwatched(State).
 
 unwatched(State = #state{owner = {_Owner, Monitor}}) ->
     true = demonitor(Monitor, [flush]),
@@ -226,7 +240,7 @@ answer(Request, Kept) ->
     State = current(Kept),
     case compiles_routes(Request, State) of
         true -> in_worker(Request, State);
-        false -> handled(Request, State)
+        false -> {handled(Request, State), []}
     end.
 
 %% The owner of the listeners can be gone before its 'DOWN' is here, and
@@ -246,26 +260,39 @@ compiles_routes(_Request, _State) -> false.
 in_worker(Request, State) ->
     Tag = make_ref(),
     {Worker, Monitor} = spawn_opt(?MODULE, work, [self(), Tag, Request, State], [link, monitor]),
+    worked({Worker, Monitor, Tag}, []).
+
+%% The listeners can begin to stop as the router runs. It is given the
+%% time their connections are given, once, however many ask meanwhile.
+worked({Worker, Monitor, Tag} = Work, Drainers) ->
     receive
         {Tag, Answer} ->
             true = demonitor(Monitor, [flush]),
-            Answer;
+            {Answer, Drainers};
         {'DOWN', Monitor, process, Worker, Reason} ->
             %% What a router links to can go down with the settings of a
             %% listener as its reason.
-            {raised, exit, nova_redact:tls_options(Reason), []}
+            {{raised, exit, nova_redact:tls_options(Reason), []}, Drainers};
+        {draining, Drainer, Timeout} ->
+            ok = overdue_after(Timeout, Tag, Drainers),
+            worked(Work, [Drainer | Drainers]);
+        {Tag, overdue, Timeout} ->
+            ?LOG_WARNING(#{msg => ~"An application was still being added as the listeners stop, and is not added",
+                           app => adding_app(Worker), timeout_ms => Timeout}),
+            exit(Worker, kill),
+            worked(Work, Drainers)
     end.
 
-%% There is one at a time, so it has a name, by which it is stopped when
-%% the listeners are.
+overdue_after(Timeout, Tag, []) when is_integer(Timeout), Timeout >= 0 ->
+    _ = erlang:send_after(Timeout, self(), {Tag, overdue, Timeout}),
+    ok;
+overdue_after(_Timeout, _Tag, _Drainers) ->
+    ok.
+
 -spec work(pid(), reference(), term(), #state{}) -> ok.
 work(Registry, Tag, Request, State) ->
     put(?ADDING, true),
-    true = register(?WORKER, self()),
-    Answer = handled(Request, State),
-    %% The next one is started on the answer, and takes the name.
-    true = unregister(?WORKER),
-    Registry ! {Tag, Answer},
+    Registry ! {Tag, handled(Request, State)},
     ok.
 
 adding(App) ->
@@ -331,8 +358,6 @@ handle({listening, _Owner}, State = #state{rows = Rows, started = Started}) ->
         {error, Reason} ->
             {{error, Reason}, State}
     end;
-handle(draining, State) ->
-    {ok, State};
 handle(_Unknown, State) ->
     {{error, unknown_request}, State}.
 

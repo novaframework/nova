@@ -190,9 +190,11 @@ should not link to it, and what it creates there that a process owns, an ETS
 table for one, goes with it. One that does not return keeps the next
 application from being added, so it should not wait for something that adds
 one itself. The server package waits `shutdown_drain_timeout` for it when it
-stops. An application that is still being added by then is not added: the
-call exits with `killed`, and Nova logs a warning with the application. One
-that was waiting behind it is given a second more.
+stops, once, before it waits for the connections of the listeners. An
+application that is still being added by then is not added: the call exits
+with `killed`, and Nova logs a warning with the application. One that was
+waiting behind it is not added to listeners that stop: it is kept for the
+next start.
 
 An application is added again to the listener it was served on. One that
 was added by `ip` and `port` to a listener that was there already stays
