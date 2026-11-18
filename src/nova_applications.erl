@@ -23,6 +23,7 @@
 -define(ADDING, nova_adding_application).
 -define(STARTED, {?MODULE, started}).
 -define(DRAINING_SLACK, 5000).
+-define(MAX_TIMER, 16#FFFFFFFF).
 
 -type bind() :: {inet:ip_address() | string(), inet:port_number()}.
 
@@ -95,28 +96,27 @@ listening(Owner) ->
 %% applications that wait: it has to know while it waits for a router.
 -spec draining() -> ok.
 draining() ->
-    Timeout = application:get_env(nova, shutdown_drain_timeout, 15000),
     case whereis(?MODULE) of
         undefined ->
             ok;
         Registry when is_pid(Registry) ->
-            Alias = monitor(process, Registry, [{alias, reply_demonitor}]),
-            Registry ! {draining, Alias, Timeout},
-            receive
-                {Alias, drained} ->
-                    ok;
-                {'DOWN', Alias, process, Registry, _Reason} ->
-                    ok
-            after unanswered(Timeout) ->
-                    true = demonitor(Alias, [flush]),
-                    ?LOG_WARNING(#{msg => ~"The listeners are stopped without the process that keeps the added applications knowing of it",
-                                   timeout_ms => Timeout}),
-                    ok
-            end
+            draining(Registry, nova_settings:current(shutdown_drain_timeout))
     end.
 
-unanswered(Timeout) when is_integer(Timeout) -> Timeout + ?DRAINING_SLACK;
-unanswered(_Timeout) -> infinity.
+draining(Registry, Timeout) when is_integer(Timeout) ->
+    Alias = monitor(process, Registry, [{alias, reply_demonitor}]),
+    Registry ! {draining, Alias, Timeout},
+    receive
+        {Alias, drained} ->
+            ok;
+        {'DOWN', Alias, process, Registry, _Reason} ->
+            ok
+    after min(Timeout + ?DRAINING_SLACK, ?MAX_TIMER) ->
+            true = demonitor(Alias, [flush]),
+            ?LOG_WARNING(#{msg => ~"The listeners are stopped without the process that keeps the added applications knowing of it",
+                           timeout_ms => Timeout}),
+            ok
+    end.
 
 %% A router that adds an application as its own routes are compiled asks
 %% the process that is waiting for those.
@@ -283,7 +283,7 @@ worked({Worker, Monitor, Tag} = Work, Drainers) ->
             worked(Work, Drainers)
     end.
 
-overdue_after(Timeout, Tag, []) when is_integer(Timeout), Timeout >= 0 ->
+overdue_after(Timeout, Tag, []) ->
     _ = erlang:send_after(Timeout, self(), {Tag, overdue, Timeout}),
     ok;
 overdue_after(_Timeout, _Tag, _Drainers) ->

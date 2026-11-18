@@ -7,18 +7,19 @@
 %%% nobody has looked at. They are read from `nova` alone, whichever
 %%% application is the bootstrap one.
 
--export([validate/0, value/1, checked/2, expected/1, removed/0, removed_notice/1]).
+-export([validate/0, value/1, current/1, checked/2, expected/1, removed/0, removed_notice/1]).
 
 -include_lib("kernel/include/logger.hrl").
 
 -type key() :: trusted_origins | csrf_token | max_sessions | non_canonical_paths | plugins_before_security |
-               secret_key_base | server_grace.
+               secret_key_base | server_grace | shutdown_drain_timeout.
 -export_type([key/0]).
 
 -define(MIN_SECRET_BYTES, 32).
 -define(MIN_DISTINCT_BYTES, 8).
 -define(DEFAULT_MAX_SESSIONS, 1000000).
 -define(DEFAULT_SERVER_GRACE, 10000).
+-define(DEFAULT_SHUTDOWN_DRAIN_TIMEOUT, 15000).
 -define(MAX_TIMER, 16#FFFFFFFF).
 
 -doc """
@@ -55,6 +56,23 @@ value(Key) ->
     end.
 
 -doc """
+The value of a setting that is read when it is used, as
+`shutdown_drain_timeout` is when the node stops, so one that is set while
+the node runs applies. A value that cannot be used is logged, and the one
+that was checked when Nova started is used in its place.
+""".
+-spec current(Key :: key()) -> term().
+current(Key) ->
+    case checked(Key, application:get_env(nova, Key, default(Key))) of
+        {ok, Value} ->
+            Value;
+        {error, Reason} ->
+            Kept = maps:get(Key, persistent_term:get(?MODULE, #{}), default(Key)),
+            ?LOG_WARNING(#{msg => expected(Key), setting => Key, value => Reason, used => Kept}),
+            Kept
+    end.
+
+-doc """
 What `Value` is kept as when it can be used for `Key`, and otherwise the
 `Reason` of `{invalid_setting, Key, Reason}`. Never raises, and never
 returns a secret that was refused. Also for a route group or a plugin that
@@ -85,6 +103,8 @@ checked(max_sessions, Value) when Value =:= infinity; is_integer(Value), Value >
     {ok, Value};
 checked(server_grace, Value) when Value =:= infinity; is_integer(Value), Value >= 0, Value =< ?MAX_TIMER ->
     {ok, Value};
+checked(shutdown_drain_timeout, Value) when is_integer(Value), Value >= 0, Value =< ?MAX_TIMER ->
+    {ok, Value};
 checked(plugins_before_security, all) ->
     {ok, all};
 checked(plugins_before_security, Value) ->
@@ -104,6 +124,8 @@ expected(secret_key_base) ->
     ~"secret_key_base must be a binary of at least 32 bytes out of a random source, or a list of such. A value that repeats a few bytes, an example out of the documentation or a ${VARIABLE} that was not filled in is refused. base64:encode(crypto:strong_rand_bytes(48)) in an Erlang shell, or openssl rand -base64 48, makes one";
 expected(max_sessions) -> ~"max_sessions must be infinity or an integer above 0";
 expected(server_grace) -> ~"server_grace must be infinity or a number of milliseconds from 0 to 4294967295";
+expected(shutdown_drain_timeout) ->
+    ~"shutdown_drain_timeout must be a number of milliseconds from 0 to 4294967295";
 expected(plugins_before_security) ->
     ~"plugins_before_security must be all or a list of plugin modules that have pre_request/4".
 
@@ -142,7 +164,7 @@ no_removed_setting([{Key, Replacement} | Rest]) ->
 -spec keys() -> [key()].
 keys() ->
     [non_canonical_paths, trusted_origins, csrf_token, secret_key_base, max_sessions, plugins_before_security,
-     server_grace].
+     server_grace, shutdown_drain_timeout].
 
 -spec default(key()) -> term().
 default(non_canonical_paths) -> reject;
@@ -151,6 +173,7 @@ default(csrf_token) -> undefined;
 default(secret_key_base) -> undefined;
 default(max_sessions) -> ?DEFAULT_MAX_SESSIONS;
 default(server_grace) -> ?DEFAULT_SERVER_GRACE;
+default(shutdown_drain_timeout) -> ?DEFAULT_SHUTDOWN_DRAIN_TIMEOUT;
 default(plugins_before_security) -> [].
 
 -spec valid(key()) -> term().

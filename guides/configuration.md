@@ -80,7 +80,7 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 | `multipart_spool` | Bounds on the upload files spooled at one time by `nova_multipart_file_handler`: `max_files` and `max_bytes`, each an integer or `infinity`. A part past a bound gets a `503`. See the [Plugins](plugins.md#nova-multipart) guide. | `map()` | `#{max_files => infinity, max_bytes => 8000000000}` |
 | `telemetry_request_fields` | Request fields to add to the controller telemetry metadata. `path` (the raw request path) and `peer` (the client's address) are the only ones accepted and are left out by default. See the [Telemetry](telemetry.md) guide. | `[path \| peer]` | `[]` |
 | `shutdown_delay` | Milliseconds to wait before suspending the listener during shutdown. Useful for letting load balancers drain traffic. See the [Graceful shutdown](graceful-shutdown.md) guide. | `integer()` | `0` |
-| `shutdown_drain_timeout` | Maximum milliseconds to wait for active connections to finish during shutdown. See the [Graceful shutdown](graceful-shutdown.md) guide. | `integer()` | `15000` |
+| `shutdown_drain_timeout` | Maximum milliseconds to wait for active connections to finish during shutdown, from `0` to `4294967295`. Anything else stops the boot. It is read as the node stops: a value set while the node runs applies, and one that cannot be used is logged and the one from boot is used. See the [Graceful shutdown](graceful-shutdown.md) guide. | `non_neg_integer()` | `15000` |
 
 ### Where Nova reads a setting
 

@@ -202,12 +202,9 @@ start_listener_for(Name, App, Settings) ->
                 {error, {ok, #nova_listener{name = By}}} ->
                     {error, {address_in_use, By}};
                 {error, error} ->
-                    case start_checked(nova_server:module(), Listener#{applications := [App]}) of
-                        {ok, App, Host, Port} ->
-                            ok = for_application(Name, App),
-                            {ok, Host, Port};
-                        {error, Reason} ->
-                            {error, Reason}
+                    case start_checked(nova_server:module(), Listener#{applications := [App]}, [App]) of
+                        {ok, App, Host, Port} -> {ok, Host, Port};
+                        {error, Reason} -> {error, Reason}
                     end
             end;
         {error, Reason} ->
@@ -482,7 +479,7 @@ note_legacy_configuration() ->
 start_all(_Server, []) ->
     ok;
 start_all(Server, [Listener | Rest]) ->
-    case start_checked(Server, Listener) of
+    case start_checked(Server, Listener, []) of
         {ok, _App, _Host, _Port} -> start_all(Server, Rest);
         {error, Reason} -> {error, Reason}
     end.
@@ -515,10 +512,11 @@ unserved_groups() ->
                     Listener <- Names,
                     not lists:member({Listener, {served, App, Prefix, Names}}, Bound)]).
 
-start_checked(Server, Listener = #{name := Name}) ->
+%% `For` is the application a listener is started for, when it is.
+start_checked(Server, Listener = #{name := Name}, For) ->
     case checked(Server, Listener) of
         ok ->
-            start_listener(Server, Listener);
+            start_listener(Server, Listener, For);
         {error, Reason} ->
             ?LOG_ERROR(#{msg => ~"Listener asks for what the server cannot do", listener => Name,
                          server => Server, reason => nova_redact:tls_options(Reason)}),
@@ -546,7 +544,7 @@ dispatch_key(#{name := Name, applications := Apps}) ->
     end.
 
 start_listener(Server, Listener = #{name := Name, ip := Host, port := Port, applications := Apps,
-                                    protocols := Protocols}) ->
+                                    protocols := Protocols}, For) ->
     DispatchKey = dispatch_key(Listener),
     %% The applications a listener serves say in their environment which
     %% others they mount, so it has to be loaded by now. It is in a release.
@@ -570,9 +568,13 @@ start_listener(Server, Listener = #{name := Name, ip := Host, port := Port, appl
     %% The listener is listed before the server binds it. What stops the
     %% listeners stops the ones that are listed, and the process that
     %% starts this one can be stopped as the server binds: it is then not
-    %% left serving with nothing that knows of it.
+    %% left serving with nothing that knows of it. It says from then on
+    %% that it is started for an application, which is how the process
+    %% that keeps the added applications knows of it when that is started
+    %% again.
     case reserve_listener(#nova_listener{name = Name, bind = {Host, Port}, server = Server, apps = Apps,
-                                         dispatch_key = DispatchKey}) of
+                                         dispatch_key = DispatchKey, added = For,
+                                         for_application = For =/= []}) of
         ok ->
             try Server:start_listener(Listener, env(Server, Listener, DispatchKey, Dispatch)) of
                 {ok, _Pid} ->
@@ -703,17 +705,6 @@ listed(App, Name, {Host, Port}, DispatchKey) ->
             {error, {no_such_listener, Name}}
     end.
 
-%% A listener that is started for an application says so, and that the
-%% application was added.
-for_application(Name, App) ->
-    case find_listener(Name) of
-        {ok, Listener} ->
-            _ = register_listener(Listener#nova_listener{added = [App], for_application = true}),
-            ok;
-        error ->
-            ok
-    end.
-
 detach_application(App, #nova_listener{name = Name, apps = Apps, added = Added,
                                        dispatch_key = DispatchKey} = Listener) ->
     ok = nova_router:remove_application(App, DispatchKey),
@@ -779,7 +770,7 @@ graceful_shutdown(Listeners) ->
         false ->
             ok
     end,
-    DrainTimeout = application:get_env(nova, shutdown_drain_timeout, 15000),
+    DrainTimeout = nova_settings:current(shutdown_drain_timeout),
     Names = [Name || #nova_listener{name = Name} <- Listeners],
     ?LOG_NOTICE(#{msg => ~"Draining connections", listeners => Names, timeout_ms => DrainTimeout}),
     _ = [drain(Server, [Name || #nova_listener{name = Name, server = S} <- Listeners, S =:= Server], DrainTimeout)

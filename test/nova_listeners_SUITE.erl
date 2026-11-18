@@ -52,6 +52,7 @@
          stuck_add/1,
          queued_add/1,
          stopped_while_binding/1,
+         killed_while_binding/1,
          invalid_settings/1,
          moved_listener/1,
          added_during_start/1,
@@ -120,6 +121,7 @@ all() ->
      stuck_add,
      queued_add,
      stopped_while_binding,
+     killed_while_binding,
      invalid_settings,
      moved_listener,
      added_during_start,
@@ -884,6 +886,50 @@ restart_keeps_added(_Config) ->
     application:set_env(nova, listeners, #{web => Web}),
     {ok, _} = application:ensure_all_started(Server),
     ?assertMatch({404, _}, nova_test_listener:get(Port, "/nested/where")).
+
+%% A listener says that it is started for an application from before the
+%% server binds it. The process that keeps the added applications can be
+%% stopped as the server binds, and the one that takes its place then
+%% knows the listener and its application: the application is removed with
+%% its listener, and the server package starts again.
+killed_while_binding(_Config) ->
+    Port = nova_test_listener:free_port(),
+    Other = nova_test_listener:free_port(),
+    {ok, Port} = nova_test_listener:try_start(#{port => Port,
+                                                listeners => #{web => #{port => Port}},
+                                                host => [#{routes => [?WHERE]}],
+                                                mounted => [#{routes => [?WHERE]}],
+                                                nova_apps => []}),
+    Server = nova_test_listener:server(#{}),
+    Self = self(),
+    ok = meck:new(Server, [passthrough, no_link]),
+    try
+        ok = meck:expect(Server, start_listener,
+                         fun(Listener = #{name := nova_test_sub_app}, Env) ->
+                                 Started = meck:passthrough([Listener, Env]),
+                                 Self ! bound,
+                                 receive after infinity -> Started end;
+                            (Listener, Env) ->
+                                 meck:passthrough([Listener, Env])
+                         end),
+        {Adder, Monitor} = spawn_monitor(fun() -> nova_sup:add_application(nova_test_sub_app, #{port => Other}) end),
+        receive bound -> ok after 5000 -> error(not_bound) end,
+        Registry = registry(),
+        exit(Registry, kill),
+        ok = registry_after(Registry),
+        receive {'DOWN', Monitor, process, Adder, _Reason} -> ok after 5000 -> error(still_adding) end,
+        ?assertEqual([{nova_test_sub_app, Other, [nova_test_sub_app], true}],
+                     [{Name, Bound, Added, ForApplication}
+                      || {Name, {_Host, Bound}, Added, ForApplication} <- nova_sup:added(), Name =/= web]),
+        ?assertEqual(ok, nova_sup:remove_application(nova_test_sub_app)),
+        ?assertEqual([web], nova_sup:listeners()),
+        ?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Other, [], 1000)),
+        ok = application:stop(Server),
+        ?assertMatch({ok, _}, application:ensure_all_started(Server)),
+        ?assertEqual({200, ~"web http1"}, nova_test_listener:get(Port, "/where"))
+    after
+        meck:unload(Server)
+    end.
 
 registry() ->
     case whereis(nova_applications) of
