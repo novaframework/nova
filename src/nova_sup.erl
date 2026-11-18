@@ -762,12 +762,11 @@ forget_listener(Bind) ->
 graceful_shutdown([]) ->
     ok;
 graceful_shutdown(Listeners) ->
-    Delay = application:get_env(nova, shutdown_delay, 0),
-    case Delay > 0 of
-        true ->
+    case nova_settings:current(shutdown_delay) of
+        Delay when is_integer(Delay), Delay > 0 ->
             ?LOG_NOTICE(#{msg => ~"Graceful shutdown started", delay_ms => Delay}),
             timer:sleep(Delay);
-        false ->
+        _None ->
             ok
     end,
     DrainTimeout = nova_settings:current(shutdown_drain_timeout),

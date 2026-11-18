@@ -128,8 +128,7 @@ serves and those of them the server takes WebSockets over.
 
 -type table() :: #{routes := nova_routing_trie:trie(),
                    apps := [{App :: atom(), Prefix :: list()}],
-                   bound := [{served | skipped, App :: atom(), Prefix :: string(), [nova_listener:name()]}],
-                   mounted := [{App :: atom(), map()}]}.
+                   bound := [{served | skipped, App :: atom(), Prefix :: string(), [nova_listener:name()]}]}.
 
 -type plugin() :: {Type :: atom(), Module :: module(), Options :: term()}.
 -type callback() :: {Callback :: fun(), Options :: term()}.
@@ -188,8 +187,9 @@ and lists none of the applications.
 A mistake in a router is thrown as `{error, Reason}`. The error
 `{routing_table_replaced, DispatchKey}` is raised when the table was
 replaced while the routers of the applications ran, as it is when its
-listener is started again, and while the table of a listener that starts
-is being built. What was compiled is then not stored.
+listener is started again, when an application was removed from it
+meanwhile, and while the table of a listener that starts is being built.
+What was compiled is then not stored.
 """.
 -spec compile(Apps :: [atom() | {atom(), map()}], DispatchKey :: dispatch_key()) ->
           nova_routing_trie:trie().
@@ -207,20 +207,45 @@ compile(Apps, DispatchKey) ->
 %% security callbacks of the listener as it was.
 generation(DispatchKey) ->
     StorageBackend = storage_backend(),
-    case StorageBackend:get(generation_key(DispatchKey), undefined) of
-        {building, _Build} -> error({routing_table_replaced, DispatchKey});
-        Generation -> Generation
+    Generation = StorageBackend:get(generation_key(DispatchKey), undefined),
+    case is_being_built(Generation) of
+        true -> error({routing_table_replaced, DispatchKey});
+        false -> Generation
     end.
 
-%% A table as it is compiled: its routes, the applications and the route
-%% groups it lists, and the applications this compile mounts.
+%% A process that was stopped as it built a table left its mark. Nothing
+%% is being built then, and the table before it takes routes again.
+is_being_built({building, Builder, _Build}) -> is_process_alive(Builder);
+is_being_built(_Generation) -> false.
+
+%% Two builds of one table can only come from outside Nova, which starts
+%% a listener in one process. The mark of another build is then left to
+%% that build.
+built(DispatchKey, Building) ->
+    StorageBackend = storage_backend(),
+    case StorageBackend:get(generation_key(DispatchKey), undefined) of
+        Building -> StorageBackend:put(generation_key(DispatchKey), make_ref());
+        _Other -> ok
+    end.
+
+%% A merge that read the table before something was taken out of it is
+%% refused when it comes to store, and does not put it back. One that is
+%% being built takes the place of this table, and is not merged into.
+moved(DispatchKey) ->
+    StorageBackend = storage_backend(),
+    case is_being_built(StorageBackend:get(generation_key(DispatchKey), undefined)) of
+        true -> ok;
+        false -> StorageBackend:put(generation_key(DispatchKey), make_ref())
+    end.
+
+%% A table as it is compiled: its routes, and the applications and the
+%% route groups it lists.
 -spec stored(dispatch_key(), nova_routing_trie:trie()) -> table().
 stored(DispatchKey, Empty) ->
     StorageBackend = storage_backend(),
     #{routes => StorageBackend:get(DispatchKey, Empty),
       apps => StorageBackend:get(apps_key(DispatchKey), []),
-      bound => StorageBackend:get(bound_key(DispatchKey), []),
-      mounted => []}.
+      bound => StorageBackend:get(bound_key(DispatchKey), [])}.
 
 %% Nothing of a table is stored before all of it is compiled, so one that
 %% does not compile leaves no application listed whose routes are not
@@ -231,33 +256,17 @@ stored(DispatchKey, Empty) ->
 %% The generation is read and the table then written, which no backend
 %% does as one step.
 -spec commit(dispatch_key(), table(), term()) -> ok.
-commit(DispatchKey, #{routes := Dispatch, apps := Apps, bound := Bound, mounted := Mounted}, Generation) ->
+commit(DispatchKey, #{routes := Dispatch, apps := Apps, bound := Bound}, Generation) ->
     StorageBackend = storage_backend(),
     case StorageBackend:get(generation_key(DispatchKey), undefined) of
         Generation ->
             StorageBackend:put(apps_key(DispatchKey), Apps),
             StorageBackend:put(bound_key(DispatchKey), Bound),
             StorageBackend:put(DispatchKey, Dispatch),
-            mount(Mounted);
+            ok;
         _Replaced ->
             error({routing_table_replaced, DispatchKey})
     end.
-
-%% The applications of every listener are in the one `apps` of the nova
-%% environment. The routers ran since this compile began, so what it
-%% mounted is put into what is there now: another table can have had an
-%% application added or removed meanwhile.
-mount([]) ->
-    ok;
-mount(Mounted) ->
-    Before = mounted_apps(),
-    Kept = [case lists:keyfind(App, 1, Mounted) of
-                false -> Entry;
-                Now -> Now
-            end || Entry = {App, _Info} <- Before],
-    New = [Entry || Entry = {App, _Info} <- Mounted, not lists:keymember(App, 1, Before)],
-    nova:set_env(apps, Kept ++ New),
-    ok.
 
 %%--------------------------------------------------------------------
 %% As compile/2, but starting from an empty routing table that replaces
@@ -283,20 +292,22 @@ compile_fresh(Apps, DispatchKey, Serving) ->
     %% From here until the table is stored nothing is merged into what is
     %% under the key: a compile that began before is refused when it comes
     %% to store, and one that begins now is refused at once.
-    Building = {building, make_ref()},
+    Building = {building, self(), make_ref()},
     StorageBackend:put(generation_key(DispatchKey), Building),
     StorageBackend:put(serving_key(DispatchKey), Serving),
-    Empty = #{routes => nova_routing_trie:new(#{strict => UseStrict}), apps => [], bound => [], mounted => []},
+    Empty = #{routes => nova_routing_trie:new(#{strict => UseStrict}), apps => [], bound => []},
     try compile(Apps, Empty, with_serving(#{dispatch_key => DispatchKey})) of
         Table = #{routes := Dispatch} ->
+            %% Outside of what is caught below: a table that is refused
+            %% here was replaced by another build, whose mark it is.
             ok = commit(DispatchKey, Table, Building),
-            StorageBackend:put(generation_key(DispatchKey), make_ref()),
+            ok = built(DispatchKey, Building),
             Dispatch
     catch
         Class:Reason:Stacktrace ->
             %% The table before this one is still under the key, and is
             %% not left as one that is being built for ever.
-            StorageBackend:put(generation_key(DispatchKey), make_ref()),
+            ok = built(DispatchKey, Building),
             erlang:raise(Class, Reason, Stacktrace)
     end.
 
@@ -559,6 +570,7 @@ remove_application(Application) ->
 -spec remove_application(Application :: atom(), DispatchKey :: dispatch_key()) -> ok.
 remove_application(Application, DispatchKey) when is_atom(Application) ->
     StorageBackend = storage_backend(),
+    ok = moved(DispatchKey),
     Dispatch = StorageBackend:get(DispatchKey),
     {ok, Dispatch0} =
         nova_routing_trie:foldl(Dispatch,
@@ -571,7 +583,6 @@ remove_application(Application, DispatchKey) when is_atom(Application) ->
     StorageBackend:put(bound_key(DispatchKey),
                        [Group || {_Status, App, _Prefix, _Names} = Group <- bound_groups(DispatchKey),
                                  App =/= Application]),
-    nova:set_env(apps, lists:keydelete(Application, 1, mounted_apps())),
     ok.
 
 %% Both handler kinds carry the owning application, and dropping the one of
@@ -793,7 +804,7 @@ listener_names([_ | _] = Names, App) ->
 listener_names(Other, App) ->
     throw({error, {invalid_route_listener, App, Other}}).
 
-compile_group(RouteInfo, Table = #{routes := Dispatch, mounted := Mounted}, Options) ->
+compile_group(RouteInfo, Table = #{routes := Dispatch}, Options) ->
     App = maps:get(app, Options),
     RouterFile = maps:get(router_file, Options),
 
@@ -826,10 +837,8 @@ compile_group(RouteInfo, Table = #{routes := Dispatch, mounted := Mounted}, Opti
                                        insert_opts => maps:get(insert_opts, Options, #{})},
                                 Value, Dispatch),
 
-    %% This app info goes to nova-env with the table. The applications the
-    %% group lists are behind its security as well.
-    compile(SubApps, Table#{routes := Dispatch1,
-                            mounted := lists:keystore(App, 1, Mounted, {App, #{prefix => Prefix}})},
+    %% The applications the group lists are behind its security as well.
+    compile(SubApps, Table#{routes := Dispatch1},
             Options#{value => Value, prefix => Prefix, secure => false,
                      inherited_secure => secures_in_force(Options) ++
                          [Security || security := Security <- RouteInfo, Security =/= false]}).
@@ -1014,12 +1023,6 @@ status_page_request(StatusCode, Data, Req) ->
 insert_opts(T) ->
     maps:get(insert_opts, T, #{}).
 
--spec mounted_apps() -> [{atom(), map()}].
-mounted_apps() ->
-    case nova:get_env(apps, []) of
-        Apps when is_list(Apps) ->
-            [{App, Info} || {App, Info} <- Apps, is_atom(App), is_map(Info)]
-    end.
 
 %% The route template rides at the head of the compiled plugin list.
 %% execute/2 takes it off again before the list reaches the Req.

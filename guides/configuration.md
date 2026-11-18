@@ -79,8 +79,8 @@ Following parameters should be defined under the `nova`-key in your *sys.config*
 | `plugins_before_security` | Plugin modules whose `pre_request/4` runs ahead of the security callback, as it did up to 0.18, for route groups that do not set the key themselves. `all`, or a list of modules that export `pre_request/4`. See [Plugins](plugins.md#running-a-plugin-ahead-of-the-security-callback). *Checked at boot.* | `all \| [module()]` | `[]` |
 | `multipart_spool` | Bounds on the upload files spooled at one time by `nova_multipart_file_handler`: `max_files` and `max_bytes`, each an integer or `infinity`. A part past a bound gets a `503`. See the [Plugins](plugins.md#nova-multipart) guide. | `map()` | `#{max_files => infinity, max_bytes => 8000000000}` |
 | `telemetry_request_fields` | Request fields to add to the controller telemetry metadata. `path` (the raw request path) and `peer` (the client's address) are the only ones accepted and are left out by default. See the [Telemetry](telemetry.md) guide. | `[path \| peer]` | `[]` |
-| `shutdown_delay` | Milliseconds to wait before suspending the listener during shutdown. Useful for letting load balancers drain traffic. See the [Graceful shutdown](graceful-shutdown.md) guide. | `integer()` | `0` |
-| `shutdown_drain_timeout` | Maximum milliseconds to wait for active connections to finish during shutdown, from `0` to `4294967295`. Anything else stops the boot. It is read as the node stops: a value set while the node runs applies, and one that cannot be used is logged and the one from boot is used. See the [Graceful shutdown](graceful-shutdown.md) guide. | `non_neg_integer()` | `15000` |
+| `shutdown_delay` | Milliseconds to wait before suspending the listener during shutdown, from `0` to `4294967295`. Useful for letting load balancers drain traffic. See the [Graceful shutdown](graceful-shutdown.md) guide. *Checked at boot, read as the node stops.* | `non_neg_integer()` | `0` |
+| `shutdown_drain_timeout` | Maximum milliseconds to wait for active connections to finish during shutdown, from `0` to `4294967295`. See the [Graceful shutdown](graceful-shutdown.md) guide. *Checked at boot, read as the node stops.* | `non_neg_integer()` | `15000` |
 
 ### Where Nova reads a setting
 
@@ -96,6 +96,8 @@ The other keys in the table above are only read from `nova`.
 ### Settings checked at boot
 
 The rows marked *Checked at boot* are read once, when Nova starts, and from the `nova` environment only. The same key in the environment of the bootstrap application is not read.
+
+`shutdown_delay` and `shutdown_drain_timeout` are checked when Nova starts as well, and a value that cannot be used stops the boot. They are read again as the node stops, so a value that is set while the node runs applies. One that cannot be used by then is logged as a warning, and the value from the boot is used.
 
 ```erlang
 {nova, [
@@ -249,8 +251,6 @@ These parameters are set in the environment of your own application, not under `
 | `watchers` | Watchers are external programs that will run together with Nova, in every environment. Each one is a tuple `{Command}`, `{Command, Arguments}`, `{Command, Options}`, `{App, Command, Options}` or `{App, Command, Arguments, Options}` (Like `[{my_app, "npm", ["run", "watch"], #{workdir => "priv/assets/js/my-app"}}]`). See the [Watchers](watchers.md) guide. | `[{string()}] | [{string(), [string()]}] | [{string(), map()}] | [{atom(), string(), map()}] | [{atom(), string(), [string()], map()}]` |
 | `router_module` | Module that contains the `routes/1` callback. Defaults to the application name followed by `_router`, such as `my_app_router` | `atom()` |
 | `nova_apps` | Other Nova applications to serve from the same listener, each an application name or `{Name, Options}`. See [Multiple applications](multi-app.md) | `[atom() \| {atom(), map()}]` |
-
-Nova writes a key `apps` to the environment of the bootstrap application for its own use. Do not set it.
 
 
 ### Configure json_lib

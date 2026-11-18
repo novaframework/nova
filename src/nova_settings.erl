@@ -5,20 +5,24 @@
 %%% starts. One that cannot be used stops the boot, and what is read
 %%% afterwards is the value that was checked, so no request meets a setting
 %%% nobody has looked at. They are read from `nova` alone, whichever
-%%% application is the bootstrap one.
+%%% application is the bootstrap one. The two that say how the node stops
+%%% are read again when it does, since they are of use to change on a node
+%%% that runs: see `current/1`.
 
 -export([validate/0, value/1, current/1, checked/2, expected/1, removed/0, removed_notice/1]).
 
 -include_lib("kernel/include/logger.hrl").
 
 -type key() :: trusted_origins | csrf_token | max_sessions | non_canonical_paths | plugins_before_security |
-               secret_key_base | server_grace | shutdown_drain_timeout.
+               secret_key_base | server_grace | shutdown_delay | shutdown_drain_timeout.
+-type live_key() :: shutdown_delay | shutdown_drain_timeout.
 -export_type([key/0]).
 
 -define(MIN_SECRET_BYTES, 32).
 -define(MIN_DISTINCT_BYTES, 8).
 -define(DEFAULT_MAX_SESSIONS, 1000000).
 -define(DEFAULT_SERVER_GRACE, 10000).
+-define(DEFAULT_SHUTDOWN_DELAY, 0).
 -define(DEFAULT_SHUTDOWN_DRAIN_TIMEOUT, 15000).
 -define(MAX_TIMER, 16#FFFFFFFF).
 
@@ -56,13 +60,13 @@ value(Key) ->
     end.
 
 -doc """
-The value of a setting that is read when it is used, as
-`shutdown_drain_timeout` is when the node stops, so one that is set while
-the node runs applies. A value that cannot be used is logged, and the one
-that was checked when Nova started is used in its place.
+The value of a setting that is read when the node stops, so one that is
+set while the node runs applies. A value that cannot be used is logged,
+and the one that was checked when Nova started is used in its place. No
+other setting is read this way.
 """.
--spec current(Key :: key()) -> term().
-current(Key) ->
+-spec current(Key :: live_key()) -> term().
+current(Key) when Key =:= shutdown_delay; Key =:= shutdown_drain_timeout ->
     case checked(Key, application:get_env(nova, Key, default(Key))) of
         {ok, Value} ->
             Value;
@@ -103,7 +107,8 @@ checked(max_sessions, Value) when Value =:= infinity; is_integer(Value), Value >
     {ok, Value};
 checked(server_grace, Value) when Value =:= infinity; is_integer(Value), Value >= 0, Value =< ?MAX_TIMER ->
     {ok, Value};
-checked(shutdown_drain_timeout, Value) when is_integer(Value), Value >= 0, Value =< ?MAX_TIMER ->
+checked(Key, Value) when Key =:= shutdown_delay orelse Key =:= shutdown_drain_timeout,
+                         is_integer(Value), Value >= 0, Value =< ?MAX_TIMER ->
     {ok, Value};
 checked(plugins_before_security, all) ->
     {ok, all};
@@ -124,6 +129,8 @@ expected(secret_key_base) ->
     ~"secret_key_base must be a binary of at least 32 bytes out of a random source, or a list of such. A value that repeats a few bytes, an example out of the documentation or a ${VARIABLE} that was not filled in is refused. base64:encode(crypto:strong_rand_bytes(48)) in an Erlang shell, or openssl rand -base64 48, makes one";
 expected(max_sessions) -> ~"max_sessions must be infinity or an integer above 0";
 expected(server_grace) -> ~"server_grace must be infinity or a number of milliseconds from 0 to 4294967295";
+expected(shutdown_delay) ->
+    ~"shutdown_delay must be a number of milliseconds from 0 to 4294967295";
 expected(shutdown_drain_timeout) ->
     ~"shutdown_drain_timeout must be a number of milliseconds from 0 to 4294967295";
 expected(plugins_before_security) ->
@@ -164,7 +171,7 @@ no_removed_setting([{Key, Replacement} | Rest]) ->
 -spec keys() -> [key()].
 keys() ->
     [non_canonical_paths, trusted_origins, csrf_token, secret_key_base, max_sessions, plugins_before_security,
-     server_grace, shutdown_drain_timeout].
+     server_grace, shutdown_delay, shutdown_drain_timeout].
 
 -spec default(key()) -> term().
 default(non_canonical_paths) -> reject;
@@ -173,6 +180,7 @@ default(csrf_token) -> undefined;
 default(secret_key_base) -> undefined;
 default(max_sessions) -> ?DEFAULT_MAX_SESSIONS;
 default(server_grace) -> ?DEFAULT_SERVER_GRACE;
+default(shutdown_delay) -> ?DEFAULT_SHUTDOWN_DELAY;
 default(shutdown_drain_timeout) -> ?DEFAULT_SHUTDOWN_DRAIN_TIMEOUT;
 default(plugins_before_security) -> [].
 
