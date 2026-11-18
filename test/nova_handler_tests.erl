@@ -227,15 +227,15 @@ terminate_called_with_three_arguments_test_() ->
 
 module_handler_terminate_gets_its_state_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        meck:new(test_cowboy_terminate, [non_strict, no_link]),
+        meck:new(test_module_terminate, [non_strict, no_link]),
         Self = self(),
-        meck:expect(test_cowboy_terminate, init, fun(Req, _Args) -> {ok, Req, handler_state} end),
-        meck:expect(test_cowboy_terminate, terminate,
+        meck:expect(test_module_terminate, init, fun(Req, _Args) -> {ok, Req, handler_state} end),
+        meck:expect(test_module_terminate, terminate,
                     fun(Reason, _Req, State) -> Self ! {terminated, Reason, State}, ok end),
-        Env = #{handler_module => test_cowboy_terminate, arguments => #{}, app => test_app},
+        Env = #{handler_module => test_module_terminate, arguments => #{}, app => test_app},
         {ok, _Req1, _Env1} = nova_handler:execute(nova_test_helper:mock_req(~"GET", ~"/"), Env),
         ?assertEqual({terminated, normal, handler_state}, receive {terminated, _, _} = M -> M after 1000 -> none end),
-        meck:unload(test_cowboy_terminate)
+        meck:unload(test_module_terminate)
     end}.
 
 %% A non-tuple return used to raise badarg in element/2 and never reach the

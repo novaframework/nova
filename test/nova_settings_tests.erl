@@ -44,6 +44,7 @@ values_that_can_be_used_test_() ->
                                {max_sessions, infinity, infinity},
                                {server_grace, 0, 0},
                                {server_grace, 60000, 60000},
+                               {server_grace, 16#FFFFFFFF, 16#FFFFFFFF},
                                {server_grace, infinity, infinity},
                                {plugins_before_security, all, all},
                                {plugins_before_security, [nova_request_plugin], [nova_request_plugin]}]].
@@ -67,6 +68,7 @@ values_that_stop_the_boot_test_() ->
                          {max_sessions, many},
                          {max_sessions, 1.5},
                          {server_grace, -1},
+                         {server_grace, 16#FFFFFFFF + 1},
                          {server_grace, "10s"},
                          {server_grace, 1.5},
                          {server_grace, never},

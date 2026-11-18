@@ -127,12 +127,14 @@ handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData, plugins
                                     {Cmds, maps:remove(hibernate, State4), hibernate}
                             end;
                         {stop, _} = Stopped ->
-                            ?LOG_WARNING(#{msg => ~"Got stop signal", signal => nova_redact:term(Stopped)}),
+                            ?LOG_WARNING(#{msg => ~"A plugin stopped the connection", phase => post_ws_request,
+                                           module => Mod, function => Func}),
                             Stopped
                     end
             end;
         {stop, _} = Stop ->
-            ?LOG_WARNING(#{msg => ~"Got stop signal", signal => nova_redact:term(Stop)}),
+            ?LOG_WARNING(#{msg => ~"A plugin stopped the connection", phase => pre_ws_request,
+                           module => Mod, function => Func}),
             Stop
     end;
 handle_ws(Mod, Func, Args, State) ->

@@ -23,7 +23,7 @@ run(RR) ->
     Metadata = logger:get_process_metadata(),
     ok = nova_roadrunner:start_request(),
     try
-        last(nova_pipeline:execute(request(RR, Compress), Env))
+        final_req(nova_pipeline:execute(request(RR, Compress), Env))
     catch
         %% Roadrunner logs what escapes and answers 500. What is logged
         %% may hold the request, so it leaves as Nova logs a crash.
@@ -34,8 +34,8 @@ run(RR) ->
         ok = restore_metadata(Metadata)
     end.
 
-last({ok, #{roadrunner_req := Last}, _Env}) -> Last;
-last({stop, #{roadrunner_req := Last}}) -> Last.
+final_req({ok, #{roadrunner_req := Last}, _Env}) -> Last;
+final_req({stop, #{roadrunner_req := Last}}) -> Last.
 
 %% The requests of a connection share its process. Roadrunner replaces the
 %% logger metadata as a request starts, and what the request added, a

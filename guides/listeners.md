@@ -98,7 +98,7 @@ route.
 | `{listener_protocols_need_tls, Name, Protocols}` | The server serves these versions with `tls` alone, as every server does `http3` |
 | `{listener_without_tls_serves_one_protocol, Name, Protocols}` | Roadrunner serves `http1` or `http2` on a listener without `tls`, not both |
 | `{listener_not_started, Reason}` | The server could not start the listener, for instance because the port is taken |
-| `{route_group_not_served, App, Prefix, Listener}` | A route group names a listener that is not configured, or one that does not serve its application |
+| `{route_group_not_served, App, Prefix, Listener}` | A route group of the configuration names a listener that is not there, or one that does not serve its application, once the applications that were added before the server package started are served as well |
 | `{route_http_versions_not_served, Path, Versions, Listener}` | A route asks for HTTP versions its listener serves none of |
 | `{invalid_route_listener, App, Value}` | `listener` in a route group is not a name or a list of names |
 | `{invalid_http_versions, Path, Versions}` | `http_versions` is not a list of `http1`, `http2` and `http3` |
@@ -150,24 +150,46 @@ A library can call `nova_sup:add_application/2` from its `start/2` without
 depending on a server package. When the server package has not started yet,
 the application is added once the listeners of the configuration are up, and
 the answer is where it will be served, and
-`nova_sup:get_started_applications/0` lists it once it is. If it cannot be
-served there, the node does not start:
-`{application_not_added, App, Reason}`. An application
-the configuration lists on that listener as well is served once.
+`nova_sup:get_started_applications/0` lists it once it is. The answer is the
+one running listeners give: a listener that would be started for the
+application cannot take a name that is in use. If it cannot be served there,
+the node does not start: `{application_not_added, App, Reason}`. That goes
+for a route group of its that names a listener which does not serve it, as
+it does for the applications of the configuration. An application the
+configuration lists on that listener as well is served once.
 
 Nova remembers the applications that were added, until
 `nova_sup:remove_application/1` takes one out. When the application of the
 server package is stopped and started again they are added again, after the
-listeners of the configuration. A listener that was started for an
-application keeps its name and its settings while another application is
-served on it, also once the one it was started for is removed, and stops
-with the last of them.
+listeners of the configuration. Applications are added and removed one at a
+time, whichever processes ask, and a router that adds one while its own
+routes are compiled is answered `{error, adding_an_application}`.
 
-A route group of an application added at runtime that names a listener
-which is not started, or which does not serve the application, is not
-served there. Nova logs a warning with the application, the prefix and the
-listener, where a boot would have stopped, and logs it again when the
-server package is started again.
+An application is added again to the listener it was served on. One that
+was added by `ip` and `port` to a listener that was there already stays
+with that listener: when the configuration has since moved or dropped it,
+no other is started on the address with the settings of the application,
+and the server package does not start: `{application_not_added, App,
+{no_such_listener, Name}}`. Remove the application, or add it where it
+should be served now.
+
+A listener that was started for an application keeps its name and its
+settings while another application is served on it, also once the one it
+was started for is removed, and stops with the last of them. Until then the
+name is in use: adding the removed application again on another port
+answers `{error, {listener_exists, App}}`, and on the port of the listener
+it is added to it. A listener of the configuration that is given the name
+meanwhile keeps the server package from starting, with
+`{application_not_added, App, {listener_exists, Name}}` for the application
+that was on the kept one.
+
+A route group of an application added to running listeners that names a
+listener which is not started, or which does not serve the application, is
+not served there. Nova logs a warning with the application, the prefix and
+the listener, where a boot would have stopped, and logs it again when the
+server package is started again. While the listeners are draining, as the
+server package stops, an application is not added to them: it is kept for
+the next start, as one added before the first.
 
 ## `cowboy_configuration`
 

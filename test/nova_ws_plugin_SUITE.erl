@@ -82,7 +82,9 @@ post_plugin_stop(Config) ->
                         end),
     ?assertEqual([closed], Texts),
     ?assertEqual([], [Event || {error, _} = Event <- Events]),
-    ?assertMatch([#{signal := _}], [Report || {warning, {report, Report = #{msg := ~"Got stop signal"}}} <- Events]).
+    ?assertEqual([#{msg => ~"A plugin stopped the connection", phase => post_ws_request,
+                    module => nova_ws_plugin_pages, function => websocket_handle}],
+                 [Report || {warning, {report, Report}} <- Events]).
 
 route_without_plugins_is_unaffected(Config) ->
     ?assertEqual([~"no plugin ran"],

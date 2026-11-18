@@ -13,7 +13,9 @@
          http_versions/1,
          crashed_stream/1,
          escaped_crash/1,
+         escaped_return/1,
          ws_crash/1,
+         ws_bad_return/1,
          start_failure/1,
          unended_response/1
         ]).
@@ -32,7 +34,9 @@ all() ->
      http_versions,
      crashed_stream,
      escaped_crash,
+     escaped_return,
      ws_crash,
+     ws_bad_return,
      start_failure,
      unended_response
     ].
@@ -163,6 +167,28 @@ escaped_crash(_Config) ->
     ?assertNotEqual(nomatch, binary:match(Logged, ~"badmatch")),
     ?assertEqual(nomatch, binary:match(Logged, ~"hunter2")).
 
+%% As it is when the steps return what they may not.
+escaped_return(_Config) ->
+    Port = nova_test_listener:free_port(),
+    {ok, Port} = nova_test_listener:try_start(#{server => nova_roadrunner,
+                                                port => Port,
+                                                listeners => #{web => #{port => Port}},
+                                                host => [#{routes => [?WHERE]}]}),
+    ok = meck:new(nova_pipeline, [passthrough, no_link]),
+    try
+        ok = meck:expect(nova_pipeline, execute, fun(Req, _Env) -> {stop, maps:remove(roadrunner_req, Req)} end),
+        {{Status, _Body}, Events} = nova_test_log:collect(
+                                      fun() ->
+                                              nova_test_listener:get(Port, "/where", [{"cookie", "session=hunter2"}])
+                                      end),
+        Logged = iolist_to_binary(io_lib:format("~0p", [Events])),
+        ?assertEqual(500, Status),
+        ?assertNotEqual(nomatch, binary:match(Logged, ~"function_clause")),
+        ?assertEqual(nomatch, binary:match(Logged, ~"hunter2"))
+    after
+        meck:unload(nova_pipeline)
+    end.
+
 %% As is what a callback of a WebSocket raises: the state of the connection
 %% has the request of its upgrade in it.
 ws_crash(_Config) ->
@@ -176,6 +202,18 @@ ws_crash(_Config) ->
             ?assertEqual({badmatch, #{req => nova_redact:term(Req)}}, Reason),
             ?assertEqual(nomatch, binary:match(iolist_to_binary(io_lib:format("~0p", [{Reason, Stacktrace}])),
                                                ~"hunter2"))
+    end.
+
+%% And what a callback returns, when a handler may not return it.
+ws_bad_return(_Config) ->
+    Req = #{method => ~"GET", path => ~"/ws", headers => #{~"cookie" => ~"session=hunter2"}},
+    Session = #{handler => nova_test_crashes, state => #{req => Req}, req => Req},
+    try nova_roadrunner_ws:handle_info(not_commands, Session) of
+        Result -> error({not_raised, Result})
+    catch
+        error:Reason:Stacktrace ->
+            ?assertEqual(function_clause, Reason),
+            ?assertEqual(nomatch, binary:match(iolist_to_binary(io_lib:format("~0p", [Stacktrace])), ~"hunter2"))
     end.
 
 %% What Roadrunner's supervisor says of a listener that did not start has
@@ -196,7 +234,7 @@ unended_response(_Config) ->
     _ = put({nova_roadrunner, stream}, Send),
     ?assertEqual(ok, nova_roadrunner:end_request()),
     ?assertEqual(ok, nova_roadrunner:end_request()),
-    ?assertEqual([{sent, <<>>, fin}], sent()),
+    ?assertEqual([{sent, ~"", fin}], sent()),
     ?assertEqual(undefined, get({nova_roadrunner, stream})).
 
 sent() ->

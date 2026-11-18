@@ -234,8 +234,10 @@ What happens depends on whether the host and port are already bound:
 
 Starting an application that is already running returns
 `{error, {already_started, App}}`. A new listener is named after the
-application, so when a listener of the configuration has that name the
-answer is `{error, {listener_exists, App}}`.
+application, so when a listener has that name the answer is
+`{error, {listener_exists, App}}`. That is a listener of the configuration,
+or one that was started for the application before and still serves
+another: see [Servers and listeners](listeners.md#at-runtime).
 
 Before the server package has started there is no listener to add to. The
 application is then added once the listeners of the configuration are up,

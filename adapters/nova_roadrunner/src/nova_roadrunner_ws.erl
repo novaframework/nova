@@ -17,7 +17,7 @@ init(#{handler := Handler, state := State} = Session) ->
     %% function_exported/3 is false for a module that is not loaded yet.
     {module, Handler} = code:ensure_loaded(Handler),
     case erlang:function_exported(Handler, websocket_init, 1) of
-        true -> result(call(Handler, websocket_init, [State]), Session);
+        true -> answer(Handler, websocket_init, [State], Session);
         false -> {ok, Session}
     end.
 
@@ -32,7 +32,7 @@ handle_control(#{opcode := Opcode, payload := Payload}, Session) ->
 
 -spec handle_info(term(), session()) -> roadrunner_ws_handler:result().
 handle_info(Info, #{handler := Handler, state := State} = Session) ->
-    result(call(Handler, websocket_info, [Info, State]), Session).
+    answer(Handler, websocket_info, [Info, State], Session).
 
 %% The listener is draining: close as a server that is going away.
 -spec handle_drain(integer(), session()) -> roadrunner_ws_handler:result().
@@ -50,11 +50,21 @@ terminate(Reason, #{handler := Handler, state := State, req := Req}) ->
     end.
 
 handle(Frame, #{handler := Handler, state := State} = Session) ->
-    result(call(Handler, websocket_handle, [Frame, State]), Session).
+    answer(Handler, websocket_handle, [Frame, State], Session).
 
-%% Roadrunner logs what a callback raises, and the state of a connection
-%% has the request of its upgrade in it, so it is raised as Nova logs a
-%% crash.
+%% Roadrunner logs what a callback raises, and what it returns when that is
+%% nothing a handler may. The state of a connection has the request of its
+%% upgrade in it, and so has its session, so either is raised as Nova logs
+%% a crash.
+answer(Handler, Function, Arguments, Session) ->
+    Returned = call(Handler, Function, Arguments),
+    try
+        result(Returned, Session)
+    catch
+        Class:Reason:Stacktrace ->
+            erlang:raise(Class, nova_redact:term(Reason), nova_redact:stacktrace(Stacktrace))
+    end.
+
 call(Handler, Function, Arguments) ->
     try
         apply(Handler, Function, Arguments)
