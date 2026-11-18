@@ -599,7 +599,10 @@ again is the answer to the first. What a router got wrong is thrown, as
 router that adds routes to the table it is being compiled into, compiles
 into it or removes an application from it: `{error, {routing_table_in_use,
 DispatchKey}}` is thrown from that call, at boot and at runtime alike, and
-nothing is stored by it. The routes of a router are the ones it returns.
+nothing is stored by it. The routes of a router are the ones it returns. A
+router that has another process store into the table and waits for it is
+not told apart from any other process that stores: its own routes are
+answered `routing_table_changed`, and what that process stored stays.
 
 Routes added this way live in the routing table of the running listener. When
 Nova starts, each listener compiles its table from the routers again, so

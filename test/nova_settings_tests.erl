@@ -123,9 +123,11 @@ current_test_() ->
              application:unset_env(nova, shutdown_drain_timeout),
              ?assertEqual(15000, nova_settings:current(shutdown_drain_timeout))
      end,
-     ?_assertMatch({2000, _}, current(shutdown_delay, 1000, 2000)),
-     ?_assertMatch({1000, _}, current(shutdown_delay, 1000, infinity)),
-     ?_assertMatch({1000, _}, current(shutdown_delay, 1000, "2000"))].
+     ?_assertMatch({2000, []}, current(shutdown_delay, 1000, 2000)),
+     ?_assertMatch({1000, [{warning, {report, #{setting := shutdown_delay, value := infinity, used := 1000}}}]},
+                   current(shutdown_delay, 1000, infinity)),
+     ?_assertMatch({1000, [{warning, {report, #{setting := shutdown_delay, value := "2000", used := 1000}}}]},
+                   current(shutdown_delay, 1000, "2000"))].
 
 current(Key, Booted, Now) ->
     application:set_env(nova, Key, Booted),

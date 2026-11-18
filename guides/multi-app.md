@@ -266,6 +266,7 @@ routing table discarded, releasing the port. Other applications on the same
 listener are unaffected.
 
 Removing an application that was never started returns `{error, not_found}`.
+The other answers are with `nova_sup:remove_application/1`.
 
 ## Inspecting what is running
 

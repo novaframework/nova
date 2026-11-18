@@ -34,6 +34,10 @@ elsewhere(Store) ->
     after 5000 -> error(not_stored)
     end.
 
+%% A build that a failed test left waiting holds its table for ever.
+stopped(undefined) -> ok;
+stopped(Builder) -> exit(Builder, kill).
+
 group_callback(_Req) -> true.
 host_callback(_Req) -> true.
 page(_Req) -> {status, 200}.
@@ -263,12 +267,14 @@ stopped_build_test_() ->
                                           receive after infinity -> [] end
                                   end),
                  {Builder, Monitor} = spawn_monitor(fun() -> nova_router:compile_fresh([nova_test_sub_app], ?KEY) end),
+                 put(?FUNCTION_NAME, Builder),
                  receive building -> ok after 5000 -> error(not_building) end,
                  ?assertError({routing_table_replaced, ?KEY}, nova_router:compile([nova_test_sub_app], ?KEY)),
                  exit(Builder, kill),
                  receive {'DOWN', Monitor, process, Builder, killed} -> ok after 5000 -> error(not_stopped) end,
                  _ = nova_router:compile([nova_test_sub_app], ?KEY)
              after
+                 stopped(erase(?FUNCTION_NAME)),
                  meck:unload(nova_test_mounted_router)
              end,
              ?assertEqual([{nova_test_sub_app, "/"}], nova_router:compiled_apps(?KEY))
@@ -305,6 +311,7 @@ dead_build_test_() ->
                                           receive after infinity -> [] end
                                   end),
                  {Builder, Monitor} = spawn_monitor(fun() -> nova_router:compile_fresh([nova_test_sub_app], ?KEY) end),
+                 put(builder, Builder),
                  receive building -> ok after 5000 -> error(not_building) end,
                  exit(Builder, kill),
                  receive {'DOWN', Monitor, process, Builder, killed} -> ok after 5000 -> error(not_stopped) end,
@@ -312,6 +319,7 @@ dead_build_test_() ->
                  ?assertEqual([ok, ok], [Found(Path) || Path <- [~"/other/", ~"/g/admin/"]])
              after
                  erase(?FUNCTION_NAME),
+                 stopped(erase(builder)),
                  meck:unload(nova_test_mounted_router)
              end
      end}.
@@ -427,7 +435,8 @@ racing_merges_test_() ->
                             try nova_router:add_routes(nova_test_app, Open#{prefix => Prefix}, ?KEY) of
                                 ok -> {added, Prefix}
                             catch
-                                error:{routing_table_changed, ?KEY} -> refused
+                                error:{routing_table_changed, ?KEY} -> refused;
+                                Class:Reason -> {Class, Reason}
                             end
                     end,
               Racers = [spawn(fun() -> receive go -> Test ! {raced, self(), Add("/r" ++ integer_to_list(I))} end end)
@@ -439,6 +448,7 @@ racing_merges_test_() ->
                               element(1, nova_routing_trie:find('_', list_to_binary(Prefix ++ "/"), ~"GET",
                                                                 persistent_term:get(?KEY)))
                       end,
+              ?assertEqual([], [Result || Result <- Results, Result =/= refused, element(1, Result) =/= added]),
               ?assertNotEqual([], [Prefix || {added, Prefix} <- Results]),
               ?assertEqual([], [Prefix || {added, Prefix} <- Results, Found(Prefix) =/= ok])
       end}}.

@@ -40,6 +40,8 @@
          table_replaced/1,
          routes_changed/1,
          own_table/1,
+         own_table_boot/1,
+         built_elsewhere/1,
          removed_while_built/1,
          outlived_on_listener/1,
          outlived_on_port/1,
@@ -116,6 +118,8 @@ all() ->
      table_replaced,
      routes_changed,
      own_table,
+     own_table_boot,
+     built_elsewhere,
      removed_while_built,
      outlived_on_listener,
      outlived_on_port,
@@ -757,9 +761,6 @@ listener_replaced(_Config) ->
         Server:stop_listener(web)
     end.
 
-%% A listener whose routing table is replaced while the router runs is not
-%% the one the application was to be added to, and the new table does not
-%% list it.
 %% Routes that are added to a listener as the router of an application
 %% that is added to it runs are no reason not to add the application. It
 %% is compiled again into the table as it is by then, and both are served.
@@ -811,8 +812,58 @@ routes_changed(_Config) ->
 elsewhere(Store) ->
     {Storing, Monitor} = spawn_monitor(fun() -> exit({stored, Store()}) end),
     receive
-        {'DOWN', Monitor, process, Storing, {stored, Stored}} -> Stored
+        {'DOWN', Monitor, process, Storing, {stored, Stored}} -> Stored;
+        {'DOWN', Monitor, process, Storing, NotStored} -> error(NotStored)
     after 5000 -> error(not_stored)
+    end.
+
+%% The same as a listener starts: the node does not start.
+own_table_boot(_Config) ->
+    ok = meck:new(nova_test_mounted_router, [passthrough, no_link]),
+    try
+        ok = meck:expect(nova_test_mounted_router, routes,
+                         fun(Env) ->
+                                 ok = nova_router:add_routes(nova_test_app, #{prefix => "/side", routes => [?WHERE]}),
+                                 meck:passthrough([Env])
+                         end),
+        ?assertMatch({error, {_Server, {{shutdown, {failed_to_start_child, nova_listener,
+                                                    {routing_table_in_use, nova_dispatch}}},
+                                        _Start}}},
+                     nova_test_listener:try_start(#{mounted => [#{prefix => "/sub", routes => [?WHERE]}]})),
+        ?assertEqual([], nova_sup:listeners())
+    after
+        meck:unload(nova_test_mounted_router)
+    end.
+
+%% A table that code outside Nova is building is not taken away by a
+%% listener that would be started on it: the one that builds it stores it.
+built_elsewhere(_Config) ->
+    Port = nova_test_listener:free_port(),
+    Other = nova_test_listener:free_port(),
+    {ok, Port} = nova_test_listener:try_start(#{port => Port,
+                                                listeners => #{web => #{port => Port}},
+                                                host => [#{routes => [?WHERE]}],
+                                                mounted => [#{prefix => "/sub", routes => [?WHERE]}],
+                                                nova_apps => []}),
+    Key = {nova_dispatch, nova_test_sub_app},
+    Self = self(),
+    ok = meck:new(nova_test_mounted_router, [passthrough, no_link]),
+    try
+        ok = meck:expect(nova_test_mounted_router, routes,
+                         fun(Env) ->
+                                 Self ! building,
+                                 receive go -> meck:passthrough([Env]) after 5000 -> error(not_let_go) end
+                         end),
+        {Builder, Monitor} = spawn_monitor(fun() -> nova_router:compile_fresh([nova_test_sub_app], Key) end),
+        receive building -> ok after 5000 -> error(not_building) end,
+        ?assertError({routing_table_replaced, Key}, nova_sup:add_application(nova_test_sub_app, #{port => Other})),
+        ?assertEqual([web], nova_sup:listeners()),
+        Builder ! go,
+        receive {'DOWN', Monitor, process, Builder, Built} -> ?assertEqual(normal, Built) after 5000 -> error(not_built) end,
+        ?assertEqual([nova_test_sub_app], [App || {App, _Prefix} <- nova_router:compiled_apps(Key)])
+    after
+        meck:unload(nova_test_mounted_router),
+        nova_router:delete_dispatch(Key)
     end.
 
 %% A router that adds routes to the listener its application is added to
@@ -884,8 +935,8 @@ removed_while_built(_Config) ->
 
 %% The router of an application can trap exits. The process it runs in
 %% then outlives the one that keeps the added applications, whose call was
-%% answered that the application was not added. What it goes on to add is
-%% kept by nothing, so it is not added: not to a listener that is there,
+%% answered that the application was not added. The one that takes its
+%% place stops it, so it adds nothing: not to a listener that is there,
 %% nor on one of its own.
 outlived_on_listener(_Config) ->
     {Port, _Other} = outlived(#{listener => web}),
@@ -939,6 +990,9 @@ outlived(Where) ->
     ?assertEqual([nova_test_app], [App || #{app := App} <- nova_sup:get_started_applications()]),
     {Port, Other}.
 
+%% A listener whose routing table is replaced while the router runs is not
+%% the one the application was to be added to, and the new table does not
+%% list it.
 table_replaced(_Config) ->
     Port = nova_test_listener:free_port(),
     {ok, Port} = nova_test_listener:try_start(#{port => Port,
@@ -1415,8 +1469,9 @@ queued_add(_Config) ->
     end.
 
 %% Any process of the node can send to the one that keeps the added
-%% applications. A timeout that is none sets no timer there, and the
-%% application that is being added is added.
+%% applications. A time no timer takes, below none or above the longest,
+%% is not taken for a drain, and the application that is being added is
+%% added.
 forged_drain(_Config) ->
     Port = nova_test_listener:free_port(),
     {ok, Port} = nova_test_listener:try_start(#{port => Port,
@@ -1437,6 +1492,7 @@ forged_drain(_Config) ->
         _ = spawn(fun() -> Self ! {added, catch nova_sup:add_application(nova_test_sub_app, #{listener => web})} end),
         Worker = receive {compiling, Compiling} -> Compiling after 5000 -> error(not_compiling) end,
         Registry ! {draining, alias(), -1},
+        Registry ! {draining, alias(), 1 bsl 60},
         Worker ! go,
         ?assertEqual({ok, nova_test_sub_app, {0, 0, 0, 0}, Port},
                      receive {added, Added} -> Added after 5000 -> none end),

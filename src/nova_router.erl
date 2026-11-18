@@ -207,14 +207,17 @@ compile(Apps, DispatchKey) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
     Generation = generation(DispatchKey),
     Stored = stored(DispatchKey, nova_routing_trie:new(#{strict => UseStrict})),
-    Compiling = compiling(DispatchKey),
-    Table = #{routes := Dispatch} = try
-                                        compile(Apps, Stored, with_serving(#{dispatch_key => DispatchKey}))
-                                    after
-                                        compiled(Compiling)
-                                    end,
+    Table = #{routes := Dispatch} = compile_into(DispatchKey, Apps, Stored),
     ok = commit(DispatchKey, Table, Generation),
     Dispatch.
+
+compile_into(DispatchKey, Apps, Table) ->
+    Before = compiling(DispatchKey),
+    try
+        compile(Apps, Table, with_serving(#{dispatch_key => DispatchKey}))
+    after
+        compiled(Before)
+    end.
 
 %% A router runs in the process that compiles its routes into a table.
 %% What it stored into that table itself would be there while its own
@@ -302,8 +305,9 @@ marked(DispatchKey, Building) ->
         unlock(Lock)
     end.
 
-%% A merge that began before this build is refused: routes can have been
-%% stored into the table since it read it.
+%% The listener this build was for is written under the key by now, and a
+%% merge that began before it compiled for the listener before that one:
+%% it is refused.
 not_built(DispatchKey, Building, Before) ->
     StorageBackend = storage_backend(),
     Lock = lock(DispatchKey),
@@ -387,8 +391,7 @@ compile_fresh(Apps, DispatchKey, Serving) ->
     Before = marked(DispatchKey, Building),
     StorageBackend:put(serving_key(DispatchKey), Serving),
     Empty = #{routes => nova_routing_trie:new(#{strict => UseStrict}), apps => [], bound => []},
-    Compiling = compiling(DispatchKey),
-    try compile(Apps, Empty, with_serving(#{dispatch_key => DispatchKey})) of
+    try compile_into(DispatchKey, Apps, Empty) of
         Table = #{routes := Dispatch} ->
             ok = commit(DispatchKey, Table, Building),
             Dispatch
@@ -398,8 +401,6 @@ compile_fresh(Apps, DispatchKey, Serving) ->
             %% not left as one that is being built for ever.
             ok = not_built(DispatchKey, Building, Before),
             erlang:raise(Class, Reason, Stacktrace)
-    after
-        compiled(Compiling)
     end.
 
 %% The route groups of a table that name the listeners they are for, each
@@ -599,20 +600,20 @@ canonical_path(Path) when is_binary(Path) ->
     end.
 
 %%--------------------------------------------------------------------
--doc "Works the same way as add_routes/2 but with the exception that you don't need to provide the routes explicitly. When using this it's expected that there's a routing-module associated with the application. Eg. for the application 'test' the corresponding router would then be 'test_router'. Read more about routers in the official documentation.".
+-doc "Works the same way as add_routes/2 but with the exception that you don't need to provide the routes explicitly. When using this it's expected that there's a routing-module associated with the application. Eg. for the application 'test' the corresponding router would then be 'test_router'. Read more about routers in the official documentation. Raises and throws as add_routes/3 does.".
 -spec add_routes(App :: atom()) -> ok.
 add_routes(App) ->
     Env = nova:get_environment(),
     add_routes(App, get_routes(router_module(App), Env)).
 
 %%--------------------------------------------------------------------
--doc "Add routes to the dispatch-table for the given app. The routes can be either a list of maps or a map. It use the same structure as the routes-callback in the router-module. Throws `{error, {misplaced_security, App, Key, Path}}` for routes with a security callback under a key that is not read: `secure` on a route group, or `security` or `secure` in the options of a route.".
+-doc "Add routes to the dispatch-table for the given app. The routes can be either a list of maps or a map. It use the same structure as the routes-callback in the router-module. Throws `{error, {misplaced_security, App, Key, Path}}` for routes with a security callback under a key that is not read: `secure` on a route group, or `security` or `secure` in the options of a route. Raises and throws as add_routes/3 does when the table is stored into or built meanwhile, or is the one the calling router is compiled into.".
 -spec add_routes(App :: atom(), Routes :: [map() | [map()]] | map()) -> ok.
 add_routes(App, Routes) ->
     add_routes(App, Routes, ?NOVA_DISPATCH).
 
 %%--------------------------------------------------------------------
--doc "As add_routes/2, but against the routing table addressed by `DispatchKey`. Raises the error `{routing_table_replaced, DispatchKey}` as `compile/2` does, when the table was replaced meanwhile. When routes were stored into the table meanwhile, these are compiled again into the table as it is by then, a few times, and then the error `{routing_table_changed, DispatchKey}` is raised. Of a list of route lists, those that were stored before that stay. Throws `{error, {routing_table_in_use, DispatchKey}}` in a router that is compiled into the table.".
+-doc "As add_routes/2, but against the routing table addressed by `DispatchKey`. Raises the error `{routing_table_replaced, DispatchKey}` as `compile/2` does, when the listener of the table was started again meanwhile, or is being started. When routes were stored into the table meanwhile, these are compiled again into the table as it is by then, a few times, and then the error `{routing_table_changed, DispatchKey}` is raised. Of a list of route lists, those that were stored before that stay. Throws `{error, {routing_table_in_use, DispatchKey}}` in a router that is compiled into the table.".
 -spec add_routes(App :: atom(), Routes :: [map() | [map()]] | map(), DispatchKey :: dispatch_key()) -> ok.
 add_routes(_App, [], _DispatchKey) ->
     ok;
@@ -632,6 +633,14 @@ add_routes(App, Routes, _DispatchKey) ->
 insert_route_maps(App, Routes, DispatchKey) ->
     insert_route_maps(App, Routes, DispatchKey, ?ADD_TRIES).
 
+add_into(DispatchKey, Routes, Table, Options) ->
+    Before = compiling(DispatchKey),
+    try
+        compile_paths(Routes, Table, Options)
+    after
+        compiled(Before)
+    end.
+
 insert_route_maps(App, Routes, DispatchKey, Tries) ->
     ok = not_compiling(DispatchKey),
     StorageBackend = storage_backend(),
@@ -643,12 +652,7 @@ insert_route_maps(App, Routes, DispatchKey, Tries) ->
     Options = with_serving(#{app => App, router_file => undefined, dispatch_key => DispatchKey,
                              insert_opts => #{on_duplicate => overwrite}, runtime => true}),
 
-    Compiling = compiling(DispatchKey),
-    {ok, Table = #{apps := CompiledApps}, _Options0} = try
-                                                          compile_paths(Routes, Stored, Options)
-                                                      after
-                                                          compiled(Compiling)
-                                                      end,
+    {ok, Table = #{apps := CompiledApps}, _Options0} = add_into(DispatchKey, Routes, Stored, Options),
 
     CompiledApps0 =
         case lists:keyfind(App, 1, CompiledApps) of
@@ -666,7 +670,7 @@ insert_route_maps(App, Routes, DispatchKey, Tries) ->
 
 
 %%--------------------------------------------------------------------
--doc "Remove all routes associated with the given application.".
+-doc "Remove all routes associated with the given application. Raises and throws as remove_application/2 does.".
 -spec remove_application(Application :: atom()) -> ok.
 remove_application(Application) ->
     remove_application(Application, ?NOVA_DISPATCH).
@@ -698,7 +702,8 @@ remove_application(Application, DispatchKey) when is_atom(Application) ->
         commit(DispatchKey, Without, Generation)
     catch
         %% Routes were stored into the table meanwhile. No router ran
-        %% here, so the application is taken out of the table as it is now.
+        %% here, so the application is taken out of the table as it is
+        %% now, however many times: each time something else was stored.
         error:{routing_table_changed, DispatchKey} -> remove_application(Application, DispatchKey)
     end.
 

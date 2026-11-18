@@ -246,7 +246,9 @@ application is added and its routes are compiled.
 
 `{error, {routing_table_replaced, Name}}` when the routing table of the
 listener is being built again, which only code outside Nova does to a
-listener that is up. The application is then still served and still added.
+listener that is up. The application is then still served by that listener
+and still added. It is taken off the other listeners it was on: call
+again.
 """.
 -spec remove_application(App :: atom()) ->
           ok | {error, not_found | adding_an_application | {routing_table_replaced, nova_listener:name()}}.
@@ -593,6 +595,11 @@ start_listener(Server, Listener = #{name := Name, ip := Host, port := Port, appl
     Dispatch = try
                    nova_router:compile_fresh(resolve_nova_apps(NovaApps), DispatchKey, Serving)
                catch
+                   %% Another process is building the table, which only
+                   %% code outside Nova does. Nothing of this start is
+                   %% under the key, and what is there is not taken away.
+                   error:{routing_table_replaced, DispatchKey}:Stacktrace ->
+                       erlang:raise(error, {routing_table_replaced, DispatchKey}, Stacktrace);
                    Class:NotCompiled:Stacktrace ->
                        ok = nova_router:delete_dispatch(DispatchKey),
                        erlang:raise(Class, NotCompiled, Stacktrace)
@@ -652,7 +659,7 @@ started(Server, #{name := Name, ip := Host, port := Port, tls := Tls, applicatio
         false ->
             _ = Server:stop_listener(Name),
             ok = nova_router:delete_dispatch(DispatchKey),
-            ?LOG_ERROR(#{msg => ~"The listeners were stopped as one was started, which is stopped with them",
+            ?LOG_ERROR(#{msg => ~"The listener was stopped as it was started",
                          listener => Name, port => Port, server => Server}),
             {error, {listener_not_started, listeners_stopped}}
     end.
@@ -751,19 +758,7 @@ attach_application(App, Listener = #nova_listener{name = Name, apps = Apps, bind
 %% The router of the application ran meanwhile, so the listener is what it
 %% is now and not what it was before.
 listed(App, Name, {Host, Port}, DispatchKey) ->
-    case nova_applications:is_kept() andalso find_listener(Name) of
-        false ->
-            %% The router can trap exits, and its process then outlives
-            %% the one it adds the application for. The call that added it
-            %% was answered that it was not, so its routes are not served.
-            _ = try
-                    nova_router:remove_application(App, DispatchKey)
-                catch
-                    error:{routing_table_replaced, DispatchKey} -> ok
-                end,
-            ?LOG_ERROR(#{msg => ~"An application was added to a listener as the process that keeps the added applications stopped. It is not added",
-                         app => App, listener => Name}),
-            {error, {no_such_listener, Name}};
+    case find_listener(Name) of
         {ok, Listener = #nova_listener{apps = Now, added = Added, bind = {Host, Port},
                                        dispatch_key = DispatchKey}} ->
             case register_listener(Listener#nova_listener{apps = Now ++ [App], added = Added ++ [App]}) of
@@ -823,24 +818,11 @@ register_listener(Listener) ->
         error:badarg -> {error, listeners_stopped}
     end.
 
-%% Under an address no other listener of Nova's has. The router of an
-%% application can trap exits, and its process then outlives the one it
-%% adds the application for, whose call was answered that it was not
-%% added. The one that takes its place stops what is listed and not bound
-%% as it starts, so a listener that is listed while the first is there is
-%% never left with nothing that knows of it.
+%% Under an address no other listener of Nova's has.
 reserve_listener(Listener) ->
     try ets:insert_new(?NOVA_LISTENERS_TABLE, Listener) of
-        true ->
-            case nova_applications:is_kept() of
-                true ->
-                    ok;
-                false ->
-                    true = ets:delete_object(?NOVA_LISTENERS_TABLE, Listener),
-                    {error, not_kept}
-            end;
-        false ->
-            {error, eaddrinuse}
+        true -> ok;
+        false -> {error, eaddrinuse}
     catch
         error:badarg -> {error, listeners_stopped}
     end.

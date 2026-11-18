@@ -16,11 +16,12 @@
 
 -include_lib("kernel/include/logger.hrl").
 
--export([start_link/0, add/2, remove/1, listening/1, draining/0, is_kept/0]).
+-export([start_link/0, add/2, remove/1, listening/1, draining/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, format_status/1]).
 -export([work/4]).
 
 -define(ADDING, nova_adding_application).
+-define(WORKER, nova_applications_worker).
 -define(STARTED, {?MODULE, started}).
 -define(DRAINING_SLACK, 5000).
 -define(MAX_TIMER, 16#FFFFFFFF).
@@ -125,7 +126,9 @@ draining(Registry, Timeout) when is_integer(Timeout) ->
 -spec call(term(), timeout()) -> dynamic().
 call(Request, Timeout) ->
     case get(?ADDING) of
-        undefined ->
+        true ->
+            {error, adding_an_application};
+        _Not ->
             try gen_server:call(?MODULE, Request, Timeout) of
                 {raised, Class, Reason, Stacktrace} -> erlang:raise(Class, Reason, Stacktrace);
                 Reply -> Reply
@@ -133,21 +136,7 @@ call(Request, Timeout) ->
                 exit:{noproc, _Call} -> not_started;
                 %% The call has the settings of the request in it.
                 exit:{Reason, _Call} -> exit({Reason, ?MODULE})
-            end;
-        _Registry ->
-            {error, adding_an_application}
-    end.
-
--doc false.
-%% For nova_sup. Whether what this process lists is kept: a process that
-%% adds an application does so for the process that keeps the added
-%% applications, and that one can be gone while the router of the
-%% application, which may trap exits, still runs.
--spec is_kept() -> boolean().
-is_kept() ->
-    case get(?ADDING) of
-        undefined -> true;
-        Registry -> whereis(?MODULE) =:= Registry
+            end
     end.
 
 %% The listeners outlive this process, and when it is started again they
@@ -155,6 +144,7 @@ is_kept() ->
 -spec init([]) -> {ok, #state{}}.
 init([]) ->
     process_flag(trap_exit, true),
+    ok = no_worker(),
     %% Started again is under the supervisor it was under before. A start
     %% of `nova` that failed had another.
     Supervisor = whereis(nova_sup),
@@ -169,6 +159,22 @@ init([]) ->
             {ok, #state{}};
         Owner ->
             {ok, recovered(Owner)}
+    end.
+
+%% The process that added an application for the one before this goes
+%% down with it, unless the router it runs traps exits. It would go on to
+%% add an application whose caller was answered that it was not added, to
+%% listeners this process has read by then. It cannot trap this.
+no_worker() ->
+    case whereis(?WORKER) of
+        Worker when is_pid(Worker) ->
+            Monitor = monitor(process, Worker),
+            exit(Worker, kill),
+            receive
+                {'DOWN', Monitor, process, Worker, _Reason} -> ok
+            end;
+        _None ->
+            ok
     end.
 
 %% The listeners say which applications were added to them. How one was
@@ -208,8 +214,10 @@ handle_cast(_Request, State) ->
 handle_info({'DOWN', Monitor, process, Owner, _Reason}, State = #state{owner = {Owner, Monitor}}) ->
     {noreply, State#state{owner = undefined}};
 %% Any process of the node can send here. What stops the listeners sends
-%% an alias and the time it gives, and nothing else is taken for it.
-handle_info({draining, Drainer, Timeout}, State) when is_reference(Drainer), is_integer(Timeout), Timeout >= 0 ->
+%% an alias and the time it gives, which is one a timer takes, and nothing
+%% else is taken for it.
+handle_info({draining, Drainer, Timeout}, State)
+  when is_reference(Drainer), is_integer(Timeout), Timeout >= 0, Timeout =< ?MAX_TIMER ->
     {noreply, drained([Drainer], State)};
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -284,13 +292,16 @@ in_worker(Request, State) ->
 worked({Worker, Monitor, Tag} = Work, Drainers) ->
     receive
         {Tag, Answer} ->
-            true = demonitor(Monitor, [flush]),
-            {Answer, Drainers};
+            %% The next one takes the name this one has.
+            receive
+                {'DOWN', Monitor, process, Worker, _Reason} -> {Answer, Drainers}
+            end;
         {'DOWN', Monitor, process, Worker, Reason} ->
             %% What a router links to can go down with the settings of a
             %% listener as its reason.
             {{raised, exit, nova_redact:tls_options(Reason), []}, Drainers};
-        {draining, Drainer, Timeout} when is_reference(Drainer), is_integer(Timeout), Timeout >= 0 ->
+        {draining, Drainer, Timeout}
+          when is_reference(Drainer), is_integer(Timeout), Timeout >= 0, Timeout =< ?MAX_TIMER ->
             ok = overdue_after(Timeout, Tag, Drainers),
             worked(Work, [Drainer | Drainers]);
         {Tag, overdue, Timeout} ->
@@ -308,7 +319,8 @@ overdue_after(_Timeout, _Tag, _Drainers) ->
 
 -spec work(pid(), reference(), term(), #state{}) -> ok.
 work(Registry, Tag, Request, State) ->
-    put(?ADDING, Registry),
+    true = register(?WORKER, self()),
+    put(?ADDING, true),
     Registry ! {Tag, handled(Request, State)},
     ok.
 
