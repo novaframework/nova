@@ -584,6 +584,14 @@ This will add the routes defined in the second argument to the `my_app` applicat
 **Note**: If a route already exists it will be overwritten. This is the one
 place where a later route wins; routes compiled at startup keep the first.
 
+Routes are added to the table as it was when the call began. When another
+process stored routes into the table meanwhile, or removed an application
+from it, yours are compiled again into the table as it is by then, so
+nothing either of you stored is lost. After three tries the call raises the
+error `{routing_table_changed, DispatchKey}`, and none of its routes are in
+the table. `{routing_table_replaced, DispatchKey}` is raised when the
+listener of the table was started again meanwhile, or is being started.
+
 Routes added this way live in the routing table of the running listener. When
 Nova starts, each listener compiles its table from the routers again, so
 routes added at runtime, and routes a router no longer returns, are gone

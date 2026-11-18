@@ -195,6 +195,36 @@ other_build_test_() ->
              ?assertEqual([{nova_test_sub_app, "/"}], nova_router:compiled_apps(?KEY))
      end}.
 
+%% A build that fails puts back the mark of the build it was started
+%% beside, which goes on: nothing is merged into the table meanwhile, and
+%% that build is stored.
+earlier_build_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             Test = self(),
+             Open = group(unset),
+             Fail = fun() -> Test ! {failed, catch nova_router:compile_fresh([nova_test_sub_app], ?KEY)} end,
+             ok = meck:new(nova_test_mounted_router, [passthrough, no_link]),
+             try
+                 ok = meck:expect(nova_test_mounted_router, routes,
+                                  fun(_Env) when self() =:= Test ->
+                                          _ = spawn(Fail),
+                                          receive {failed, _Raised} -> ok after 5000 -> error(not_failed) end,
+                                          Test ! {merged, catch nova_router:compile([], ?KEY)},
+                                          [Open#{prefix => "/first"}];
+                                     (_Env) ->
+                                          error(fails)
+                                  end),
+                 _ = nova_router:compile_fresh([nova_test_sub_app], ?KEY)
+             after
+                 meck:unload(nova_test_mounted_router)
+             end,
+             ?assertMatch({'EXIT', {{routing_table_replaced, ?KEY}, _Stacktrace}},
+                          receive {merged, Merged} -> Merged after 0 -> none end),
+             ?assertEqual(ok, element(1, nova_routing_trie:find('_', ~"/first/", ~"GET", persistent_term:get(?KEY)))),
+             ?assertEqual([{nova_test_sub_app, "/"}], nova_router:compiled_apps(?KEY))
+     end}.
+
 %% A process that is stopped as it builds a table leaves it marked. The
 %% table before it takes routes again, as no table is being built.
 stopped_build_test_() ->
@@ -275,6 +305,74 @@ secured_meanwhile_test_() ->
                           nova_routing_trie:find('_', ~"/admin/", ~"GET", persistent_term:get(?KEY))),
              ?assertEqual(ok, element(1, nova_routing_trie:find('_', ~"/sub/", ~"GET", persistent_term:get(?KEY))))
      end}.
+
+%% Routes that are stored as others are added to the table are no reason
+%% not to add those: they are compiled again into the table as it is by
+%% then. Not for ever: a table that changes each time is given up on.
+added_again_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             Open = group(unset),
+             Group = #{prefix => "/g", apps => [nova_test_sub_app], routes => []},
+             Other = fun() -> nova_router:add_routes(nova_test_app, Open#{prefix => "/other"}, ?KEY) end,
+             Found = fun(Path) -> element(1, nova_routing_trie:find('_', Path, ~"GET", persistent_term:get(?KEY))) end,
+             _ = nova_router:compile_fresh([], ?KEY),
+             ok = meck:new(nova_test_mounted_router, [passthrough, no_link]),
+             try
+                 ok = meck:expect(nova_test_mounted_router, routes,
+                                  fun(_Env) ->
+                                          case put(?FUNCTION_NAME, stored) of
+                                              undefined -> ok = Other();
+                                              stored -> ok
+                                          end,
+                                          [Open]
+                                  end),
+                 ?assertEqual(ok, nova_router:add_routes(nova_test_app, Group, ?KEY)),
+                 ?assertEqual(2, meck:num_calls(nova_test_mounted_router, routes, '_')),
+                 ?assertEqual([ok, ok], [Found(Path) || Path <- [~"/other/", ~"/g/admin/"]]),
+                 ok = meck:reset(nova_test_mounted_router),
+                 ok = meck:expect(nova_test_mounted_router, routes,
+                                  fun(_Env) ->
+                                          ok = Other(),
+                                          [Open#{prefix => "/never"}]
+                                  end),
+                 ?assertError({routing_table_changed, ?KEY}, nova_router:add_routes(nova_test_app, Group, ?KEY)),
+                 ?assertEqual(3, meck:num_calls(nova_test_mounted_router, routes, '_')),
+                 ?assertEqual(error, Found(~"/g/never/"))
+             after
+                 erase(?FUNCTION_NAME),
+                 meck:unload(nova_test_mounted_router)
+             end
+     end}.
+
+%% Of merges that store at once, none is stored over another: every one
+%% that is answered is in the table.
+racing_merges_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     {timeout, 60,
+      fun() ->
+              _ = nova_router:compile_fresh([], ?KEY),
+              Test = self(),
+              Open = group(unset),
+              Add = fun(Prefix) ->
+                            try nova_router:add_routes(nova_test_app, Open#{prefix => Prefix}, ?KEY) of
+                                ok -> {added, Prefix}
+                            catch
+                                error:{routing_table_changed, ?KEY} -> refused
+                            end
+                    end,
+              Racers = [spawn(fun() -> receive go -> Test ! {raced, self(), Add("/r" ++ integer_to_list(I))} end end)
+                        || I <- lists:seq(1, 16)],
+              _ = [Racer ! go || Racer <- Racers],
+              Results = [receive {raced, Racer, Result} -> Result after 30000 -> error(not_raced) end
+                         || Racer <- Racers],
+              Found = fun(Prefix) ->
+                              element(1, nova_routing_trie:find('_', list_to_binary(Prefix ++ "/"), ~"GET",
+                                                                persistent_term:get(?KEY)))
+                      end,
+              ?assertNotEqual([], [Prefix || {added, Prefix} <- Results]),
+              ?assertEqual([], [Prefix || {added, Prefix} <- Results, Found(Prefix) =/= ok])
+      end}}.
 
 %% Routes that are stored as an application is taken out of the table are
 %% kept: the application is taken out of the table as it is by then.

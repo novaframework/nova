@@ -40,7 +40,7 @@ Each listener owns its own routing table, so an application started on a second 
 -export([start_listeners/1, shutdown_listeners/0, shutdown_listeners/1, stop_listeners/1]).
 
 %% Called by nova_applications
--export([running/0, added/0, listeners_owner/0, attach_to_listener/2, start_listener_for/3, detach_application/1,
+-export([running/0, added/0, drop_unbound/0, listeners_owner/0, attach_to_listener/2, start_listener_for/3, detach_application/1,
          unserved_groups/0, check_route_groups/1]).
 
 %% Started by the supervisor as its first child
@@ -55,7 +55,10 @@ Each listener owns its own routing table, so an application started on a second 
                         %% Those of `apps` that were added at runtime, and
                         %% whether the listener was started for one of them.
                         added = [] :: [atom()],
-                        for_application = false :: boolean()
+                        for_application = false :: boolean(),
+                        %% A listener is listed before the server binds
+                        %% it, and bound once the server said it is.
+                        bound = false :: boolean()
                        }).
 
 %%%===================================================================
@@ -152,6 +155,20 @@ add_application(App, Settings) ->
 -spec running() -> [{nova_listener:name(), {inet:ip_address() | string(), inet:port_number()}, [atom()]}].
 running() ->
     [{Name, Bind, Apps} || #nova_listener{name = Name, bind = Bind, apps = Apps} <- all_listeners()].
+
+-doc false.
+%% For nova_applications when it is started again. A listener that was
+%% being started for an application then was started by a process that
+%% went with the one before. Whether the server bound it is not known, and
+%% no call that added the application was answered: it is stopped.
+-spec drop_unbound() -> ok.
+drop_unbound() ->
+    _ = [begin
+             ?LOG_WARNING(#{msg => ~"A listener was being started for an application as the process that keeps the added applications stopped. It is stopped, and the application is not added",
+                            listener => Name}),
+             stop_listener(Name)
+         end || #nova_listener{name = Name, for_application = true, bound = false} <- all_listeners()],
+    ok.
 
 -doc false.
 %% For nova_applications when it is started again: what was added to the
@@ -611,8 +628,8 @@ started(Server, #{name := Name, ip := Host, port := Port, tls := Tls, applicatio
                   protocols := Protocols},
         DispatchKey) ->
     Names = nova_listener:protocol_names(Protocols),
-    case find_listener(Host, Port) of
-        {ok, #nova_listener{name = Name}} ->
+    case bound({Host, Port}, Name) of
+        true ->
             say_what_the_session_cookie_needs(Tls =/= false),
             note_http3_only(Name, Names),
             ?LOG_NOTICE(#{msg => ~"Nova is running",
@@ -624,12 +641,26 @@ started(Server, #{name := Name, ip := Host, port := Port, tls := Tls, applicatio
                           nova_version => get_version(nova),
                           apps => Apps}),
             {ok, App, Host, Port};
-        _Gone ->
+        false ->
             _ = Server:stop_listener(Name),
             ok = nova_router:delete_dispatch(DispatchKey),
             ?LOG_ERROR(#{msg => ~"The listeners were stopped as one was started, which is stopped with them",
                          listener => Name, port => Port, server => Server}),
             {error, {listener_not_started, listeners_stopped}}
+    end.
+
+%% Whether the listener is still listed under its name, and bound from
+%% here on. One that was stopped meanwhile is not listed again by this.
+bound({Host, Port}, Name) ->
+    case find_listener(Host, Port) of
+        {ok, #nova_listener{name = Name}} ->
+            try
+                ets:update_element(?NOVA_LISTENERS_TABLE, {Host, Port}, {#nova_listener.bound, true})
+            catch
+                error:badarg -> false
+            end;
+        _GoneOrAnother ->
+            false
     end.
 
 %% The versions a server takes WebSockets over can depend on how the

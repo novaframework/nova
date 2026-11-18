@@ -163,6 +163,7 @@ init([]) ->
 %% are refused when the listeners are back, and the server package does
 %% not start.
 recovered(Owner) ->
+    ok = nova_sup:drop_unbound(),
     Added = nova_sup:added(),
     Rows = [#added{app = App, settings = #{ip => Host, port => Port}, listener = Name, bind = {Host, Port},
                    served = true}
@@ -283,7 +284,7 @@ worked({Worker, Monitor, Tag} = Work, Drainers) ->
             worked(Work, Drainers)
     end.
 
-overdue_after(Timeout, Tag, []) ->
+overdue_after(Timeout, Tag, []) when is_integer(Timeout), Timeout >= 0 ->
     _ = erlang:send_after(Timeout, self(), {Tag, overdue, Timeout}),
     ok;
 overdue_after(_Timeout, _Tag, _Drainers) ->

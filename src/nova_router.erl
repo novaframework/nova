@@ -102,6 +102,7 @@ it returns after the routes of `routes/1`.
 
 
 -define(NOVA_APPS, nova_apps).
+-define(ADD_TRIES, 3).
 -define(NOVA_PLUGINS, nova_plugins).
 -define(NOVA_DISPATCH, nova_dispatch).
 
@@ -253,16 +254,23 @@ marked(DispatchKey, Building) ->
 
 %% Two builds of one table can only come from outside Nova, which starts
 %% a listener in one process. The mark of another build is then left to
-%% that build. A merge that began before this build is refused: routes
+%% that build, and the one this build was set over is put back while its
+%% build goes on. A merge that began before this build is refused: routes
 %% can have been stored into the table since it read it.
 not_built(DispatchKey, Building, Before) ->
     StorageBackend = storage_backend(),
     Lock = lock(DispatchKey),
     try StorageBackend:get(generation_key(DispatchKey), undefined) of
-        Building -> StorageBackend:put(generation_key(DispatchKey), {build(Before), make_ref()});
+        Building -> StorageBackend:put(generation_key(DispatchKey), restored(Before));
         _Other -> ok
     after
         unlock(Lock)
+    end.
+
+restored(Before) ->
+    case is_being_built(Before) of
+        true -> Before;
+        false -> {build(Before), make_ref()}
     end.
 
 %% A table as it is compiled: its routes, and the applications and the
@@ -562,7 +570,7 @@ add_routes(App, Routes) ->
     add_routes(App, Routes, ?NOVA_DISPATCH).
 
 %%--------------------------------------------------------------------
--doc "As add_routes/2, but against the routing table addressed by `DispatchKey`. Raises the errors `{routing_table_replaced, DispatchKey}` and `{routing_table_changed, DispatchKey}` as `compile/2` does, when the table was replaced or stored into meanwhile.".
+-doc "As add_routes/2, but against the routing table addressed by `DispatchKey`. Raises the error `{routing_table_replaced, DispatchKey}` as `compile/2` does, when the table was replaced meanwhile. When routes were stored into the table meanwhile, these are compiled again into the table as it is by then, three times at most, and then the error `{routing_table_changed, DispatchKey}` is raised.".
 -spec add_routes(App :: atom(), Routes :: [map() | [map()]] | map(), DispatchKey :: dispatch_key()) -> ok.
 add_routes(_App, [], _DispatchKey) ->
     ok;
@@ -580,6 +588,9 @@ add_routes(App, Routes, _DispatchKey) ->
     throw({error, {invalid_routes, App, Routes}}).
 
 insert_route_maps(App, Routes, DispatchKey) ->
+    insert_route_maps(App, Routes, DispatchKey, ?ADD_TRIES).
+
+insert_route_maps(App, Routes, DispatchKey, Tries) ->
     StorageBackend = storage_backend(),
     Generation = generation(DispatchKey),
     Stored = stored(DispatchKey, StorageBackend:get(DispatchKey)),
@@ -597,7 +608,14 @@ insert_route_maps(App, Routes, DispatchKey) ->
             false      -> CompiledApps ++ [{App, "/"}];
             _StoredApp -> CompiledApps
         end,
-    commit(DispatchKey, Table#{apps := CompiledApps0}, Generation).
+    try
+        commit(DispatchKey, Table#{apps := CompiledApps0}, Generation)
+    catch
+        %% Routes were stored into the table as these were compiled, which
+        %% is no reason not to add them to the table as it is by then.
+        error:{routing_table_changed, DispatchKey} when Tries > 1 ->
+            insert_route_maps(App, Routes, DispatchKey, Tries - 1)
+    end.
 
 
 %%--------------------------------------------------------------------
