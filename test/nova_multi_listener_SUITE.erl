@@ -16,7 +16,7 @@
          an_explicit_host_is_part_of_the_listener_identity/1,
          an_explicit_host_does_not_match_the_wildcard_listener/1,
          a_failed_bind_leaves_no_routing_table/1,
-         adding_a_started_application_again_is_an_error/1,
+         configured_application_again/1,
          removing_an_application_stops_only_its_listener/1,
          removing_an_unknown_application_is_an_error/1
         ]).
@@ -33,7 +33,7 @@ all() ->
      an_explicit_host_is_part_of_the_listener_identity,
      an_explicit_host_does_not_match_the_wildcard_listener,
      a_failed_bind_leaves_no_routing_table,
-     adding_a_started_application_again_is_an_error,
+     configured_application_again,
      removing_an_application_stops_only_its_listener,
      removing_an_unknown_application_is_an_error
     ].
@@ -172,10 +172,12 @@ a_failed_bind_leaves_no_routing_table(_Config) ->
         gen_tcp:close(Socket)
     end.
 
-adding_a_started_application_again_is_an_error(Config) ->
+configured_application_again(Config) ->
     BootstrapPort = ?config(port, Config),
-    ?assertEqual({error, {already_started, nova_test_app}},
-                 nova_sup:add_application(nova_test_app, #{port => BootstrapPort})).
+    Before = nova_sup:get_started_applications(),
+    ?assertMatch({ok, nova_test_app, _Host, BootstrapPort},
+                 nova_sup:add_application(nova_test_app, #{port => BootstrapPort})),
+    ?assertEqual(Before, nova_sup:get_started_applications()).
 
 removing_an_application_stops_only_its_listener(Config) ->
     BootstrapPort = ?config(port, Config),

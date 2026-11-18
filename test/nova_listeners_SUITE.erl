@@ -22,6 +22,7 @@
          early_add_routes/1,
          cowboy_ws_http2/1,
          early_add_configured/1,
+         add_configured/1,
          server_restart/1,
          restart_unserved_group/1,
          kept_listener/1,
@@ -34,7 +35,15 @@
          early_remove_named/1,
          readdressed_listener/1,
          address_taken/1,
+         settings_ignored/1,
+         listener_replaced/1,
+         registry_dies_adding/1,
          registry_restart/1,
+         restart_keeps_added/1,
+         registry_restart_stopped/1,
+         registry_first_start/1,
+         listeners_gone/1,
+         gone_while_starting/1,
          owner_gone/1,
          runtime_raise/1,
          router_dies/1,
@@ -77,6 +86,7 @@ all() ->
      early_add_routes,
      cowboy_ws_http2,
      early_add_configured,
+     add_configured,
      server_restart,
      restart_unserved_group,
      kept_listener,
@@ -89,7 +99,15 @@ all() ->
      early_remove_named,
      readdressed_listener,
      address_taken,
+     settings_ignored,
+     listener_replaced,
+     registry_dies_adding,
      registry_restart,
+     restart_keeps_added,
+     registry_restart_stopped,
+     registry_first_start,
+     listeners_gone,
+     gone_while_starting,
      owner_gone,
      runtime_raise,
      router_dies,
@@ -327,9 +345,42 @@ early_add_configured(_Config) ->
                 nova_apps => []},
     ok = nova_test_listener:configure(Options),
     {ok, _} = application:ensure_all_started(nova),
-    ?assertEqual({ok, nova_test_sub_app, {0, 0, 0, 0}, Port},
-                 nova_sup:add_application(nova_test_sub_app, #{listener => web})),
+    Served = {ok, nova_test_sub_app, {0, 0, 0, 0}, Port},
+    ?assertEqual(Served, nova_sup:add_application(nova_test_sub_app, #{listener => web})),
+    ?assertEqual(Served, nova_sup:add_application(nova_test_sub_app, #{port => Port})),
     {ok, Port} = nova_test_listener:boot(Options),
+    ?assertEqual({200, ~"web http1"}, nova_test_listener:get(Port, "/where")),
+    served_once(Port).
+
+%% It is answered the same once the listeners are up.
+add_configured(_Config) ->
+    Port = nova_test_listener:free_port(),
+    {ok, Port} = nova_test_listener:try_start(#{port => Port,
+                                                listeners => #{web => #{port => Port,
+                                                                        applications => [nova_test_app,
+                                                                                         nova_test_sub_app]}},
+                                                host => [#{routes => []}],
+                                                mounted => [#{routes => [?WHERE]}],
+                                                nova_apps => []}),
+    Served = {ok, nova_test_sub_app, {0, 0, 0, 0}, Port},
+    ?assertEqual(Served, nova_sup:add_application(nova_test_sub_app, #{listener => web})),
+    ?assertEqual(Served, nova_sup:add_application(nova_test_sub_app, #{port => Port})),
+    served_once(Port).
+
+%% The application is the configuration's and not one that was added: it
+%% goes when the configuration no longer lists it. One that was added is
+%% refused the second time.
+served_once(Port) ->
+    Server = nova_test_listener:server(#{}),
+    ?assertEqual([nova_test_app, nova_test_sub_app], [App || #{app := App} <- nova_sup:get_started_applications()]),
+    ok = application:stop(Server),
+    application:set_env(nova, listeners, #{web => #{port => Port, applications => [nova_test_app]}}),
+    {ok, _} = application:ensure_all_started(Server),
+    ?assertMatch({404, _}, nova_test_listener:get(Port, "/where")),
+    Added = {ok, nova_test_sub_app, {0, 0, 0, 0}, Port},
+    ?assertEqual(Added, nova_sup:add_application(nova_test_sub_app, #{listener => web})),
+    ?assertEqual({error, {already_started, nova_test_sub_app}},
+                 nova_sup:add_application(nova_test_sub_app, #{listener => web})),
     ?assertEqual({200, ~"web http1"}, nova_test_listener:get(Port, "/where")).
 
 %% The listeners go with the server package. What was added to them is
@@ -582,10 +633,15 @@ readdressed_listener(_Config) ->
     ok = application:stop(Server),
     application:set_env(nova, listeners, #{web => #{port => Moved, tls => Tls, applications => [nova_test_app]},
                                            metrics => #{port => Port, applications => [nova_test_app]}}),
+    {NotStarted, Events} = nova_test_log:collect(fun() -> application:ensure_all_started(Server) end),
     ?assertMatch({error, {Server,
                           {{shutdown, {failed_to_start_child, nova_listener,
                                        {application_not_added, nova_test_sub_app, {no_such_listener, web}}}}, _}}},
-                 application:ensure_all_started(Server)),
+                 NotStarted),
+    ?assertEqual([{nova_test_sub_app, web, {{0, 0, 0, 0}, Port}, {{0, 0, 0, 0}, Moved}}],
+                 [{App, Name, Was, Now}
+                  || {notice, {report, #{app := App, listener := Name, added_at := Was, listener_at := Now}}}
+                         <- Events]),
     ?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Port, [], 1000)),
     ok = nova_sup:remove_application(nova_test_sub_app),
     {ok, _} = application:ensure_all_started(Server),
@@ -613,6 +669,102 @@ address_taken(_Config) ->
                  application:ensure_all_started(Server)),
     ?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Other, [], 1000)).
 
+%% A listener that is there serves as it was started. An application that
+%% comes with settings it would not apply is not put on it, before the
+%% listeners are up and after, by its address or by its name. The settings
+%% a listener was started with for an application are those it has.
+settings_ignored(_Config) ->
+    Port = nova_test_listener:free_port(),
+    Other = nova_test_listener:free_port(),
+    Options = #{port => Port,
+                listeners => #{web => #{port => Port}},
+                host => [#{routes => [?WHERE]}],
+                mounted => [#{prefix => "/sub", routes => [?WHERE]}],
+                nested => [#{prefix => "/nested", routes => [?WHERE]}],
+                nova_apps => []},
+    Tls = nova_test_listener:tls(),
+    Ignored = fun(Name, Keys) -> {error, {listener_settings_ignored, Name, Keys}} end,
+    ok = nova_test_listener:configure(Options),
+    {ok, _} = application:ensure_all_started(nova),
+    ?assertEqual(Ignored(web, [tls]), nova_sup:add_application(nova_test_sub_app, #{port => Port, tls => Tls})),
+    ?assertEqual(Ignored(web, [steps]),
+                 nova_sup:add_application(nova_test_sub_app, #{listener => web, steps => [nova_router]})),
+    {ok, Port} = nova_test_listener:boot(Options),
+    ?assertEqual(Ignored(web, [protocols, tls]),
+                 nova_sup:add_application(nova_test_sub_app, #{port => Port, tls => Tls, protocols => [http1]})),
+    ?assertEqual(Ignored(web, [use_ssl]), nova_sup:add_application(nova_test_sub_app, #{port => Port, use_ssl => false})),
+    ?assertEqual(Ignored(web, [port]), nova_sup:add_application(nova_test_sub_app, #{listener => web, port => Other})),
+    ?assertMatch({404, _}, nova_test_listener:get(Port, "/sub/where")),
+    ?assertEqual({error, {invalid_listener_setting, nova_test_sub_app, port, 0}},
+                 nova_sup:add_application(nova_test_sub_app, #{port => 0})),
+    {ok, nova_test_sub_app, Host, Other} = nova_sup:add_application(nova_test_sub_app, #{port => Other, tls => Tls}),
+    ?assertEqual(Ignored(nova_test_sub_app, [protocols]),
+                 nova_sup:add_application(nova_test_nested_app, #{port => Other, protocols => [http1]})),
+    ?assertEqual(Ignored(nova_test_sub_app, [tls]),
+                 nova_sup:add_application(nova_test_nested_app, #{port => Other, tls => [{verify, verify_none} | Tls]})),
+    ?assertEqual({ok, nova_test_nested_app, Host, Other},
+                 nova_sup:add_application(nova_test_nested_app, #{port => Other, tls => Tls})),
+    ?assertMatch({200, _Headers, ~"nova_test_sub_app http1"},
+                 nova_test_listener:https_get(Other, "/nested/where")),
+    ?assertEqual([nova_test_app], [App || #{app := App, listener := web} <- nova_sup:get_started_applications()]).
+
+%% The routes of an application are not added to a listener that is not
+%% the one it was to be added to by the time its router has run.
+listener_replaced(_Config) ->
+    Port = nova_test_listener:free_port(),
+    {ok, Port} = nova_test_listener:try_start(#{port => Port,
+                                                listeners => #{web => #{port => Port}},
+                                                host => [#{routes => [?WHERE]}],
+                                                mounted => [#{prefix => "/sub", routes => [?WHERE]}],
+                                                nova_apps => []}),
+    Server = nova_test_listener:server(#{}),
+    ok = meck:new(nova_test_mounted_router, [passthrough, no_link]),
+    try
+        ok = meck:expect(nova_test_mounted_router, routes,
+                         fun(Env) ->
+                                 true = ets:delete(nova_listeners, {{0, 0, 0, 0}, Port}),
+                                 meck:passthrough([Env])
+                         end),
+        ?assertEqual({error, {no_such_listener, web}},
+                     nova_sup:add_application(nova_test_sub_app, #{listener => web})),
+        ?assertEqual([], nova_sup:listeners())
+    after
+        meck:unload(nova_test_mounted_router),
+        Server:stop_listener(web)
+    end.
+
+%% What is added goes with the process that keeps it: an application that
+%% is being added as that process goes down is not added behind its back.
+registry_dies_adding(_Config) ->
+    Port = nova_test_listener:free_port(),
+    {ok, Port} = nova_test_listener:try_start(#{port => Port,
+                                                listeners => #{web => #{port => Port}},
+                                                host => [#{routes => [?WHERE]}],
+                                                mounted => [#{prefix => "/sub", routes => [?WHERE]}],
+                                                nova_apps => []}),
+    Self = self(),
+    Registry = registry(),
+    ok = meck:new(nova_test_mounted_router, [passthrough, no_link]),
+    try
+        ok = meck:expect(nova_test_mounted_router, routes,
+                         fun(_Env) ->
+                                 Self ! {compiling, self()},
+                                 receive after infinity -> ok end
+                         end),
+        {Adder, Adding} = spawn_monitor(fun() -> nova_sup:add_application(nova_test_sub_app, #{listener => web}) end),
+        Compiling = receive {compiling, Pid} when is_pid(Pid) -> Pid after 5000 -> error(not_compiling) end,
+        Monitor = monitor(process, Compiling),
+        exit(Registry, kill),
+        ?assertEqual(killed, receive {'DOWN', Monitor, process, Compiling, Why} -> Why after 5000 -> alive end),
+        ?assertMatch({killed, _Call}, receive {'DOWN', Adding, process, Adder, Reason} -> Reason after 5000 -> none end)
+    after
+        meck:unload(nova_test_mounted_router)
+    end,
+    ok = registry_after(Registry),
+    ?assertMatch({404, _}, nova_test_listener:get(Port, "/sub/where")),
+    ?assertEqual({ok, nova_test_sub_app, {0, 0, 0, 0}, Port},
+                 nova_sup:add_application(nova_test_sub_app, #{listener => web})).
+
 %% The process that keeps the added applications can be started again
 %% while the listeners are up. It says so, what was added is still served,
 %% and applications are added and removed as before. How a listener was
@@ -631,6 +783,8 @@ registry_restart(_Config) ->
     Server = nova_test_listener:server(#{}),
     {ok, nova_test_sub_app, _, Other} = nova_sup:add_application(nova_test_sub_app, #{port => Other}),
     {ok, nova_test_nested_app, _, Port} = nova_sup:add_application(nova_test_nested_app, #{listener => web}),
+    {ok, nova_test_deep_app, _, Port} = nova_sup:add_application(nova_test_deep_app, #{listener => web}),
+    ok = nova_sup:remove_application(nova_test_deep_app),
     Registry = registry(),
     {Unknown, Events} = nova_test_log:collect(
                           fun() ->
@@ -639,9 +793,10 @@ registry_restart(_Config) ->
                                   gen_server:call(nova_applications, status)
                           end),
     ?assertEqual({error, unknown_request}, Unknown),
-    ?assertMatch([#{listeners := [nova_test_sub_app]}],
-                 [Report || Report = #{msg := <<"The process that keeps the applications", _/binary>>}
-                                <- nova_test_log:errors(Events)]),
+    ?assertEqual([{[nova_test_nested_app, nova_test_sub_app], [nova_test_sub_app]}],
+                 [{lists:sort(Apps), Listeners}
+                  || #{msg := <<"The process that keeps the applications", _/binary>>,
+                       applications := Apps, listeners := Listeners} <- nova_test_log:errors(Events)]),
     ?assertEqual({ok, nova_test_deep_app, {0, 0, 0, 0}, Port},
                  nova_sup:add_application(nova_test_deep_app, #{listener => web})),
     ?assertEqual({200, ~"web http1"}, nova_test_listener:get(Port, "/deep/where")),
@@ -658,6 +813,44 @@ registry_restart(_Config) ->
     ?assertEqual({200, ~"web http1"}, nova_test_listener:get(Port, "/deep/where")),
     ?assertMatch({404, _}, nova_test_listener:get(Port, "/nested/where")).
 
+%% What was added is what the listeners say was, not what the configuration
+%% does not list by then: an application it listed is not kept as added.
+%% A listener of the configuration that has the name and the address of
+%% one that was started for an application is not taken for it.
+restart_keeps_added(_Config) ->
+    Port = nova_test_listener:free_port(),
+    Other = nova_test_listener:free_port(),
+    {ok, Port} = nova_test_listener:try_start(#{port => Port,
+                                                listeners => #{web => #{port => Port,
+                                                                        applications => [nova_test_app,
+                                                                                         nova_test_nested_app]}},
+                                                host => [#{routes => [?WHERE]}],
+                                                mounted => [#{prefix => "/sub", routes => [?WHERE]}],
+                                                nested => [#{prefix => "/nested", routes => [?WHERE]}],
+                                                nova_apps => []}),
+    Server = nova_test_listener:server(#{}),
+    Tls = nova_test_listener:tls(),
+    {ok, nova_test_sub_app, _, Other} = nova_sup:add_application(nova_test_sub_app, #{port => Other, tls => Tls}),
+    Web = #{port => Port, applications => [nova_test_app]},
+    application:set_env(nova, listeners, #{web => Web}),
+    Registry = registry(),
+    exit(Registry, kill),
+    ok = registry_after(Registry),
+    ok = application:stop(Server),
+    application:set_env(nova, listeners, #{web => Web,
+                                           nova_test_sub_app => #{port => Other, applications => [nova_test_app]}}),
+    ?assertMatch({error, {Server,
+                          {{shutdown, {failed_to_start_child, nova_listener,
+                                       {application_not_added, nova_test_sub_app,
+                                        {no_such_listener, nova_test_sub_app}}}}, _}}},
+                 application:ensure_all_started(Server)),
+    ?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Other, [], 1000)),
+    ok = nova_sup:remove_application(nova_test_sub_app),
+    ?assertEqual({error, not_found}, nova_sup:remove_application(nova_test_nested_app)),
+    application:set_env(nova, listeners, #{web => Web}),
+    {ok, _} = application:ensure_all_started(Server),
+    ?assertMatch({404, _}, nova_test_listener:get(Port, "/nested/where")).
+
 registry() ->
     case whereis(nova_applications) of
         Registry when is_pid(Registry) -> Registry
@@ -670,6 +863,95 @@ registry_after(Was) ->
         _Not ->
             timer:sleep(10),
             registry_after(Was)
+    end.
+
+%% When that process is started again while no listeners are up, nothing
+%% says what was added. It says so, and the applications are not served.
+registry_restart_stopped(_Config) ->
+    Port = nova_test_listener:free_port(),
+    Other = nova_test_listener:free_port(),
+    {ok, Port} = nova_test_listener:try_start(#{port => Port,
+                                                listeners => #{web => #{port => Port}},
+                                                host => [#{routes => [?WHERE]}],
+                                                mounted => [#{routes => [?WHERE]}],
+                                                nova_apps => []}),
+    Server = nova_test_listener:server(#{}),
+    {ok, nova_test_sub_app, _, Other} = nova_sup:add_application(nova_test_sub_app, #{port => Other}),
+    ok = application:stop(Server),
+    Registry = registry(),
+    {ok, Events} = nova_test_log:collect(fun() ->
+                                                 exit(Registry, kill),
+                                                 registry_after(Registry)
+                                         end),
+    ?assertMatch([_Lost],
+                 [Report || Report = #{msg := <<"The process that keeps the applications", _/binary>>}
+                                <- nova_test_log:errors(Events)]),
+    {ok, _} = application:ensure_all_started(Server),
+    ?assertEqual({200, ~"web http1"}, nova_test_listener:get(Port, "/where")),
+    ?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Other, [], 1000)),
+    ?assertEqual({error, not_found}, nova_sup:remove_application(nova_test_sub_app)).
+
+%% The first start of the process says nothing.
+registry_first_start(_Config) ->
+    Port = nova_test_listener:free_port(),
+    Options = #{port => Port,
+                listeners => #{web => #{port => Port}},
+                host => [#{routes => [?WHERE]}],
+                nova_apps => []},
+    ok = nova_test_listener:configure(Options),
+    {{ok, _}, Events} = nova_test_log:collect(fun() -> application:ensure_all_started(nova) end),
+    ?assertEqual([], nova_test_log:errors(Events)),
+    ok = application:stop(nova),
+    {{ok, _}, Again} = nova_test_log:collect(fun() -> application:ensure_all_started(nova) end),
+    ?assertEqual([], nova_test_log:errors(Again)).
+
+%% The listeners can be gone before the process that keeps the
+%% applications is told. An application is then kept for the next start,
+%% and no listener is started for it.
+listeners_gone(_Config) ->
+    Port = nova_test_listener:free_port(),
+    Other = nova_test_listener:free_port(),
+    {ok, Port} = nova_test_listener:try_start(#{port => Port,
+                                                listeners => #{web => #{port => Port}},
+                                                host => [#{routes => [?WHERE]}],
+                                                mounted => [#{routes => [?WHERE]}],
+                                                nova_apps => []}),
+    Server = nova_test_listener:server(#{}),
+    true = ets:delete(nova_listeners),
+    try
+        ?assertEqual({ok, nova_test_sub_app, {0, 0, 0, 0}, Other},
+                     nova_sup:add_application(nova_test_sub_app, #{port => Other})),
+        ?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Other, [], 1000))
+    after
+        Server:stop_listener(web)
+    end.
+
+%% When they go as a listener is started for an application, that one is
+%% stopped with them.
+gone_while_starting(_Config) ->
+    Port = nova_test_listener:free_port(),
+    Other = nova_test_listener:free_port(),
+    {ok, Port} = nova_test_listener:try_start(#{port => Port,
+                                                listeners => #{web => #{port => Port}},
+                                                host => [#{routes => [?WHERE]}],
+                                                mounted => [#{routes => [?WHERE]}],
+                                                nova_apps => []}),
+    Server = nova_test_listener:server(#{}),
+    ok = meck:new(Server, [passthrough, no_link]),
+    try
+        ok = meck:expect(Server, start_listener,
+                         fun(Listener, Env) ->
+                                 Started = meck:passthrough([Listener, Env]),
+                                 true = ets:delete(nova_listeners),
+                                 Started
+                         end),
+        ?assertEqual({error, {listener_not_started, listeners_stopped}},
+                     nova_sup:add_application(nova_test_sub_app, #{port => Other})),
+        ?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Other, [], 1000)),
+        ?assertEqual(undefined, persistent_term:get({nova_dispatch, nova_test_sub_app}, undefined))
+    after
+        meck:unload(Server),
+        Server:stop_listener(web)
     end.
 
 %% Once the owner of the listeners is gone, an application is kept for the
@@ -734,10 +1016,11 @@ router_dies(_Config) ->
     try
         ok = meck:expect(nova_test_mounted_router, routes,
                          fun(_Env) ->
-                                 _ = spawn_link(fun() -> exit(router_gone) end),
+                                 _ = spawn_link(fun() -> exit({router_gone, [{password, "hunter2"}]}) end),
                                  receive after infinity -> ok end
                          end),
-        ?assertExit(router_gone, nova_sup:add_application(nova_test_sub_app, #{listener => web}))
+        ?assertExit({router_gone, [{password, redacted}]},
+                    nova_sup:add_application(nova_test_sub_app, #{listener => web}))
     after
         meck:unload(nova_test_mounted_router)
     end,
@@ -747,7 +1030,7 @@ router_dies(_Config) ->
     ?assertEqual({200, ~"web http1"}, nova_test_listener:get(Port, "/sub/where")).
 
 %% A router that does not return keeps its application from being added,
-%% and not the server package from stopping.
+%% and not the server package from stopping, or from starting again.
 stuck_add(_Config) ->
     Port = nova_test_listener:free_port(),
     {ok, Port} = nova_test_listener:try_start(#{port => Port,
@@ -769,12 +1052,15 @@ stuck_add(_Config) ->
         Compiling = receive {compiling, Pid} when is_pid(Pid) -> Pid after 5000 -> error(not_compiling) end,
         {Stopped, Events} = nova_test_log:collect(fun() -> application:stop(Server) end),
         ?assertEqual(ok, Stopped),
-        ?assertMatch([#{timeout_ms := 200}],
-                     [Report || {warning, {report, Report = #{msg := <<"An application is still being added", _/binary>>}}}
+        ?assertMatch([#{app := nova_test_sub_app, timeout_ms := 200}],
+                     [Report || {warning, {report, Report = #{msg := <<"An application was still being added", _/binary>>}}}
                                     <- Events]),
         ?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Port, [], 1000)),
-        exit(Compiling, kill),
-        ?assertEqual(killed, receive {'DOWN', Monitor, process, Adder, Reason} -> Reason after 5000 -> none end)
+        ?assertEqual(killed, receive {'DOWN', Monitor, process, Adder, Reason} -> Reason after 5000 -> none end),
+        ?assertNot(is_process_alive(Compiling)),
+        {ok, _} = application:ensure_all_started(Server),
+        ?assertEqual({200, ~"web http1"}, nova_test_listener:get(Port, "/where")),
+        ?assertEqual([nova_test_app], [App || #{app := App} <- nova_sup:get_started_applications()])
     after
         application:unset_env(nova, shutdown_drain_timeout),
         meck:unload(nova_test_mounted_router)
@@ -797,6 +1083,9 @@ invalid_settings(_Config) ->
     ?assertEqual(Unknown, nova_sup:add_application(nova_test_sub_app, #{prot => 1})),
     application:set_env(nova, listeners, #{}),
     ?assertEqual({error, {invalid_listeners, #{}}}, nova_sup:add_application(nova_test_sub_app, #{port => Port})),
+    application:set_env(nova, listeners, [{web, [{port, Port}, {tls, [{password, "hunter2"}]}]}]),
+    ?assertEqual({error, {invalid_listeners, [{web, [{port, Port}, {tls, [{password, redacted}]}]}]}},
+                 nova_sup:add_application(nova_test_sub_app, #{port => Port})),
     application:set_env(nova, listeners, Listeners),
     {ok, Port} = nova_test_listener:boot(Options),
     ?assertEqual(Unknown, nova_sup:add_application(nova_test_sub_app, #{prot => 1})),

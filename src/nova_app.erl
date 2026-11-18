@@ -36,10 +36,10 @@ prep_stop(State) ->
     State.
 
 stop(undefined) ->
-    ok;
+    nova_applications:stopped();
 stop(Timer) ->
     _ = timer:cancel(Timer),
-    ok.
+    nova_applications:stopped().
 
 %% A node that serves nothing on purpose sets server_grace to infinity.
 no_listener_timer(infinity) ->

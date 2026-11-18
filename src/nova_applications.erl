@@ -16,11 +16,13 @@
 
 -include_lib("kernel/include/logger.hrl").
 
--export([start_link/0, add/2, remove/1, listening/1, draining/0]).
+-export([start_link/0, add/2, remove/1, listening/1, draining/0, stopped/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, format_status/1]).
 -export([work/4]).
 
 -define(ADDING, nova_adding_application).
+-define(WORKER, nova_applications_worker).
+-define(STARTED, {?MODULE, started}).
 
 -type bind() :: {inet:ip_address() | string(), inet:port_number()}.
 
@@ -36,10 +38,11 @@
 
 %% A listener that is started for an application, under its name and with
 %% its settings. It is there for as long as an application is on it, also
-%% when the one it was started for is removed.
+%% when the one it was started for is removed. The settings of one that
+%% was found running by this process as it was started again are lost.
 -record(started, {
                   name :: nova_listener:name(),
-                  settings :: map(),
+                  settings :: map() | lost,
                   bind :: bind()
                  }).
 
@@ -82,18 +85,35 @@ listening(Owner) ->
     end.
 
 %% The listeners take no more connections and are about to stop. An
-%% application that is still being added does not keep them from it.
+%% application that is still being added by then is not added: what its
+%% router waits for is not waited for, and nothing is left to add it to
+%% the listeners once they are stopped, or to those of the next start.
 -spec draining() -> ok.
 draining() ->
     Timeout = application:get_env(nova, shutdown_drain_timeout, 15000),
     case call(draining, Timeout) of
         timeout ->
-            ?LOG_WARNING(#{msg => ~"An application is still being added, so the listeners are stopped without waiting for it",
-                           timeout_ms => Timeout}),
-            ok;
+            case whereis(?WORKER) of
+                Worker when is_pid(Worker) ->
+                    ?LOG_WARNING(#{msg => ~"An application was still being added as the listeners stop, and is not added",
+                                   app => added_by(Worker), timeout_ms => Timeout}),
+                    exit(Worker, kill),
+                    draining();
+                undefined ->
+                    ?LOG_WARNING(#{msg => ~"The listeners are stopped without the process that keeps the added applications knowing of it",
+                                   timeout_ms => Timeout}),
+                    ok
+            end;
         _Told ->
             ok
     end.
+
+%% The `nova` application has stopped, and the applications that were added
+%% went with it.
+-spec stopped() -> ok.
+stopped() ->
+    _ = persistent_term:erase(?STARTED),
+    ok.
 
 %% A router that adds an application as its own routes are compiled asks
 %% the process that is waiting for those.
@@ -118,32 +138,36 @@ call(Request, Timeout) ->
 %% are still there, with the applications that were added to them.
 -spec init([]) -> {ok, #state{}}.
 init([]) ->
+    process_flag(trap_exit, true),
+    Again = persistent_term:get(?STARTED, false),
+    ok = persistent_term:put(?STARTED, true),
     case nova_sup:listeners_owner() of
-        undefined -> {ok, #state{}};
-        Owner -> {ok, recovered(Owner)}
+        undefined when Again ->
+            %% Nothing says what was added while no listeners are up.
+            ?LOG_ERROR(#{msg => ~"The process that keeps the applications added with nova_sup:add_application/2 was started again while no listeners were up. The applications that were added are not kept, and are not served when the server package starts: add them again"}),
+            {ok, #state{}};
+        undefined ->
+            {ok, #state{}};
+        Owner ->
+            {ok, recovered(Owner)}
     end.
 
-%% How a listener was started for an application went with the process,
-%% so one is not started for it again: a row without it is refused when the
-%% listeners are back, and the server package does not start.
+%% The listeners say which applications were added to them. How one was
+%% started for an application went with the process, so it is not started
+%% again, nor is another of its name taken for it: the applications on it
+%% are refused when the listeners are back, and the server package does
+%% not start.
 recovered(Owner) ->
-    Listed = listed(),
-    Running = nova_sup:running(),
+    Added = nova_sup:added(),
     Rows = [#added{app = App, settings = #{ip => Host, port => Port}, listener = Name, bind = {Host, Port},
                    served = true}
-            || {Name, {Host, Port}, Apps} <- Running,
-               App <- Apps,
-               not lists:member(App, proplists:get_value(Name, Listed, []))],
+            || {Name, {Host, Port}, Apps, _ForApplication} <- Added,
+               App <- Apps],
+    Lost = [#started{name = Name, settings = lost, bind = Bind} || {Name, Bind, _Apps, true} <- Added],
     ?LOG_ERROR(#{msg => ~"The process that keeps the applications added with nova_sup:add_application/2 was started again. They are served. A listener that was started for one cannot be started again as it was, so the server package will not start again before the applications on it are removed",
                  applications => [App || #added{app = App} <- Rows],
-                 listeners => [Name || {Name, _Bind, _Apps} <- Running, not lists:keymember(Name, 1, Listed)]}),
-    #state{rows = Rows, owner = {Owner, monitor(process, Owner)}}.
-
-listed() ->
-    case nova_listener:configured() of
-        {ok, Listeners} -> [{Name, Apps} || #{name := Name, applications := Apps} <- Listeners];
-        {error, _Reason} -> []
-    end.
+                 listeners => [Name || #started{name = Name} <- Lost]}),
+    #state{rows = Rows, started = Lost, owner = {Owner, monitor(process, Owner)}}.
 
 %% What a router raises as its application is added is raised in the
 %% caller, as it was when the caller added it itself.
@@ -195,12 +219,24 @@ unwatched(State) ->
 
 %% The routes of an application are compiled by its own router. That runs
 %% in a process of its own, so what it links to, receives or leaves behind
-%% is not with the one that keeps the applications.
-answer(Request, State) ->
+%% is not with the one that keeps the applications. It goes with this one,
+%% so it adds nothing that is not kept.
+answer(Request, Kept) ->
+    State = current(Kept),
     case compiles_routes(Request, State) of
         true -> in_worker(Request, State);
         false -> handled(Request, State)
     end.
+
+%% The owner of the listeners can be gone before its 'DOWN' is here, and
+%% the listeners with it.
+current(State = #state{owner = {Owner, _Monitor}}) ->
+    case nova_sup:listeners_owner() of
+        Owner -> State;
+        _Gone -> unwatched(State)
+    end;
+current(State) ->
+    State.
 
 compiles_routes({add, _App, _Settings}, #state{owner = Owner}) -> Owner =/= undefined;
 compiles_routes({listening, _Owner}, _State) -> true;
@@ -208,20 +244,35 @@ compiles_routes(_Request, _State) -> false.
 
 in_worker(Request, State) ->
     Tag = make_ref(),
-    {Worker, Monitor} = spawn_monitor(?MODULE, work, [self(), Tag, Request, State]),
+    {Worker, Monitor} = spawn_opt(?MODULE, work, [self(), Tag, Request, State], [link, monitor]),
     receive
         {Tag, Answer} ->
             true = demonitor(Monitor, [flush]),
             Answer;
         {'DOWN', Monitor, process, Worker, Reason} ->
-            {raised, exit, Reason, []}
+            %% What a router links to can go down with the settings of a
+            %% listener as its reason.
+            {raised, exit, nova_redact:tls_options(Reason), []}
     end.
 
+%% There is one at a time, so it has a name, by which it is stopped when
+%% the listeners are.
 -spec work(pid(), reference(), term(), #state{}) -> ok.
 work(Registry, Tag, Request, State) ->
     put(?ADDING, true),
+    true = register(?WORKER, self()),
     Registry ! {Tag, handled(Request, State)},
     ok.
+
+%% The label of a worker says which application it is adding.
+adding(App) ->
+    proc_lib:set_label({?MODULE, App}).
+
+added_by(Worker) ->
+    case proc_lib:get_label(Worker) of
+        {?MODULE, App} -> App;
+        _None -> undefined
+    end.
 
 handled(Request, State) ->
     try
@@ -234,20 +285,24 @@ handled(Request, State) ->
 handle({add, App, Settings}, State = #state{owner = undefined}) ->
     case expected(State) of
         {ok, Listeners} ->
-            case place(App, Settings, Listeners) of
+            case place(App, Settings, Listeners, State) of
                 {on, Name, Bind} -> with_row(App, Settings, Name, Bind, false, [], State);
                 {start, Bind} -> with_row(App, Settings, App, Bind, false, [started(App, Settings, Bind)], State);
+                {served, {Host, Port}} -> {{ok, App, Host, Port}, State};
                 {error, Reason} -> {{error, Reason}, State}
             end;
         {error, Reason} ->
             {{error, Reason}, State}
     end;
 handle({add, App, Settings}, State) ->
+    ok = adding(App),
     Unserved = nova_sup:unserved_groups(),
-    case put_on(App, Settings, place(App, Settings, nova_sup:running())) of
+    case put_on(App, Settings, place(App, Settings, nova_sup:running(), State)) of
         {ok, Name, Bind, Started} ->
             ok = warn_unserved(App, nova_sup:unserved_groups() -- Unserved),
             with_row(App, Settings, Name, Bind, true, Started, State);
+        {served, {Host, Port}} ->
+            {{ok, App, Host, Port}, State};
         {error, Reason} ->
             {{error, Reason}, State}
     end;
@@ -293,41 +348,66 @@ started(Name, Settings, Bind) ->
 %% its settings. When none is, one is started for it under its own name,
 %% which no other listener may have. `Listeners` are those that are up, or
 %% those that are going to be.
-place(App, #{listener := Name}, Listeners) ->
+place(App, #{listener := Name} = Settings, Listeners, State) ->
     case lists:keyfind(Name, 1, Listeners) of
-        {Name, Bind, Apps} -> on_listener(App, Name, Bind, Apps);
+        {Name, Bind, Apps} -> on_listener(App, Name, Bind, Apps, maps:without([listener], Settings), State);
         false -> {error, {no_such_listener, Name}}
     end;
-place(App, Settings, Listeners) ->
+place(App, Settings, Listeners, State) ->
     case nova_listener:normalize(App, nova_listener:runtime_settings(Settings), #{applications => [App]}) of
+        {ok, #{port := 0}} ->
+            %% Which port that would be is not known here, and the next to
+            %% ask for one would be put on the same listener.
+            {error, {invalid_listener_setting, App, port, 0}};
         {ok, #{ip := Host, port := Port}} ->
             case {lists:keyfind({Host, Port}, 2, Listeners), lists:keymember(App, 1, Listeners)} of
-                {{Name, Bind, Apps}, _Named} -> on_listener(App, Name, Bind, Apps);
-                {false, true} -> {error, {listener_exists, App}};
-                {false, false} -> {start, {Host, Port}}
+                {{Name, Bind, Apps}, _Named} ->
+                    on_listener(App, Name, Bind, Apps, maps:without([ip, port], Settings), State);
+                {false, true} ->
+                    {error, {listener_exists, App}};
+                {false, false} ->
+                    {start, {Host, Port}}
             end;
         {error, Reason} ->
             {error, Reason}
     end.
 
-on_listener(App, Name, Bind, Apps) ->
-    case lists:member(App, Apps) of
-        true -> {error, {already_started, App}};
-        false -> {on, Name, Bind}
+%% A listener that is there serves as it was started. Settings that ask it
+%% for something, TLS or steps of its own say, would not be applied, so
+%% an application that comes with them is not put on it. The settings a
+%% listener was started with for an application are those it has.
+%%
+%% An application that is on the listener and was not added to it is one
+%% the configuration lists there. It is served where it asks to be, as a
+%% library that adds itself as it starts may find, and is not kept as
+%% added. Adding one a second time is what is refused.
+on_listener(App, Name, Bind, Apps, Asked, #state{rows = Rows, started = Started}) ->
+    case {applied(Name, Asked, Started), lists:member(App, apps_on(Name, Rows)), lists:member(App, Apps)} of
+        {false, _Added, _On} -> {error, {listener_settings_ignored, Name, lists:sort(maps:keys(Asked))}};
+        {true, true, _On} -> {error, {already_started, App}};
+        {true, false, true} -> {served, Bind};
+        {true, false, false} -> {on, Name, Bind}
+    end.
+
+applied(_Name, Asked, _Started) when map_size(Asked) =:= 0 ->
+    true;
+applied(Name, Asked, Started) ->
+    case lists:keyfind(Name, #started.name, Started) of
+        #started{settings = With} when is_map(With) -> maps:without([ip, port], With) =:= Asked;
+        _NotStartedWithAny -> false
     end.
 
 %% The listeners there are going to be: those of the configuration, and
-%% those that are started for an application. A library that adds itself
-%% as it starts may be listed by the configuration as well, which is not
-%% adding it twice.
+%% those that are started for an application.
 expected(#state{rows = Rows, started = Started}) ->
     case nova_listener:configured() of
         {ok, Configured} ->
-            {ok, [{Name, {Host, Port}, apps_on(Name, Rows)}
-                  || #{name := Name, ip := Host, port := Port} <- Configured]
+            {ok, [{Name, {Host, Port}, Apps ++ apps_on(Name, Rows)}
+                  || #{name := Name, ip := Host, port := Port, applications := Apps} <- Configured]
                  ++ [{Name, Bind, apps_on(Name, Rows)} || #started{name = Name, bind = Bind} <- Started]};
         {error, Reason} ->
-            {error, Reason}
+            %% What is not valid can be the TLS options of a listener.
+            {error, nova_redact:tls_options(Reason)}
     end.
 
 apps_on(Name, Rows) ->
@@ -343,6 +423,8 @@ put_on(App, Settings, {start, _Bind}) ->
         {ok, Host, Port} -> {ok, App, {Host, Port}, [started(App, Settings, {Host, Port})]};
         {error, Reason} -> {error, Reason}
     end;
+put_on(_App, _Settings, {served, Bind}) ->
+    {served, Bind};
 put_on(_App, _Settings, {error, Reason}) ->
     {error, Reason}.
 
@@ -362,6 +444,7 @@ replay([], _Started, _Up, Replayed, Brought, Unserved) ->
         {error, Reason} -> {error, Reason}
     end;
 replay([#added{app = App, listener = Name, served = Served} = Row | Rows], Started, Up, Replayed, Brought, Before) ->
+    ok = adding(App),
     try back_on(Row, Started, Up) of
         {ok, Host, Port} ->
             Unserved = nova_sup:unserved_groups(),
@@ -383,6 +466,8 @@ replay([#added{app = App, listener = Name, served = Served} = Row | Rows], Start
 %% is gone from it.
 back_on(#added{app = App, listener = Name, settings = Settings, bind = Bind}, Started, Up) ->
     case lists:keyfind(Name, #started.name, Started) of
+        #started{settings = lost} ->
+            {error, {no_such_listener, Name}};
         #started{settings = With} ->
             case lists:member(Name, Up) of
                 true -> nova_sup:attach_to_listener(App, Name);
@@ -392,7 +477,11 @@ back_on(#added{app = App, listener = Name, settings = Settings, bind = Bind}, St
             case lists:keyfind(Name, 1, nova_sup:running()) of
                 {Name, On, _Apps} when On =:= Bind; is_map_key(listener, Settings) ->
                     nova_sup:attach_to_listener(App, Name);
-                _Elsewhere ->
+                {Name, On, _Apps} ->
+                    ?LOG_NOTICE(#{msg => ~"A listener is no longer at the address an application was added to it by",
+                                  app => App, listener => Name, added_at => Bind, listener_at => On}),
+                    {error, {no_such_listener, Name}};
+                false ->
                     {error, {no_such_listener, Name}}
             end
     end.

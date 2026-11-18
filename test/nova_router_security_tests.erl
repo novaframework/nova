@@ -38,6 +38,30 @@ secure_of(GroupSecurity, AppOptions) ->
     nova_router:delete_dispatch(?KEY),
     Secure.
 
+%% A router that takes its time can find the table of its listener
+%% replaced, by a listener that was started again. What it read before is
+%% not written over the new one.
+replaced_table_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             Open = group(unset),
+             nova_test_mounted_router:set_routes([Open]),
+             _ = nova_router:compile_fresh([nova_test_sub_app], ?KEY),
+             ok = meck:new(nova_test_mounted_router, [passthrough, no_link]),
+             try
+                 ok = meck:expect(nova_test_mounted_router, routes,
+                                  fun(_Env) ->
+                                          _ = nova_router:compile_fresh([], ?KEY),
+                                          [Open]
+                                  end),
+                 ?assertError({routing_table_replaced, ?KEY}, nova_router:compile([nova_test_sub_app], ?KEY))
+             after
+                 meck:unload(nova_test_mounted_router)
+             end,
+             ?assertEqual(error, element(1, nova_routing_trie:find('_', ~"/admin/", ~"GET",
+                                                                   persistent_term:get(?KEY))))
+     end}.
+
 precedence_test_() ->
     Group = fun ?MODULE:group_callback/1,
     Host = fun ?MODULE:host_callback/1,

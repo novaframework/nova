@@ -179,12 +179,20 @@ compile(Apps, DispatchKey) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
     StorageBackend = storage_backend(),
 
+    Generation = StorageBackend:get(generation_key(DispatchKey), undefined),
     StoredDispatch = StorageBackend:get(DispatchKey,
                                         nova_routing_trie:new(#{strict => UseStrict})),
     Dispatch = compile(Apps, StoredDispatch, with_serving(#{dispatch_key => DispatchKey})),
-    %% Write the updated dispatch to storage
-    StorageBackend:put(DispatchKey, Dispatch),
-    Dispatch.
+    %% The routers of the applications ran meanwhile. A listener that was
+    %% started again by now has a table of its own, which the routes and
+    %% the security callbacks read before are not written over.
+    case StorageBackend:get(generation_key(DispatchKey), undefined) of
+        Generation ->
+            StorageBackend:put(DispatchKey, Dispatch),
+            Dispatch;
+        _Replaced ->
+            error({routing_table_replaced, DispatchKey})
+    end.
 
 %%--------------------------------------------------------------------
 %% As compile/2, but starting from an empty routing table that replaces
@@ -207,6 +215,7 @@ compile_fresh(Apps, DispatchKey) ->
 compile_fresh(Apps, DispatchKey, Serving) ->
     UseStrict = application:get_env(nova, use_strict_routing, false),
     StorageBackend = storage_backend(),
+    StorageBackend:put(generation_key(DispatchKey), make_ref()),
     StorageBackend:put(apps_key(DispatchKey), []),
     StorageBackend:put(serving_key(DispatchKey), Serving),
     StorageBackend:put(bound_key(DispatchKey), []),
@@ -509,7 +518,8 @@ delete_dispatch(DispatchKey) ->
     case storage_backend() of
         persistent_term ->
             _ = [persistent_term:erase(Key)
-                 || Key <- [DispatchKey, apps_key(DispatchKey), serving_key(DispatchKey), bound_key(DispatchKey)]],
+                 || Key <- [DispatchKey, apps_key(DispatchKey), serving_key(DispatchKey), bound_key(DispatchKey),
+                            generation_key(DispatchKey)]],
             ok;
         _Backend ->
             %% A custom backend has no erase in its contract; leave it to
@@ -1127,6 +1137,9 @@ apps_key(DispatchKey)     -> {?NOVA_APPS, DispatchKey}.
 %% theirs.
 serving_key(DispatchKey) -> {nova_serving, DispatchKey}.
 bound_key(DispatchKey)   -> {nova_bound_groups, DispatchKey}.
+
+%% Which table is under the key: a listener that starts has a new one.
+generation_key(DispatchKey) -> {nova_generation, DispatchKey}.
 
 with_serving(Options = #{dispatch_key := DispatchKey}) ->
     StorageBackend = storage_backend(),

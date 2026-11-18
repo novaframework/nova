@@ -39,7 +39,7 @@ Each listener owns its own routing table, so an application started on a second 
 -export([start_listeners/1, shutdown_listeners/0, shutdown_listeners/1, stop_listeners/1]).
 
 %% Called by nova_applications
--export([running/0, listeners_owner/0, attach_to_listener/2, start_listener_for/3, detach_application/1,
+-export([running/0, added/0, listeners_owner/0, attach_to_listener/2, start_listener_for/3, detach_application/1,
          unserved_groups/0, check_route_groups/1]).
 
 %% Started by the supervisor as its first child
@@ -50,7 +50,11 @@ Each listener owns its own routing table, so an application started on a second 
                         bind :: {inet:ip_address() | string(), inet:port_number()},
                         server :: module(),
                         apps = [] :: [atom()],
-                        dispatch_key :: nova_router:dispatch_key()
+                        dispatch_key :: nova_router:dispatch_key(),
+                        %% Those of `apps` that were added at runtime, and
+                        %% whether the listener was started for one of them.
+                        added = [] :: [atom()],
+                        for_application = false :: boolean()
                        }).
 
 %%%===================================================================
@@ -78,6 +82,13 @@ bound to the `ip` and `port` of the settings, and when there is none a
 listener named after the application is started with them, unless a
 listener has that name already: `{error, {listener_exists, App}}`.
 
+A listener that is there serves as it was started, so an application is
+not added to it with settings that ask it for something else, `tls` or
+`steps` say: `{error, {listener_settings_ignored, Name, Keys}}`. The
+settings a listener was started with for an application are those it has.
+`port => 0` is refused, since the port that would be is not known when the
+application is added: `{error, {invalid_listener_setting, App, port, 0}}`.
+
 An application that starts before the server package has, as a library that
 calls this from its `start/2` may, is added once the listeners of the
 configuration are started. The answer is where it will be served, and the
@@ -100,9 +111,17 @@ stops with `{application_not_added, App, {no_such_listener, Name}}`. When
 the address of a listener that was started for an application is that of
 another by then, it stops with `{address_in_use, Other}` as the reason.
 
+An application the configuration lists on the listener it is added to is
+served there already: the answer says where, and it is not remembered as
+added. `{error, {already_started, App}}` is the answer to adding an
+application to a listener a second time.
+
 Applications are added and removed one at a time. The routes of an added
-application are compiled in a process of Nova's, and a router that calls
-this from there gets `{error, adding_an_application}`.
+application are compiled in a process of Nova's that does not outlive the
+call, and a router that calls this from there gets
+`{error, adding_an_application}`. An application that is still being added
+`shutdown_drain_timeout` after the server package began to stop is not
+added, and the call exits with `killed`.
 
 `{error, server_not_started}` when the `nova` application is not running.
 """.
@@ -118,6 +137,15 @@ add_application(App, Settings) ->
 -spec running() -> [{nova_listener:name(), {inet:ip_address() | string(), inet:port_number()}, [atom()]}].
 running() ->
     [{Name, Bind, Apps} || #nova_listener{name = Name, bind = Bind, apps = Apps} <- all_listeners()].
+
+-doc false.
+%% For nova_applications when it is started again: what was added to the
+%% listeners that are up, and whether a listener was started for it.
+-spec added() -> [{nova_listener:name(), {inet:ip_address() | string(), inet:port_number()}, [atom()], boolean()}].
+added() ->
+    [{Name, Bind, Added, ForApplication}
+     || #nova_listener{name = Name, bind = Bind, added = Added, for_application = ForApplication}
+            <- all_listeners()].
 
 -doc false.
 %% For nova_applications: the process that has the listeners, when there
@@ -140,8 +168,10 @@ listeners_owner() ->
 attach_to_listener(App, Name) ->
     case find_listener(Name) of
         {ok, Listener = #nova_listener{bind = {Host, Port}}} ->
-            _ = attach_application(App, Listener),
-            {ok, Host, Port};
+            case attach_application(App, Listener) of
+                {error, {no_such_listener, Name}} -> {error, {no_such_listener, Name}};
+                _AddedOrListed -> {ok, Host, Port}
+            end;
         error ->
             {error, {no_such_listener, Name}}
     end.
@@ -164,8 +194,11 @@ start_listener_for(Name, App, Settings) ->
                     {error, {address_in_use, By}};
                 {error, error} ->
                     case start_checked(nova_server:module(), Listener#{applications := [App]}) of
-                        {ok, App, Host, Port} -> {ok, Host, Port};
-                        {error, Reason} -> {error, Reason}
+                        {ok, App, Host, Port} ->
+                            ok = for_application(Name, App),
+                            {ok, Host, Port};
+                        {error, Reason} ->
+                            {error, Reason}
                     end
             end;
         {error, Reason} ->
@@ -503,8 +536,8 @@ dispatch_key(#{name := Name, applications := Apps}) ->
         false -> {nova_dispatch, Name}
     end.
 
-start_listener(Server, Listener = #{name := Name, ip := Host, port := Port, tls := Tls,
-                                    applications := [App | _] = Apps, protocols := Protocols}) ->
+start_listener(Server, Listener = #{name := Name, ip := Host, port := Port, applications := Apps,
+                                    protocols := Protocols}) ->
     DispatchKey = dispatch_key(Listener),
     %% The applications a listener serves say in their environment which
     %% others they mount, so it has to be loaded by now. It is in a release.
@@ -527,28 +560,44 @@ start_listener(Server, Listener = #{name := Name, ip := Host, port := Port, tls 
                end,
     case Server:start_listener(Listener, env(Server, Listener, DispatchKey, Dispatch)) of
         {ok, _Pid} ->
-            register_listener(#nova_listener{name = Name,
-                                             bind = {Host, Port},
-                                             server = Server,
-                                             apps = Apps,
-                                             dispatch_key = DispatchKey}),
-            say_what_the_session_cookie_needs(Tls =/= false),
-            note_http3_only(Name, Names),
-            ?LOG_NOTICE(#{msg => ~"Nova is running",
-                          url => unicode:characters_to_binary(
-                                   io_lib:format("~s://~s:~B", [scheme(Tls), format_host(Host), Port])),
-                          listener => Name,
-                          protocols => nova_listener:protocol_names(Protocols),
-                          server => Server,
-                          nova_version => get_version(nova),
-                          apps => Apps}),
-            {ok, App, Host, Port};
+            started(Server, Listener, #nova_listener{name = Name,
+                                                     bind = {Host, Port},
+                                                     server = Server,
+                                                     apps = Apps,
+                                                     dispatch_key = DispatchKey});
         {error, NotStarted} ->
             Reason = nova_redact:tls_options(NotStarted),
             ok = nova_router:delete_dispatch(DispatchKey),
             ?LOG_ERROR(#{msg => ~"Could not start listener",
                          listener => Name, port => Port, server => Server, reason => Reason}),
             {error, {listener_not_started, Reason}}
+    end.
+
+%% The listeners go with their owner, and that can be as one is started for
+%% an application. It is then not left serving with nothing that stops it.
+started(Server, #{name := Name, ip := Host, port := Port, tls := Tls, applications := [App | _] = Apps,
+                  protocols := Protocols},
+        Listener = #nova_listener{dispatch_key = DispatchKey}) ->
+    Names = nova_listener:protocol_names(Protocols),
+    case registered(Listener) of
+        ok ->
+            say_what_the_session_cookie_needs(Tls =/= false),
+            note_http3_only(Name, Names),
+            ?LOG_NOTICE(#{msg => ~"Nova is running",
+                          url => unicode:characters_to_binary(
+                                   io_lib:format("~s://~s:~B", [scheme(Tls), format_host(Host), Port])),
+                          listener => Name,
+                          protocols => Names,
+                          server => Server,
+                          nova_version => get_version(nova),
+                          apps => Apps}),
+            {ok, App, Host, Port};
+        {error, listeners_stopped} ->
+            _ = Server:stop_listener(Name),
+            ok = nova_router:delete_dispatch(DispatchKey),
+            ?LOG_ERROR(#{msg => ~"The listeners were stopped as one was started, which is stopped with them",
+                         listener => Name, port => Port, server => Server}),
+            {error, {listener_not_started, listeners_stopped}}
     end.
 
 %% The versions a server takes WebSockets over can depend on how the
@@ -600,27 +649,50 @@ say_what_the_session_cookie_needs(false) ->
 %% Runtime application lifecycle
 %%--------------------------------------------------------------------
 
-attach_application(App, Listener = #nova_listener{name = Name, apps = Apps, bind = {Host, Port},
-                                                  dispatch_key = DispatchKey}) ->
+attach_application(App, #nova_listener{name = Name, apps = Apps, bind = {Host, Port}, dispatch_key = DispatchKey}) ->
     case lists:member(App, Apps) of
         true ->
             {error, {already_started, App}};
         false ->
             nova_router:compile(resolve_nova_apps(with_nova_apps(App)), DispatchKey),
-            register_listener(Listener#nova_listener{apps = Apps ++ [App]}),
-            ?LOG_NOTICE(#{msg => ~"Added Nova application to an existing listener",
-                          app => App, port => Port, listener => Name}),
-            {ok, App, Host, Port}
+            %% The router of the application ran meanwhile, so the listener
+            %% is what it is now and not what it was before.
+            case find_listener(Name) of
+                {ok, Listener = #nova_listener{apps = Now, added = Added, bind = {Host, Port},
+                                               dispatch_key = DispatchKey}} ->
+                    case registered(Listener#nova_listener{apps = Now ++ [App], added = Added ++ [App]}) of
+                        ok ->
+                            ?LOG_NOTICE(#{msg => ~"Added Nova application to an existing listener",
+                                          app => App, port => Port, listener => Name}),
+                            {ok, App, Host, Port};
+                        {error, listeners_stopped} ->
+                            {error, {no_such_listener, Name}}
+                    end;
+                _GoneOrAnother ->
+                    {error, {no_such_listener, Name}}
+            end
     end.
 
-detach_application(App, #nova_listener{name = Name, apps = Apps, dispatch_key = DispatchKey} = Listener) ->
+%% A listener that is started for an application says so, and that the
+%% application was added.
+for_application(Name, App) ->
+    case find_listener(Name) of
+        {ok, Listener} ->
+            _ = registered(Listener#nova_listener{added = [App], for_application = true}),
+            ok;
+        error ->
+            ok
+    end.
+
+detach_application(App, #nova_listener{name = Name, apps = Apps, added = Added,
+                                       dispatch_key = DispatchKey} = Listener) ->
     ok = nova_router:remove_application(App, DispatchKey),
     case lists:delete(App, Apps) of
         [] ->
             ?LOG_NOTICE(#{msg => ~"Stopping listener", app => App, listener => Name}),
             stop_listener(Name);
         Remaining ->
-            register_listener(Listener#nova_listener{apps = Remaining}),
+            register_listener(Listener#nova_listener{apps = Remaining, added = lists:delete(App, Added)}),
             ok
     end.
 
@@ -642,6 +714,14 @@ stop_listener(Name) ->
 register_listener(Listener) ->
     true = ets:insert(?NOVA_LISTENERS_TABLE, Listener),
     ok.
+
+%% The table goes with the owner of the listeners.
+registered(Listener) ->
+    try
+        register_listener(Listener)
+    catch
+        error:badarg -> {error, listeners_stopped}
+    end.
 
 %%--------------------------------------------------------------------
 %% Shutdown

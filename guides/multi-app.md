@@ -230,11 +230,14 @@ What happens depends on whether the host and port are already bound:
   error pages. The listener serves only those routes.
 - **A port Nova already listens on.** The application's routes are added to
   that listener's existing routing table, and the two applications are served
-  side by side.
+  side by side. The listener serves as it was started, so settings other
+  than the address are refused with
+  `{error, {listener_settings_ignored, Name, Keys}}`.
 
-Adding an application to a listener that serves it already returns
-`{error, {already_started, App}}`. A new listener is named after the
-application, so when a listener has that name the answer is
+Adding an application to a listener a second time returns
+`{error, {already_started, App}}`. One the configuration lists on the
+listener is served there already, and the answer says where. A new listener
+is named after the application, so when a listener has that name the answer is
 `{error, {listener_exists, App}}`. That is a listener of the configuration,
 or one that was started for the application before and still serves
 another: see [Servers and listeners](listeners.md#at-runtime).

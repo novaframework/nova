@@ -123,7 +123,12 @@ capabilities() ->
 %%% Listeners
 %%%===================================================================
 
--doc "The name Roadrunner knows the listener by, for `roadrunner_listener:info/1` and the like.".
+-doc """
+The name Roadrunner knows the listener by, for `roadrunner_listener:info/1`
+and the like. Names that start with `nova_listener_` are Nova's: a Roadrunner
+listener that has one is stopped and replaced when Nova starts the listener
+of that name.
+""".
 -spec roadrunner_name(nova_listener:name()) -> atom().
 roadrunner_name(Name) ->
     %% One atom for each listener of the configuration.
