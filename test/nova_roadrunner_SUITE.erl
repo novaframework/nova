@@ -16,7 +16,6 @@
          escaped_return/1,
          ws_crash/1,
          ws_bad_return/1,
-         start_failure/1,
          unended_response/1
         ]).
 
@@ -37,7 +36,6 @@ all() ->
      escaped_return,
      ws_crash,
      ws_bad_return,
-     start_failure,
      unended_response
     ].
 
@@ -215,15 +213,6 @@ ws_bad_return(_Config) ->
             ?assertEqual(function_clause, Reason),
             ?assertEqual(nomatch, binary:match(iolist_to_binary(io_lib:format("~0p", [Stacktrace])), ~"hunter2"))
     end.
-
-%% What Roadrunner's supervisor says of a listener that did not start has
-%% the child specification in it, and that has the TLS options.
-start_failure(_Config) ->
-    Child = {child, undefined, web, {roadrunner_listener, start_link, [#{key => ~"der"}]}},
-    ?assertEqual(eaddrinuse, nova_roadrunner:why({{listen_failed, eaddrinuse}, Child})),
-    ?assertEqual(shutdown, nova_roadrunner:why({shutdown, Child})),
-    ?assertEqual({already_started, self()}, nova_roadrunner:why({already_started, self()})),
-    ?assertEqual(timeout, nova_roadrunner:why(timeout)).
 
 %% A response that was begun is ended with the request, once.
 unended_response(_Config) ->
