@@ -23,7 +23,7 @@ try_start(Options) ->
 
 try_start(Options, Attempts) ->
     case boot(Options, free_port()) of
-        {error, {nova, {{shutdown, {failed_to_start_child, nova_listener, {listener_not_started, eaddrinuse}}},
+        {error, {nova_cowboy, {{shutdown, {failed_to_start_child, nova_listener, {listener_not_started, eaddrinuse}}},
                         _Start}}} when Attempts > 1 ->
             ok = stop(),
             try_start(Options, Attempts - 1);
@@ -54,8 +54,13 @@ configure(Options) ->
     nova_test_nested_router:set_routes(maps:get(nested, Options, [])),
     nova_test_deep_router:set_routes(maps:get(deep, Options, [])),
     application:set_env(nova, bootstrap_application, nova_test_app),
-    application:set_env(nova, cowboy_configuration,
-                        #{port => Port, options => maps:get(cowboy_options, Options, #{})}),
+    case Options of
+        #{listeners := Listeners} ->
+            application:set_env(nova, listeners, Listeners);
+        #{} ->
+            application:set_env(nova, cowboy_configuration,
+                                #{port => Port, options => maps:get(cowboy_options, Options, #{})})
+    end,
     application:set_env(nova, environment, test),
     application:set_env(nova, plugins, []),
     application:set_env(nova_test_app, router_module, nova_test_host_router),
@@ -73,10 +78,12 @@ configure(Options) ->
 -spec stop() -> ok.
 stop() ->
     application:stop(nova_test_app),
+    application:stop(nova_cowboy),
     application:stop(nova),
     application:unload(nova_test_app),
     application:unload(nova_test_sub_app),
     application:unset_env(nova, cowboy_configuration),
+    application:unset_env(nova, listeners),
     application:unset_env(nova_test_nested_app, router_module),
     application:unset_env(nova_test_nested_app, nova_apps),
     application:unset_env(nova_test_deep_app, router_module),

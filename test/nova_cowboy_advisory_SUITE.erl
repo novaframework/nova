@@ -48,6 +48,7 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
     persistent_term:erase(nova_test_app_plugin),
     application:stop(nova_test_app),
+    application:stop(nova_cowboy),
     application:stop(nova),
     ok.
 

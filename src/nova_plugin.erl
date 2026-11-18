@@ -62,12 +62,12 @@ site the request was made to, and answers `400` for anything else.
 """.
 -type reply() :: {reply, Body :: iodata()} |
                  {reply, Status :: integer(), Body :: iodata()} |
-                 {reply, Status :: integer(), Headers :: cowboy:http_headers() | [{binary(), iodata()}],
+                 {reply, Status :: integer(), Headers :: nova_req:http_headers() | [{binary(), iodata()}],
                   Body :: iodata()} |
                  {redirect, Url :: binary() | string()} |
                  {redirect_local, Path :: binary() | string()} |
                  {status, Status :: integer()} |
-                 {status, Status :: integer(), Headers :: cowboy:http_headers() | [{binary(), iodata()}]}.
+                 {status, Status :: integer(), Headers :: nova_req:http_headers() | [{binary(), iodata()}]}.
 
 -doc """
 Called when the plugin is first found in a routing table: at start for the

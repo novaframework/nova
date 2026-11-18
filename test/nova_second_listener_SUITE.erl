@@ -66,20 +66,20 @@ bootstrap_listener_keeps_its_pages(Config) ->
     ?assertEqual(404, Status),
     ?assertNotEqual(~"second 404", Body).
 
-lookup_by_dispatch_key(Config) ->
-    SecondKey = {nova_dispatch, nova_test_sub_app, ?config(second_port, Config)},
+lookup_by_dispatch_key(_Config) ->
+    SecondKey = {nova_dispatch, nova_test_sub_app},
     ?assertMatch({ok, _, _}, nova_router:lookup_url('_', ~"/only-second", ~"GET", SecondKey)),
     ?assertEqual({error, not_found}, nova_router:lookup_url('_', ~"/only-second", ~"GET", nova_dispatch)),
     ?assertEqual({error, not_found}, nova_router:lookup_url('_', ~"/only-second", ~"GET")).
 
 dispatch_key_of_a_request(Config) ->
     SecondPort = ?config(second_port, Config),
-    Expected = iolist_to_binary(io_lib:format("~0p", [{nova_dispatch, nova_test_sub_app, SecondPort}])),
+    Expected = iolist_to_binary(io_lib:format("~0p", [{nova_dispatch, nova_test_sub_app}])),
     ?assertEqual({200, ~"nova_dispatch"}, nova_test_listener:get(?config(first_port, Config), "/key")),
     ?assertEqual({200, Expected}, nova_test_listener:get(SecondPort, "/key")).
 
-dispatch_key_is_not_looked_up_by_listener(Config) ->
-    Listener = {nova_listener, nova_test_sub_app, ?config(second_port, Config)},
+dispatch_key_is_not_looked_up_by_listener(_Config) ->
+    Listener = nova_test_sub_app,
     ?assert(lists:member(Listener, nova_sup:listeners())),
     ?assertEqual(nova_dispatch, nova_router:dispatch_key(#{ref => Listener})).
 

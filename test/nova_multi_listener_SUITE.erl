@@ -51,6 +51,7 @@ init_per_suite(Config) ->
 
 end_per_suite(_Config) ->
     application:stop(nova_test_app),
+    application:stop(nova_cowboy),
     application:stop(nova),
     ok.
 
@@ -62,7 +63,7 @@ bootstrap_listener_is_registered(Config) ->
     Port = ?config(port, Config),
     Started = nova_sup:get_started_applications(),
     ?assertMatch([_ | _], [S || S = #{app := nova_test_app, port := P} <- Started, P =:= Port]),
-    ?assert(lists:member(nova_listener, nova_sup:listeners())).
+    ?assert(lists:member(default, nova_sup:listeners())).
 
 second_application_gets_its_own_port(_Config) ->
     Port = nova_test_listener:free_port(),
@@ -145,7 +146,7 @@ an_explicit_host_does_not_match_the_wildcard_listener(Config) ->
                                       #{ip => {127, 0, 0, 1}, port => BootstrapPort}),
     try
         ?assertEqual([nova_test_app],
-                     [A || #{app := A, listener := nova_listener}
+                     [A || #{app := A, listener := default}
                                <- nova_sup:get_started_applications()])
     after
         case Result of
@@ -183,7 +184,7 @@ removing_an_application_stops_only_its_listener(Config) ->
     ?assertEqual(2, length(nova_sup:listeners())),
 
     ok = nova_sup:remove_application(nova_test_sub_app),
-    ?assertEqual([nova_listener], nova_sup:listeners()),
+    ?assertEqual([default], nova_sup:listeners()),
 
     %% The port is released, and the bootstrap listener still answers.
     ?assertEqual({error, econnrefused}, connect(Port)),

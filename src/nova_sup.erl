@@ -4,7 +4,7 @@
 -moduledoc """
 Nova supervisor.
 
-Owns the Cowboy listeners. The bootstrap application gets one at startup from the `cowboy_configuration` key, and further applications can be started and stopped at runtime with `add_application/2` and `remove_application/1`.
+Keeps track of the listeners. Those of the `listeners` configuration are started by the server package as its application starts, and further applications can be started and stopped at runtime with `add_application/2` and `remove_application/1`.
 
 Each listener owns its own routing table, so an application started on a second port serves only its own routes. Applications added to a listener that is already bound to the same host and port share that listener's table instead.
 """.
@@ -33,26 +33,22 @@ Each listener owns its own routing table, so an application started on a second 
 
 -define(SERVER, ?MODULE).
 -define(NOVA_LISTENER, nova_listener).
--define(NOVA_STD_PORT, 8080).
--define(NOVA_STD_SSL_PORT, 8443).
 -define(NOVA_LISTENERS_TABLE, nova_listeners).
 
 -type nova_app() :: atom() | {atom(), map()}.
 
-%% Started by the supervisor as its last child
--export([start_listener_child/1]).
+%% Called by nova_listener_owner, in the application of the server package
+-export([start_listeners/1, shutdown_listeners/0, stop_listeners/0]).
 
 %% Started by the supervisor as its first child
 -export([start_pubsub_scope/0]).
 
-%% Keyed on bind: one listener per {Host, Port} is the invariant
-%% add_application/2 relies on, so that pair is the table key.
 -record(nova_listener, {
+                        name :: nova_listener:name(),
                         bind :: {inet:ip_address() | string(), inet:port_number()},
-                        ref :: ranch:ref(),
+                        server :: module(),
                         apps = [] :: [atom()],
-                        dispatch_key :: nova_router:dispatch_key(),
-                        tls = false :: boolean()
+                        dispatch_key :: nova_router:dispatch_key()
                        }).
 
 %%%===================================================================
@@ -61,8 +57,8 @@ Each listener owns its own routing table, so an application started on a second 
 
 %%--------------------------------------------------------------------
 -doc """
-Starts the supervisor, which starts the listener of the bootstrap
-application as its last child. The `nova` application calls it.
+Starts the supervisor of the `nova` application. The listeners are started
+by the application of the server package, which starts after this one.
 """.
 -spec start_link() -> {ok, Pid :: pid()} | ignore | {error, Error :: any()}.
 start_link() ->
@@ -72,19 +68,35 @@ start_link() ->
 -doc """
 Start a Nova application at runtime.
 
-`Configuration` takes the same shape as the `cowboy_configuration` environment key. If a listener is already bound to the requested host and port, the application's routes are added to that listener's routing table. Otherwise a new listener is started with a routing table of its own.
+`Settings` are those of a listener, as `nova_listener` describes them. With
+`#{listener => Name}` the routes of the application are added to the
+listener of that name. Without it they are added to the listener already
+bound to the `ip` and `port` of the settings, and when there is none a
+listener named after the application is started with them.
 """.
--spec add_application(App :: atom(), Configuration :: map()) ->
+-spec add_application(App :: atom(), Settings :: map()) ->
           {ok, App :: atom(), Host :: inet:ip_address() | string(), Port :: inet:port_number()} |
           {error, Reason :: any()}.
-add_application(App, Configuration) ->
-    Host = maps:get(ip, Configuration, {0, 0, 0, 0}),
-    Port = effective_port(Configuration),
-    case find_listener(Host, Port) of
-        {ok, Listener} ->
-            attach_application(App, Listener);
-        error ->
-            start_listener(App, Host, Port, Configuration)
+add_application(App, Settings) ->
+    case ets:whereis(?NOVA_LISTENERS_TABLE) of
+        undefined -> {error, server_not_started};
+        _Tid -> add_to_listener(App, Settings)
+    end.
+
+add_to_listener(App, #{listener := Name}) ->
+    case find_listener(Name) of
+        {ok, Listener} -> attach_application(App, Listener);
+        error -> {error, {no_such_listener, Name}}
+    end;
+add_to_listener(App, Settings) ->
+    case nova_listener:normalize(App, nova_listener:from_legacy(Settings, App), #{applications => [App]}) of
+        {ok, #{ip := Host, port := Port} = Listener} ->
+            case find_listener(Host, Port) of
+                {ok, Bound} -> attach_application(App, Bound);
+                error -> start_checked(nova_server:module(), Listener#{applications := [App]})
+            end;
+        {error, Reason} ->
+            {error, Reason}
     end.
 
 %%--------------------------------------------------------------------
@@ -105,17 +117,58 @@ remove_application(App) ->
 -spec get_started_applications() -> [#{app := atom(),
                                        host := inet:ip_address() | string(),
                                        port := inet:port_number(),
-                                       listener := ranch:ref()}].
+                                       listener := nova_listener:name()}].
 get_started_applications() ->
-    [#{app => App, host => Host, port => Port, listener => Ref}
-     || #nova_listener{ref = Ref, apps = Apps, bind = {Host, Port}} <- all_listeners(),
+    [#{app => App, host => Host, port => Port, listener => Name}
+     || #nova_listener{name = Name, apps = Apps, bind = {Host, Port}} <- all_listeners(),
         App <- Apps].
 
 %%--------------------------------------------------------------------
--doc "The `ranch` reference of every Cowboy listener Nova has started.".
--spec listeners() -> [ranch:ref()].
+-doc "The names of the listeners that are started.".
+-spec listeners() -> [nova_listener:name()].
 listeners() ->
-    [Ref || #nova_listener{ref = Ref} <- all_listeners()].
+    [Name || #nova_listener{name = Name} <- all_listeners()].
+
+%%--------------------------------------------------------------------
+-doc false.
+%% Called by nova_listener_owner as it starts, in the application of a
+%% server package, after the `nova` application and the server itself have
+%% started. The caller owns the table of listeners from here on, so there
+%% are listeners for as long as it lives.
+-spec start_listeners(Server :: module()) -> ok | {error, Reason :: any()}.
+start_listeners(Server) ->
+    ?NOVA_LISTENERS_TABLE = ets:new(?NOVA_LISTENERS_TABLE,
+                                    [named_table, public, set, {keypos, #nova_listener.bind}]),
+    case nova_server:module() of
+        Server ->
+            try
+                start_configured(Server)
+            catch
+                throw:{error, Reason} -> {error, Reason}
+            end;
+        Other ->
+            ?LOG_NOTICE(#{msg => ~"Server package is started but not used: the server key of the nova application names another",
+                          started => Server, server => Other}),
+            ok
+    end.
+
+-doc false.
+%% Stops taking connections, waits for the open ones and stops the listeners.
+%% Called when the application of the server package stops, and when `nova`
+%% does, for the listeners that are still there then.
+-spec shutdown_listeners() -> ok.
+shutdown_listeners() ->
+    case all_listeners() of
+        [] -> ok;
+        Listeners -> graceful_shutdown(Listeners)
+    end.
+
+-doc false.
+%% Stops the listeners as they are, without waiting for their connections.
+-spec stop_listeners() -> ok.
+stop_listeners() ->
+    _ = [stop_listener(Name) || #nova_listener{name = Name} <- all_listeners()],
+    ok.
 
 %%--------------------------------------------------------------------
 -doc false.
@@ -145,9 +198,7 @@ init([]) ->
 
     ok = nova_settings:validate(),
 
-    ensure_listener_table(),
-
-    Configuration = application:get_env(nova, cowboy_configuration, #{}),
+    persistent_term:put(nova_use_stacktrace, application:get_env(nova, use_stacktrace, false)),
 
     SessionManager = application:get_env(nova, session_manager, nova_session_ets),
 
@@ -172,13 +223,7 @@ init([]) ->
             _ -> Children0
         end,
 
-    {ok, {SupFlags, [pubsub_scope_child() | Children] ++ [listener_child(Configuration)]}}.
-
-%%--------------------------------------------------------------------
--doc false.
--spec start_listener_child(Configuration :: map()) -> ignore | {error, Reason :: any()}.
-start_listener_child(Configuration) ->
-    setup_cowboy(Configuration).
+    {ok, {SupFlags, [pubsub_scope_child() | Children]}}.
 
 -doc false.
 -spec start_pubsub_scope() -> {ok, pid()} | ignore.
@@ -216,29 +261,6 @@ pubsub_scope_child() ->
       type => worker,
       modules => [pg]}.
 
-%% The listener is owned by ranch, so this child only binds it and leaves no
-%% process behind. It is last, so no request arrives before the processes a
-%% request needs are running, and a listener that cannot be bound stops the
-%% supervisor from starting.
-listener_child(Configuration) ->
-    #{id => ?NOVA_LISTENER,
-      start => {?MODULE, start_listener_child, [Configuration]},
-      restart => temporary,
-      type => worker}.
-
-%% Also called when a listener is registered, so creating it has to be
-%% idempotent. The supervisor owns the table, which goes when it does.
-%% It is public because add_application/2 and remove_application/1 are called
-%% by whoever wants the application started, not by the supervisor process.
-ensure_listener_table() ->
-    case ets:whereis(?NOVA_LISTENERS_TABLE) of
-        undefined ->
-            ets:new(?NOVA_LISTENERS_TABLE,
-                    [named_table, public, set, {keypos, #nova_listener.bind}]);
-        _Tid ->
-            ?NOVA_LISTENERS_TABLE
-    end.
-
 all_listeners() ->
     case ets:whereis(?NOVA_LISTENERS_TABLE) of
         undefined -> [];
@@ -256,60 +278,118 @@ find_listener(Host, Port) ->
             end
     end.
 
-setup_cowboy(Configuration) ->
-    case start_cowboy(Configuration) of
-        {ok, App, Host, Port} ->
-            Host0 = format_host(Host),
-            CowboyVersion = get_version(cowboy),
-            NovaVersion = get_version(nova),
-            UseStacktrace = application:get_env(nova, use_stacktrace, false),
-            persistent_term:put(nova_use_stacktrace, UseStacktrace),
-            ?LOG_NOTICE(#{msg => <<"Nova is running">>,
-                          url => unicode:characters_to_binary(io_lib:format("http://~s:~B", [Host0, Port])),
-                          cowboy_version => CowboyVersion, nova_version => NovaVersion, app => App}),
-            ignore;
-        {error, Error} ->
-            ?LOG_ERROR(#{msg => <<"Cowboy could not start">>, reason => Error}),
-            {error, {listener_not_started, Error}}
+find_listener(Name) ->
+    case [Listener || Listener = #nova_listener{name = N} <- all_listeners(), N =:= Name] of
+        [Listener] -> {ok, Listener};
+        [] -> error
     end.
 
--spec start_cowboy(Configuration :: map()) ->
-          {ok, BootstrapApp :: atom(), Host :: inet:ip_address() | string(),
-           Port :: inet:port_number()} | {error, Reason :: any()}.
-start_cowboy(Configuration) ->
-    BootstrapApp = application:get_env(nova, bootstrap_application, undefined),
+%%--------------------------------------------------------------------
+%% The listeners of the configuration
+%%--------------------------------------------------------------------
 
-    Dispatch =
-        case BootstrapApp of
-            undefined ->
-                ?LOG_ERROR(#{msg => <<"You need to define bootstrap_application option in configuration">>}),
-                throw({error, no_nova_app_defined});
-            App ->
-                %% Routes are first-wins. The bootstrap application comes
-                %% first so nothing it mounts can take over one of its routes,
-                %% and nova last so its 404/500 routes are only defaults.
-                nova_router:compile_fresh(resolve_nova_apps(with_nova_apps(App) ++ [nova]), nova_dispatch)
-        end,
+start_configured(Server) ->
+    case application:get_env(nova, bootstrap_application, undefined) of
+        undefined ->
+            ?LOG_ERROR(#{msg => <<"You need to define bootstrap_application option in configuration">>}),
+            {error, no_nova_app_defined};
+        _Bootstrap ->
+            case nova_listener:configured() of
+                {ok, Listeners} ->
+                    note_legacy_configuration(),
+                    start_all(Server, Listeners, []);
+                {error, Reason} ->
+                    ?LOG_ERROR(#{msg => ~"The listeners of the nova application are not configured as nova_listener describes",
+                                 reason => Reason}),
+                    {error, Reason}
+            end
+    end.
 
-    Host = maps:get(ip, Configuration, {0, 0, 0, 0}),
-    Port = effective_port(Configuration),
+note_legacy_configuration() ->
+    case application:get_env(nova, listeners) =:= undefined
+        andalso application:get_env(nova, cowboy_configuration) =/= undefined of
+        true ->
+            ?LOG_NOTICE(#{msg => ~"cowboy_configuration is read as the settings of one listener named default. Write it as {listeners, #{default => #{...}}}: see nova_listener",
+                          key => cowboy_configuration});
+        false ->
+            ok
+    end.
 
-    %% The bootstrap listener serves the default table: the compile/1 above
-    %% and every keyless nova_router caller already address it.
-    DispatchKey = nova_dispatch,
-    CowboyOptions = cowboy_options(Configuration, DispatchKey, Dispatch),
-
-    case bind(?NOVA_LISTENER, Host, Port, Configuration, CowboyOptions) of
-        {ok, Tls} ->
-            register_listener(#nova_listener{bind = {Host, Port},
-                                             ref = ?NOVA_LISTENER,
-                                             apps = [BootstrapApp],
-                                             dispatch_key = DispatchKey,
-                                             tls = Tls}),
-            say_what_the_session_cookie_needs(Tls),
-            {ok, BootstrapApp, Host, Port};
+%% A listener that cannot start takes those started before it down again, so
+%% a boot that fails leaves nothing bound.
+start_all(_Server, [], _Started) ->
+    ok;
+start_all(Server, [Listener | Rest], Started) ->
+    case start_checked(Server, Listener) of
+        {ok, _App, _Host, _Port} ->
+            start_all(Server, Rest, [Listener | Started]);
         {error, Reason} ->
+            _ = [stop_listener(Name) || #{name := Name} <- Started],
             {error, Reason}
+    end.
+
+start_checked(Server, Listener = #{name := Name}) ->
+    case nova_listener:check(Listener, Server, nova_server:capabilities(Server)) of
+        ok ->
+            start_listener(Server, Listener);
+        {error, Reason} ->
+            ?LOG_ERROR(#{msg => ~"Listener asks for what the server cannot do", listener => Name,
+                         server => Server, reason => Reason}),
+            {error, Reason}
+    end.
+
+%% The table without a key is the one of the listener that serves the
+%% bootstrap application: every keyless nova_router caller addresses it.
+dispatch_key(#{name := Name, applications := Apps}) ->
+    Bootstrap = application:get_env(nova, bootstrap_application, undefined),
+    case lists:member(Bootstrap, Apps) andalso not lists:member(nova_dispatch, dispatch_keys()) of
+        true -> nova_dispatch;
+        false -> {nova_dispatch, Name}
+    end.
+
+start_listener(Server, Listener = #{name := Name, ip := Host, port := Port, tls := Tls,
+                                    applications := [App | _] = Apps, protocols := Protocols}) ->
+    DispatchKey = dispatch_key(Listener),
+    %% Routes are first-wins. An application comes before those it mounts so
+    %% nothing it mounts can take over one of its routes, and nova last so its
+    %% 404/500 routes are only defaults.
+    NovaApps = lists:append([with_nova_apps(Each) || Each <- Apps]) ++ [nova],
+    Dispatch = nova_router:compile_fresh(resolve_nova_apps(NovaApps), DispatchKey),
+    case Server:start_listener(Listener, env(Listener, DispatchKey, Dispatch)) of
+        {ok, _Pid} ->
+            register_listener(#nova_listener{name = Name,
+                                             bind = {Host, Port},
+                                             server = Server,
+                                             apps = Apps,
+                                             dispatch_key = DispatchKey}),
+            say_what_the_session_cookie_needs(Tls =/= false),
+            ?LOG_NOTICE(#{msg => <<"Nova is running">>,
+                          url => unicode:characters_to_binary(
+                                   io_lib:format("~s://~s:~B", [scheme(Tls), format_host(Host), Port])),
+                          listener => Name,
+                          protocols => nova_listener:protocol_names(Protocols),
+                          server => Server,
+                          nova_version => get_version(nova),
+                          apps => Apps}),
+            {ok, App, Host, Port};
+        {error, Reason} ->
+            ok = nova_router:delete_dispatch(DispatchKey),
+            ?LOG_ERROR(#{msg => <<"Could not start listener">>,
+                         listener => Name, port => Port, server => Server, reason => Reason}),
+            {error, {listener_not_started, Reason}}
+    end.
+
+scheme(false) -> "http";
+scheme(_Tls) -> "https".
+
+%% What every request of a listener runs with. nova_router reads its routing
+%% table out of it, so a listener always carries the key of the table it
+%% serves.
+env(#{name := Name, steps := Steps}, DispatchKey, Dispatch) ->
+    Env = #{nova_dispatch_key => DispatchKey, nova_steps => Steps, listener => Name},
+    case application:get_env(nova, use_persistent_term, true) of
+        true -> Env;
+        _    -> Env#{dispatch => Dispatch}
     end.
 
 %% Nova cannot see whether a proxy in front of a listener without TLS has it,
@@ -332,29 +412,7 @@ say_what_the_session_cookie_needs(false) ->
 %% Runtime application lifecycle
 %%--------------------------------------------------------------------
 
-start_listener(App, Host, Port, Configuration) ->
-    Ref = {?NOVA_LISTENER, App, Port},
-    DispatchKey = {nova_dispatch, App, Port},
-    Dispatch = nova_router:compile_fresh(resolve_nova_apps(with_nova_apps(App) ++ [nova]), DispatchKey),
-    CowboyOptions = cowboy_options(Configuration, DispatchKey, Dispatch),
-    case bind(Ref, Host, Port, Configuration, CowboyOptions) of
-        {ok, Tls} ->
-            register_listener(#nova_listener{bind = {Host, Port},
-                                             ref = Ref,
-                                             apps = [App],
-                                             dispatch_key = DispatchKey,
-                                             tls = Tls}),
-            ?LOG_NOTICE(#{msg => <<"Started Nova application on a new listener">>,
-                          app => App, port => Port, listener => Ref}),
-            {ok, App, Host, Port};
-        {error, Reason} ->
-            ok = nova_router:delete_dispatch(DispatchKey),
-            ?LOG_ERROR(#{msg => <<"Could not start listener for application">>,
-                         app => App, port => Port, reason => Reason}),
-            {error, Reason}
-    end.
-
-attach_application(App, Listener = #nova_listener{ref = Ref, apps = Apps, bind = {Host, Port},
+attach_application(App, Listener = #nova_listener{name = Name, apps = Apps, bind = {Host, Port},
                                                   dispatch_key = DispatchKey}) ->
     case lists:member(App, Apps) of
         true ->
@@ -363,124 +421,71 @@ attach_application(App, Listener = #nova_listener{ref = Ref, apps = Apps, bind =
             nova_router:compile(resolve_nova_apps(with_nova_apps(App)), DispatchKey),
             register_listener(Listener#nova_listener{apps = Apps ++ [App]}),
             ?LOG_NOTICE(#{msg => <<"Added Nova application to an existing listener">>,
-                          app => App, port => Port, listener => Ref}),
+                          app => App, port => Port, listener => Name}),
             {ok, App, Host, Port}
     end.
 
-detach_application(App, #nova_listener{ref = Ref, bind = Bind, apps = Apps,
-                                       dispatch_key = DispatchKey} = Listener) ->
+detach_application(App, #nova_listener{name = Name, apps = Apps, dispatch_key = DispatchKey} = Listener) ->
     ok = nova_router:remove_application(App, DispatchKey),
     case lists:delete(App, Apps) of
         [] ->
-            ?LOG_NOTICE(#{msg => <<"Stopping cowboy listener">>, app => App, listener => Ref}),
-            case cowboy:stop_listener(Ref) of
-                ok ->
-                    ok;
-                {error, Reason} ->
-                    ?LOG_ERROR(#{msg => <<"Could not stop cowboy listener">>,
-                                 listener => Ref, reason => Reason})
-            end,
-            ets:delete(?NOVA_LISTENERS_TABLE, Bind),
-            ok = nova_router:delete_dispatch(DispatchKey),
-            ok;
+            ?LOG_NOTICE(#{msg => <<"Stopping listener">>, app => App, listener => Name}),
+            stop_listener(Name);
         Remaining ->
             register_listener(Listener#nova_listener{apps = Remaining}),
             ok
     end.
 
+stop_listener(Name) ->
+    case find_listener(Name) of
+        {ok, #nova_listener{server = Server, bind = Bind, dispatch_key = DispatchKey}} ->
+            case Server:stop_listener(Name) of
+                ok ->
+                    ok;
+                {error, Reason} ->
+                    ?LOG_ERROR(#{msg => <<"Could not stop listener">>, listener => Name, reason => Reason})
+            end,
+            ets:delete(?NOVA_LISTENERS_TABLE, Bind),
+            ok = nova_router:delete_dispatch(DispatchKey);
+        error ->
+            ok
+    end.
+
 register_listener(Listener) ->
-    ensure_listener_table(),
     true = ets:insert(?NOVA_LISTENERS_TABLE, Listener),
     ok.
 
 %%--------------------------------------------------------------------
-%% Cowboy plumbing
+%% Shutdown
 %%--------------------------------------------------------------------
 
-%% The port a configuration actually binds. Only reading the `port' key made
-%% a TLS listener on ssl_port invisible to the already-bound check.
-effective_port(Configuration) ->
-    case maps:get(use_ssl, Configuration, false) of
-        false -> maps:get(port, Configuration, ?NOVA_STD_PORT);
-        _     -> maps:get(ssl_port, Configuration, ?NOVA_STD_SSL_PORT)
-    end.
-
-cowboy_options(Configuration, DispatchKey, Dispatch) ->
-    StreamH = [nova_stream_h,
-               cowboy_compress_h,
-               cowboy_stream_h],
-    StreamHandlers = maps:get(stream_handlers, Configuration, StreamH),
-    Steps = maps:get(middleware_handlers, Configuration, nova_pipeline:steps()),
-    Options = maps:get(options, Configuration, #{compress => true}),
-
-    %% nova_router reads its routing table out of the Env, so a listener always
-    %% carries the key of the table it serves.
-    Env0 = maps:get(env, Options, #{}),
-    Env = Env0#{nova_dispatch_key => DispatchKey, nova_steps => Steps},
-
-    CowboyOptions = Options#{middlewares => [nova_pipeline],
-                             stream_handlers => StreamHandlers,
-                             env => Env},
-
-    case application:get_env(nova, use_persistent_term, true) of
-        true -> CowboyOptions;
-        _    -> CowboyOptions#{env => Env#{dispatch => Dispatch}}
-    end.
-
-%% Returns {ok, IsTls} so the caller can record how the listener was bound.
-%% ranch owns the listener, so it outlives a nova_sup that went down without
-%% nova_app:prep_stop/1 stopping it. Only a listener Nova started is replaced.
-bind(Ref, Host, Port, Configuration, CowboyOptions) ->
-    case bind_listener(Ref, Host, Port, Configuration, CowboyOptions) of
-        {error, {already_started, _Pid}} = AlreadyStarted ->
-            case stop_nova_listener(Ref) of
-                ok -> bind_listener(Ref, Host, Port, Configuration, CowboyOptions);
-                {error, _Reason} -> AlreadyStarted
-            end;
-        Result ->
-            Result
-    end.
-
-stop_nova_listener(Ref) ->
-    try ranch:get_protocol_options(Ref) of
-        #{env := #{nova_dispatch_key := _DispatchKey}} ->
-            ?LOG_NOTICE(#{msg => <<"Replacing the listener of an earlier nova_sup">>, listener => Ref}),
-            cowboy:stop_listener(Ref);
-        _OtherOwner ->
-            {error, not_nova}
-    catch
-        error:badarg -> {error, not_found}
-    end.
-
-bind_listener(Ref, Host, Port, Configuration, CowboyOptions) ->
-    case maps:get(use_ssl, Configuration, false) of
+graceful_shutdown(Listeners) ->
+    Delay = application:get_env(nova, shutdown_delay, 0),
+    case Delay > 0 of
+        true ->
+            ?LOG_NOTICE(#{msg => <<"Graceful shutdown started">>, delay_ms => Delay}),
+            timer:sleep(Delay);
         false ->
-            case cowboy:start_clear(Ref, [{port, Port}, {ip, Host}], CowboyOptions) of
-                {ok, _Pid} -> {ok, false};
-                {error, Reason} -> {error, Reason}
-            end;
-        _ ->
-            bind_tls(Ref, Host, Port, Configuration, CowboyOptions)
-    end.
+            ok
+    end,
+    DrainTimeout = application:get_env(nova, shutdown_drain_timeout, 15000),
+    Names = [Name || #nova_listener{name = Name} <- Listeners],
+    ?LOG_NOTICE(#{msg => <<"Draining connections">>, listeners => Names, timeout_ms => DrainTimeout}),
+    _ = [drain(Server, [Name || #nova_listener{name = Name, server = S} <- Listeners, S =:= Server], DrainTimeout)
+         || Server <- lists:usort([Server || #nova_listener{server = Server} <- Listeners])],
+    ?LOG_NOTICE(#{msg => <<"Stopping listeners">>}),
+    _ = [stop_listener(Name) || Name <- Names],
+    ok.
 
-bind_tls(Ref, Host, Port, Configuration, CowboyOptions) ->
-    TransportOpts =
-        case maps:get(ca_cert, Configuration, undefined) of
-            undefined ->
-                SSLOptions = maps:get(ssl_options, Configuration, #{}),
-                maps:to_list(SSLOptions#{port => Port, ip => Host});
-            CACert ->
-                Cert = maps:get(cert, Configuration),
-                ?LOG_DEPRECATED(<<"0.10.3">>, <<"Use of ca_cert/cert is deprecated, use ssl_options instead">>),
-                [{port, Port}, {ip, Host}, {certfile, Cert}, {cacertfile, CACert}]
-        end,
-    case cowboy:start_tls(Ref, TransportOpts, CowboyOptions) of
-        {ok, _Pid} ->
-            ?LOG_NOTICE(#{msg => <<"Nova starting SSL">>, port => Port}),
-            {ok, true};
-        {error, Reason} ->
-            ?LOG_ERROR(#{msg => <<"Could not start cowboy with SSL">>, reason => Reason}),
-            {error, Reason}
+%% A drain that fails must not keep the node from stopping.
+drain(Server, Names, Timeout) ->
+    try
+        Server:drain_listeners(Names, Timeout)
+    catch
+        Class:Reason ->
+            ?LOG_WARNING(#{msg => ~"Draining the listeners failed, so they are stopped as they are",
+                           server => Server, class => Class, reason => Reason}),
+            ok
     end.
 
 %% The ip configuration key is an address tuple in practice, but ranch also

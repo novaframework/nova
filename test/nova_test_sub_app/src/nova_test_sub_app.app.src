@@ -2,7 +2,7 @@
  [{description, "Nova application mounted under a prefix by nova_test_app"},
   {vsn, "0.1.0"},
   {registered, []},
-  {applications, [kernel, stdlib, nova]},
+  {applications, [kernel, stdlib, nova, nova_cowboy]},
   {env, []},
   {modules, []},
   {licenses, ["Apache-2.0"]}

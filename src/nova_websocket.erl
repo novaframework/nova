@@ -101,14 +101,12 @@ idle for too long, `{error, Reason}` for a socket or protocol error, and
                    {crash, error | exit | throw, any()}.
 -export_type([reason/0]).
 
-%% The options of the connection. They are Cowboy's today; the callback
-%% names Nova's type so that can change without changing the callback.
 -doc """
 The options of a connection, as `init/1` returns them in
-`{ok, State, Options}`: those of `cowboy_websocket`, such as `idle_timeout`
-and `max_frame_size`.
+`{ok, State, Options}`: `idle_timeout`, `max_frame_size` and `compress`, and
+whatever else the server package takes.
 """.
--type opts() :: cowboy_websocket:opts().
+-type opts() :: nova_server:ws_opts().
 -export_type([opts/0]).
 
 -doc """
