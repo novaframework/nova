@@ -103,6 +103,7 @@ it returns after the routes of `routes/1`.
 
 -define(NOVA_APPS, nova_apps).
 -define(ADD_TRIES, 3).
+-define(COMPILING, {?MODULE, compiling}).
 -define(NOVA_PLUGINS, nova_plugins).
 -define(NOVA_DISPATCH, nova_dispatch).
 
@@ -193,16 +194,56 @@ is being built. The error `{routing_table_changed, DispatchKey}` is raised
 when routes were added to the table, or an application was removed from
 it, while the routers ran. What was compiled is then not stored, and to
 compile again merges into the table as it is by then.
+
+A router that adds routes to the table it is compiled into, compiles into
+it or removes an application from it has `{error, {routing_table_in_use,
+DispatchKey}}` thrown from that call, and nothing is stored by it. The
+routes of a router are the ones it returns.
 """.
 -spec compile(Apps :: [atom() | {atom(), map()}], DispatchKey :: dispatch_key()) ->
           nova_routing_trie:trie().
 compile(Apps, DispatchKey) ->
+    ok = not_compiling(DispatchKey),
     UseStrict = application:get_env(nova, use_strict_routing, false),
     Generation = generation(DispatchKey),
     Stored = stored(DispatchKey, nova_routing_trie:new(#{strict => UseStrict})),
-    Table = #{routes := Dispatch} = compile(Apps, Stored, with_serving(#{dispatch_key => DispatchKey})),
+    Compiling = compiling(DispatchKey),
+    Table = #{routes := Dispatch} = try
+                                        compile(Apps, Stored, with_serving(#{dispatch_key => DispatchKey}))
+                                    after
+                                        compiled(Compiling)
+                                    end,
     ok = commit(DispatchKey, Table, Generation),
     Dispatch.
+
+%% A router runs in the process that compiles its routes into a table.
+%% What it stored into that table itself would be there while its own
+%% routes are refused, each time they are compiled. That is a mistake of
+%% the router, and thrown as its other mistakes are, before anything is
+%% stored.
+not_compiling(DispatchKey) ->
+    case lists:member(DispatchKey, get_compiling()) of
+        true -> throw({error, {routing_table_in_use, DispatchKey}});
+        false -> ok
+    end.
+
+compiling(DispatchKey) ->
+    Before = get_compiling(),
+    put(?COMPILING, [DispatchKey | Before]),
+    Before.
+
+compiled([]) ->
+    _ = erase(?COMPILING),
+    ok;
+compiled(Before) ->
+    _ = put(?COMPILING, Before),
+    ok.
+
+get_compiling() ->
+    case get(?COMPILING) of
+        Keys when is_list(Keys) -> Keys;
+        undefined -> []
+    end.
 
 %% What a table is merged into has to be the table it is stored over. One
 %% that is being built for a listener that starts is not under its key
@@ -224,7 +265,7 @@ is_being_built(_Generation) -> false.
 %% A generation is the table that was built for a listener and what was
 %% stored into it last. One that differs in the first was replaced, and
 %% one that differs in the second alone had routes added or taken out.
-build({building, _Builder, _Build}) -> make_ref();
+build({building, _Builder, Build}) -> Build;
 build({Build, _Stored}) -> Build;
 build(undefined) -> undefined.
 
@@ -241,36 +282,36 @@ unlock(Lock) ->
 
 %% A table that is stored has its generation written last, which would
 %% take the mark away were it set meanwhile.
+%% A table is built by one process at a time, so a mark is only ever taken
+%% away by the process that set it, or after that process is gone. Nova
+%% starts a listener in one process: a second build can only come from
+%% outside of it, and is refused as a merge into the table is.
 marked(DispatchKey, Building) ->
     StorageBackend = storage_backend(),
     Lock = lock(DispatchKey),
     try
         Before = StorageBackend:get(generation_key(DispatchKey), undefined),
-        StorageBackend:put(generation_key(DispatchKey), Building),
-        Before
+        case is_being_built(Before) of
+            true ->
+                error({routing_table_replaced, DispatchKey});
+            false ->
+                StorageBackend:put(generation_key(DispatchKey), Building),
+                Before
+        end
     after
         unlock(Lock)
     end.
 
-%% Two builds of one table can only come from outside Nova, which starts
-%% a listener in one process. The mark of another build is then left to
-%% that build, and the one this build was set over is put back while its
-%% build goes on. A merge that began before this build is refused: routes
-%% can have been stored into the table since it read it.
+%% A merge that began before this build is refused: routes can have been
+%% stored into the table since it read it.
 not_built(DispatchKey, Building, Before) ->
     StorageBackend = storage_backend(),
     Lock = lock(DispatchKey),
     try StorageBackend:get(generation_key(DispatchKey), undefined) of
-        Building -> StorageBackend:put(generation_key(DispatchKey), restored(Before));
+        Building -> StorageBackend:put(generation_key(DispatchKey), {build(Before), make_ref()});
         _Other -> ok
     after
         unlock(Lock)
-    end.
-
-restored(Before) ->
-    case is_being_built(Before) of
-        true -> Before;
-        false -> {build(Before), make_ref()}
     end.
 
 %% A table as it is compiled: its routes, and the applications and the
@@ -346,10 +387,9 @@ compile_fresh(Apps, DispatchKey, Serving) ->
     Before = marked(DispatchKey, Building),
     StorageBackend:put(serving_key(DispatchKey), Serving),
     Empty = #{routes => nova_routing_trie:new(#{strict => UseStrict}), apps => [], bound => []},
+    Compiling = compiling(DispatchKey),
     try compile(Apps, Empty, with_serving(#{dispatch_key => DispatchKey})) of
         Table = #{routes := Dispatch} ->
-            %% Outside of what is caught below: a table that is refused
-            %% here was replaced by another build, whose mark it is.
             ok = commit(DispatchKey, Table, Building),
             Dispatch
     catch
@@ -358,6 +398,8 @@ compile_fresh(Apps, DispatchKey, Serving) ->
             %% not left as one that is being built for ever.
             ok = not_built(DispatchKey, Building, Before),
             erlang:raise(Class, Reason, Stacktrace)
+    after
+        compiled(Compiling)
     end.
 
 %% The route groups of a table that name the listeners they are for, each
@@ -570,7 +612,7 @@ add_routes(App, Routes) ->
     add_routes(App, Routes, ?NOVA_DISPATCH).
 
 %%--------------------------------------------------------------------
--doc "As add_routes/2, but against the routing table addressed by `DispatchKey`. Raises the error `{routing_table_replaced, DispatchKey}` as `compile/2` does, when the table was replaced meanwhile. When routes were stored into the table meanwhile, these are compiled again into the table as it is by then, three times at most, and then the error `{routing_table_changed, DispatchKey}` is raised.".
+-doc "As add_routes/2, but against the routing table addressed by `DispatchKey`. Raises the error `{routing_table_replaced, DispatchKey}` as `compile/2` does, when the table was replaced meanwhile. When routes were stored into the table meanwhile, these are compiled again into the table as it is by then, a few times, and then the error `{routing_table_changed, DispatchKey}` is raised. Of a list of route lists, those that were stored before that stay. Throws `{error, {routing_table_in_use, DispatchKey}}` in a router that is compiled into the table.".
 -spec add_routes(App :: atom(), Routes :: [map() | [map()]] | map(), DispatchKey :: dispatch_key()) -> ok.
 add_routes(_App, [], _DispatchKey) ->
     ok;
@@ -591,6 +633,7 @@ insert_route_maps(App, Routes, DispatchKey) ->
     insert_route_maps(App, Routes, DispatchKey, ?ADD_TRIES).
 
 insert_route_maps(App, Routes, DispatchKey, Tries) ->
+    ok = not_compiling(DispatchKey),
     StorageBackend = storage_backend(),
     Generation = generation(DispatchKey),
     Stored = stored(DispatchKey, StorageBackend:get(DispatchKey)),
@@ -600,9 +643,13 @@ insert_route_maps(App, Routes, DispatchKey, Tries) ->
     Options = with_serving(#{app => App, router_file => undefined, dispatch_key => DispatchKey,
                              insert_opts => #{on_duplicate => overwrite}, runtime => true}),
 
-    {ok, Table = #{apps := CompiledApps}, _Options0} = compile_paths(Routes, Stored, Options),
+    Compiling = compiling(DispatchKey),
+    {ok, Table = #{apps := CompiledApps}, _Options0} = try
+                                                          compile_paths(Routes, Stored, Options)
+                                                      after
+                                                          compiled(Compiling)
+                                                      end,
 
-    %% Take out the prefix for the app and store it in the persistent store
     CompiledApps0 =
         case lists:keyfind(App, 1, CompiledApps) of
             false      -> CompiledApps ++ [{App, "/"}];
@@ -628,11 +675,14 @@ remove_application(Application) ->
 -doc """
 As remove_application/1, but against the routing table addressed by
 `DispatchKey`. Raises the error `{routing_table_replaced, DispatchKey}`
-while the table of a listener that starts is being built: the table the
-application would be taken out of is not the one that will be served.
+while the table of a listener that starts is being built, or was built
+again as the application was taken out: the table it would be taken out of
+is not the one that is served. Throws `{error, {routing_table_in_use,
+DispatchKey}}` in a router that is compiled into the table.
 """.
 -spec remove_application(Application :: atom(), DispatchKey :: dispatch_key()) -> ok.
 remove_application(Application, DispatchKey) when is_atom(Application) ->
+    ok = not_compiling(DispatchKey),
     StorageBackend = storage_backend(),
     Generation = generation(DispatchKey),
     Stored = #{routes := Dispatch, apps := Apps, bound := Bound} = stored(DispatchKey, StorageBackend:get(DispatchKey)),

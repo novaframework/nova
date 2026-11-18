@@ -16,7 +16,7 @@
 
 -include_lib("kernel/include/logger.hrl").
 
--export([start_link/0, add/2, remove/1, listening/1, draining/0]).
+-export([start_link/0, add/2, remove/1, listening/1, draining/0, is_kept/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, format_status/1]).
 -export([work/4]).
 
@@ -67,11 +67,13 @@ add(App, Settings) ->
         not_started -> {error, server_not_started}
     end.
 
--spec remove(App :: atom()) -> ok | {error, not_found | adding_an_application}.
+-spec remove(App :: atom()) ->
+          ok | {error, not_found | adding_an_application | {routing_table_replaced, nova_listener:name()}}.
 remove(App) ->
     case call({remove, App}, infinity) of
         ok -> ok;
         {error, not_found} -> {error, not_found};
+        {error, {routing_table_replaced, Name}} -> {error, {routing_table_replaced, Name}};
         {error, adding_an_application} -> {error, adding_an_application};
         not_started -> {error, not_found}
     end.
@@ -123,9 +125,7 @@ draining(Registry, Timeout) when is_integer(Timeout) ->
 -spec call(term(), timeout()) -> dynamic().
 call(Request, Timeout) ->
     case get(?ADDING) of
-        true ->
-            {error, adding_an_application};
-        _Not ->
+        undefined ->
             try gen_server:call(?MODULE, Request, Timeout) of
                 {raised, Class, Reason, Stacktrace} -> erlang:raise(Class, Reason, Stacktrace);
                 Reply -> Reply
@@ -133,7 +133,21 @@ call(Request, Timeout) ->
                 exit:{noproc, _Call} -> not_started;
                 %% The call has the settings of the request in it.
                 exit:{Reason, _Call} -> exit({Reason, ?MODULE})
-            end
+            end;
+        _Registry ->
+            {error, adding_an_application}
+    end.
+
+-doc false.
+%% For nova_sup. Whether what this process lists is kept: a process that
+%% adds an application does so for the process that keeps the added
+%% applications, and that one can be gone while the router of the
+%% application, which may trap exits, still runs.
+-spec is_kept() -> boolean().
+is_kept() ->
+    case get(?ADDING) of
+        undefined -> true;
+        Registry -> whereis(?MODULE) =:= Registry
     end.
 
 %% The listeners outlive this process, and when it is started again they
@@ -193,7 +207,9 @@ handle_cast(_Request, State) ->
 -spec handle_info(term(), #state{}) -> {noreply, #state{}}.
 handle_info({'DOWN', Monitor, process, Owner, _Reason}, State = #state{owner = {Owner, Monitor}}) ->
     {noreply, State#state{owner = undefined}};
-handle_info({draining, Drainer, _Timeout}, State) ->
+%% Any process of the node can send here. What stops the listeners sends
+%% an alias and the time it gives, and nothing else is taken for it.
+handle_info({draining, Drainer, Timeout}, State) when is_reference(Drainer), is_integer(Timeout), Timeout >= 0 ->
     {noreply, drained([Drainer], State)};
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -274,7 +290,7 @@ worked({Worker, Monitor, Tag} = Work, Drainers) ->
             %% What a router links to can go down with the settings of a
             %% listener as its reason.
             {{raised, exit, nova_redact:tls_options(Reason), []}, Drainers};
-        {draining, Drainer, Timeout} ->
+        {draining, Drainer, Timeout} when is_reference(Drainer), is_integer(Timeout), Timeout >= 0 ->
             ok = overdue_after(Timeout, Tag, Drainers),
             worked(Work, [Drainer | Drainers]);
         {Tag, overdue, Timeout} ->
@@ -284,7 +300,7 @@ worked({Worker, Monitor, Tag} = Work, Drainers) ->
             worked(Work, Drainers)
     end.
 
-overdue_after(Timeout, Tag, []) when is_integer(Timeout), Timeout >= 0 ->
+overdue_after(Timeout, Tag, []) ->
     _ = erlang:send_after(Timeout, self(), {Tag, overdue, Timeout}),
     ok;
 overdue_after(_Timeout, _Tag, _Drainers) ->
@@ -292,7 +308,7 @@ overdue_after(_Timeout, _Tag, _Drainers) ->
 
 -spec work(pid(), reference(), term(), #state{}) -> ok.
 work(Registry, Tag, Request, State) ->
-    put(?ADDING, true),
+    put(?ADDING, Registry),
     Registry ! {Tag, handled(Request, State)},
     ok.
 
@@ -343,6 +359,8 @@ handle({remove, App}, State = #state{rows = Rows, started = Started}) ->
         {{error, not_found}, Rows} ->
             ?LOG_ERROR(#{msg => ~"Application not found", app => App}),
             {{error, not_found}, State};
+        {{error, {routing_table_replaced, Name}}, _Left} ->
+            {{error, {routing_table_replaced, Name}}, State};
         {_Detached, Left} ->
             InUse = [Listener || Listener = #started{name = Name} <- Started,
                                  lists:keymember(Name, #added.listener, Left)],

@@ -587,10 +587,19 @@ place where a later route wins; routes compiled at startup keep the first.
 Routes are added to the table as it was when the call began. When another
 process stored routes into the table meanwhile, or removed an application
 from it, yours are compiled again into the table as it is by then, so
-nothing either of you stored is lost. After three tries the call raises the
-error `{routing_table_changed, DispatchKey}`, and none of its routes are in
-the table. `{routing_table_replaced, DispatchKey}` is raised when the
-listener of the table was started again meanwhile, or is being started.
+nothing either of you stored is lost. After a few tries the call raises the
+error `{routing_table_changed, DispatchKey}`. Of a list of route lists,
+those that were stored before that stay in the table: the others are not in
+it. `{routing_table_replaced, DispatchKey}` is raised when the listener of
+the table was started again meanwhile, or is being started.
+
+These two are raised as errors: the table moved under the call, and calling
+again is the answer to the first. What a router got wrong is thrown, as
+`{error, Reason}`, and calling again does not help. One of those is a
+router that adds routes to the table it is being compiled into, compiles
+into it or removes an application from it: `{error, {routing_table_in_use,
+DispatchKey}}` is thrown from that call, at boot and at runtime alike, and
+nothing is stored by it. The routes of a router are the ones it returns.
 
 Routes added this way live in the routing table of the running listener. When
 Nova starts, each listener compiles its table from the routers again, so

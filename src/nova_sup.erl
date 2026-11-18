@@ -139,7 +139,7 @@ application ran. Its routes are then not served.
 `{error, {routing_table_changed, Name}}` when routes were added to the
 listener with `nova_router`, or an application was removed from it there,
 each time the router of the application ran. The application is compiled
-again when that happens, three times at most.
+again when that happens, a few times.
 
 `{error, server_not_started}` when the `nova` application is not running.
 """.
@@ -243,21 +243,29 @@ it, and the listener itself is stopped once no applications are left on it.
 `{error, not_found}` when it is not served and was not added, and
 `{error, adding_an_application}` to a router that calls this while an
 application is added and its routes are compiled.
+
+`{error, {routing_table_replaced, Name}}` when the routing table of the
+listener is being built again, which only code outside Nova does to a
+listener that is up. The application is then still served and still added.
 """.
--spec remove_application(App :: atom()) -> ok | {error, not_found | adding_an_application}.
+-spec remove_application(App :: atom()) ->
+          ok | {error, not_found | adding_an_application | {routing_table_replaced, nova_listener:name()}}.
 remove_application(App) ->
     nova_applications:remove(App).
 
 -doc false.
 %% For nova_applications.
--spec detach_application(App :: atom()) -> ok | {error, not_found}.
+-spec detach_application(App :: atom()) ->
+          ok | {error, not_found} | {error, {routing_table_replaced, nova_listener:name()}}.
 detach_application(App) ->
     case [L || L = #nova_listener{apps = Apps} <- all_listeners(), lists:member(App, Apps)] of
         [] ->
             {error, not_found};
         Listeners ->
-            _ = [detach_application(App, Listener) || Listener <- Listeners],
-            ok
+            case [Error || Listener <- Listeners, {error, _} = Error <- [detach_application(App, Listener)]] of
+                [] -> ok;
+                [Error | _] -> Error
+            end
     end.
 
 %%--------------------------------------------------------------------
@@ -650,12 +658,16 @@ started(Server, #{name := Name, ip := Host, port := Port, tls := Tls, applicatio
     end.
 
 %% Whether the listener is still listed under its name, and bound from
-%% here on. One that was stopped meanwhile is not listed again by this.
+%% here on. One that was stopped meanwhile is not listed again by this,
+%% nor is another that has its address by now said to be bound.
 bound({Host, Port}, Name) ->
     case find_listener(Host, Port) of
-        {ok, #nova_listener{name = Name}} ->
+        {ok, Listed = #nova_listener{name = Name}} ->
             try
-                ets:update_element(?NOVA_LISTENERS_TABLE, {Host, Port}, {#nova_listener.bound, true})
+                ets:select_replace(?NOVA_LISTENERS_TABLE,
+                                   [{Listed, [], [{const, Listed#nova_listener{bound = true}}]}])
+            of
+                Replaced -> Replaced =:= 1
             catch
                 error:badarg -> false
             end;
@@ -739,7 +751,19 @@ attach_application(App, Listener = #nova_listener{name = Name, apps = Apps, bind
 %% The router of the application ran meanwhile, so the listener is what it
 %% is now and not what it was before.
 listed(App, Name, {Host, Port}, DispatchKey) ->
-    case find_listener(Name) of
+    case nova_applications:is_kept() andalso find_listener(Name) of
+        false ->
+            %% The router can trap exits, and its process then outlives
+            %% the one it adds the application for. The call that added it
+            %% was answered that it was not, so its routes are not served.
+            _ = try
+                    nova_router:remove_application(App, DispatchKey)
+                catch
+                    error:{routing_table_replaced, DispatchKey} -> ok
+                end,
+            ?LOG_ERROR(#{msg => ~"An application was added to a listener as the process that keeps the added applications stopped. It is not added",
+                         app => App, listener => Name}),
+            {error, {no_such_listener, Name}};
         {ok, Listener = #nova_listener{apps = Now, added = Added, bind = {Host, Port},
                                        dispatch_key = DispatchKey}} ->
             case register_listener(Listener#nova_listener{apps = Now ++ [App], added = Added ++ [App]}) of
@@ -756,21 +780,25 @@ listed(App, Name, {Host, Port}, DispatchKey) ->
 
 detach_application(App, #nova_listener{name = Name, apps = Apps, added = Added,
                                        dispatch_key = DispatchKey} = Listener) ->
-    ok = try
-             nova_router:remove_application(App, DispatchKey)
-         catch
-             %% The table is built again, which only code outside Nova
-             %% does to that of a listener that is up. The application is
-             %% not among those of the listener from here on.
-             error:{routing_table_replaced, DispatchKey} -> ok
-         end,
-    case lists:delete(App, Apps) of
-        [] ->
-            ?LOG_NOTICE(#{msg => ~"Stopping listener", app => App, listener => Name}),
-            stop_listener(Name);
-        Remaining ->
-            _ = register_listener(Listener#nova_listener{apps = Remaining, added = lists:delete(App, Added)}),
-            ok
+    try nova_router:remove_application(App, DispatchKey) of
+        ok ->
+            case lists:delete(App, Apps) of
+                [] ->
+                    ?LOG_NOTICE(#{msg => ~"Stopping listener", app => App, listener => Name}),
+                    stop_listener(Name);
+                Remaining ->
+                    _ = register_listener(Listener#nova_listener{apps = Remaining,
+                                                                 added = lists:delete(App, Added)}),
+                    ok
+            end
+    catch
+        %% The table is built again, which only code outside Nova does to
+        %% that of a listener that is up. The application is in the one
+        %% that is served, so it is not said to be removed.
+        error:{routing_table_replaced, DispatchKey} ->
+            ?LOG_ERROR(#{msg => ~"The routing table of the listener is being built, so the application is not removed from it",
+                         app => App, listener => Name}),
+            {error, {routing_table_replaced, Name}}
     end.
 
 stop_listener(Name) ->
@@ -795,11 +823,24 @@ register_listener(Listener) ->
         error:badarg -> {error, listeners_stopped}
     end.
 
-%% Under an address no other listener of Nova's has.
+%% Under an address no other listener of Nova's has. The router of an
+%% application can trap exits, and its process then outlives the one it
+%% adds the application for, whose call was answered that it was not
+%% added. The one that takes its place stops what is listed and not bound
+%% as it starts, so a listener that is listed while the first is there is
+%% never left with nothing that knows of it.
 reserve_listener(Listener) ->
     try ets:insert_new(?NOVA_LISTENERS_TABLE, Listener) of
-        true -> ok;
-        false -> {error, eaddrinuse}
+        true ->
+            case nova_applications:is_kept() of
+                true ->
+                    ok;
+                false ->
+                    true = ets:delete_object(?NOVA_LISTENERS_TABLE, Listener),
+                    {error, not_kept}
+            end;
+        false ->
+            {error, eaddrinuse}
     catch
         error:badarg -> {error, listeners_stopped}
     end.

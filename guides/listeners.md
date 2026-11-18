@@ -104,6 +104,7 @@ route.
 | `{invalid_http_versions, Path, Versions}` | `http_versions` is not a list of `http1`, `http2` and `http3` |
 | `{websocket_route_not_served, Path, Listener}` | A WebSocket route is on a listener that serves no version the server takes WebSockets over. Cowboy takes them over `http2` when `server_opts` has `enable_connect_protocol => true` |
 | `{application_not_added, App, Reason}` | An application that was added before the server package started cannot be served, see [At runtime](#at-runtime) |
+| `{routing_table_in_use, DispatchKey}` | A router called `nova_router:add_routes/2,3`, `compile/2` or `remove_application/1,2` on the routing table it is compiled into. The routes of a router are the ones it returns |
 
 A boot that fails leaves no listener behind: those that were started before
 the one that failed are stopped. What a server reports of a listener it
@@ -182,6 +183,14 @@ server package is stopped and started again they are added again, after the
 listeners of the configuration. Applications are added and removed one at a
 time, whichever processes ask.
 
+Code that stores into the routing table of a listener with `nova_router`
+while the router of an added application runs makes Nova compile that
+application again, a few times. When the table changed each time, the
+answer is `{error, {routing_table_changed, Name}}`, and when the server
+package starts and adds the applications again it does not start:
+`{application_not_added, App, {routing_table_changed, Name}}`. Add routes
+once the listeners are up, not while they start.
+
 The routes of an application that is added are compiled in a process of
 Nova's, not in the caller. A router that adds or removes an application
 from there is answered `{error, adding_an_application}`, and what it raises
@@ -227,7 +236,9 @@ first started.
 The applications that were added are kept by one process of the `nova`
 application. Should it be started again while the listeners are up, Nova
 logs an error. The applications are still served, and can be added and
-removed. How a listener was started for one of them is lost with the
+removed. A listener that was being started for an application as the
+process stopped is stopped: the application is not added, and the call that
+added it exits. How a listener was started for one of them is lost with the
 process, so the server package does not start again before the applications
 on that listener are removed: `{application_not_added, App,
 {no_such_listener, Name}}`. That an application was added by the name of
