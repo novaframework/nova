@@ -253,7 +253,7 @@ is_origin_form(_Path) -> false.
 
 route(Req = #{host := Host, path := Path, method := Method}, Env, Dispatch) ->
     Found = nova_routing_trie:find(Host, Path, Method, Dispatch),
-    case refused_version(route_plugins(Found), Req) of
+    case refused_version(route_versions(Found), Req) of
         false -> routed(Found, Req, Env, Dispatch);
         Served -> version_not_served(Served, Req, Env)
     end.
@@ -261,15 +261,10 @@ route(Req = #{host := Host, path := Path, method := Method}, Env, Dispatch) ->
 %% The versions a route is served over, when the request came over another.
 refused_version(undefined, _Req) ->
     false;
-refused_version(RoutePlugins, Req) ->
-    case http_versions(RoutePlugins) of
-        undefined ->
-            false;
-        Served ->
-            case lists:member(nova_req:http_version(Req), Served) of
-                true -> false;
-                false -> Served
-            end
+refused_version(Served, Req) ->
+    case lists:member(nova_req:http_version(Req), Served) of
+        true -> false;
+        false -> Served
     end.
 
 %% 426 names the versions to come back with, in a header only HTTP/1 has.
@@ -821,9 +816,9 @@ parse_url(Host, [{RemotePath, LocalPath, Options}|Tl], T = #{prefix := Prefix},
                 app = App,
                 callback = fun nova_file_controller:TargetFun/1,
                 extra_state = nova_file_controller:static_state(Payload, Options),
-                plugins = with_route(RealPath, served_versions(Options, T, RealPath),
-                                     Value#nova_handler_value.plugins),
-                secure = Secure
+                plugins = with_route(RealPath, Value#nova_handler_value.plugins),
+                secure = Secure,
+                http_versions = served_versions(Options, T, RealPath)
                },
     Tree0 = insert(Host, RealPath, '_', Value0, Tree, insert_opts(T)),
     parse_url(Host, Tl, T, Value, Tree0);
@@ -847,8 +842,8 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
             Value0 = Value#nova_handler_value{extra_state = ExtraState},
 
             Value1 = Value0#nova_handler_value{callback = Callback,
-                                               plugins = with_route(RealPath, served_versions(Options, T, RealPath),
-                                                                    Value#nova_handler_value.plugins)},
+                                               plugins = with_route(RealPath, Value#nova_handler_value.plugins),
+                                               http_versions = served_versions(Options, T, RealPath)},
             ?LOG_DEBUG(#{action => <<"Adding route">>, route => RealPath, app => App, methods => Methods,
                          router_file => maps:get(router_file, Options, undefined)}),
             CompiledPaths = insert_methods(Methods, Host, RealPath, Value1, Tree, insert_opts(T),
@@ -868,9 +863,9 @@ parse_url(Host,
                   app = App,
                   handler = nova_ws_handler,
                   arguments = websocket_arguments(Mod, App, Options, T),
-                  plugins = with_route(RealPath, websocket_versions(Options, T, RealPath),
-                                       with_origin_check(Value#nova_handler_value.plugins)),
-                  secure = Secure},
+                  plugins = with_route(RealPath, with_origin_check(Value#nova_handler_value.plugins)),
+                  secure = Secure,
+                  http_versions = websocket_versions(Options, T, RealPath)},
 
     ?LOG_DEBUG(#{action => <<"Adding route">>, protocol => <<"ws">>, route => Path, app => App,
                  router_file => maps:get(router_file, T, undefined)}),
@@ -958,20 +953,13 @@ mounted_apps() ->
             [{App, Info} || {App, Info} <- Apps, is_atom(App), is_map(Info)]
     end.
 
-%% The route template rides at the head of the compiled plugin list so the
-%% routing records keep their arity: rebar3_nova and other tools match them
-%% positionally. execute/2 takes it off again before the list reaches the Req.
-with_route(RealPath, undefined, Plugins) ->
-    [{nova_route, unicode:characters_to_binary(RealPath)} | Plugins];
-with_route(RealPath, Versions, Plugins) ->
-    [{nova_route, unicode:characters_to_binary(RealPath)}, {nova_http_versions, Versions} | Plugins].
+%% The route template rides at the head of the compiled plugin list.
+%% execute/2 takes it off again before the list reaches the Req.
+with_route(RealPath, Plugins) ->
+    [{nova_route, unicode:characters_to_binary(RealPath)} | Plugins].
 
-take_route([{nova_route, Route}, {nova_http_versions, _Versions} | Plugins]) -> {Route, Plugins};
-take_route([{nova_route, Route} | Plugins])                                  -> {Route, Plugins};
-take_route(Plugins)                                                          -> {undefined, Plugins}.
-
-http_versions([{nova_route, _Route}, {nova_http_versions, Versions} | _Plugins]) -> Versions;
-http_versions(_Plugins)                                                          -> undefined.
+take_route([{nova_route, Route} | Plugins]) -> {Route, Plugins};
+take_route(Plugins)                          -> {undefined, Plugins}.
 
 %% The HTTP versions a route is served over: those it asks for, or else its
 %% route group does, that its listener has. A route that asks for none is
@@ -1070,9 +1058,15 @@ with_preflight_plugins(Req, _Host, _Path, _Dispatch) ->
 
 route_plugins({ok, _Bindings, Value})            -> route_plugins(Value);
 route_plugins({ok, _Bindings, Value, _Pathinfo}) -> route_plugins(Value);
-route_plugins(#nova_handler_value{plugins = Plugins})   -> Plugins;
-route_plugins(#nova_module_value{plugins = Plugins}) -> Plugins;
-route_plugins(_NoRoute)                          -> undefined.
+route_plugins(#nova_handler_value{plugins = Plugins}) -> Plugins;
+route_plugins(#nova_module_value{plugins = Plugins})  -> Plugins;
+route_plugins(_NoRoute)                               -> undefined.
+
+route_versions({ok, _Bindings, Value})                         -> route_versions(Value);
+route_versions({ok, _Bindings, Value, _Pathinfo})              -> route_versions(Value);
+route_versions(#nova_handler_value{http_versions = Versions}) -> Versions;
+route_versions(#nova_module_value{http_versions = Versions})  -> Versions;
+route_versions(_NoRoute)                                       -> undefined.
 
 %% A route without an extra_state of its own takes the one its route group
 %% declares, an empty map included, and has undefined when the group

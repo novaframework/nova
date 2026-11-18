@@ -7,7 +7,8 @@
                              plugins = [] :: list(),
                              secure = false :: false | fun((nova_req:req()) -> term()) |
                                                [fun((nova_req:req()) -> term())] | {Mod :: atom(), Fun :: atom()},
-                             extra_state :: any()
+                             extra_state :: any(),
+                             http_versions :: undefined | [nova_server:protocol()]
                             }).
 
 %% The value of a route that a module answers from its init/2, as a
@@ -18,5 +19,6 @@
                             arguments :: any(),
                             plugins = [] :: list(),
                             secure = false :: false | fun((nova_req:req()) -> term()) |
-                                              [fun((nova_req:req()) -> term())] | {Mod :: atom(), Fun :: atom()}
+                                              [fun((nova_req:req()) -> term())] | {Mod :: atom(), Fun :: atom()},
+                            http_versions :: undefined | [nova_server:protocol()]
                            }).

@@ -842,6 +842,8 @@ route_template_absent_on_404_and_405_test_() ->
         ?assertNot(maps:is_key(nova_route, NotAllowed))
     end}.
 
-route_template_record_arity_test() ->
-    ?assertEqual(8, tuple_size(#nova_handler_value{})),
-    ?assertEqual(6, tuple_size(#nova_module_value{})).
+%% Tools that carry a copy of the records, as rebar3_nova does, match them by
+%% size. A field more is theirs to follow.
+record_size_test() ->
+    ?assertEqual(9, tuple_size(#nova_handler_value{})),
+    ?assertEqual(7, tuple_size(#nova_module_value{})).

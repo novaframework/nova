@@ -76,9 +76,8 @@ router_listener_test_() ->
        fun() ->
                Route = {"/v", fun ?MODULE:page/1, #{methods => [get], http_versions => [http3, http2]}},
                ok = compiled(?SERVING, [#{routes => [Route]}]),
-               {ok, _Bindings, #nova_handler_value{plugins = Plugins}} =
-                   nova_router:lookup_url('_', ~"/v", ~"GET", ?KEY),
-               ?assertMatch([{nova_route, ~"/v"}, {nova_http_versions, [http2]} | _], Plugins)
+               ?assertMatch({ok, _Bindings, #nova_handler_value{http_versions = [http2]}},
+                            nova_router:lookup_url('_', ~"/v", ~"GET", ?KEY))
        end},
       {"websocket route needs a version the server takes websockets over",
        fun() ->
