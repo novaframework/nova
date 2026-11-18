@@ -526,7 +526,7 @@ inform(Status, Headers, Req) ->
     Server = nova_server:of_req(Req),
     case response_begun(Req) =:= false andalso nova_server:supports(Server, {inform, 3}) of
         true ->
-            case checked_headers(maps:to_list(Headers), Req) of
+            case checked_headers(maps:to_list(Headers), Req, ~"The informational response is left out") of
                 {ok, Out} -> Server:inform(status(Status), Out, Req);
                 refused -> ok
             end;
@@ -557,7 +557,7 @@ reply(Status0, Headers, Body, Req) ->
     case response_begun(Req) of
         false ->
             Length = body_size(Body),
-            ok = no_body_where_none_is_allowed(Status, Length),
+            ok = check_no_body(Status, Length),
             Server = nova_server:of_req(Req),
             case response_headers(with_content_length(Status, Length, Headers), Req) of
                 {ok, Out} -> answered(Server:reply(Status, Out, body_to_send(Body, Req), Req), true);
@@ -610,7 +610,8 @@ header.
 -spec stream_trailers(http_headers(), req()) -> ok.
 stream_trailers(Trailers, Req) ->
     Server = nova_server:of_req(Req),
-    case nova_server:supports(Server, {stream_trailers, 2}) andalso checked_headers(maps:to_list(Trailers), Req) of
+    case nova_server:supports(Server, {stream_trailers, 2})
+        andalso checked_headers(maps:to_list(Trailers), Req, ~"The response ends without trailers") of
         {ok, Out} -> Server:stream_trailers(Out, Req);
         _Without -> Server:stream_body(<<>>, fin, Req)
     end.
@@ -692,10 +693,10 @@ status(<<Code:3/binary, _ReasonPhrase/binary>>) ->
 body_size({sendfile, _Offset, Length, _Path}) -> Length;
 body_size(Body) -> iolist_size(Body).
 
-no_body_where_none_is_allowed(Status, Length) when Length > 0, (Status =:= 204 orelse Status =:= 304) ->
+check_no_body(Status, Length) when Length > 0, (Status =:= 204 orelse Status =:= 304) ->
     exit({response_error, payload_too_large,
           '204 and 304 responses must not include a body. (RFC7230 3.3)'});
-no_body_where_none_is_allowed(_Status, _Length) ->
+check_no_body(_Status, _Length) ->
     ok.
 
 %% A 204 has no content-length, and a 304 only the one it was given.
@@ -721,15 +722,16 @@ body_to_send(Body, _Req) -> Body.
 response_headers(Headers, Req) ->
     Merged = maps:merge(maps:get(resp_headers, Req, #{}), Headers),
     Cookies = maps:values(maps:get(resp_cookies, Req, #{})) ++ nova_session:response_cookies(Req),
-    checked_headers(maps:to_list(Merged) ++ [{~"set-cookie", Cookie} || Cookie <- Cookies], Req).
+    checked_headers(maps:to_list(Merged) ++ [{~"set-cookie", Cookie} || Cookie <- Cookies], Req,
+                    ~"The request is answered 500").
 
-checked_headers(Headers, Req) ->
+checked_headers(Headers, Req, Instead) ->
     case [Name || {Name, Value} <- Headers, not (valid_header_name(Name) andalso valid_header_value(Value))] of
         [] ->
             {ok, Headers};
         Refused ->
-            ?LOG_ERROR(#{msg => ~"Headers not sent: a header name is not a token, or a header value has a line break or a NUL in it. A response is answered 500 instead",
-                         headers => Refused, method => maps:get(method, Req, undefined),
+            ?LOG_ERROR(#{msg => ~"Headers not sent: a header name is not a token, or a header value has a line break or a NUL in it",
+                         instead => Instead, headers => Refused, method => maps:get(method, Req, undefined),
                          path => maps:get(path, Req, undefined)}),
             refused
     end.

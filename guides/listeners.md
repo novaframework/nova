@@ -149,8 +149,16 @@ that name already the answer is `{error, {listener_exists, App}}`. See
 A library can call `nova_sup:add_application/2` from its `start/2` without
 depending on a server package. When the server package has not started yet,
 the application is added once the listeners of the configuration are up, and
-the answer is where it will be served. If it cannot be served there, the
-node does not start: `{application_not_added, App, Reason}`.
+the answer is where it will be served, and
+`nova_sup:get_started_applications/0` lists it once it is. If it cannot be
+served there, the node does not start:
+`{application_not_added, App, Reason}`. An application
+the configuration lists on that listener as well is served once.
+
+Nova remembers the applications that were added, until
+`nova_sup:remove_application/1` takes one out. When the application of the
+server package is stopped and started again they are added again, after the
+listeners of the configuration.
 
 A route group of an application added at runtime that names a listener
 which is not started, or which does not serve the application, is not

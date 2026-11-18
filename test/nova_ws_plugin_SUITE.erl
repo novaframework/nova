@@ -6,6 +6,7 @@
 -export([pre_ws_request_plugin_runs_before_the_controller/1,
          post_ws_request_plugin_runs_after_the_controller/1,
          pre_ws_request_plugin_can_stop_the_connection/1,
+         post_plugin_stop/1,
          route_without_plugins_is_unaffected/1]).
 
 -export([pre_ws_request/3, post_ws_request/3, plugin_info/0]).
@@ -17,6 +18,7 @@ all() ->
     [pre_ws_request_plugin_runs_before_the_controller,
      post_ws_request_plugin_runs_after_the_controller,
      pre_ws_request_plugin_can_stop_the_connection,
+     post_plugin_stop,
      route_without_plugins_is_unaffected].
 
 init_per_suite(Config) ->
@@ -28,6 +30,9 @@ init_per_suite(Config) ->
                 routes => [{"/ws", nova_ws_plugin_pages, #{protocol => ws}}]},
               #{prefix => "/stopping",
                 plugins => [{pre_ws_request, ?MODULE, #{stop => true}}],
+                routes => [{"/ws", nova_ws_plugin_pages, #{protocol => ws}}]},
+              #{prefix => "/post-stopping",
+                plugins => [{post_ws_request, ?MODULE, #{stop => true}}],
                 routes => [{"/ws", nova_ws_plugin_pages, #{protocol => ws}}]},
               #{prefix => "/plain",
                 plugins => [],
@@ -42,6 +47,8 @@ pre_ws_request(_ControllerState, State, #{stop := true}) ->
 pre_ws_request(ControllerState, State = #{controller_data := ControllerData}, #{mark := Mark}) ->
     {ok, ControllerState, State#{controller_data => ControllerData#{mark => Mark}}}.
 
+post_ws_request(_ControllerState, State, #{stop := true}) ->
+    {stop, State};
 post_ws_request(ControllerState, State = #{commands := Commands}, _Options) ->
     {ok, ControllerState, State#{commands => Commands ++ [{text, ~"post plugin ran"}]}}.
 
@@ -64,6 +71,17 @@ post_ws_request_plugin_runs_after_the_controller(Config) ->
 pre_ws_request_plugin_can_stop_the_connection(Config) ->
     ?assertEqual([closed],
                  nova_test_listener:websocket_texts(?config(port, Config), "/stopping/ws", ~"hello", 1)).
+
+%% The connection is closed, and nothing crashes with its state in the
+%% reason: that has the request of the upgrade in it.
+post_plugin_stop(Config) ->
+    {Texts, Events} = nova_test_log:collect(
+                        fun() ->
+                                nova_test_listener:websocket_texts(?config(port, Config), "/post-stopping/ws",
+                                                                   ~"hello", 1)
+                        end),
+    ?assertEqual([closed], Texts),
+    ?assertEqual([], [Event || {error, _} = Event <- Events]).
 
 route_without_plugins_is_unaffected(Config) ->
     ?assertEqual([~"no plugin ran"],

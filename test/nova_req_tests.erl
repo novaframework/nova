@@ -27,13 +27,13 @@ http_version_test() ->
     ?assertEqual(http2, nova_req:http_version(?REQ(#{version => 'HTTP/2'}))),
     ?assertEqual(http3, nova_req:http_version(?REQ(#{version => 'HTTP/3'}))).
 
-malformed_request_is_a_request_error_test() ->
+malformed_request_test() ->
     ?assertExit({request_error, qs, _}, nova_req:parse_qs(?REQ(#{qs => ~"a=%zz"}))),
     ?assertExit({request_error, {header, ~"content-type"}, _},
                 nova_req:parse_header(~"content-type", ?REQ(#{headers => #{~"content-type" => ~"nonsense"}}))),
     ?assertError({unsupported_header, ~"x-unknown"}, nova_req:parse_header(~"x-unknown", ?REQ())).
 
-reply_merges_headers_and_cookies_test() ->
+reply_merge_test() ->
     Req0 = nova_req:set_resp_header(~"x-a", ~"request", ?REQ()),
     Req1 = nova_req:set_resp_headers(#{~"x-b" => ~"request"}, Req0),
     Req2 = nova_req:set_resp_cookie(~"one", ~"1", Req1),
@@ -55,25 +55,25 @@ headers_from_a_list_test() ->
     ?assertEqual(~"1", nova_req:resp_header(~"x-a", Req)),
     ?assertExit({response_error, invalid_header, _}, nova_req:set_resp_headers([{~"set-cookie", ~"a=1"}], ?REQ())).
 
-reply_uses_the_body_set_on_the_request_test() ->
+reply_resp_body_test() ->
     _ = nova_req:reply(201, nova_req:set_resp_body(~"made", ?REQ())),
     ?assertMatch([{reply, 201, _, ~"made"}], nova_fake_server:sent()).
 
-reply_takes_a_status_with_a_reason_phrase_test() ->
+reply_status_phrase_test() ->
     _ = nova_req:reply(~"404 Not Found", ?REQ()),
     ?assertMatch([{reply, 404, _, <<>>}], nova_fake_server:sent()).
 
-head_has_the_length_and_no_body_test() ->
+head_reply_test() ->
     _ = nova_req:reply(200, #{}, ~"hello", ?REQ(#{method => ~"HEAD"})),
     [{reply, 200, Headers, <<>>}] = nova_fake_server:sent(),
     ?assertEqual(~"5", proplists:get_value(~"content-length", Headers)).
 
-no_content_has_no_length_test() ->
+no_content_length_test() ->
     _ = nova_req:reply(204, ?REQ()),
     [{reply, 204, Headers, <<>>}] = nova_fake_server:sent(),
     ?assertEqual(undefined, proplists:get_value(~"content-length", Headers)).
 
-no_content_with_a_body_raises_test() ->
+no_content_body_test() ->
     ?assertExit({response_error, payload_too_large, _}, nova_req:reply(204, #{}, ~"body", ?REQ())),
     ?assertExit({response_error, payload_too_large, _}, nova_req:reply(304, #{}, ~"body", ?REQ())),
     ?assertEqual([], nova_fake_server:sent()).
@@ -85,7 +85,7 @@ sendfile_test() ->
     _ = nova_req:reply(200, #{}, {sendfile, 0, 0, "/tmp/empty"}, ?REQ()),
     ?assertMatch([{reply, 200, _, <<>>}], nova_fake_server:sent()).
 
-a_cookie_is_not_a_header_test() ->
+set_cookie_header_test() ->
     ?assertExit({response_error, invalid_header, _}, nova_req:set_resp_header(~"set-cookie", ~"a=1", ?REQ())),
     ?assertExit({response_error, invalid_header, _}, nova_req:set_resp_headers(#{~"set-cookie" => ~"a=1"}, ?REQ())),
     ?assertExit({response_error, invalid_header, _}, nova_req:reply(200, #{~"set-cookie" => ~"a=1"}, ?REQ())),
@@ -94,7 +94,7 @@ a_cookie_is_not_a_header_test() ->
 
 %% A value somebody else chose, a redirect target for instance, must not be
 %% able to write a header or a response of its own.
-header_that_would_split_the_response_is_not_sent_test() ->
+header_injection_test() ->
     [begin
          Req = nova_req:reply(302, Headers, ?REQ()),
          ?assertEqual(true, maps:get(has_sent_resp, Req)),
@@ -113,34 +113,34 @@ header_that_would_split_the_response_is_not_sent_test() ->
 
 %% The answer to an upgrade, an informational response and the trailers
 %% are checked as the headers of a response are.
-upgrade_with_a_header_that_would_split_it_is_answered_500_test() ->
+upgrade_injection_test() ->
     Req = nova_req:set_resp_header(~"x-a", ~"a\r\nb", ?REQ()),
     {ok, Answered, #{}} = nova_req:upgrade_websocket(Req, #{}, nova_ws_handler, ws_state, #{}),
     ?assertEqual(true, nova_req:response_begun(Answered)),
     ?assertEqual([{reply, 500, [{~"content-length", ~"0"}], <<>>}], nova_fake_server:sent()).
 
-upgrade_is_given_the_headers_set_on_the_request_test() ->
+upgrade_headers_test() ->
     Req = nova_req:set_resp_header(~"x-a", ~"1", ?REQ()),
     {ok, _Req, #{}} = nova_req:upgrade_websocket(Req, #{}, nova_ws_handler, ws_state, #{}),
     ?assertEqual([{upgrade_websocket, nova_ws_handler, ws_state, #{}, []}], nova_fake_server:sent()).
 
-inform_with_a_header_that_would_split_it_is_left_out_test() ->
+inform_injection_test() ->
     ok = nova_req:inform(103, #{~"link" => ~"</a>\r\nx-b: 1"}, ?REQ()),
     ?assertEqual([], nova_fake_server:sent()).
 
-trailers_with_a_header_that_would_split_them_are_left_out_test() ->
+trailers_injection_test() ->
     Req = nova_req:stream_reply(200, #{}, ?REQ()),
     ok = nova_req:stream_trailers(#{~"x-end" => ~"1\nx-b: 1"}, Req),
     ?assertMatch([{stream_reply, 200, _}, {stream_body, <<>>, fin}], nova_fake_server:sent()).
 
-second_answer_is_not_sent_test() ->
+second_reply_test() ->
     Req0 = ?REQ(),
     Req1 = nova_req:reply(200, Req0),
     Req2 = nova_req:reply(500, Req1),
     ?assertEqual(true, maps:get(has_sent_resp, Req2)),
     ?assertMatch([{reply, 200, _, _}], nova_fake_server:sent()).
 
-second_answer_on_the_request_from_before_is_not_sent_test() ->
+second_reply_stale_req_test() ->
     Req0 = ?REQ(),
     _ = nova_req:reply(200, Req0),
     ?assertEqual(true, nova_req:response_begun(Req0)),
@@ -161,12 +161,12 @@ stream_test() ->
     ?assertEqual(undefined, proplists:get_value(~"content-length", Headers)),
     ?assertEqual(~"one=1", iolist_to_binary(proplists:get_value(~"set-cookie", Headers))).
 
-stream_reply_without_content_is_a_reply_test() ->
+bodyless_stream_reply_test() ->
     Req = nova_req:stream_reply(204, ?REQ()),
     ?assertEqual(true, maps:get(has_sent_resp, Req)),
     ?assertMatch([{reply, 204, _, <<>>}], nova_fake_server:sent()).
 
-stream_body_to_head_sends_nothing_test() ->
+head_stream_body_test() ->
     Req = nova_req:stream_reply(200, ?REQ(#{method => ~"HEAD"})),
     ok = nova_req:stream_body(~"data", fin, Req),
     ?assertMatch([{stream_reply, 200, _}], nova_fake_server:sent()).

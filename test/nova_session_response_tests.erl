@@ -29,33 +29,33 @@ cleanup(Pid) ->
 response_test_() ->
     {foreach, fun setup/0, fun cleanup/1,
      [
-      fun no_cookie_when_session_is_not_written/0,
-      fun cookie_issued_when_session_is_written/0,
-      fun cookie_issued_for_an_id_that_is_handed_out/0,
-      fun handed_out_id_is_not_issued_over_a_presented_cookie/0,
-      fun handed_out_id_follows_what_the_session_does_next/0,
+      fun no_cookie_unwritten/0,
+      fun cookie_on_write/0,
+      fun cookie_for_handed_id/0,
+      fun handed_id_presented/0,
+      fun handed_id_follows/0,
       fun default_cookie_attributes/0,
       fun dev_cookie_attributes/0,
       fun secure_over_https/0,
-      fun max_age_infinity_has_no_max_age/0,
-      fun settings_are_read_from_bootstrap_app/0,
+      fun max_age_infinity/0,
+      fun bootstrap_settings/0,
       fun host_prefixed_cookie_name/0,
-      fun two_session_cookies_mean_no_session/0,
-      fun repeated_identical_cookie_is_one_session/0,
-      fun unparsable_cookie_header_never_sets_cookie/0,
-      fun configured_cookie_attributes/0,
-      fun invalid_cookie_opts_are_ignored/0,
+      fun two_session_cookies/0,
+      fun repeated_cookie/0,
+      fun unparsable_cookie/0,
+      fun cookie_attributes/0,
+      fun invalid_cookie_opts/0,
       fun known_session_is_kept/0,
-      fun unknown_session_is_replaced/0,
-      fun no_backend_lookup_before_the_session_is_used/0,
-      fun upgrade_carries_cookie/0,
+      fun unknown_session/0,
+      fun lazy_backend_lookup/0,
+      fun upgrade_cookie/0,
       fun renew_issues_new_cookie/0,
       fun delete_expires_cookie/0,
-      fun write_after_delete_issues_new_cookie/0,
-      fun stream_reply_carries_cookie/0,
-      fun cookie_is_handed_out_once/0,
-      fun cookie_does_not_depend_on_the_request_handed_back/0,
-      fun no_cookie_after_the_request_ended/0,
+      fun write_after_delete/0,
+      fun stream_reply_cookie/0,
+      fun cookie_once/0,
+      fun cookie_without_req/0,
+      fun no_cookie_after_end/0,
       fun sessions_disabled/0
      ]}.
 
@@ -63,12 +63,12 @@ response_test_() ->
 %% Tests
 %%====================================================================
 
-no_cookie_when_session_is_not_written() ->
+no_cookie_unwritten() ->
     {Req, State} = start(req()),
     ?assert(is_binary(maps:get(nova_session_id, Req))),
     ?assertEqual([], set_cookies(respond(State))).
 
-cookie_issued_when_session_is_written() ->
+cookie_on_write() ->
     {#{nova_session_id := Id}, State} = start(req()),
     State1 = event({written, Id}, State),
     [Cookie] = set_cookies(respond(State1)),
@@ -77,13 +77,13 @@ cookie_issued_when_session_is_written() ->
 
 %% nova_session:client_id/1 hands the id of the request to a client that
 %% sent no cookie. Nothing is stored for it.
-cookie_issued_for_an_id_that_is_handed_out() ->
+cookie_for_handed_id() ->
     {#{nova_session_id := Id}, State} = start(req()),
     [Cookie] = set_cookies(respond(event({issued, Id}, State))),
     ?assertEqual(Id, cookie_value(Cookie)),
     ?assertNot(nova_session_ets:session_exists(Id)).
 
-handed_out_id_is_not_issued_over_a_presented_cookie() ->
+handed_id_presented() ->
     {_Req, State} = start(req(~"__Host-session_id=held")),
     ?assertEqual([], set_cookies(respond(event({issued, ~"other"}, State)))).
 
@@ -110,13 +110,13 @@ secure_over_https() ->
     [Cookie] = set_cookies(respond(event({written, Id}, State))),
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Secure")).
 
-max_age_infinity_has_no_max_age() ->
+max_age_infinity() ->
     application:set_env(nova, session_max_age, infinity),
     {#{nova_session_id := Id}, State} = start(req()),
     [Cookie] = set_cookies(respond(event({written, Id}, State))),
     ?assertEqual(nomatch, binary:match(Cookie, ~"Max-Age")).
 
-settings_are_read_from_bootstrap_app() ->
+bootstrap_settings() ->
     application:set_env(nova, bootstrap_application, nova_session_response_tests_app),
     application:set_env(nova_session_response_tests_app, session_max_age, 60),
     application:set_env(nova, session_max_age, 3600),
@@ -142,7 +142,7 @@ host_prefixed_cookie_name() ->
 
 %% A cookie of the same name set for a parent domain or path arrives next to
 %% ours; neither is trusted.
-two_session_cookies_mean_no_session() ->
+two_session_cookies() ->
     ok = nova_session_ets:set_value(~"one", ~"k", ~"v"),
     ok = nova_session_ets:set_value(~"two", ~"k", ~"v"),
     {Req, _} = start(req(~"__Host-session_id=one; __Host-session_id=two")),
@@ -150,11 +150,11 @@ two_session_cookies_mean_no_session() ->
     ?assert(is_binary(maps:get(nova_session_id, Req))),
     ?assertNot(nova_once:first({nova_session, ambiguous_cookie_warned})).
 
-repeated_identical_cookie_is_one_session() ->
+repeated_cookie() ->
     {Req, _} = start(req(~"__Host-session_id=same; __Host-session_id=same")),
     ?assertEqual(~"same", maps:get(nova_session_presented, Req)).
 
-configured_cookie_attributes() ->
+cookie_attributes() ->
     application:set_env(nova, session_cookie_name, ~"session_id"),
     application:set_env(nova, session_cookie_opts, #{secure => true, same_site => strict,
                                                      domain => ~"example.com"}),
@@ -167,7 +167,7 @@ configured_cookie_attributes() ->
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Max-Age=3600")),
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; HttpOnly")).
 
-invalid_cookie_opts_are_ignored() ->
+invalid_cookie_opts() ->
     application:set_env(nova, session_cookie_opts, #{path => "/not-a-binary", same_site => sideways,
                                                      unknown => 1, http_only => false}),
     {#{nova_session_id := Id}, State} = start(req()),
@@ -185,7 +185,7 @@ known_session_is_kept() ->
 
 %% A client must not be able to pick its own session id: nova_session falls
 %% back to the fresh id, and that is the cookie the client gets.
-unknown_session_is_replaced() ->
+unknown_session() ->
     {Req, State} = start(req(~"__Host-session_id=attacker-chosen")),
     #{nova_session_pending := Id} = Req,
     ?assertNotEqual(~"attacker-chosen", Id),
@@ -206,7 +206,7 @@ delete_expires_cookie() ->
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"Max-Age=0")),
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Path=/")).
 
-write_after_delete_issues_new_cookie() ->
+write_after_delete() ->
     ok = nova_session_ets:set_value(~"old", ~"k", ~"v"),
     {_Req, State} = start(req(~"__Host-session_id=old")),
     State1 = event({written, ~"new"}, event({deleted, ~"new"}, State)),
@@ -219,7 +219,7 @@ sessions_disabled() ->
     ?assertNot(maps:is_key(nova_session_id, Req)),
     ?assertEqual([], set_cookies(respond(event({written, ~"x"}, State)))).
 
-handed_out_id_follows_what_the_session_does_next() ->
+handed_id_follows() ->
     Issued = fun() ->
                      {#{nova_session_id := Id}, State} = start(req()),
                      {Id, event({issued, Id}, State)}
@@ -235,7 +235,7 @@ handed_out_id_follows_what_the_session_does_next() ->
 
 %% The client may hold a valid session cookie Nova cannot read past the rest
 %% of the header, so a write, renew or delete leaves it alone.
-unparsable_cookie_header_never_sets_cookie() ->
+unparsable_cookie() ->
     {Req, State} = start(req(~"__Host-session_id=abc; =x")),
     #{nova_session_id := Id} = Req,
     ?assertNot(maps:is_key(nova_session_presented, Req)),
@@ -246,7 +246,7 @@ unparsable_cookie_header_never_sets_cookie() ->
     ?assertEqual([], set_cookies(respond(event({deleted, ~"fresh"}, State)))).
 
 %% A request that never touches its session never asks the backend.
-no_backend_lookup_before_the_session_is_used() ->
+lazy_backend_lookup() ->
     meck:new(nova_session_ets, [passthrough]),
     try
         {_Req, _State} = start(req(~"__Host-session_id=whatever")),
@@ -256,7 +256,7 @@ no_backend_lookup_before_the_session_is_used() ->
     end.
 
 %% A session written in nova_websocket:init/1 gets its cookie on the 101.
-upgrade_carries_cookie() ->
+upgrade_cookie() ->
     {#{nova_session_id := Id}, State} = start(req()),
     Req = event({written, Id}, State),
     {ok, _Req, #{}} = nova_req:upgrade_websocket(Req, #{}, nova_ws_handler, ws_state, #{}),
@@ -264,7 +264,7 @@ upgrade_carries_cookie() ->
     ?assertEqual(Id, cookie_value(iolist_to_binary(Cookie))),
     ?assertEqual(true, nova_req:response_begun(Req)).
 
-stream_reply_carries_cookie() ->
+stream_reply_cookie() ->
     {#{nova_session_id := Id}, State} = start(req()),
     Req = nova_req:set_resp_cookie(~"other", ~"1", event({written, Id}, State)),
     _ = nova_req:stream_reply(200, Req),
@@ -275,7 +275,7 @@ stream_reply_carries_cookie() ->
 
 %% The cookie goes out once: with the headers of a streamed response, and not
 %% again with what follows on the same request.
-cookie_is_handed_out_once() ->
+cookie_once() ->
     {#{nova_session_id := Id}, State} = start(req()),
     Req = event({written, Id}, State),
     ?assertMatch([_Cookie], nova_session:response_cookies(Req)),
@@ -283,13 +283,13 @@ cookie_is_handed_out_once() ->
 
 %% A controller that answers and hands back the request from before the
 %% answer still gets the cookie of its session on that answer.
-cookie_does_not_depend_on_the_request_handed_back() ->
+cookie_without_req() ->
     {#{nova_session_id := Id} = Req, _State} = start(req()),
     ok = nova_session:set(Req#{nova_session_owner => self()}, ~"k", ~"v"),
     [Cookie] = set_cookies(respond(Req)),
     ?assertEqual(Id, cookie_value(Cookie)).
 
-no_cookie_after_the_request_ended() ->
+no_cookie_after_end() ->
     {#{nova_session_id := Id}, State} = start(req()),
     _ = event({written, Id}, State),
     ok = nova_session:end_request(),

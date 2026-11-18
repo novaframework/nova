@@ -245,3 +245,17 @@ logged() ->
 assert_not_leaked(Term) ->
     Text = iolist_to_binary(io_lib:format("~p", [Term])),
     ?assertEqual(nomatch, binary:match(Text, ~"do-not-log-me")).
+
+%% What a server says of a listener it could not start may have the TLS
+%% options in it.
+tls_options_test() ->
+    Key = {'RSAPrivateKey', ~"der"},
+    ?assertEqual({shutdown, {child, [{port, 8443}, {certfile, "cert.pem"}, {key, redacted}, {password, redacted}]}},
+                 nova_redact:tls_options({shutdown, {child, [{port, 8443}, {certfile, "cert.pem"}, {key, Key},
+                                                             {password, "hunter2"}]}})),
+    ?assertEqual(#{socket_opts => [{certs_keys, redacted}, {stateless_tickets_seed, redacted}], port => 1},
+                 nova_redact:tls_options(#{socket_opts => [{certs_keys, [#{key => Key}]},
+                                                           {stateless_tickets_seed, ~"seed"}],
+                                           port => 1})),
+    ?assertEqual({options, {password, redacted}}, nova_redact:tls_options({options, {password, "hunter2"}})),
+    ?assertEqual(eaddrinuse, nova_redact:tls_options(eaddrinuse)).

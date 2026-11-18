@@ -6,13 +6,13 @@
 
 -define(SERVERS, ["cowboy", "ranch", "roadrunner"]).
 
-nova_calls_no_server_test() ->
+no_server_calls_test() ->
     _ = application:load(nova),
     {ok, Modules} = application:get_key(nova, modules),
     ?assertNotEqual([], Modules),
     ?assertEqual([], [{Module, Called} || Module <- Modules, Called <- servers_called(Module)]).
 
-nova_depends_on_no_server_test() ->
+no_server_deps_test() ->
     _ = application:load(nova),
     {ok, Applications} = application:get_key(nova, applications),
     ?assertEqual([], [Application || Application <- Applications, is_server(Application)]).

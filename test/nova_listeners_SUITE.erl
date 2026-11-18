@@ -6,22 +6,24 @@
 -export([all/0, end_per_testcase/2]).
 
 -export([
-         each_listener_serves_its_own_applications/1,
-         a_listener_serves_the_versions_it_names/1,
-         listeners_are_known_by_name/1,
-         an_application_is_added_to_a_listener_by_name/1,
-         a_version_the_server_does_not_have_fails_the_boot/1,
+         listener_apps/1,
+         listener_protocols/1,
+         listener_names/1,
+         add_to_listener/1,
+         unsupported_protocol/1,
          http3_needs_tls/1,
-         a_misconfigured_listener_fails_the_boot/1,
-         a_listener_that_cannot_start_leaves_none_behind/1,
-         stopping_the_server_package_stops_the_listeners/1,
-         stopping_nova_stops_the_listeners/1,
-         an_application_does_not_take_the_name_of_a_listener/1,
-         an_application_added_before_the_server_is_served_once_it_starts/1,
-         an_application_added_before_the_server_that_cannot_be_served_fails_the_boot/1,
-         cowboy_takes_websockets_over_http2_when_the_listener_turns_it_on/1,
-         a_listener_that_cannot_start_does_not_tell_its_secrets/1,
-         nova_without_a_server_package_says_so/1
+         unknown_setting/1,
+         bind_failure/1,
+         server_stop/1,
+         nova_stop/1,
+         listener_exists/1,
+         early_add/1,
+         early_add_failure/1,
+         cowboy_ws_http2/1,
+         early_add_configured/1,
+         server_restart/1,
+         start_error_secrets/1,
+         no_server_warning/1
         ]).
 
 -include_lib("stdlib/include/assert.hrl").
@@ -30,28 +32,30 @@
 
 all() ->
     [
-     each_listener_serves_its_own_applications,
-     a_listener_serves_the_versions_it_names,
-     listeners_are_known_by_name,
-     an_application_is_added_to_a_listener_by_name,
-     a_version_the_server_does_not_have_fails_the_boot,
+     listener_apps,
+     listener_protocols,
+     listener_names,
+     add_to_listener,
+     unsupported_protocol,
      http3_needs_tls,
-     a_misconfigured_listener_fails_the_boot,
-     a_listener_that_cannot_start_leaves_none_behind,
-     stopping_the_server_package_stops_the_listeners,
-     stopping_nova_stops_the_listeners,
-     an_application_does_not_take_the_name_of_a_listener,
-     an_application_added_before_the_server_is_served_once_it_starts,
-     an_application_added_before_the_server_that_cannot_be_served_fails_the_boot,
-     cowboy_takes_websockets_over_http2_when_the_listener_turns_it_on,
-     a_listener_that_cannot_start_does_not_tell_its_secrets,
-     nova_without_a_server_package_says_so
+     unknown_setting,
+     bind_failure,
+     server_stop,
+     nova_stop,
+     listener_exists,
+     early_add,
+     early_add_failure,
+     cowboy_ws_http2,
+     early_add_configured,
+     server_restart,
+     start_error_secrets,
+     no_server_warning
     ].
 
 end_per_testcase(_Case, _Config) ->
     nova_test_listener:stop().
 
-each_listener_serves_its_own_applications(_Config) ->
+listener_apps(_Config) ->
     {Public, Admin} = two_listeners(),
     ?assertEqual({200, ~"public http1"}, nova_test_listener:get(Public, "/where")),
     ?assertEqual({200, ~"admin http1"}, nova_test_listener:get(Admin, "/where")),
@@ -59,7 +63,7 @@ each_listener_serves_its_own_applications(_Config) ->
     ?assertMatch({200, _}, nova_test_listener:get(Public, "/only-public")).
 
 %% A listener without TLS that serves HTTP/2 alone is one every server has.
-a_listener_serves_the_versions_it_names(_Config) ->
+listener_protocols(_Config) ->
     {Public, Admin} = two_listeners([http2]),
     ?assertEqual(200, nova_test_listener:h2_get(Public, ~"/where")),
     ?assertNotMatch({200, _}, attempt(fun() -> nova_test_listener:get(Public, "/where") end)),
@@ -74,14 +78,14 @@ attempt(Request) ->
         _Class:_Reason -> failed
     end.
 
-listeners_are_known_by_name(_Config) ->
+listener_names(_Config) ->
     {Public, Admin} = two_listeners(),
     ?assertEqual([admin, public], lists:sort(nova_sup:listeners())),
     ?assertEqual([#{app => nova_test_app, host => {0, 0, 0, 0}, port => Public, listener => public},
                   #{app => nova_test_sub_app, host => {127, 0, 0, 1}, port => Admin, listener => admin}],
                  lists:sort(nova_sup:get_started_applications())).
 
-an_application_is_added_to_a_listener_by_name(_Config) ->
+add_to_listener(_Config) ->
     Port = nova_test_listener:free_port(),
     {ok, Port} = nova_test_listener:try_start(#{port => Port,
                                                 listeners => #{web => #{port => Port}},
@@ -98,7 +102,7 @@ an_application_is_added_to_a_listener_by_name(_Config) ->
     ?assertMatch({404, _}, nova_test_listener:get(Port, "/where")),
     ?assertEqual([web], nova_sup:listeners()).
 
-a_version_the_server_does_not_have_fails_the_boot(_Config) ->
+unsupported_protocol(_Config) ->
     Port = nova_test_listener:free_port(),
     {Settings, Refusal} =
         case nova_test_listener:server(#{}) of
@@ -126,14 +130,14 @@ http3_needs_tls(_Config) ->
     ?assert(lists:member(Refused, [tls, server])),
     ?assertEqual({web, [http3]}, {Listener, Protocols}).
 
-a_misconfigured_listener_fails_the_boot(_Config) ->
+unknown_setting(_Config) ->
     Port = nova_test_listener:free_port(),
     ?assertMatch({error, {_Server,
                           {{shutdown, {failed_to_start_child, nova_listener,
                                        {unknown_listener_settings, web, [use_ssl]}}}, _}}},
                  nova_test_listener:try_start(#{port => Port, listeners => #{web => #{port => Port, use_ssl => true}}})).
 
-a_listener_that_cannot_start_leaves_none_behind(_Config) ->
+bind_failure(_Config) ->
     First = nova_test_listener:free_port(),
     {ok, Taken} = gen_tcp:listen(0, [{ip, {0, 0, 0, 0}}]),
     {ok, Second} = inet:port(Taken),
@@ -149,7 +153,7 @@ a_listener_that_cannot_start_leaves_none_behind(_Config) ->
         gen_tcp:close(Taken)
     end.
 
-stopping_the_server_package_stops_the_listeners(_Config) ->
+server_stop(_Config) ->
     {Public, Admin} = two_listeners(),
     ok = application:stop(nova_test_app),
     ok = application:stop(nova_test_listener:server(#{})),
@@ -160,7 +164,7 @@ stopping_the_server_package_stops_the_listeners(_Config) ->
 
 %% The owner of the listeners watches nova_sup, and takes the server
 %% package down with it when nova stops under it.
-stopping_nova_stops_the_listeners(_Config) ->
+nova_stop(_Config) ->
     {Public, Admin} = two_listeners(),
     Supervisor = list_to_existing_atom(atom_to_list(nova_test_listener:server(#{})) ++ "_sup"),
     Monitor = monitor(process, Supervisor),
@@ -174,7 +178,7 @@ stopping_nova_stops_the_listeners(_Config) ->
     [?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Port, [], 1000)) || Port <- [Public, Admin]].
 
 %% A listener started for an application is named after it.
-an_application_does_not_take_the_name_of_a_listener(_Config) ->
+listener_exists(_Config) ->
     Port = nova_test_listener:free_port(),
     Listeners = #{nova_test_sub_app => #{port => Port, applications => [nova_test_app]}},
     {ok, Port} = nova_test_listener:try_start(#{port => Port,
@@ -188,7 +192,7 @@ an_application_does_not_take_the_name_of_a_listener(_Config) ->
 
 %% A library that adds its application from its start/2 may be started
 %% before the server package is.
-an_application_added_before_the_server_is_served_once_it_starts(_Config) ->
+early_add(_Config) ->
     Port = nova_test_listener:free_port(),
     Other = nova_test_listener:free_port(),
     Options = #{port => Port,
@@ -209,7 +213,7 @@ an_application_added_before_the_server_is_served_once_it_starts(_Config) ->
     ?assertEqual({200, ~"web http1"}, nova_test_listener:get(Port, "/where")),
     ?assertEqual({200, ~"nova_test_sub_app http1"}, nova_test_listener:get(Other, "/where")).
 
-an_application_added_before_the_server_that_cannot_be_served_fails_the_boot(_Config) ->
+early_add_failure(_Config) ->
     Port = nova_test_listener:free_port(),
     {ok, Taken} = gen_tcp:listen(0, [{ip, {0, 0, 0, 0}}]),
     {ok, Other} = inet:port(Taken),
@@ -225,14 +229,53 @@ an_application_added_before_the_server_that_cannot_be_served_fails_the_boot(_Con
                                             {listener_not_started, eaddrinuse}}}}, _}}},
                      nova_test_listener:boot(Options)),
         ?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Port, [], 1000)),
-        ?assertEqual({error, not_found}, nova_sup:remove_application(nova_test_sub_app))
+        ok = nova_sup:remove_application(nova_test_sub_app),
+        ?assertEqual({error, not_found}, nova_sup:remove_application(nova_test_sub_app)),
+        ?assertEqual({ok, Port}, nova_test_listener:boot(Options))
     after
         gen_tcp:close(Taken)
     end.
 
+%% A library adds itself, and the listener it names lists it as well.
+early_add_configured(_Config) ->
+    Port = nova_test_listener:free_port(),
+    Options = #{port => Port,
+                listeners => #{web => #{port => Port, applications => [nova_test_app, nova_test_sub_app]}},
+                host => [#{routes => []}],
+                mounted => [#{routes => [?WHERE]}],
+                nova_apps => []},
+    ok = nova_test_listener:configure(Options),
+    {ok, _} = application:ensure_all_started(nova),
+    ?assertEqual({ok, nova_test_sub_app, {0, 0, 0, 0}, Port},
+                 nova_sup:add_application(nova_test_sub_app, #{listener => web})),
+    {ok, Port} = nova_test_listener:boot(Options),
+    ?assertEqual({200, ~"web http1"}, nova_test_listener:get(Port, "/where")).
+
+%% The listeners go with the server package. What was added to them is
+%% kept with nova, and is added again.
+server_restart(_Config) ->
+    Port = nova_test_listener:free_port(),
+    Other = nova_test_listener:free_port(),
+    {ok, Port} = nova_test_listener:try_start(#{port => Port,
+                                                listeners => #{web => #{port => Port}},
+                                                host => [#{routes => [?WHERE]}],
+                                                mounted => [#{routes => [?WHERE]}],
+                                                nova_apps => []}),
+    Server = nova_test_listener:server(#{}),
+    {ok, nova_test_sub_app, _Host, Other} = nova_sup:add_application(nova_test_sub_app, #{port => Other}),
+    ok = application:stop(Server),
+    ?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Other, [], 1000)),
+    {ok, _} = application:ensure_all_started(Server),
+    ?assertEqual({200, ~"nova_test_sub_app http1"}, nova_test_listener:get(Other, "/where")),
+    ok = nova_sup:remove_application(nova_test_sub_app),
+    ok = application:stop(Server),
+    {ok, _} = application:ensure_all_started(Server),
+    ?assertEqual({200, ~"web http1"}, nova_test_listener:get(Port, "/where")),
+    ?assertMatch({error, _}, gen_tcp:connect({127, 0, 0, 1}, Other, [], 1000)).
+
 %% Over HTTP/2 a WebSocket is an extended CONNECT, which Cowboy takes when
 %% it is told to. Without it the route could never be reached.
-cowboy_takes_websockets_over_http2_when_the_listener_turns_it_on(_Config) ->
+cowboy_ws_http2(_Config) ->
     Port = nova_test_listener:free_port(),
     Socket = {"/ws", nova_ws_lifecycle_pages, #{protocol => ws}},
     Start = fun(Settings) ->
@@ -250,7 +293,7 @@ cowboy_takes_websockets_over_http2_when_the_listener_turns_it_on(_Config) ->
     ?assertEqual({ok, Port}, Start(#{server_opts => #{enable_connect_protocol => true}})).
 
 %% The reason is logged, and is what the node does not start with.
-a_listener_that_cannot_start_does_not_tell_its_secrets(_Config) ->
+start_error_secrets(_Config) ->
     Port = nova_test_listener:free_port(),
     Tls = #{certfile => "/nova/no/such/cert.pem", keyfile => "/nova/no/such/key.pem", password => "hunter2"},
     {Refused, Events} = nova_test_log:collect(
@@ -263,7 +306,7 @@ a_listener_that_cannot_start_does_not_tell_its_secrets(_Config) ->
 
 %% The module of the server is not there, or it is and nothing starts its
 %% application.
-nova_without_a_server_package_says_so(_Config) ->
+no_server_warning(_Config) ->
     Port = nova_test_listener:free_port(),
     Options = #{port => Port, listeners => #{web => #{port => Port}}, host => [#{routes => [?WHERE]}]},
     Warned = fun(Events) -> [Server || {warning, {report, #{server := Server}}} <- Events] end,

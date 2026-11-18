@@ -463,21 +463,13 @@ insert_route_maps(App, Routes, DispatchKey) ->
     %% Routes added at runtime replace any route already registered on the
     %% same path and method, which is what the routing guide promises.
     Options = with_serving(#{app => App, router_file => undefined, dispatch_key => DispatchKey,
-                             insert_opts => #{on_duplicate => overwrite}}),
+                             insert_opts => #{on_duplicate => overwrite}, runtime => true}),
 
-    Skipped = skipped_groups(DispatchKey),
     {ok, Dispatch1, _Options0} = compile_paths(Routes, Dispatch, Options),
-    _ = [?LOG_NOTICE(#{msg => ~"Route group is for other listeners and is not added to this routing table",
-                       app => GroupApp, prefix => Prefix, listeners => Names,
-                       listener => maps:get(name, maps:get(serving, Options, #{}), undefined)})
-         || {GroupApp, Prefix, Names} <- skipped_groups(DispatchKey) -- Skipped],
 
     StorageBackend:put(AppsKey, CompiledApps0),
     StorageBackend:put(DispatchKey, Dispatch1),
     ok.
-
-skipped_groups(DispatchKey) ->
-    [{App, Prefix, Names} || {skipped, App, Prefix, Names} <- bound_groups(DispatchKey)].
 
 
 %%--------------------------------------------------------------------
@@ -705,6 +697,14 @@ place_group(RouteInfo = #{listener := Listener}, Options = #{app := App}) ->
              end,
     Prefix = concat_strings(maps:get(prefix, Options, ""), maps:get(prefix, RouteInfo, "")),
     ok = note_bound_group({Status, App, Prefix, Names}, maps:get(dispatch_key, Options, ?NOVA_DISPATCH)),
+    case {Status, Options} of
+        {skipped, #{runtime := true}} ->
+            ?LOG_NOTICE(#{msg => ~"Route group is for other listeners and is not added to this routing table",
+                          app => App, prefix => Prefix, listeners => Names,
+                          listener => maps:get(name, maps:get(serving, Options, #{}), undefined)});
+        _Quiet ->
+            ok
+    end,
     Status;
 place_group(_RouteInfo, _Options) ->
     served.

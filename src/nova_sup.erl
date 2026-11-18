@@ -32,7 +32,7 @@ Each listener owns its own routing table, so an application started on a second 
 
 -define(SERVER, ?MODULE).
 -define(NOVA_LISTENERS_TABLE, nova_listeners).
--define(NOVA_PENDING_TABLE, nova_pending_applications).
+-define(NOVA_ADDED_TABLE, nova_added_applications).
 
 -type nova_app() :: atom() | {atom(), map()}.
 
@@ -80,6 +80,10 @@ calls this from its `start/2` may, is added once the listeners of the
 configuration are started. The answer is where it will be served, and the
 node does not start when it cannot be: the server package stops with
 `{application_not_added, App, Reason}`.
+
+Nova remembers the applications that were added until `remove_application/1`
+takes them out, and adds them again when the server package is started
+again.
 """.
 -spec add_application(App :: atom(), Settings :: map()) ->
           {ok, App :: atom(), Host :: inet:ip_address() | string(), Port :: inet:port_number()} |
@@ -87,26 +91,78 @@ node does not start when it cannot be: the server package stops with
 add_application(App, Settings) ->
     case ets:whereis(?NOVA_LISTENERS_TABLE) of
         undefined -> add_with_configured(App, Settings);
-        _Tid -> add_to_listener(App, Settings)
+        _Tid -> added(App, Settings, add_to_listener(App, Settings))
     end.
 
+%% The applications that were added are kept with nova_sup, which outlives
+%% the server package. Its listeners come and go with it, and what was added
+%% to them is added again when they are back.
+added(App, Settings, {ok, App, Host, Port} = Added) ->
+    ok = remember(App, Settings, {Host, Port}),
+    Added;
+added(_App, _Settings, NotAdded) ->
+    NotAdded.
+
+remember(App, Settings, Bind) ->
+    case ets:whereis(?NOVA_ADDED_TABLE) of
+        undefined ->
+            ok;
+        Tid ->
+            true = ets:insert(Tid, {erlang:unique_integer([monotonic]), App, Settings, Bind}),
+            ok
+    end.
+
+remembered() ->
+    case ets:whereis(?NOVA_ADDED_TABLE) of
+        undefined -> [];
+        Tid -> ets:tab2list(Tid)
+    end.
+
+forget(App) ->
+    case ets:whereis(?NOVA_ADDED_TABLE) of
+        undefined -> false;
+        Tid -> ets:select_delete(Tid, [{{'_', App, '_', '_'}, [], [true]}]) > 0
+    end.
+
+%% Before there is a listener to add to, the application is remembered and
+%% answered with where its settings put it.
 add_with_configured(App, Settings) ->
-    case ets:whereis(?NOVA_PENDING_TABLE) of
+    case ets:whereis(?NOVA_ADDED_TABLE) of
         undefined ->
             {error, server_not_started};
         Tid ->
-            case {ets:match_object(Tid, {'_', App, '_'}), bind_of(App, Settings)} of
-                {[], {ok, Host, Port}} ->
-                    true = ets:insert(Tid, {erlang:unique_integer([monotonic]), App, Settings}),
-                    {ok, App, Host, Port};
-                {[], {error, Reason}} ->
-                    {error, Reason};
-                {[_Pending], _Bind} ->
-                    {error, {already_started, App}}
+            case bind_of(App, Settings) of
+                {ok, Host, Port} ->
+                    case ets:match_object(Tid, {'_', App, '_', {Host, Port}}) of
+                        [] ->
+                            ok = remember(App, Settings, {Host, Port}),
+                            added_meanwhile(App, Settings, {ok, App, Host, Port});
+                        [_Remembered | _] ->
+                            {error, {already_started, App}}
+                    end;
+                {error, Reason} ->
+                    {error, Reason}
             end
     end.
 
-%% Where the settings put an application, before there is a listener to ask.
+%% The server package may have started its listeners between the look for
+%% them and the note of the application, which it then did not see.
+added_meanwhile(App, Settings, Noted) ->
+    case ets:whereis(?NOVA_LISTENERS_TABLE) of
+        undefined ->
+            Noted;
+        _Tid ->
+            case add_to_listener(App, Settings) of
+                {error, {already_started, App}} ->
+                    Noted;
+                {error, Reason} ->
+                    _ = forget(App),
+                    {error, Reason};
+                Added ->
+                    Added
+            end
+    end.
+
 bind_of(_App, #{listener := Name}) ->
     case nova_listener:configured() of
         {ok, Listeners} ->
@@ -123,26 +179,20 @@ bind_of(App, Settings) ->
         {error, Reason} -> {error, Reason}
     end.
 
-add_pending([]) ->
+%% An application the configuration lists on the listener it was added to
+%% is served there already, which is what was asked for.
+add_remembered([]) ->
     ok;
-add_pending([{_Order, App, Settings} | Rest]) ->
+add_remembered([{_Order, App, Settings, _Bind} | Rest]) ->
     case add_to_listener(App, Settings) of
         {ok, App, _Host, _Port} ->
-            add_pending(Rest);
+            add_remembered(Rest);
+        {error, {already_started, App}} ->
+            add_remembered(Rest);
         {error, Reason} ->
-            ?LOG_ERROR(#{msg => ~"An application that was added before the server package started cannot be served",
+            ?LOG_ERROR(#{msg => ~"An application that was added with nova_sup:add_application/2 cannot be served",
                          app => App, reason => Reason}),
             {error, {application_not_added, App, Reason}}
-    end.
-
-take_pending() ->
-    case ets:whereis(?NOVA_PENDING_TABLE) of
-        undefined ->
-            [];
-        Tid ->
-            Pending = ets:tab2list(Tid),
-            true = ets:delete_all_objects(Tid),
-            Pending
     end.
 
 add_to_listener(App, #{listener := Name}) ->
@@ -168,34 +218,29 @@ start_named_after(App, Listener) ->
         {ok, _Named} ->
             {error, {listener_exists, App}};
         error ->
-            Started = start_checked(nova_server:module(), Listener),
-            ok = warn_about_route_groups(App),
-            Started
+            Unserved = unserved_groups(),
+            case start_checked(nova_server:module(), Listener) of
+                {ok, App, Host, Port} ->
+                    ok = warn_unserved_groups(App, Unserved),
+                    {ok, App, Host, Port};
+                {error, Reason} ->
+                    {error, Reason}
+            end
     end.
 
 %%--------------------------------------------------------------------
 -doc "Stop a Nova application. Its routes are removed from the listener serving it, and the listener itself is stopped once no applications are left on it.".
 -spec remove_application(App :: atom()) -> ok | {error, not_found}.
 remove_application(App) ->
+    Forgotten = forget(App),
     case [L || L = #nova_listener{apps = Apps} <- all_listeners(), lists:member(App, Apps)] of
-        [] ->
-            remove_pending(App);
-        Listeners ->
-            [detach_application(App, Listener) || Listener <- Listeners],
-            ok
-    end.
-
-remove_pending(App) ->
-    Pending = case ets:whereis(?NOVA_PENDING_TABLE) of
-                  undefined -> [];
-                  Tid -> ets:match_object(Tid, {'_', App, '_'})
-              end,
-    case Pending of
+        [] when Forgotten ->
+            ok;
         [] ->
             ?LOG_ERROR(#{msg => ~"Application not found", app => App}),
             {error, not_found};
-        [Entry] ->
-            true = ets:delete_object(?NOVA_PENDING_TABLE, Entry),
+        Listeners ->
+            [detach_application(App, Listener) || Listener <- Listeners],
             ok
     end.
 
@@ -237,14 +282,14 @@ start_listeners(Server) ->
                     ok;
                 {error, Reason} ->
                     ok = stop_listeners(Server),
-                    {error, Reason}
+                    {error, nova_redact:tls_options(Reason)}
             catch
                 throw:{error, Reason} ->
                     ok = stop_listeners(Server),
                     {error, Reason};
                 Class:Reason:Stacktrace ->
                     ok = stop_listeners(Server),
-                    erlang:raise(Class, Reason, Stacktrace)
+                    erlang:raise(Class, nova_redact:tls_options(Reason), nova_redact:stacktrace(Stacktrace))
             end;
         Other ->
             ?LOG_NOTICE(#{msg => ~"Server package is started but not used: the server key of the nova application names another",
@@ -303,7 +348,7 @@ init([]) ->
 
     ok = nova_settings:validate(),
 
-    ?NOVA_PENDING_TABLE = ets:new(?NOVA_PENDING_TABLE, [named_table, public, ordered_set]),
+    ?NOVA_ADDED_TABLE = ets:new(?NOVA_ADDED_TABLE, [named_table, public, ordered_set]),
 
     persistent_term:put(nova_use_stacktrace, application:get_env(nova, use_stacktrace, false)),
 
@@ -407,7 +452,7 @@ start_configured(Server) ->
                     start_all(Server, Listeners);
                 {error, Reason} ->
                     ?LOG_ERROR(#{msg => ~"The listeners of the nova application are not configured as nova_listener describes",
-                                 reason => Reason}),
+                                 reason => nova_redact:tls_options(Reason)}),
                     {error, Reason}
             end
     end.
@@ -423,10 +468,11 @@ note_legacy_configuration() ->
     end.
 
 %% The listeners of the configuration, then the applications that were
-%% added before there was a server to add them to.
+%% added: before there was a server to add them to, or to the listeners of
+%% an earlier start of the server package.
 start_all(_Server, []) ->
-    case add_pending(take_pending()) of
-        ok -> all_route_groups_served();
+    case add_remembered(remembered()) of
+        ok -> check_route_groups();
         {error, Reason} -> {error, Reason}
     end;
 start_all(Server, [Listener | Rest]) ->
@@ -435,8 +481,8 @@ start_all(Server, [Listener | Rest]) ->
         {error, Reason} -> {error, Reason}
     end.
 
-all_route_groups_served() ->
-    case route_groups_not_served() of
+check_route_groups() ->
+    case unserved_groups() of
         [] ->
             ok;
         [{App, Prefix, Listener} | _] ->
@@ -447,7 +493,7 @@ all_route_groups_served() ->
 
 %% The route groups that name a listener whose routing table they are not
 %% in: one that is not there, or one the application is not served on.
-route_groups_not_served() ->
+unserved_groups() ->
     Bound = [{Name, Group} || #nova_listener{name = Name, dispatch_key = DispatchKey} <- all_listeners(),
                               Group <- nova_router:bound_groups(DispatchKey)],
     lists:usort([{App, Prefix, Listener}
@@ -515,7 +561,7 @@ start_listener(Server, Listener = #{name := Name, ip := Host, port := Port, tls 
                                              apps = Apps,
                                              dispatch_key = DispatchKey}),
             say_what_the_session_cookie_needs(Tls =/= false),
-            say_how_http3_alone_is_found(Name, Names),
+            note_http3_only(Name, Names),
             ?LOG_NOTICE(#{msg => ~"Nova is running",
                           url => unicode:characters_to_binary(
                                    io_lib:format("~s://~s:~B", [scheme(Tls), format_host(Host), Port])),
@@ -526,7 +572,7 @@ start_listener(Server, Listener = #{name := Name, ip := Host, port := Port, tls 
                           apps => Apps}),
             {ok, App, Host, Port};
         {error, NotStarted} ->
-            Reason = nova_listener:without_secrets(NotStarted),
+            Reason = nova_redact:tls_options(NotStarted),
             ok = nova_router:delete_dispatch(DispatchKey),
             ?LOG_ERROR(#{msg => ~"Could not start listener",
                          listener => Name, port => Port, server => Server, reason => Reason}),
@@ -543,10 +589,10 @@ websocket_protocols(Server, Listener) ->
 
 %% A client tries HTTP/3 once it is told of it: by the alt-svc header of an
 %% answer over another version, or by an HTTPS record in DNS.
-say_how_http3_alone_is_found(Name, [http3]) ->
+note_http3_only(Name, [http3]) ->
     ?LOG_NOTICE(#{msg => ~"Listener serves HTTP/3 alone. Browsers only come to it when an HTTPS record in DNS says it is there",
                   listener => Name});
-say_how_http3_alone_is_found(_Name, _Protocols) ->
+note_http3_only(_Name, _Protocols) ->
     ok.
 
 scheme(false) -> "http";
@@ -588,20 +634,22 @@ attach_application(App, Listener = #nova_listener{name = Name, apps = Apps, bind
         true ->
             {error, {already_started, App}};
         false ->
+            Unserved = unserved_groups(),
             nova_router:compile(resolve_nova_apps(with_nova_apps(App)), DispatchKey),
             register_listener(Listener#nova_listener{apps = Apps ++ [App]}),
-            ok = warn_about_route_groups(App),
+            ok = warn_unserved_groups(App, Unserved),
             ?LOG_NOTICE(#{msg => ~"Added Nova application to an existing listener",
                           app => App, port => Port, listener => Name}),
             {ok, App, Host, Port}
     end.
 
 %% At boot a route group that no listener it names serves stops the node.
-%% At runtime the listener it names may still be to come, so it is said.
-warn_about_route_groups(App) ->
+%% At runtime the listener it names may still be to come, so the groups the
+%% application brought, and no listener they name serves, are said.
+warn_unserved_groups(App, Before) ->
     _ = [?LOG_WARNING(#{msg => ~"A route group names a listener that is not started or does not serve its application, so the group is not served there",
                         app => GroupApp, prefix => Prefix, listener => Listener, added => App})
-         || {GroupApp, Prefix, Listener} <- route_groups_not_served()],
+         || {GroupApp, Prefix, Listener} <- unserved_groups() -- Before],
     ok.
 
 detach_application(App, #nova_listener{name = Name, apps = Apps, dispatch_key = DispatchKey} = Listener) ->

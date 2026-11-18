@@ -15,20 +15,20 @@ configured_test_() ->
              application:unset_env(nova, cowboy_configuration)
      end,
      [
-      fun without_configuration_there_is_one_listener/0,
-      fun the_only_listener_serves_the_bootstrap_application/0,
-      fun one_of_several_listeners_names_its_applications/0,
-      fun listeners_come_in_the_order_of_their_names/0,
+      fun default_listener/0,
+      fun bootstrap_default/0,
+      fun applications_required/0,
+      fun listener_order/0,
       fun tls_changes_the_defaults/0,
-      fun a_version_can_carry_options/0,
-      fun two_listeners_on_one_port_are_refused/0,
-      fun the_same_port_on_two_addresses_is_two_listeners/0,
-      fun a_setting_nova_does_not_know_is_refused/0,
-      fun a_wrong_setting_is_named/0,
-      fun listeners_that_are_not_a_map_are_refused/0,
-      fun cowboy_configuration_is_one_listener/0,
-      fun cowboy_configuration_with_ssl/0,
-      fun listeners_win_over_cowboy_configuration/0
+      fun protocol_options/0,
+      fun duplicate_bind/0,
+      fun same_port_two_ips/0,
+      fun unknown_setting/0,
+      fun invalid_setting/0,
+      fun invalid_listeners/0,
+      fun legacy_config/0,
+      fun legacy_ssl/0,
+      fun listeners_over_legacy/0
      ]}.
 
 %% nova_sup:add_application/2 takes the settings of a listener, or those of
@@ -46,19 +46,14 @@ runtime_settings_test() ->
                  nova_listener:runtime_settings(#{ssl_port => 4443, use_ssl => true,
                                                   cert => "cert.pem", ca_cert => "ca.pem"})).
 
-%% What a server says of a listener it could not start may have the TLS
-%% options in it.
-reason_a_listener_did_not_start_with_has_no_secrets_test() ->
-    Key = {'RSAPrivateKey', ~"der"},
-    ?assertEqual({shutdown, {child, [{port, 8443}, {certfile, "cert.pem"}, {key, redacted}, {password, redacted}]}},
-                 nova_listener:without_secrets({shutdown, {child, [{port, 8443}, {certfile, "cert.pem"}, {key, Key},
-                                                                   {password, "hunter2"}]}})),
-    ?assertEqual(#{socket_opts => [{certs_keys, redacted}], port => 1},
-                 nova_listener:without_secrets(#{socket_opts => [{certs_keys, [#{key => Key}]}], port => 1})),
-    ?assertEqual({options, {password, redacted}}, nova_listener:without_secrets({options, {password, "hunter2"}})),
-    ?assertEqual(eaddrinuse, nova_listener:without_secrets(eaddrinuse)).
+%% The settings of a listener that are refused may be its TLS options.
+refused_tls_test() ->
+    ?assertEqual({error, {invalid_listener_setting, web, tls, redacted}},
+                 nova_listener:normalize(web, #{tls => {key, ~"der"}}, #{applications => [my_app]})),
+    ?assertEqual({error, {invalid_listener, web, [{port, 8443}, {tls, [{password, redacted}]}]}},
+                 nova_listener:normalize(web, [{port, 8443}, {tls, [{password, "hunter2"}]}], #{})).
 
-without_configuration_there_is_one_listener() ->
+default_listener() ->
     {ok, [Listener]} = nova_listener:configured(),
     ?assertEqual(#{name => default,
                    ip => {0, 0, 0, 0},
@@ -73,18 +68,18 @@ without_configuration_there_is_one_listener() ->
      || Server <- [nova_cowboy, nova_roadrunner]],
     ?assertEqual(ok, nova_roadrunner:check_listener(Listener)).
 
-the_only_listener_serves_the_bootstrap_application() ->
+bootstrap_default() ->
     application:set_env(nova, listeners, #{web => #{port => 4000}}),
     ?assertMatch({ok, [#{name := web, port := 4000, applications := [my_app], protocols := [{http1, #{}}],
                          server_opts := #{}}]},
                  nova_listener:configured()).
 
-one_of_several_listeners_names_its_applications() ->
+applications_required() ->
     application:set_env(nova, listeners, #{web => #{port => 4000, applications => [my_app]},
                                            admin => #{port => 4001}}),
     ?assertEqual({error, {invalid_listener_setting, admin, applications, undefined}}, nova_listener:configured()).
 
-listeners_come_in_the_order_of_their_names() ->
+listener_order() ->
     application:set_env(nova, listeners, #{web => #{port => 4000, applications => [my_app]},
                                            admin => #{port => 4001, applications => [my_admin]}}),
     {ok, Listeners} = nova_listener:configured(),
@@ -97,28 +92,28 @@ tls_changes_the_defaults() ->
     ?assertEqual([{certfile, "cert.pem"}, {keyfile, "key.pem"}], lists:sort(Tls)),
     ?assertEqual([http1, http2], nova_listener:protocol_names(Protocols)).
 
-a_version_can_carry_options() ->
+protocol_options() ->
     application:set_env(nova, listeners,
                         #{web => #{protocols => [http1, {http2, #{max_concurrent_streams => 10}}]}}),
     ?assertMatch({ok, [#{protocols := [{http1, #{}}, {http2, #{max_concurrent_streams := 10}}]}]},
                  nova_listener:configured()).
 
-two_listeners_on_one_port_are_refused() ->
+duplicate_bind() ->
     application:set_env(nova, listeners, #{web => #{port => 4000, applications => [my_app]},
                                            admin => #{port => 4000, applications => [my_admin]}}),
     ?assertEqual({error, {listeners_on_one_port, {0, 0, 0, 0}, 4000}}, nova_listener:configured()).
 
-the_same_port_on_two_addresses_is_two_listeners() ->
+same_port_two_ips() ->
     application:set_env(nova, listeners,
                         #{web => #{ip => {10, 0, 0, 1}, port => 4000, applications => [my_app]},
                           admin => #{ip => {127, 0, 0, 1}, port => 4000, applications => [my_admin]}}),
     ?assertMatch({ok, [_, _]}, nova_listener:configured()).
 
-a_setting_nova_does_not_know_is_refused() ->
+unknown_setting() ->
     application:set_env(nova, listeners, #{web => #{prot => 4000, ssl => true}}),
     ?assertEqual({error, {unknown_listener_settings, web, [prot, ssl]}}, nova_listener:configured()).
 
-a_wrong_setting_is_named() ->
+invalid_setting() ->
     [begin
          application:set_env(nova, listeners, #{web => #{Setting => Value}}),
          ?assertEqual({error, {invalid_listener_setting, web, Setting, Value}}, nova_listener:configured())
@@ -140,13 +135,13 @@ a_wrong_setting_is_named() ->
     application:set_env(nova, listeners, #{web => [{port, 4000}]}),
     ?assertEqual({error, {invalid_listener, web, [{port, 4000}]}}, nova_listener:configured()).
 
-listeners_that_are_not_a_map_are_refused() ->
+invalid_listeners() ->
     application:set_env(nova, listeners, [{web, #{}}]),
     ?assertEqual({error, {invalid_listeners, [{web, #{}}]}}, nova_listener:configured()),
     application:set_env(nova, listeners, #{}),
     ?assertEqual({error, {invalid_listeners, #{}}}, nova_listener:configured()).
 
-cowboy_configuration_is_one_listener() ->
+legacy_config() ->
     application:set_env(nova, cowboy_configuration, #{port => 4000,
                                                       ip => {127, 0, 0, 1},
                                                       options => #{idle_timeout => 1000},
@@ -162,7 +157,7 @@ cowboy_configuration_is_one_listener() ->
                          server_opts => #{idle_timeout => 1000, stream_handlers => [my_stream_h]}}]},
                  nova_listener:configured()).
 
-cowboy_configuration_with_ssl() ->
+legacy_ssl() ->
     application:set_env(nova, cowboy_configuration, #{use_ssl => true,
                                                       port => 4000,
                                                       ssl_port => 4443,
@@ -172,12 +167,12 @@ cowboy_configuration_with_ssl() ->
     ?assertMatch({ok, [#{port := 8443, tls := [{certfile, "cert.pem"}, {cacertfile, "ca.pem"}]}]},
                  nova_listener:configured()).
 
-listeners_win_over_cowboy_configuration() ->
+listeners_over_legacy() ->
     application:set_env(nova, cowboy_configuration, #{port => 4000}),
     application:set_env(nova, listeners, #{web => #{port => 5000}}),
     ?assertMatch({ok, [#{name := web, port := 5000}]}, nova_listener:configured()).
 
-a_server_serves_what_it_can_test() ->
+server_check_test() ->
     {ok, Clear} = nova_listener:normalize(web, #{protocols => [http1, http2]}, #{applications => [my_app]}),
     {ok, Tls} = nova_listener:normalize(web, #{tls => #{certfile => "cert.pem"}, protocols => [http1, http2, http3]},
                                         #{applications => [my_app]}),

@@ -17,7 +17,7 @@ init(#{handler := Handler, state := State} = Session) ->
     %% function_exported/3 is false for a module that is not loaded yet.
     {module, Handler} = code:ensure_loaded(Handler),
     case erlang:function_exported(Handler, websocket_init, 1) of
-        true -> result(Handler:websocket_init(State), Session);
+        true -> result(call(Handler, websocket_init, [State]), Session);
         false -> {ok, Session}
     end.
 
@@ -32,7 +32,7 @@ handle_control(#{opcode := Opcode, payload := Payload}, Session) ->
 
 -spec handle_info(term(), session()) -> roadrunner_ws_handler:result().
 handle_info(Info, #{handler := Handler, state := State} = Session) ->
-    result(Handler:websocket_info(Info, State), Session).
+    result(call(Handler, websocket_info, [Info, State]), Session).
 
 %% The listener is draining: close as a server that is going away.
 -spec handle_drain(integer(), session()) -> roadrunner_ws_handler:result().
@@ -43,14 +43,25 @@ handle_drain(_Deadline, Session) ->
 terminate(Reason, #{handler := Handler, state := State, req := Req}) ->
     case erlang:function_exported(Handler, terminate, 3) of
         true ->
-            _ = Handler:terminate(reason(Reason), Req, State),
+            _ = call(Handler, terminate, [reason(Reason), Req, State]),
             ok;
         false ->
             ok
     end.
 
 handle(Frame, #{handler := Handler, state := State} = Session) ->
-    result(Handler:websocket_handle(Frame, State), Session).
+    result(call(Handler, websocket_handle, [Frame, State]), Session).
+
+%% Roadrunner logs what a callback raises, and the state of a connection
+%% has the request of its upgrade in it, so it is raised as Nova logs a
+%% crash.
+call(Handler, Function, Arguments) ->
+    try
+        apply(Handler, Function, Arguments)
+    catch
+        Class:Reason:Stacktrace ->
+            erlang:raise(Class, nova_redact:term(Reason), nova_redact:stacktrace(Stacktrace))
+    end.
 
 %% What a callback of the handler returns, as Roadrunner's.
 result({stop, State}, Session) ->

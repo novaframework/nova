@@ -51,7 +51,6 @@ named `default` with these defaults, which serves the bootstrap application.
 -export([
          configured/0,
          from_legacy/1,
-         without_secrets/1,
          runtime_settings/1,
          normalize/3,
          check/3,
@@ -103,14 +102,14 @@ defaults(Bootstrap, true) -> #{applications => [Bootstrap]};
 defaults(_Bootstrap, false) -> #{}.
 
 normalize_all([], _Defaults, Listeners) ->
-    no_two_on_one_port(lists:reverse(Listeners));
+    unique_binds(lists:reverse(Listeners));
 normalize_all([{Name, Settings} | Rest], Defaults, Listeners) ->
     case normalize(Name, Settings, Defaults) of
         {ok, Listener} -> normalize_all(Rest, Defaults, [Listener | Listeners]);
         {error, Reason} -> {error, Reason}
     end.
 
-no_two_on_one_port(Listeners) ->
+unique_binds(Listeners) ->
     Binds = [{Ip, Port} || #{ip := Ip, port := Port} <- Listeners],
     case Binds -- lists:usort(Binds) of
         [] -> {ok, Listeners};
@@ -171,7 +170,7 @@ normalize(Name, Settings, Defaults) when is_map(Settings) ->
             {error, {unknown_listener_settings, Name, lists:sort(Unknown)}}
     end;
 normalize(Name, Settings, _Defaults) ->
-    {error, {invalid_listener, Name, Settings}}.
+    {error, {invalid_listener, Name, nova_redact:tls_options(Settings)}}.
 
 normalize_settings(Name, Settings) ->
     try
@@ -187,6 +186,8 @@ normalize_settings(Name, Settings) ->
                steps => steps(maps:get(steps, Settings, nova_pipeline:steps())),
                server_opts => server_opts(maps:get(server_opts, Settings, #{}))}}
     catch
+        throw:{invalid, tls, _Value} ->
+            {error, {invalid_listener_setting, Name, tls, redacted}};
         throw:{invalid, Setting, Value} ->
             {error, {invalid_listener_setting, Name, Setting, Value}}
     end.
@@ -245,32 +246,6 @@ server_opts(Other) -> throw({invalid, server_opts, Other}).
 -spec protocol_names([{nova_server:protocol(), map()}]) -> [nova_server:protocol()].
 protocol_names(Protocols) ->
     [Name || {Name, _Options} <- Protocols].
-
--doc false.
-%% Why a listener did not start is logged, and is what the node does not
-%% start with. A server may hand back the options it was given with it, and
-%% those of TLS hold a key and its password.
--spec without_secrets(term()) -> term().
-without_secrets({Option, Value}) ->
-    case is_secret(Option) of
-        true -> {Option, redacted};
-        false -> {without_secrets(Option), without_secrets(Value)}
-    end;
-without_secrets(Tuple) when is_tuple(Tuple) ->
-    list_to_tuple([without_secrets(Element) || Element <- tuple_to_list(Tuple)]);
-without_secrets(List) when is_list(List), length(List) >= 0 ->
-    [without_secrets(Element) || Element <- List];
-without_secrets(Map) when is_map(Map) ->
-    #{Key => case is_secret(Key) of
-                 true -> redacted;
-                 false -> without_secrets(Value)
-             end || Key := Value <- Map};
-without_secrets(Other) ->
-    Other.
-
-is_secret(Option) ->
-    lists:member(Option, [key, password, certs_keys, sni_hosts, sni_fun, user_lookup_fun, psk_identity,
-                          srp_identity]).
 
 -doc false.
 %% Whether a server can serve the listener: every HTTP version it asks for,
