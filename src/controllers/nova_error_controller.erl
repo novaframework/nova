@@ -69,7 +69,7 @@ page(StatusCode, Json, Variables, Req) ->
 %% A client that sends no accept header gets JSON, as does one whose header
 %% cannot be read. One that accepts neither JSON nor HTML gets no body.
 response_type(Req) ->
-    try cowboy_req:parse_header(~"accept", Req) of
+    try nova_req:parse_header(~"accept", Req) of
         undefined -> json;
         Ranges when is_list(Ranges) -> preferred_type(lists:enumerate(Ranges))
     catch

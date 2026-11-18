@@ -35,17 +35,17 @@ request. `Options` without `allow_origins` matches no clause.
 Runs ahead of the security callback: a preflight carries no credentials, and
 a browser only shows a refusal to the page when it has the headers.
 """.
--spec pre_security(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
-                          {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
-                          {stop, Req0 :: cowboy_req:req(), NewState :: any()}.
+-spec pre_security(Req :: nova_req:req(), Env :: any(), Options :: map(), State :: any()) ->
+                          {ok, Req0 :: nova_req:req(), NewState :: any()} |
+                          {stop, Req0 :: nova_req:req(), NewState :: any()}.
 pre_security(Req, _Env, #{allow_origins := Origins} = Options, State) ->
     ReqWithOptions = add_cors_headers(Req, Origins, Options),
     continue(ReqWithOptions, State).
 
 %%--------------------------------------------------------------------
 -doc "Does nothing: the plugin works in `pre_security/4`.".
--spec post_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
-                               {ok, Req0 :: cowboy_req:req(), NewState :: any()}.
+-spec post_request(Req :: nova_req:req(), Env :: any(), Options :: map(), State :: any()) ->
+                               {ok, Req0 :: nova_req:req(), NewState :: any()}.
 post_request(Req, _Env, _Opts, State) ->
     {ok, Req, State}.
 
@@ -78,29 +78,29 @@ plugin_info() ->
 
 continue(Req, State) ->
     case is_preflight(Req) of
-        true -> {stop, cowboy_req:reply(204, Req), State};
+        true -> {stop, nova_req:reply(204, Req), State};
         false -> {ok, Req, State}
     end.
 
 %% Any other OPTIONS request is the application's to answer.
 is_preflight(#{method := ~"OPTIONS"} = Req) ->
-    cowboy_req:header(~"origin", Req) =/= undefined andalso
-        cowboy_req:header(~"access-control-request-method", Req) =/= undefined;
+    nova_req:header(~"origin", Req) =/= undefined andalso
+        nova_req:header(~"access-control-request-method", Req) =/= undefined;
 is_preflight(_Req) ->
     false.
 
 add_cors_headers(Req, ~"*", Options) ->
-    preflight_headers(cowboy_req:set_resp_header(~"access-control-allow-origin", ~"*", Req), Options);
+    preflight_headers(nova_req:set_resp_header(~"access-control-allow-origin", ~"*", Req), Options);
 add_cors_headers(Req, Origins, Options) ->
     %% The answer depends on the Origin header, so caches must key on it.
     Req0 = vary_on_origin(Req),
-    case cowboy_req:header(~"origin", Req) of
+    case nova_req:header(~"origin", Req) of
         undefined ->
             Req0;
         Origin ->
             case lists:member(Origin, values(Origins)) of
                 true ->
-                    Req1 = cowboy_req:set_resp_header(~"access-control-allow-origin", Origin, Req0),
+                    Req1 = nova_req:set_resp_header(~"access-control-allow-origin", Origin, Req0),
                     preflight_headers(Req1, Options);
                 false ->
                     Req0
@@ -108,15 +108,15 @@ add_cors_headers(Req, Origins, Options) ->
     end.
 
 vary_on_origin(Req) ->
-    case cowboy_req:resp_header(~"vary", Req, undefined) of
+    case nova_req:resp_header(~"vary", Req, undefined) of
         Vary when is_binary(Vary) ->
             Listed = [string:lowercase(string:trim(V)) || V <- binary:split(Vary, ~",", [global])],
             case lists:member(~"origin", Listed) orelse lists:member(~"*", Listed) of
                 true -> Req;
-                false -> cowboy_req:set_resp_header(~"vary", <<Vary/binary, ", origin">>, Req)
+                false -> nova_req:set_resp_header(~"vary", <<Vary/binary, ", origin">>, Req)
             end;
         _ ->
-            cowboy_req:set_resp_header(~"vary", ~"origin", Req)
+            nova_req:set_resp_header(~"vary", ~"origin", Req)
     end.
 
 -spec values(binary() | [unicode:chardata()]) -> [binary()].
@@ -144,18 +144,18 @@ preflight_headers(Req, Options) ->
                   undefined -> requested_headers(Req);
                   Configured -> join(Configured)
               end,
-    Req0 = cowboy_req:set_resp_header(~"access-control-allow-headers", Headers, Req),
-    Req1 = cowboy_req:set_resp_header(~"access-control-allow-methods",
+    Req0 = nova_req:set_resp_header(~"access-control-allow-headers", Headers, Req),
+    Req1 = nova_req:set_resp_header(~"access-control-allow-methods",
                                       join(maps:get(allow_methods, Options, ~"*")), Req0),
     case maps:get(max_age, Options, undefined) of
         MaxAge when is_integer(MaxAge) ->
-            cowboy_req:set_resp_header(~"access-control-max-age", integer_to_binary(MaxAge), Req1);
+            nova_req:set_resp_header(~"access-control-max-age", integer_to_binary(MaxAge), Req1);
         _ ->
             Req1
     end.
 
 requested_headers(Req) ->
-    case cowboy_req:header(~"access-control-request-headers", Req) of
+    case nova_req:header(~"access-control-request-headers", Req) of
         undefined -> ~"*";
         Requested -> Requested
     end.

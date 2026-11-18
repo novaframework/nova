@@ -11,7 +11,7 @@ default_view(_Req) ->
     {ok, #{title => ~"default"}}.
 
 with_request(Req) ->
-    {ok, #{title => ~"request"}, #{}, cowboy_req:set_resp_header(~"x-from-controller", ~"yes", Req)}.
+    {ok, #{title => ~"request"}, #{}, nova_req:set_resp_header(~"x-from-controller", ~"yes", Req)}.
 
 other_view(_Req) ->
     {ok, #{title => ~"named"}, #{view => nova_views_other}}.

@@ -48,12 +48,12 @@ Handler for JSON. It can take one of three different return objects:
 
 \{json, StatusCode :: integer(), Headers :: map(), JSON :: map()\} Same operation as the above except you can set custom status code and custom headers.
 
-\{json, StatusCode :: integer(), Headers :: map(), JSON :: map(), Req0 :: cowboy_req:req()\} This is the same as the above but you can also return the request object. This is particularly useful if you want to set cookies or other headers that are not supported by the handler. Older releases only accepted the request before the JSON, \{json, StatusCode, Headers, Req0, JSON\}; that order still works but is deprecated and logs a warning once per controller module.
+\{json, StatusCode :: integer(), Headers :: map(), JSON :: map(), Req0 :: nova_req:req()\} This is the same as the above but you can also return the request object. This is particularly useful if you want to set cookies or other headers that are not supported by the handler. Older releases only accepted the request before the JSON, \{json, StatusCode, Headers, Req0, JSON\}; that order still works but is deprecated and logs a warning once per controller module.
 """.
 -spec handle_json({json, JSON :: map()} | {json, StatusCode :: integer(), Headers :: map(), JSON :: map()} |
-                  {json, StatusCode :: integer(), Headers :: map(), JSON :: map(), Req0 :: cowboy_req:req()} |
-                  {json, StatusCode :: integer(), Headers :: map(), Req0 :: cowboy_req:req(), JSON :: map()},
-                  Callback :: function(), Req :: cowboy_req:req()) -> {ok, State :: cowboy_req:req()}.
+                  {json, StatusCode :: integer(), Headers :: map(), JSON :: map(), Req0 :: nova_req:req()} |
+                  {json, StatusCode :: integer(), Headers :: map(), Req0 :: nova_req:req(), JSON :: map()},
+                  Callback :: function(), Req :: nova_req:req()) -> {ok, State :: nova_req:req()}.
 handle_json({json, StatusCode, Headers, Req0, JSON}, Callback, _Req) when ?IS_REQ(Req0), not ?IS_REQ(JSON) ->
     deprecated_json_order(Callback),
     handle_json({json, StatusCode, Headers, JSON}, Callback, Req0);
@@ -62,8 +62,8 @@ handle_json({json, StatusCode, Headers, JSON, Req0}, Callback, _Req) ->
 handle_json({json, StatusCode, Headers, JSON}, _Callback, Req) ->
     EncodedJSON = nova_json:encode(JSON),
     Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, Headers),
-    Req0 = cowboy_req:set_resp_headers(Headers0, Req),
-    Req1 = cowboy_req:set_resp_body(EncodedJSON, Req0),
+    Req0 = nova_req:set_resp_headers(Headers0, Req),
+    Req1 = nova_req:set_resp_body(EncodedJSON, Req0),
     Req2 = Req1#{resp_status_code => StatusCode},
     {ok, Req2};
 handle_json({json, JSON}, Callback, Req = #{method := Method}) ->
@@ -114,8 +114,8 @@ The tuple can have three different forms:
 \{ok, Variables, Options, Req0\} - This will render the default view with the given variables and options but also takes a request object. This is useful if you want to set cookies or other headers that are not supported by the handler.
 """.
 -spec handle_ok({ok, Variables :: erlydtl_vars()} | {ok, Variables :: erlydtl_vars(), Options :: map()} |
-                {ok, Variables :: erlydtl_vars(), Options :: map(), Req0 :: cowboy_req:req()},
-                Callback :: function(), Req :: cowboy_req:req()) -> {ok, cowboy_req:req()}.
+                {ok, Variables :: erlydtl_vars(), Options :: map(), Req0 :: nova_req:req()},
+                Callback :: function(), Req :: nova_req:req()) -> {ok, nova_req:req()}.
 handle_ok({ok, Variables}, Callback, Req) ->
     %% Derive the view from module
     {module, Module} = erlang:fun_info(Callback, module),
@@ -161,26 +161,26 @@ And if you want to modulate the request object you can send it in as the fifth a
                     {status, StatusCode :: integer(), ExtraHeaders :: map()} |
                     {status, StatusCode :: integer(), ExtraHeaders :: map(), Body :: binary() | map()} |
                     {status, StatusCode :: integer(), ExtraHeaders :: map(), Body :: binary() | map(),
-                     Req0 :: cowboy_req:req()},
-                    Callback :: function(), Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()}.
+                     Req0 :: nova_req:req()},
+                    Callback :: function(), Req :: nova_req:req()) -> {ok, Req :: nova_req:req()}.
 handle_status({status, Status, ExtraHeaders, JSON, Req0}, Callback, _Req) ->
     handle_status({status, Status, ExtraHeaders, JSON}, Callback, Req0);
 handle_status({status, Status, ExtraHeaders, JSON}, _Callback, Req) when is_map(JSON) ->
     %% We do not need to render a status page since we just return a JSON structure
     Headers0 = maps:merge(#{<<"content-type">> => <<"application/json">>}, ExtraHeaders),
-    Req0 = cowboy_req:set_resp_headers(Headers0, Req),
+    Req0 = nova_req:set_resp_headers(Headers0, Req),
     Req1 = Req0#{resp_status_code => Status},
     JSONStr = nova_json:encode(JSON),
-    Req2 = cowboy_req:set_resp_body(JSONStr, Req1),
+    Req2 = nova_req:set_resp_body(JSONStr, Req1),
     {ok, Req2};
 handle_status({status, Status, ExtraHeaders, Body}, _Callback, Req) ->
     %% Body is a binary - just send it out
-    Req0 = cowboy_req:set_resp_headers(ExtraHeaders, Req),
+    Req0 = nova_req:set_resp_headers(ExtraHeaders, Req),
     Req1 = Req0#{resp_status_code => Status},
-    Req2 = cowboy_req:set_resp_body(Body, Req1),
+    Req2 = nova_req:set_resp_body(Body, Req1),
     {ok, Req2};
 handle_status({status, Status, ExtraHeaders}, _Callback, Req) ->
-    Req0 = cowboy_req:set_resp_headers(ExtraHeaders, Req),
+    Req0 = nova_req:set_resp_headers(ExtraHeaders, Req),
     {ok, Req0#{resp_status_code => Status}};
 handle_status({status, Status}, Callback, State) when is_integer(Status) ->
     handle_status({status, Status, #{}}, Callback, State).
@@ -195,8 +195,8 @@ Optionally you can attach the request object as the third argument. This is usef
 \{redirect, Url\} sends any location, another site included. Use \{redirect_local, Path\} for a target that comes from the request, such as a `next` parameter: it only redirects to a path on the site the request was made to, and answers anything else with a 400.
 """.
 -spec handle_redirect({redirect | redirect_local, Route :: list()|binary()} |
-                      {redirect | redirect_local, Route :: list()|binary(), Req :: cowboy_req:req()},
-                      Callback :: function(), Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()}.
+                      {redirect | redirect_local, Route :: list()|binary(), Req :: nova_req:req()},
+                      Callback :: function(), Req :: nova_req:req()) -> {ok, Req :: nova_req:req()}.
 handle_redirect({Keyword, Route, Req0}, Callback, _Req) ->
     handle_redirect({Keyword, Route}, Callback, Req0);
 handle_redirect({redirect_local, Route}, Callback, Req) ->
@@ -207,7 +207,7 @@ handle_redirect({redirect_local, Route}, Callback, Req) ->
                            controller => Module, location => loggable_location(Route)}),
             {ok, Req#{resp_status_code => 400}};
         Location ->
-            Req0 = cowboy_req:set_resp_headers(#{~"location" => Location}, Req),
+            Req0 = nova_req:set_resp_headers(#{~"location" => Location}, Req),
             {ok, Req0#{resp_status_code => 302}}
     end;
 handle_redirect({redirect, Route}, Callback, Req) ->
@@ -219,7 +219,7 @@ handle_redirect({redirect, Route}, Callback, Req) ->
             %% nova_handler renders the 500 status page for a thrown {Status, Reason}.
             throw({500, #{status_code => 500, class => error, reason => invalid_redirect_location}});
         Location ->
-            Req0 = cowboy_req:set_resp_headers(#{~"location" => Location}, Req),
+            Req0 = nova_req:set_resp_headers(#{~"location" => Location}, Req),
             {ok, Req0#{resp_status_code => 302}}
     end.
 
@@ -302,14 +302,14 @@ Optionally a sixth element can be added to the tuple. This is the request object
                       {sendfile, StatusCode :: integer(), Headers :: map(), {Offset :: integer(),
                                                                              Length :: integer(),
                                                                              Path :: list()}, Mime :: binary(),
-                       Req0 :: cowboy_req:req()},
-                  Callback :: function(), Req) -> {ok, Req} when Req :: cowboy_req:req().
+                       Req0 :: nova_req:req()},
+                  Callback :: function(), Req) -> {ok, Req} when Req :: nova_req:req().
 handle_sendfile({sendfile, StatusCode, Headers, FileInfo, Mime, Req0}, Callback, _Req) ->
     handle_sendfile({sendfile, StatusCode, Headers, FileInfo, Mime}, Callback, Req0);
 handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _Callback, Req) ->
     Headers0 = maps:merge(#{<<"content-type">> => Mime}, Headers),
-    Req0 = cowboy_req:set_resp_headers(Headers0, Req),
-    Req1 = cowboy_req:set_resp_body({sendfile, Offset, Length, Path}, Req0),
+    Req0 = nova_req:set_resp_headers(Headers0, Req),
+    Req1 = nova_req:set_resp_body({sendfile, Offset, Length, Path}, Req0),
     Req2 = Req1#{resp_status_code => StatusCode},
     {ok, Req2}.
 
@@ -317,10 +317,10 @@ handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _
 %%--------------------------------------------------------------------
 -doc false.
 -spec handle_websocket({websocket, ControllerData :: any()} |
-                       {websocket, ControllerData :: any(), Req0 :: cowboy_req:req()},
-                       Callback :: function(), Req :: cowboy_req:req()) ->
-                              {ok, Req :: cowboy_req:req()} |
-                              {cowboy_websocket, Req :: cowboy_req:req(), Options :: map()} |
+                       {websocket, ControllerData :: any(), Req0 :: nova_req:req()},
+                       Callback :: function(), Req :: nova_req:req()) ->
+                              {ok, Req :: nova_req:req()} |
+                              {websocket, Req :: nova_req:req(), Options :: map()} |
                               nova_handlers:handler_return().
 handle_websocket({websocket, ControllerData, Req0}, Callback, _Req) ->
     websocket_upgrade(ControllerData, Callback, Req0);
@@ -331,7 +331,7 @@ websocket_upgrade(ControllerData, Callback, Req) ->
     {module, Module} = erlang:fun_info(Callback, module),
     case Module:init(ControllerData) of
         {ok, NewControllerData} ->
-            {cowboy_websocket, Req#{controller_data => NewControllerData}, #{}};
+            {websocket, Req#{controller_data => NewControllerData}, #{}};
         %% We also support status tuples
         StatusTuple when is_tuple(StatusTuple), element(1, StatusTuple) =:= status ->
             {ok, HandlerMod} = nova_handlers:get_handler(status),
@@ -399,9 +399,9 @@ handle_view(View, Variables, Options, Req) ->
     StatusCode = maps:get(status_code, Options, 200),
     %% The headers of the controller go on top of the default, so one that
     %% names a content type replaces it and one that names none keeps it.
-    Req0 = cowboy_req:set_resp_headers(maps:get(headers, Options, #{}),
-                                       cowboy_req:set_resp_headers(#{~"content-type" => ~"text/html"}, Req)),
-    Req1 = cowboy_req:set_resp_body(HTML, Req0),
+    Req0 = nova_req:set_resp_headers(maps:get(headers, Options, #{}),
+                                       nova_req:set_resp_headers(#{~"content-type" => ~"text/html"}, Req)),
+    Req1 = nova_req:set_resp_body(HTML, Req0),
     Req2 = Req1#{resp_status_code => StatusCode},
     {ok, Req2}.
 

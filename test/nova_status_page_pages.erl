@@ -26,10 +26,10 @@ crashing_security(_Req) ->
     error(security_failed).
 
 not_found(Req) ->
-    page(404, cowboy_req:header(~"x-404", Req, ~"ok"), Req).
+    page(404, nova_req:header(~"x-404", Req, ~"ok"), Req).
 
 server_error(Req) ->
-    page(500, cowboy_req:header(~"x-500", Req, ~"ok"), Req).
+    page(500, nova_req:header(~"x-500", Req, ~"ok"), Req).
 
 page(Status, Behaviour, Req) ->
     nova_test_observer:observed(nova_status_page_observer, {page, Status}),

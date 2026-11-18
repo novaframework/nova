@@ -98,7 +98,7 @@ add_route(Path, Value) ->
 
 init(Req, State) ->
     counters:add(persistent_term:get(?MODULE), 1, 1),
-    {ok, cowboy_req:reply(200, #{}, ~"handler", Req), State}.
+    {ok, nova_req:reply(200, #{}, ~"handler", Req), State}.
 
 handler_calls() ->
     counters:get(persistent_term:get(?MODULE), 1).

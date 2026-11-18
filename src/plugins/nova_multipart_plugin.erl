@@ -39,9 +39,9 @@ rejects, `408` when the body is not read within `read_timeout` or its next
 when the handler reports `spool_full`, and `500` when the handler fails or
 the plugin has no handler. A `408` over HTTP/1 carries `connection: close`.
 """.
--spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
-          {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
-          {stop, Req0 :: cowboy_req:req(), NewState :: any()}.
+-spec pre_request(Req :: nova_req:req(), Env :: any(), Options :: map(), State :: any()) ->
+          {ok, Req0 :: nova_req:req(), NewState :: any()} |
+          {stop, Req0 :: nova_req:req(), NewState :: any()}.
 pre_request(Req, _Env, #{handler := {Mod, InitArgs}} = Options, State) when is_atom(Mod) ->
     case content_type(Req) of
         other ->
@@ -66,8 +66,8 @@ pre_request(Req, _Env, Options, State) ->
     {stop, reply(500, Req), State}.
 
 -doc "Does nothing: the plugin works in `pre_request/4`.".
--spec post_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
-          {ok, Req0 :: cowboy_req:req(), NewState :: any()}.
+-spec post_request(Req :: nova_req:req(), Env :: any(), Options :: map(), State :: any()) ->
+          {ok, Req0 :: nova_req:req(), NewState :: any()}.
 post_request(Req, _Env, _Options, State) ->
     {ok, Req, State}.
 
@@ -100,7 +100,7 @@ plugin_info() ->
 %%%%%%%%%%%%%%%%%%%%%%
 
 content_type(Req) ->
-    try cowboy_req:parse_header(<<"content-type">>, Req) of
+    try nova_req:parse_header(<<"content-type">>, Req) of
         {<<"multipart">>, <<"form-data">>, Params} ->
             case has_boundary(Params) of
                 true -> multipart;
@@ -289,18 +289,18 @@ finish_part(Req, Mod, HandlerState, TotalSize) ->
             {aborted, 500, Req}
     end.
 
-%% cowboy_req:read_part/1 and read_part_body/2 exit on a stalled or malformed
+%% nova_req:read_part/1 and read_part_body/2 exit on a stalled or malformed
 %% read, and raise error:badmatch on duplicate part headers. Both are turned
 %% into {error, Reason, Req} so every caller cleans up through one path.
 safe_read_part(Req, Opts) ->
-    try cowboy_req:read_part(Req, Opts)
+    try nova_req:read_part(Req, Opts)
     catch
         exit:Reason -> {error, Reason, Req};
         error:Reason -> {error, Reason, Req}
     end.
 
 safe_read_part_body(Req, Opts) ->
-    try cowboy_req:read_part_body(Req, Opts)
+    try nova_req:read_part_body(Req, Opts)
     catch
         exit:Reason -> {error, Reason, Req};
         error:Reason -> {error, Reason, Req}
@@ -308,9 +308,9 @@ safe_read_part_body(Req, Opts) ->
 
 %% The rest of the body is not coming, so the connection is not kept for it.
 reply(408, #{version := Version} = Req) when Version =:= 'HTTP/1.1'; Version =:= 'HTTP/1.0' ->
-    cowboy_req:reply(408, #{~"connection" => ~"close"}, Req);
+    nova_req:reply(408, #{~"connection" => ~"close"}, Req);
 reply(Status, Req) ->
-    cowboy_req:reply(Status, Req).
+    nova_req:reply(Status, Req).
 
 error_status(timeout) -> 408;
 error_status({request_error, timeout, _}) -> 408;

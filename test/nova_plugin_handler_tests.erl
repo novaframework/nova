@@ -15,9 +15,9 @@ setup() ->
     persistent_term:put(nova_plugins, []),
     persistent_term:put(nova_use_stacktrace, false),
     {ok, Pid} = nova_plugin_manager:start_link(),
-    meck:new(cowboy_req, [passthrough, no_link]),
-    meck:expect(cowboy_req, reply, fun nova_test_helper:reply/2),
-    meck:expect(cowboy_req, set_resp_headers, fun(Headers, Req) ->
+    meck:new(nova_req, [passthrough, no_link]),
+    meck:expect(nova_req, reply, fun nova_test_helper:reply/2),
+    meck:expect(nova_req, set_resp_headers, fun(Headers, Req) ->
         Existing = maps:get(resp_headers, Req, #{}),
         New = case is_list(Headers) of
                   true -> maps:from_list(Headers);
@@ -25,14 +25,14 @@ setup() ->
               end,
         Req#{resp_headers => maps:merge(Existing, New)}
     end),
-    meck:expect(cowboy_req, set_resp_body, fun(Body, Req) ->
+    meck:expect(nova_req, set_resp_body, fun(Body, Req) ->
         Req#{resp_body => Body}
     end),
     {Prev, Pid}.
 
 cleanup({Prev, Pid}) ->
     gen_server:stop(Pid),
-    meck:unload(cowboy_req),
+    meck:unload(nova_req),
     persistent_term:erase(nova_dispatch),
     persistent_term:erase(nova_plugins),
     persistent_term:erase(nova_use_stacktrace),
@@ -169,7 +169,7 @@ pre_plugin_break_reply_test_() ->
         {stop, Req1} = nova_plugin_handler:execute(Req, env()),
         ?assertEqual(403, maps:get(resp_status_code, Req1)),
         ?assertEqual(<<"forbidden">>, maps:get(resp_body, Req1)),
-        ?assert(meck:called(cowboy_req, reply, [403, '_']))
+        ?assert(meck:called(nova_req, reply, [403, '_']))
     end}.
 
 %% nova_oidcc answers anonymous users with these two.
@@ -180,7 +180,7 @@ break_redirect_reply_test_() ->
         {stop, Req1} = nova_plugin_handler:execute(Req, env()),
         ?assertEqual(302, maps:get(resp_status_code, Req1)),
         ?assertEqual(~"/login", maps:get(~"location", maps:get(resp_headers, Req1))),
-        ?assert(meck:called(cowboy_req, reply, [302, '_']))
+        ?assert(meck:called(nova_req, reply, [302, '_']))
     end}.
 
 break_status_reply_test_() ->
@@ -189,7 +189,7 @@ break_status_reply_test_() ->
         Req = req([{pre_request, [plugin(P)]}]),
         {stop, Req1} = nova_plugin_handler:execute(Req, env()),
         ?assertEqual(401, maps:get(resp_status_code, Req1)),
-        ?assert(meck:called(cowboy_req, reply, [401, '_']))
+        ?assert(meck:called(nova_req, reply, [401, '_']))
     end}.
 
 break_unknown_reply_is_a_500_test_() ->
@@ -266,7 +266,7 @@ pre_plugin_stop_reply_test_() ->
         {stop, Req1} = nova_plugin_handler:execute(Req, env()),
         ?assertEqual(503, maps:get(resp_status_code, Req1)),
         ?assertEqual(<<"unavailable">>, maps:get(resp_body, Req1)),
-        ?assert(meck:called(cowboy_req, reply, [503, '_']))
+        ?assert(meck:called(nova_req, reply, [503, '_']))
     end}.
 
 %%====================================================================
@@ -438,7 +438,7 @@ stop_reply_default_status_test_() ->
         Req = req([{pre_request, [plugin(P)]}]),
         {stop, Req1} = nova_plugin_handler:execute(Req, env()),
         ?assertEqual(200, maps:get(resp_status_code, Req1)),
-        ?assert(meck:called(cowboy_req, reply, [200, '_']))
+        ?assert(meck:called(nova_req, reply, [200, '_']))
     end}.
 
 %%====================================================================

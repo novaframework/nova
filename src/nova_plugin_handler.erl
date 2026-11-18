@@ -1,6 +1,6 @@
 -module(nova_plugin_handler).
 -moduledoc false.
--behaviour(cowboy_middleware).
+-behaviour(nova_pipeline).
 
 -export([
          execute/2,
@@ -25,7 +25,7 @@ execute(Req, Env) ->
 %% pre_request/4 of the plugins, which waits for the request to be let
 %% through. nova_security_handler calls this once it is.
 -spec after_security(Req, Env) -> {ok, Req, Env} | {stop, Req}
-              when Req :: cowboy_req:req(), Env :: cowboy_middleware:env().
+              when Req :: nova_req:req(), Env :: nova_server:env().
 after_security(Req = #{plugins := Plugins}, Env) when is_list(Plugins) ->
     case proplists:get_value(after_security, Plugins, []) of
         [] -> {ok, Req, Env};
@@ -66,7 +66,7 @@ run_plugins([{Callback, Options}|Tl], CallbackType, Req, Env) when is_function(C
             nova_telemetry:stop(Span, #{result => stop}),
             ?LOG_WARNING(#{msg => ~"Request error in plugin", plugin => plugin_module(Callback),
                            kind => nova_redact:term(Kind), status_code => Status}),
-            {stop, cowboy_req:reply(Status, Req)};
+            {stop, nova_req:reply(Status, Req)};
         Class:Reason0:Stacktrace0 ->
             nova_telemetry:exception(Span, Class, Reason0, Stacktrace0),
             Reason = nova_redact:term(Reason0),
@@ -120,7 +120,7 @@ handle_result({stop, Reply, Req0, State0}, Callback, State, _Tl, _CallbackType, 
         {ok, Req1} ->
             %% Stopping means nobody else will answer, so the reply goes out here.
             StatusCode = maps:get(resp_status_code, Req1, 200),
-            {stop, cowboy_req:reply(StatusCode, Req1)};
+            {stop, nova_req:reply(StatusCode, Req1)};
         error ->
             unsupported_reply(Callback, Reply, Req0, Env)
     end;
@@ -139,15 +139,15 @@ handle_reply({reply, Status, Body}, Req, Callback) ->
     handle_reply({reply, Status, #{}, Body}, Req, Callback);
 handle_reply({reply, Status, Headers, Body}, Req, _Callback)
   when is_integer(Status), is_map(Headers) orelse is_list(Headers) ->
-    Req0 = cowboy_req:set_resp_headers(Headers, Req),
-    Req1 = cowboy_req:set_resp_body(Body, Req0),
+    Req0 = nova_req:set_resp_headers(Headers, Req),
+    Req1 = nova_req:set_resp_body(Body, Req0),
     {ok, Req1#{resp_status_code => Status}};
 handle_reply({redirect, Url}, Req, _Callback) when is_binary(Url); is_list(Url) ->
     case nova_basic_handler:location(Url) of
         error ->
             error;
         Location ->
-            Req0 = cowboy_req:set_resp_headers(#{~"location" => Location}, Req),
+            Req0 = nova_req:set_resp_headers(#{~"location" => Location}, Req),
             {ok, Req0#{resp_status_code => 302}}
     end;
 handle_reply({redirect_local, Url}, Req, Callback) when is_binary(Url); is_list(Url) ->
@@ -158,14 +158,14 @@ handle_reply({redirect_local, Url}, Req, Callback) when is_binary(Url); is_list(
                            location => nova_basic_handler:loggable_location(Url)}),
             {ok, Req#{resp_status_code => 400}};
         Location ->
-            Req0 = cowboy_req:set_resp_headers(#{~"location" => Location}, Req),
+            Req0 = nova_req:set_resp_headers(#{~"location" => Location}, Req),
             {ok, Req0#{resp_status_code => 302}}
     end;
 handle_reply({status, Status}, Req, Callback) ->
     handle_reply({status, Status, #{}}, Req, Callback);
 handle_reply({status, Status, Headers}, Req, _Callback)
   when is_integer(Status), is_map(Headers) orelse is_list(Headers) ->
-    {ok, (cowboy_req:set_resp_headers(Headers, Req))#{resp_status_code => Status}};
+    {ok, (nova_req:set_resp_headers(Headers, Req))#{resp_status_code => Status}};
 handle_reply(_Reply, _Req, _Callback) ->
     error.
 

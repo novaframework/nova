@@ -41,15 +41,15 @@ pre_request_string_origin_test() ->
 pre_request_allows_requested_headers_test() ->
     Req0 = preflight(~"https://a.example"),
     Req = nova_test_helper:with_header(~"access-control-request-headers", ~"authorization, content-type", Req0),
-    meck:new(cowboy_req, [passthrough]),
-    meck:expect(cowboy_req, reply, fun(_Status, R) -> R end),
+    meck:new(nova_req, [passthrough]),
+    meck:expect(nova_req, reply, fun(_Status, R) -> R end),
     try
         {stop, Req1, state} = nova_cors_plugin:pre_security(Req, #{}, #{allow_origins => [~"https://a.example"]},
                                                            state),
         Headers = maps:get(resp_headers, Req1),
         ?assertEqual(~"authorization, content-type", maps:get(~"access-control-allow-headers", Headers))
     after
-        meck:unload(cowboy_req)
+        meck:unload(nova_req)
     end.
 
 pre_request_configured_headers_test() ->
@@ -65,15 +65,15 @@ pre_request_configured_headers_test() ->
 %%====================================================================
 
 pre_request_options_stop_test() ->
-    meck:new(cowboy_req, [passthrough]),
-    meck:expect(cowboy_req, reply, fun(Status, R) -> R#{replied => Status} end),
+    meck:new(nova_req, [passthrough]),
+    meck:expect(nova_req, reply, fun(Status, R) -> R#{replied => Status} end),
     try
         Opts = #{allow_origins => ~"*"},
         {stop, Req1, my_state} = nova_cors_plugin:pre_security(preflight(~"https://a.example"), #{}, Opts,
                                                               my_state),
         ?assertEqual(204, maps:get(replied, Req1))
     after
-        meck:unload(cowboy_req)
+        meck:unload(nova_req)
     end.
 
 %% An OPTIONS request without Origin and Access-Control-Request-Method is not
@@ -90,7 +90,7 @@ pre_request_plain_options_reaches_app_test() ->
 pre_request_appends_to_vary_test() ->
     Opts = #{allow_origins => [~"https://a.example"]},
     Req = with_origin(~"https://a.example", nova_test_helper:mock_req(~"GET", ~"/")),
-    Set = fun(Vary) -> cowboy_req:set_resp_header(~"vary", Vary, Req) end,
+    Set = fun(Vary) -> nova_req:set_resp_header(~"vary", Vary, Req) end,
     ?assertEqual(~"accept-encoding, origin", maps:get(~"vary", cors_headers(Set(~"accept-encoding"), Opts))),
     ?assertEqual(~"Origin", maps:get(~"vary", cors_headers(Set(~"Origin"), Opts))),
     ?assertEqual(~"origin", maps:get(~"vary", cors_headers(Req, Opts))).

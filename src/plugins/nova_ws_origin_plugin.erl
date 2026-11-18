@@ -61,9 +61,9 @@ A route group that declares `plugins` uses only those and none of the global one
          plugin_info/0]).
 
 -doc "Stops a websocket upgrade from an origin that is not allowed with a 403, ahead of the security callback.".
--spec pre_security(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
-          {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
-          {stop, nova_plugin:reply(), Req0 :: cowboy_req:req(), NewState :: any()}.
+-spec pre_security(Req :: nova_req:req(), Env :: any(), Options :: map(), State :: any()) ->
+          {ok, Req0 :: nova_req:req(), NewState :: any()} |
+          {stop, nova_plugin:reply(), Req0 :: nova_req:req(), NewState :: any()}.
 pre_security(Req, Env, Options, State) ->
     Trusted = case Options of
                   #{trusted_origins := Origins} -> Origins;
@@ -82,10 +82,10 @@ pre_security(Req, Env, Options, State) ->
 %% is the rule nova_csrf_plugin has for a request that changes state. A
 %% browser that says the page is of the site, or says nothing, is taken by
 %% its `Origin`, and a client that sends neither header is not a page.
--spec is_from_a_trusted_page(Req :: cowboy_req:req(), Trusted :: term()) -> boolean().
+-spec is_from_a_trusted_page(Req :: nova_req:req(), Trusted :: term()) -> boolean().
 is_from_a_trusted_page(Req, Trusted) ->
-    Origin = cowboy_req:header(~"origin", Req),
-    case cowboy_req:header(~"sec-fetch-site", Req) of
+    Origin = nova_req:header(~"origin", Req),
+    case nova_req:header(~"sec-fetch-site", Req) of
         Site when Site =:= undefined; Site =:= ~"same-origin"; Site =:= ~"none" ->
             nova_origin:is_allowed(Origin, Req, Trusted);
         _Elsewhere ->
@@ -94,8 +94,8 @@ is_from_a_trusted_page(Req, Trusted) ->
     end.
 
 -doc false.
--spec post_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
-          {ok, Req0 :: cowboy_req:req(), NewState :: any()}.
+-spec post_request(Req :: nova_req:req(), Env :: any(), Options :: map(), State :: any()) ->
+          {ok, Req0 :: nova_req:req(), NewState :: any()}.
 post_request(Req, _Env, _Options, State) ->
     {ok, Req, State}.
 
@@ -116,17 +116,16 @@ plugin_info() ->
                    ~"same_host, same_origin, any, or the list of origins that may open a websocket"}]}.
 
 %% Every request to a websocket route is checked, also one that does not ask
-%% for the upgrade: its controller is started before Cowboy turns it down.
+%% for the upgrade: its controller is started before the server turns it down.
 is_for_a_websocket(_Req, #{cowboy_handler := nova_ws_handler}) ->
     true;
 is_for_a_websocket(Req, _Env) ->
     is_websocket_upgrade(Req).
 
-%% The check Cowboy makes before it upgrades, which also knows the extended
-%% CONNECT of HTTP/2 and HTTP/3. A request it cannot parse is checked too.
+%% A request whose headers do not parse is checked too.
 is_websocket_upgrade(Req) ->
     try
-        cowboy_websocket:is_upgrade_request(Req)
+        nova_req:is_websocket_upgrade(Req)
     catch
         _Class:_Reason -> true
     end.

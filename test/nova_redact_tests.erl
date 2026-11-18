@@ -159,7 +159,7 @@ query_string_behind_a_badmatch_is_not_logged_test_() ->
     {setup, fun setup/0, fun cleanup/1,
      fun() ->
              capture_logs(),
-             Callback = fun(Req) -> [] = cowboy_req:parse_qs(Req) end,
+             Callback = fun(Req) -> [] = nova_req:parse_qs(Req) end,
              Env = #{callback => Callback, app => test_app, secure => false, controller_data => #{}},
              Req0 = (nova_test_helper:mock_req(~"GET", ~"/login"))#{qs => ~"password=SECRETPW"},
              {ok, Req1, _Env} = nova_handler:execute(Req0, Env),
@@ -213,13 +213,13 @@ setup() ->
     persistent_term:put(nova_dispatch, nova_routing_trie:new(#{})),
     persistent_term:put(nova_use_stacktrace, true),
     {ok, Pid} = nova_handlers:start_link(),
-    meck:new(cowboy_req, [passthrough, no_link]),
-    meck:expect(cowboy_req, reply, fun nova_test_helper:reply/2),
+    meck:new(nova_req, [passthrough, no_link]),
+    meck:expect(nova_req, reply, fun nova_test_helper:reply/2),
     {Prev, Pid}.
 
 cleanup({Prev, Pid}) ->
     logger:remove_handler(nova_redact_tests),
-    meck:unload(cowboy_req),
+    meck:unload(nova_req),
     gen_server:stop(Pid),
     persistent_term:erase(nova_dispatch),
     persistent_term:erase(nova_use_stacktrace),

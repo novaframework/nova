@@ -5,7 +5,7 @@
 
 sign_in(Req) ->
     {ok, Req1} = nova_session:renew(Req),
-    #{~"user" := User} = maps:from_list(cowboy_req:parse_qs(Req)),
+    #{~"user" := User} = maps:from_list(nova_req:parse_qs(Req)),
     case nova_session:set(Req1, ~"user", User) of
         ok -> {status, 200, #{}, User};
         {error, Reason} -> {status, 503, #{}, atom_to_binary(Reason)}

@@ -24,23 +24,23 @@ setup() ->
     Tree = nova_routing_trie:new(#{use_strict => false, convert_to_binary => true}),
     persistent_term:put(nova_dispatch, Tree),
     persistent_term:put(nova_use_stacktrace, false),
-    meck:new(cowboy_req, [passthrough, no_link]),
-    meck:expect(cowboy_req, reply, fun nova_test_helper:reply/2),
-    meck:expect(cowboy_req, set_resp_headers, fun(Headers, Req) ->
+    meck:new(nova_req, [passthrough, no_link]),
+    meck:expect(nova_req, reply, fun nova_test_helper:reply/2),
+    meck:expect(nova_req, set_resp_headers, fun(Headers, Req) ->
         ExistingHeaders = maps:get(resp_headers, Req, #{}),
         Req#{resp_headers => maps:merge(ExistingHeaders, Headers)}
     end),
-    meck:expect(cowboy_req, set_resp_body, fun(Body, Req) ->
+    meck:expect(nova_req, set_resp_body, fun(Body, Req) ->
         Req#{resp_body => Body}
     end),
-    meck:expect(cowboy_req, set_resp_header, fun(Name, Value, Req) ->
+    meck:expect(nova_req, set_resp_header, fun(Name, Value, Req) ->
         Headers = maps:get(resp_headers, Req, #{}),
         Req#{resp_headers => Headers#{Name => Value}}
     end),
     Prev.
 
 cleanup(Prev) ->
-    meck:unload(cowboy_req),
+    meck:unload(nova_req),
     persistent_term:erase(nova_dispatch),
     persistent_term:erase(nova_use_stacktrace),
     nova_test_helper:cleanup_nova_env(Prev).

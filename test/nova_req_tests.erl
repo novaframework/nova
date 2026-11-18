@@ -49,6 +49,12 @@ reply_merges_headers_and_cookies_test() ->
     ?assertNot(is_map_key(resp_headers, Req)),
     ?assertNot(is_map_key(resp_cookies, Req)).
 
+headers_from_a_list_test() ->
+    Req = nova_req:set_resp_headers([{~"vary", ~"accept"}, {~"x-a", ~"1"}, {~"vary", ~"origin"}], ?REQ()),
+    ?assertEqual(~"accept, origin", iolist_to_binary(nova_req:resp_header(~"vary", Req))),
+    ?assertEqual(~"1", nova_req:resp_header(~"x-a", Req)),
+    ?assertExit({response_error, invalid_header, _}, nova_req:set_resp_headers([{~"set-cookie", ~"a=1"}], ?REQ())).
+
 reply_uses_the_body_set_on_the_request_test() ->
     _ = nova_req:reply(201, nova_req:set_resp_body(~"made", ?REQ())),
     ?assertMatch([{reply, 201, _, ~"made"}], nova_fake_server:sent()).
@@ -85,6 +91,25 @@ a_cookie_is_not_a_header_test() ->
     ?assertExit({response_error, invalid_header, _}, nova_req:reply(200, #{~"set-cookie" => ~"a=1"}, ?REQ())),
     ?assertExit({response_error, invalid_header, _}, nova_req:stream_reply(200, #{~"set-cookie" => ~"a=1"}, ?REQ())),
     ?assertError(_, nova_req:set_resp_cookie(~"bad name", ~"1", ?REQ())).
+
+%% A value somebody else chose, a redirect target for instance, must not be
+%% able to write a header or a response of its own.
+header_that_would_split_the_response_is_not_sent_test() ->
+    [begin
+         Req = nova_req:reply(302, Headers, ?REQ()),
+         ?assertEqual(true, maps:get(has_sent_resp, Req)),
+         ?assertEqual([{reply, 500, [{~"content-length", ~"0"}], <<>>}], nova_fake_server:sent())
+     end || Headers <- [#{~"location" => ~"/next\r\nset-cookie: a=b"},
+                        #{~"location" => ~"/next\nx: y"},
+                        #{~"x-a" => <<"a", 0, "b">>},
+                        #{~"x-a" => [~"a", [~"\r\n"]]},
+                        #{~"x a" => ~"1"},
+                        #{~"x-a\r\nx-b" => ~"1"},
+                        #{<<>> => ~"1"}]],
+    _ = nova_req:stream_reply(200, #{~"x-a" => ~"a\r\nb"}, ?REQ()),
+    ?assertEqual([{reply, 500, [{~"content-length", ~"0"}], <<>>}], nova_fake_server:sent()),
+    _ = nova_req:reply(200, nova_req:set_resp_header(~"x-a", ~"a\nb", ?REQ())),
+    ?assertEqual([{reply, 500, [{~"content-length", ~"0"}], <<>>}], nova_fake_server:sent()).
 
 second_answer_is_not_sent_test() ->
     Req0 = ?REQ(),

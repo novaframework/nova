@@ -7,7 +7,7 @@ The session id lives in the `__Host-session_id` cookie, and in `session_id`
 when the `environment` is `dev` (see `session_cookie_name` in the
 configuration guide). A browser keeps a cookie with the `__Host-` prefix only
 when it is `Secure`, has `Path=/` and no `Domain`, so no other host of the
-domain can set or shadow it. `nova_stream_h` issues it with the response of the
+domain can set or shadow it. Nova issues it with the response of the
 first request that writes to the session or is given a token by
 `nova_csrf_plugin`, so visitors that do neither get no cookie. A request carrying two or more different session ids
 is treated as having no session. A request whose Cookie header does not parse
@@ -51,11 +51,9 @@ serving the request (where controllers, plugins and `c:nova_websocket:init/1`
 run). A process spawned with the request can read and write the session data,
 but the response will not carry a new cookie for it.
 
-Cookies are written by `nova_stream_h`. A `stream_handlers` configuration
-without it still stores session data, and `renew/1` and `delete/1` set or
-expire the cookie on the returned request themselves, but a `set/3` without a
-cookie does not start a session and presented ids are used without the check
-above.
+The cookie goes out with the response Nova sends, or one sent with
+`nova_req`. A response sent with the functions of the server itself, such as
+`cowboy_req:reply/4`, carries no session cookie.
 """.
 -export([
          get/2,
@@ -69,7 +67,15 @@ above.
          generate_session_id/0
         ]).
 
-%% Used by nova_stream_h
+%% The session of a request and its cookie on the response
+-export([
+         start_request/1,
+         end_request/0,
+         response_event/1,
+         response_cookies/1,
+         with_response_cookies/1
+        ]).
+
 -export([
          enabled/0,
          cookie_name/0,
@@ -90,6 +96,18 @@ above.
 -define(ID_RANDOM_BYTES, 16).
 -define(ID_SIGNATURE_BYTES, 16).
 -define(ID_CHARACTERS, 44).
+-define(RESPONSE, {?MODULE, response}).
+
+%% What the response of the request the process is serving has to do with
+%% the session cookie.
+-record(response, {
+                   %% The id the client sent, if any, known or not
+                   presented :: binary() | undefined,
+                   %% The id the request is working with
+                   current :: binary(),
+                   issue = false :: boolean(),
+                   expire = false :: boolean()
+                  }).
 
 %%%===================================================================
 %%% Callbacks
@@ -204,7 +222,7 @@ that another request ended before this one touched it can be.
 %%% Public functions
 %%%===================================================================
 -doc "The value stored under `Key` in the session of the request, as it was given to `set/3`.".
--spec get(Req :: cowboy_req:req(), Key :: binary()) ->
+-spec get(Req :: nova_req:req(), Key :: binary()) ->
           {ok, Value :: term()} | {error, Reason :: atom()} | no_return().
 get(Req, Key) ->
     case get_session_id(Req) of
@@ -221,7 +239,7 @@ handed to the session backend as it is. `nova_session_ets` keeps any term
 and returns it unchanged from `get/2`. A backend of your own decides what it
 can store, and returns `{error, Reason}` for a value it cannot.
 """.
--spec set(Req :: cowboy_req:req(), Key :: binary(), Value :: term()) ->
+-spec set(Req :: nova_req:req(), Key :: binary(), Value :: term()) ->
           ok | {error, Reason :: atom()} | no_return().
 set(Req, Key, Value) ->
     write(set_value, Req, Key, Value).
@@ -235,7 +253,7 @@ cannot fill it and keep clients from signing in. The first `set/3` on the
 session makes it an ordinary one. A backend of your own that does not have
 `c:set_provisional_value/3` stores the value as `set/3` does.
 """.
--spec set_provisional(Req :: cowboy_req:req(), Key :: binary(), Value :: term()) ->
+-spec set_provisional(Req :: nova_req:req(), Key :: binary(), Value :: term()) ->
           ok | {error, Reason :: atom()} | no_return().
 set_provisional(Req, Key, Value) ->
     Mod = get_session_module(),
@@ -280,7 +298,7 @@ logout(Req) ->
     {redirect, "/"}.
 ```
 """.
--spec delete(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} | no_return().
+-spec delete(Req :: nova_req:req()) -> {ok, Req :: nova_req:req()} | no_return().
 delete(Req) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
@@ -324,7 +342,7 @@ the next page the client loads carries one for the new id.
 the value. The id has changed by then and nobody is signed in.
 """.
 -spec sign_in(Req, Key :: binary(), Value :: term()) -> {ok, Req} | {error, Reason :: atom()} | no_return()
-              when Req :: cowboy_req:req().
+              when Req :: nova_req:req().
 sign_in(Req, Key, Value) ->
     {ok, SignedIn} = renew(Req),
     case set(SignedIn, Key, Value) of
@@ -348,7 +366,7 @@ second_factor_passed(Req, UserId) ->
     {redirect, "/"}.
 ```
 """.
--spec renew(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} | no_return().
+-spec renew(Req :: nova_req:req()) -> {ok, Req :: nova_req:req()} | no_return().
 renew(Req) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
@@ -377,9 +395,9 @@ renew(Req) ->
 %% session cookie Nova could not read. That id is not seen again, so what
 %% was tied to it is refused when it comes back. {error, not_found} means
 %% there is no id to give: the request has no session cookie Nova can read
-%% and nova_stream_h is not there to hand one out.
+%% and the request did not go through start_request/1.
 -doc false.
--spec client_id(Req :: cowboy_req:req()) -> {ok, SessionId :: binary()} | {error, not_found} | no_return().
+-spec client_id(Req :: nova_req:req()) -> {ok, SessionId :: binary()} | {error, not_found} | no_return().
 client_id(Req) ->
     case enabled() of
         true ->
@@ -404,7 +422,7 @@ held_id(Req) ->
 Deletes `Key` from the session of the request and returns `{ok, Req}` with
 the request as it was given, also when the request has no session.
 """.
--spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} | no_return().
+-spec delete(Req :: nova_req:req(), Key :: binary()) -> {ok, Req :: nova_req:req()} | no_return().
 delete(Req, Key) ->
     case get_session_id(Req, write) of
         {ok, SessionId} ->
@@ -418,7 +436,7 @@ delete(Req, Key) ->
 
 
 %%%===================================================================
-%%% Functions used by nova_stream_h
+%%% Settings of the session cookie
 %%%===================================================================
 -doc false.
 -spec enabled() -> boolean().
@@ -463,7 +481,7 @@ max_age() ->
 %% terminates TLS the request itself looks like plain http. A __Host- cookie
 %% is only stored by browsers when it is Secure, has Path=/ and no Domain.
 -doc false.
--spec cookie_opts(cowboy_req:req()) -> cow_cookie:cookie_opts().
+-spec cookie_opts(nova_req:req()) -> cow_cookie:cookie_opts().
 cookie_opts(Req) ->
     cookie_opts_for(maps:get(scheme, Req, ~"http")).
 
@@ -585,10 +603,10 @@ merge_cookie_opts([_ | Rest], Opts) ->
 %% A header that does not parse may still hold our cookie, so it is reported
 %% apart.
 -doc false.
--spec presented_session_id(cowboy_req:req()) -> binary() | undefined | unparsable.
+-spec presented_session_id(nova_req:req()) -> binary() | undefined | unparsable.
 presented_session_id(Req) ->
     Name = cookie_name(),
-    try lists:usort([Value || {Key, Value} <- cowboy_req:parse_cookies(Req), Key =:= Name]) of
+    try lists:usort([Value || {Key, Value} <- nova_req:parse_cookies(Req), Key =:= Name]) of
         [SessionId] when is_binary(SessionId), SessionId =/= <<>> ->
             SessionId;
         [_, _ | _] ->
@@ -681,10 +699,9 @@ get_session_id(Req, Access) ->
     end.
 
 %% A new visitor's request carries its id in nova_session_id. When the client
-%% sent a cookie, nova_stream_h hands over the presented id and a fresh one,
+%% sent a cookie, start_request/1 hands over the presented id and a fresh one,
 %% and the presented one is used only while the backend knows it, so a client
-%% cannot choose its own id. The check runs here, in the process calling
-%% nova_session, and not in the connection process.
+%% cannot choose its own id. The check runs when the session is first used.
 session_id(#{nova_session_id := SessionId}, _Access) ->
     {ok, SessionId};
 session_id(Req = #{nova_session_presented := Presented, nova_session_pending := Pending}, Access) ->
@@ -693,7 +710,8 @@ session_id(Req = #{nova_session_presented := Presented, nova_session_pending := 
         false -> {ok, Pending}
     end;
 session_id(Req, _Access) ->
-    %% Without nova_stream_h there is only the cookie.
+    %% On a request that did not go through start_request/1 there is only
+    %% the cookie.
     case presented_session_id(Req) of
         SessionId when is_binary(SessionId) -> {ok, SessionId};
         _ -> {error, not_found}
@@ -741,8 +759,9 @@ id_signature(Key, Random) ->
 with_session_id(SessionId, Req) ->
     (maps:without([nova_session_presented, nova_session_pending], Req))#{nova_session_id => SessionId}.
 
-%% nova_stream_h puts the session ids in the request. Without it the cookie
-%% goes on the request's response headers instead.
+%% start_request/1 puts the session ids in the request. On a request that
+%% did not go through it the cookie goes on the request's response headers
+%% instead.
 stream_handled(#{nova_session_direct := true}) ->
     false;
 stream_handled(Req) ->
@@ -751,7 +770,7 @@ stream_handled(Req) ->
 set_cookie(Value, Opts, Req) ->
     Name = cookie_name(),
     valid_cookie(Name, Opts) orelse erlang:error(invalid_cookie_config(Name, Opts)),
-    Req0 = cowboy_req:set_resp_cookie(Name, Value, Req, Opts),
+    Req0 = nova_req:set_resp_cookie(Name, Value, Req, Opts),
     Req0#{nova_session_direct => true}.
 
 warn_ambiguous_cookie(Name) ->
@@ -764,15 +783,131 @@ warn_ambiguous_cookie(Name) ->
             ok
     end.
 
-%% Tells nova_stream_h which session id the response has to hand out. Only
-%% the process serving the request (stamped by nova_router) does: a process
-%% spawned with the request, or a websocket running in the connection
-%% process after the upgrade, would deliver the message to whatever handles
-%% the connection by then.
-notify(#{pid := _, streamid := _, nova_session_owner := Owner} = Req, Event) when Owner =:= self() ->
-    cowboy_req:cast({nova_session, Event}, Req);
+%% Which session id the response has to hand out is kept by the process
+%% serving the request (stamped by nova_router), and only for a change it
+%% made itself: a process spawned with the request, or a websocket after the
+%% upgrade, has no response to put a cookie on.
+notify(#{nova_session_owner := Owner}, Event) when Owner =:= self() ->
+    ?MODULE:response_event(Event);
 notify(_Req, _Event) ->
     ok.
+
+%%%===================================================================
+%%% The session of a request and its cookie on the response
+%%%===================================================================
+
+-doc false.
+%% The request gets the id the client presented, if any, and a fresh one.
+%% The presented id is checked against the backend when it is first used, so
+%% a request that never touches its session never asks the backend. A Cookie
+%% header that does not parse may still carry a valid session cookie, so that
+%% request works with a fresh id and its response never sets or expires the
+%% cookie.
+-spec start_request(Req) -> Req when Req :: nova_req:req().
+start_request(Req) ->
+    _ = erase(?RESPONSE),
+    case enabled() of
+        true ->
+            {ok, Pending} = generate_session_id(),
+            case presented_session_id(Req) of
+                undefined ->
+                    _ = put(?RESPONSE, #response{current = Pending}),
+                    Req#{nova_session_id => Pending};
+                unparsable ->
+                    Req#{nova_session_id => Pending};
+                Presented ->
+                    _ = put(?RESPONSE, #response{presented = Presented, current = Pending}),
+                    Req#{nova_session_presented => Presented, nova_session_pending => Pending}
+            end;
+        false ->
+            Req
+    end.
+
+-doc false.
+-spec end_request() -> ok.
+end_request() ->
+    _ = erase(?RESPONSE),
+    ok.
+
+-doc false.
+-spec response_event({written | issued | renewed | deleted, SessionId :: binary()}) -> ok.
+response_event(Event) ->
+    case get(?RESPONSE) of
+        undefined ->
+            ok;
+        Response ->
+            _ = put(?RESPONSE, after_event(Event, Response)),
+            ok
+    end.
+
+after_event({written, SessionId}, Response = #response{presented = Presented}) ->
+    Response#response{current = SessionId, issue = SessionId =/= Presented, expire = false};
+%% client_id/1 for a client that sent no cookie. A request whose Cookie header
+%% did not parse has no response record and gets no cookie.
+after_event({issued, SessionId}, Response = #response{presented = undefined, current = SessionId}) ->
+    Response#response{issue = true};
+after_event({renewed, SessionId}, Response) ->
+    Response#response{current = SessionId, issue = true, expire = false};
+after_event({deleted, SessionId}, Response = #response{presented = Presented}) ->
+    Response#response{current = SessionId, issue = false, expire = Presented =/= undefined};
+after_event(_Event, Response) ->
+    Response.
+
+-doc false.
+%% The session cookie the response that is about to go out carries, as
+%% complete set-cookie values. It is handed out once: a response that follows
+%% on the same request has none.
+-spec response_cookies(nova_req:req()) -> [iodata()].
+response_cookies(Req) ->
+    case get(?RESPONSE) of
+        #response{issue = true, current = SessionId} = Response ->
+            _ = put(?RESPONSE, Response#response{presented = SessionId, issue = false}),
+            cookie(SessionId, cookie_opts(Req));
+        #response{expire = true} = Response ->
+            _ = put(?RESPONSE, Response#response{presented = undefined, expire = false}),
+            cookie(<<>>, (cookie_opts(Req))#{max_age => 0});
+        _ ->
+            []
+    end.
+
+-doc false.
+%% For a response the server builds from the request, as the 101 of a
+%% websocket upgrade is.
+-spec with_response_cookies(Req) -> Req when Req :: nova_req:req().
+with_response_cookies(Req) ->
+    case response_cookies(Req) of
+        [] ->
+            Req;
+        [Cookie] ->
+            Cookies = maps:get(resp_cookies, Req, #{}),
+            Req#{resp_cookies => Cookies#{cookie_name() => Cookie}}
+    end.
+
+%% A raise here would turn every response into a 500, so a cookie Nova or
+%% cow_cookie refuses is dropped instead, with one log line per cookie name
+%% rather than one per response.
+cookie(Value, Opts) ->
+    Name = cookie_name(),
+    try valid_cookie(Name, Opts) andalso cow_cookie:setcookie(Name, Value, Opts) of
+        false ->
+            log_invalid_cookie(Name),
+            [];
+        Cookie ->
+            [Cookie]
+    catch
+        error:_ ->
+            log_invalid_cookie(Name),
+            []
+    end.
+
+log_invalid_cookie(Name) ->
+    case nova_once:first({?MODULE, invalid_cookie_logged, Name}) of
+        true ->
+            ?LOG_ERROR(#{msg => ~"Session cookie not set: session_cookie_name or session_cookie_opts is invalid",
+                         cookie => Name});
+        false ->
+            ok
+    end.
 
 -doc """
 A new session id: 32 random bytes in base64, or, with `secret_key_base` set,

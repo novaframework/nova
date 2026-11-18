@@ -3,7 +3,7 @@
 %%%-------------------------------------------------------------------
 -module(nova_router).
 -moduledoc "Router module for nova. This module is responsible for compiling routes, dispatching requests to the correct handler and managing the routing table. It also exposes an API for modulating the routing table at runtime.".
--behaviour(cowboy_middleware).
+-behaviour(nova_pipeline).
 
 %% Cowboy middleware-callbacks
 -export([
@@ -60,7 +60,7 @@
 -type bindings() :: #{binary() => binary()}.
 
 %% A request the router has matched. Its bindings are keyed by binary, which
-%% cowboy_req:req() has no room for, so it is typed as a map.
+%% nova_req:req() has no room for, so it is typed as a map.
 -doc "A request the router has matched.".
 -type routed_req() :: map().
 
@@ -193,9 +193,9 @@ compile_fresh(Apps, DispatchKey) ->
     Dispatch.
 
 -doc false.
--spec execute(Req, Env :: cowboy_middleware:env()) -> {ok, Req, Env0} | {stop, Req}
-                                                          when Req::cowboy_req:req(),
-                                                               Env0::cowboy_middleware:env().
+-spec execute(Req, Env :: nova_server:env()) -> {ok, Req, Env0} | {stop, Req}
+                                                          when Req::nova_req:req(),
+                                                               Env0::nova_server:env().
 execute(Req0 = #{path := Path}, Env) ->
     StorageBackend = storage_backend(),
     DispatchKey = dispatch_key(Env),
@@ -229,7 +229,7 @@ route(Req = #{host := Host, path := Path, method := Method}, Env, Dispatch) ->
             Allowed = [AllowedMethod || AllowedMethod <- AllowedMethods, is_binary(AllowedMethod)],
             AllowHeader = iolist_to_binary(lists:join(<<", ">>, Allowed)),
             %% Set the 'allow'-header
-            Req1 = cowboy_req:set_resp_header(<<"allow">>, AllowHeader, Req),
+            Req1 = nova_req:set_resp_header(<<"allow">>, AllowHeader, Req),
             {ok, Req2, Env1} = render_status_page('_', 405, #{error => "Method not allowed"}, Req1, Env),
             {ok, with_preflight_plugins(Req2, Host, Path, Dispatch), Env1};
         {ok, Bindings, #nova_handler_value{app = App, callback = Callback, secure = Secure, plugins = RoutePlugins,
@@ -335,7 +335,7 @@ A plugin or security callback that decides by path must look at this one. Compar
 
 A request whose path is written another way is answered `400` before a route is looked up, so before any plugin and before the security callback, unless the `nova` environment sets `non_canonical_paths` to `resolve`. What is refused is a path with an empty segment ahead of its last one (`//a`, `/a//b`), or with a `.` or `..` segment, the dots written out or percent-encoded (`/a/../b`, `/a/%2e%2e/b`). One trailing slash is not refused, so `path` and this function still differ by it: `/users/` gives `/users`. A path that does not start with a slash, which HTTP/2 lets a client send, is refused whatever `non_canonical_paths` is. The answer is the `400` status route of the application when it has one.
 """.
--spec canonical_path(Req :: cowboy_req:req() | binary()) -> binary().
+-spec canonical_path(Req :: nova_req:req() | binary()) -> binary().
 canonical_path(#{path := Path}) ->
     canonical_path(Path);
 canonical_path(Path) when is_binary(Path) ->
@@ -747,7 +747,7 @@ parse_url(Host,
 
 
 -doc "As `render_status_page/3` with no data.".
--spec render_status_page(StatusCode :: integer(), Req :: cowboy_req:req()) ->
+-spec render_status_page(StatusCode :: integer(), Req :: nova_req:req()) ->
                                 {ok, Req0 :: routed_req(), Env :: map()}.
 render_status_page(StatusCode, Req) ->
     render_status_page(StatusCode, #{}, Req).
@@ -756,7 +756,7 @@ render_status_page(StatusCode, Req) ->
 As `render_status_page/5`, for any host and the routing table that serves
 `Req`.
 """.
--spec render_status_page(StatusCode :: integer(), Data :: map(), Req :: cowboy_req:req()) ->
+-spec render_status_page(StatusCode :: integer(), Data :: map(), Req :: nova_req:req()) ->
                                 {ok, Req0 :: routed_req(), Env :: map()}.
 render_status_page(StatusCode, Data, Req) ->
     render_status_page('_', StatusCode, Data, Req, #{nova_dispatch_key => dispatch_key(Req)}).
@@ -774,7 +774,7 @@ data => Data}` under `controller_data`.
 -spec render_status_page(Host :: binary() | atom(),
                          StatusCode :: integer(),
                          Data :: map(),
-                         Req :: cowboy_req:req(),
+                         Req :: nova_req:req(),
                          Env :: map()) -> {ok, Req0 :: routed_req(), Env :: map()}.
 render_status_page(Host, StatusCode, Data, Req, Env) ->
     StorageBackend = storage_backend(),
@@ -847,8 +847,8 @@ put_route(Route, Req)     -> Req#{nova_route => Route}.
 %% plugin the route group lists to run ahead of its callback would read
 %% the body for anybody.
 with_preflight_plugins(Req = #{method := ~"OPTIONS"}, Host, Path, Dispatch) ->
-    case cowboy_req:header(~"origin", Req) =/= undefined andalso
-        cowboy_req:header(~"access-control-request-method", Req) of
+    case nova_req:header(~"origin", Req) =/= undefined andalso
+        nova_req:header(~"access-control-request-method", Req) of
         Requested when is_binary(Requested) ->
             case route_plugins(nova_routing_trie:find(Host, Path, Requested, Dispatch)) of
                 undefined ->
@@ -917,7 +917,7 @@ storage_backend() ->
 
 %%--------------------------------------------------------------------
 -doc "The key of the routing table serving a request, for the functions that take a `DispatchKey`. Takes the request, which carries the key once it has passed the router, or the middleware environment where that is at hand. Anything else gives the key of the default listener.".
--spec dispatch_key(ReqOrEnv :: cowboy_req:req() | cowboy_middleware:env()) -> dispatch_key().
+-spec dispatch_key(ReqOrEnv :: nova_req:req() | nova_server:env()) -> dispatch_key().
 dispatch_key(#{nova_dispatch_key := DispatchKey}) ->
     DispatchKey;
 dispatch_key(_) ->

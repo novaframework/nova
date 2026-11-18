@@ -48,7 +48,7 @@ get_falls_back_to_cookie_test() ->
 get_returns_error_when_no_session_test() ->
     setup_meck(),
     try
-        ?assertEqual([], cowboy_req:parse_cookies(req_without_cookie_header())),
+        ?assertEqual([], nova_req:parse_cookies(req_without_cookie_header())),
         ?assertEqual({error, not_found}, nova_session:get(req_without_cookie_header(), <<"key">>)),
         ?assertEqual({error, not_found},
                      nova_session:get(req_with_cookie_header(~"other=cookie-session-id"), <<"key">>)),
@@ -71,7 +71,7 @@ get_returns_error_when_cookie_header_does_not_parse_test() ->
     setup_meck(),
     try
         Req = req_with_cookie_header(~"__Host-session_id=cookie-session-id; =x"),
-        ?assertExit({request_error, {header, ~"cookie"}, _}, cowboy_req:parse_cookies(Req)),
+        ?assertExit({request_error, {header, ~"cookie"}, _}, nova_req:parse_cookies(Req)),
         ?assertEqual({error, not_found}, nova_session:get(Req, <<"key">>)),
         ?assertEqual(0, meck:num_calls(nova_session_ets, get_value, '_'))
     after

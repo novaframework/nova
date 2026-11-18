@@ -95,12 +95,12 @@ with and `PluginState` the state of the plugin. It can modify the request and
 the state, and returns what `c:pre_request/4` can. It must not read the
 request body.
 """.
--callback pre_security(Req :: cowboy_req:req(), Env :: any(),
+-callback pre_security(Req :: nova_req:req(), Env :: any(),
                        Options :: map(), PluginState :: any()) ->
-    {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
-    {ok, Reply :: reply(), Req0 :: cowboy_req:req(), NewState :: any()} |
-    {stop, Req0 :: cowboy_req:req(), NewState :: any()} |
-    {stop, Reply :: reply(), Req0 :: cowboy_req:req(), NewState :: any()} |
+    {ok, Req0 :: nova_req:req(), NewState :: any()} |
+    {ok, Reply :: reply(), Req0 :: nova_req:req(), NewState :: any()} |
+    {stop, Req0 :: nova_req:req(), NewState :: any()} |
+    {stop, Reply :: reply(), Req0 :: nova_req:req(), NewState :: any()} |
     {error, Reason :: term()}.
 -optional_callbacks([pre_security/4]).
 
@@ -111,15 +111,15 @@ route has let the request through. The arguments are those of
 `c:pre_security/4`. See the module documentation for the returns and what
 Nova does with each.
 """.
--callback pre_request(Req :: cowboy_req:req(), Env :: any(),
+-callback pre_request(Req :: nova_req:req(), Env :: any(),
                       Options :: map(), PluginState :: any()) ->
-    {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
-    {ok, Reply :: reply(), Req0 :: cowboy_req:req(), NewState :: any()} |
-    {break, Req0 :: cowboy_req:req(), NewState :: any()} |
-    {break, Reply :: reply(), Req0 :: cowboy_req:req(), NewState :: any()} |
-    {stop, Req0 :: cowboy_req:req(), NewState :: any()} |
-    {stop, Req0 :: cowboy_req:req()} |
-    {stop, Reply :: reply(), Req0 :: cowboy_req:req(), NewState :: any()} |
+    {ok, Req0 :: nova_req:req(), NewState :: any()} |
+    {ok, Reply :: reply(), Req0 :: nova_req:req(), NewState :: any()} |
+    {break, Req0 :: nova_req:req(), NewState :: any()} |
+    {break, Reply :: reply(), Req0 :: nova_req:req(), NewState :: any()} |
+    {stop, Req0 :: nova_req:req(), NewState :: any()} |
+    {stop, Req0 :: nova_req:req()} |
+    {stop, Reply :: reply(), Req0 :: nova_req:req(), NewState :: any()} |
     {error, Reason :: term()}.
 -optional_callbacks([pre_request/4]).
 
@@ -128,15 +128,15 @@ Called for every HTTP request on a route that lists the plugin under
 `post_request`, after the controller has returned. The arguments and the
 returns are those of `pre_request/4`.
 """.
--callback post_request(Req :: cowboy_req:req(), Env :: any(),
+-callback post_request(Req :: nova_req:req(), Env :: any(),
                        Options :: map(), PluginState :: any()) ->
-    {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
-    {ok, Reply :: reply(), Req0 :: cowboy_req:req(), NewState :: any()} |
-    {break, Req0 :: cowboy_req:req(), NewState :: any()} |
-    {break, Reply :: reply(), Req0 :: cowboy_req:req(), NewState :: any()} |
-    {stop, Req0 :: cowboy_req:req(), NewState :: any()} |
-    {stop, Req0 :: cowboy_req:req()} |
-    {stop, Reply :: reply(), Req0 :: cowboy_req:req(), NewState :: any()} |
+    {ok, Req0 :: nova_req:req(), NewState :: any()} |
+    {ok, Reply :: reply(), Req0 :: nova_req:req(), NewState :: any()} |
+    {break, Req0 :: nova_req:req(), NewState :: any()} |
+    {break, Reply :: reply(), Req0 :: nova_req:req(), NewState :: any()} |
+    {stop, Req0 :: nova_req:req(), NewState :: any()} |
+    {stop, Req0 :: nova_req:req()} |
+    {stop, Reply :: reply(), Req0 :: nova_req:req(), NewState :: any()} |
     {error, Reason :: term()}.
 -optional_callbacks([post_request/4]).
 

@@ -20,9 +20,9 @@ non_multipart_req_test() ->
 
 missing_boundary_test_() ->
     {setup,
-     fun() -> meck:new(cowboy_req, [passthrough]),
-              meck:expect(cowboy_req, reply, fun(Status, Req) -> Req#{replied => Status} end) end,
-     fun(_) -> meck:unload(cowboy_req) end,
+     fun() -> meck:new(nova_req, [passthrough]),
+              meck:expect(nova_req, reply, fun(Status, Req) -> Req#{replied => Status} end) end,
+     fun(_) -> meck:unload(nova_req) end,
      fun() ->
          Req = nova_test_helper:mock_req(<<"POST">>, <<"/upload">>),
          Req0 = nova_test_helper:with_content_type(<<"multipart/form-data">>, Req),
@@ -33,9 +33,9 @@ missing_boundary_test_() ->
 
 misconfigured_handler_test_() ->
     {setup,
-     fun() -> meck:new(cowboy_req, [passthrough]),
-              meck:expect(cowboy_req, reply, fun(Status, Req) -> Req#{replied => Status} end) end,
-     fun(_) -> meck:unload(cowboy_req) end,
+     fun() -> meck:new(nova_req, [passthrough]),
+              meck:expect(nova_req, reply, fun(Status, Req) -> Req#{replied => Status} end) end,
+     fun(_) -> meck:unload(nova_req) end,
      [fun() ->
           Req = nova_test_helper:mock_req(<<"POST">>, <<"/upload">>),
           {stop, Req1, state} = nova_multipart_plugin:pre_request(Req, env, Options, state),
@@ -54,7 +54,7 @@ case_insensitive_content_type_test_() ->
     Parts = [{data_part(<<"title">>), <<"a picture">>}],
     {setup,
      fun() -> mock_cowboy_req(Parts) end,
-     fun(_) -> meck:unload(cowboy_req) end,
+     fun(_) -> meck:unload(nova_req) end,
      fun() ->
          Req = nova_test_helper:mock_req(<<"POST">>, <<"/upload">>),
          Req0 = nova_test_helper:with_content_type(
@@ -65,7 +65,7 @@ case_insensitive_content_type_test_() ->
      end}.
 
 %%====================================================================
-%% cowboy_req scripting - same pattern as nova_request_plugin_tests
+%% nova_req scripting - same pattern as nova_request_plugin_tests
 %%====================================================================
 
 multipart_req() ->
@@ -76,11 +76,11 @@ multipart_req() ->
 
 %% Parts is a list of {Headers, Body}. Body is a binary or a list of chunks
 %% delivered as {more, ...}; a chunk or Headers of {raise, Class, Reason}
-%% raises the way cowboy_req does on a stalled or malformed read.
+%% raises the way nova_req does on a stalled or malformed read.
 mock_cowboy_req(Parts) ->
-    meck:new(cowboy_req, [passthrough]),
+    meck:new(nova_req, [passthrough]),
     Pid = spawn(fun() -> part_server(Parts) end),
-    meck:expect(cowboy_req, read_part,
+    meck:expect(nova_req, read_part,
                 fun(Req, _Opts) ->
                     case call(Pid, next_part) of
                         done -> {done, Req};
@@ -88,7 +88,7 @@ mock_cowboy_req(Parts) ->
                         {part, Headers} -> {ok, Headers, Req}
                     end
                 end),
-    meck:expect(cowboy_req, read_part_body,
+    meck:expect(nova_req, read_part_body,
                 fun(Req, _Opts) ->
                     case call(Pid, next_chunk) of
                         {last, {raise, Class, Reason}} -> erlang:Class(Reason);
@@ -97,7 +97,7 @@ mock_cowboy_req(Parts) ->
                         {more, Data} -> {more, Data, Req}
                     end
                 end),
-    meck:expect(cowboy_req, reply, fun(Status, Req) -> Req#{replied => Status} end).
+    meck:expect(nova_req, reply, fun(Status, Req) -> Req#{replied => Status} end).
 
 call(Pid, Msg) ->
     Pid ! {self(), Msg},
@@ -144,7 +144,7 @@ file_part(Name, Filename, ContentType) ->
 multipart_test_(Parts, OptionsFun, Assertions) ->
     {setup,
      fun() -> mock_cowboy_req(Parts) end,
-     fun(_) -> meck:unload(cowboy_req) end,
+     fun(_) -> meck:unload(nova_req) end,
      fun() ->
          Options = OptionsFun(self()),
          Result = nova_multipart_plugin:pre_request(multipart_req(), env, Options, state),
@@ -341,8 +341,8 @@ read_waits_no_longer_than_what_is_left_of_the_read_timeout_test_() ->
       end).
 
 read_waits() ->
-    [{Timeout, Period} || {_Pid, {cowboy_req, Read, [_Req, #{timeout := Timeout, period := Period}]}, _Result}
-                              <- meck:history(cowboy_req),
+    [{Timeout, Period} || {_Pid, {nova_req, Read, [_Req, #{timeout := Timeout, period := Period}]}, _Result}
+                              <- meck:history(nova_req),
                           Read =:= read_part orelse Read =:= read_part_body].
 
 multipart_cowboy_exit_mid_field_test_() ->
@@ -353,7 +353,7 @@ multipart_cowboy_exit_mid_field_test_() ->
           ?assertEqual(408, maps:get(replied, Req))
       end).
 
-%% cowboy_req:read_part/1 raises error:badmatch on duplicate part headers.
+%% nova_req:read_part/1 raises error:badmatch on duplicate part headers.
 multipart_cowboy_error_on_duplicate_headers_test_() ->
     Parts = [{{raise, error, {badmatch, false}}, <<>>}],
     multipart_test_(

@@ -72,14 +72,14 @@ pre_security(Req, _Env, #{stop := true}, State) ->
     {stop, {reply, 403, ~"stopped by a plugin"}, Req, State};
 pre_security(Req, _Env, _Options, State) ->
     ran(pre_security),
-    {ok, cowboy_req:set_resp_header(~"x-pipeline", ~"pre_security", Req), State}.
+    {ok, nova_req:set_resp_header(~"x-pipeline", ~"pre_security", Req), State}.
 
 pre_request(Req, _Env, #{stop := late}, State) ->
     ran(pre_request),
     {stop, {reply, 403, ~"stopped by a plugin"}, Req, State};
 pre_request(Req, _Env, _Options, State) ->
     ran(pre_request),
-    {ok, cowboy_req:set_resp_header(~"x-pipeline", ~"pre_request", Req), State}.
+    {ok, nova_req:set_resp_header(~"x-pipeline", ~"pre_request", Req), State}.
 
 post_request(Req, _Env, _Options, State) ->
     ran(post_request),

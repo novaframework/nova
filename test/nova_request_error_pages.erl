@@ -10,14 +10,14 @@ echo(Req) ->
                        ~"params" => maps:get(params, Req, null)}}.
 
 parse_qs(Req) ->
-    {json, 200, #{}, maps:from_list(cowboy_req:parse_qs(Req))}.
+    {json, 200, #{}, maps:from_list(nova_req:parse_qs(Req))}.
 
 short_body(Req) ->
-    {ok, Fields, _Req} = cowboy_req:read_urlencoded_body(Req, #{length => 8, period => 200}),
+    {ok, Fields, _Req} = nova_req:read_urlencoded_body(Req, #{length => 8, period => 200}),
     {json, 200, #{}, maps:from_list(Fields)}.
 
 slow_body(Req) ->
-    {ok, Fields, _Req} = cowboy_req:read_urlencoded_body(Req, #{period => 200}),
+    {ok, Fields, _Req} = nova_req:read_urlencoded_body(Req, #{period => 200}),
     {json, 200, #{}, maps:from_list(Fields)}.
 
 pre_request(Req, _Env, _Options, State) ->

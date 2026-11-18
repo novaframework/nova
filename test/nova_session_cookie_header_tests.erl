@@ -1,16 +1,16 @@
--module(nova_stream_h_cookie_tests).
+-module(nova_session_cookie_header_tests).
 -include_lib("eunit/include/eunit.hrl").
 
--export([init/2, init/3, log/2]).
+-export([init/2, log/2]).
 
 -define(TOKEN, "TOPSECRETTOKEN").
 
-%% A Cookie header that cowlib cannot parse used to crash nova_stream_h:init/3,
-%% and Cowboy logged the whole request, Authorization included. Which bytes
-%% cowlib refuses depends on its version, so every case checks what holds
-%% either way: init/3 does not raise, the client's session cookie is not
-%% overwritten, and a request whose header did not parse still gets a
-%% session id.
+%% A Cookie header that cowlib cannot parse used to crash the start of the
+%% request, and the server logged the whole request, Authorization included.
+%% Which bytes cowlib refuses depends on its version, so every case checks
+%% what holds either way: nova_session:start_request/1 does not raise, the
+%% client's session cookie is not overwritten, and a request whose header did
+%% not parse still gets a session id.
 malformed_cookie_header_test_() ->
     [{Name, fun() -> assert_session_cookie_kept(Cookie) end}
      || {Name, Cookie} <- [{"=x", ~"__Host-session_id=abc; =x"},
@@ -22,15 +22,17 @@ malformed_cookie_header_test_() ->
 %% These two fail to parse with every cowlib Nova has used, so the
 %% unparsable path above is always exercised.
 unparsable_cookie_header_test_() ->
-    [{Name, ?_assertExit({request_error, _, _}, cowboy_req:parse_cookies(req(Cookie)))}
+    [{Name, ?_assertExit({request_error, _, _}, nova_req:parse_cookies(req(Cookie)))}
      || {Name, Cookie} <- [{"=x", ~"__Host-session_id=abc; =x"},
                            {"101 cookies", too_many_cookies()}]].
 
 assert_session_cookie_kept(Cookie) ->
     application:unset_env(nova, environment),
-    {[{req, Req}], _} = nova_stream_h:init(1, req(Cookie), #{stream_handlers => [?MODULE]}),
+    Req = nova_session:start_request(req(Cookie)),
     ?assertNot(is_map_key(~"__Host-session_id", maps:get(resp_cookies, Req, #{}))),
-    try cowboy_req:parse_cookies(req(Cookie)) of
+    ?assertEqual([], nova_session:response_cookies(Req)),
+    ok = nova_session:end_request(),
+    try nova_req:parse_cookies(req(Cookie)) of
         _ -> ok
     catch
         exit:{request_error, _, _} -> ?assertMatch(#{nova_session_id := _}, Req)
@@ -55,7 +57,7 @@ malformed_cookie_header_over_a_socket_test_() ->
              end
      end}.
 
-%% Only the headers matter to nova_stream_h:init/3 here.
+%% Only the headers matter to nova_session:start_request/1 here.
 -spec req(binary()) -> dynamic().
 req(Cookie) ->
     #{headers => #{~"cookie" => Cookie, ~"authorization" => <<"Bearer " ?TOKEN>>}}.
@@ -93,12 +95,10 @@ port() ->
         Port when is_integer(Port) -> Port
     end.
 
-init(Req, State) ->
+init(Req0, State) ->
+    Req = nova_session:start_request(Req0),
+    ok = nova_session:end_request(),
     {ok, cowboy_req:reply(200, #{}, ~"ok", Req), State}.
-
-%% As the next stream handler, hands back the request nova_stream_h passed on.
-init(_StreamID, Req, _Opts) ->
-    {[{req, Req}], undefined}.
 
 %% The connection process closes the socket only after it is done with the
 %% request, so anything it logged has arrived by then.

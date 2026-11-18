@@ -7,9 +7,9 @@ handler(_Req) ->
     {test_streamed, finish}.
 
 controller(Req0) ->
-    Req = cowboy_req:stream_reply(200, #{~"content-type" => ~"text/plain"}, Req0),
-    ok = cowboy_req:stream_body(~"first-chunk", nofin, Req),
-    ok = cowboy_req:stream_body(~"last-chunk", fin, Req),
+    Req = nova_req:stream_reply(200, #{~"content-type" => ~"text/plain"}, Req0),
+    ok = nova_req:stream_body(~"first-chunk", nofin, Req),
+    ok = nova_req:stream_body(~"last-chunk", fin, Req),
     {status, 200, #{}, <<>>, Req}.
 
 crash(_Req) ->

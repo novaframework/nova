@@ -14,7 +14,7 @@ sign_out(Req) ->
 %% In flight until the test case says `write`. With `?read` it has read its
 %% session by then.
 held_write(Req) ->
-    _ = cowboy_req:qs(Req) =:= ~"read" andalso nova_session:get(Req, ~"user"),
+    _ = nova_req:qs(Req) =:= ~"read" andalso nova_session:get(Req, ~"user"),
     nova_test_observer:observed(nova_session_race_observer, {held, self()}),
     receive
         write -> ok

@@ -20,6 +20,8 @@ These keys are always there, and can be matched on:
 - `peer`: `{IP, Port}` of the client
 - `has_body` and `body_length`, which is `undefined` when the client did not
   say
+- `protocol`: what an extended `CONNECT` of HTTP/2 or HTTP/3 asks for, such as
+  `~"websocket"`. Absent on every other request.
 
 Nova adds `bindings`, `listener` and, as the request goes through the
 pipeline, keys such as `auth_data`, `json` and `params`. The keys that start
@@ -55,7 +57,8 @@ A request is answered once. A second answer is not sent, and is logged.
          headers/1,
          parse_header/2,
          parse_header/3,
-         parse_cookies/1
+         parse_cookies/1,
+         is_websocket_upgrade/1
         ]).
 
 -export([
@@ -93,6 +96,11 @@ A request is answered once. A second answer is not sent, and is logged.
          stream_body/3,
          stream_trailers/2,
          response_begun/1
+        ]).
+
+-export([
+         start_request/0,
+         upgrade_websocket/5
         ]).
 
 -export_type([req/0, http_version/0, http_headers/0, http_status/0, resp_body/0,
@@ -197,9 +205,10 @@ headers(#{headers := Headers}) -> Headers.
 
 -doc """
 A request header, parsed. `Name` is one of `accept`, `accept-charset`,
-`accept-encoding`, `accept-language`, `authorization`, `content-length`,
-`content-type`, `cookie`, `if-match`, `if-modified-since`, `if-none-match`,
-`if-range`, `if-unmodified-since`, `origin`, `range` and `x-forwarded-for`.
+`accept-encoding`, `accept-language`, `authorization`, `connection`,
+`content-length`, `content-type`, `cookie`, `if-match`, `if-modified-since`,
+`if-none-match`, `if-range`, `if-unmodified-since`, `origin`, `range`,
+`upgrade` and `x-forwarded-for`.
 A header that does not parse is a request error, answered 400.
 """.
 -spec parse_header(binary(), req()) -> term().
@@ -230,6 +239,7 @@ header_parser(~"accept-language") -> fun cow_http_hd:parse_accept_language/1;
 header_parser(~"authorization") -> fun cow_http_hd:parse_authorization/1;
 header_parser(~"content-length") -> fun cow_http_hd:parse_content_length/1;
 header_parser(~"content-type") -> fun cow_http_hd:parse_content_type/1;
+header_parser(~"connection") -> fun cow_http_hd:parse_connection/1;
 header_parser(~"cookie") -> fun cow_cookie:parse_cookie/1;
 header_parser(~"if-match") -> fun cow_http_hd:parse_if_match/1;
 header_parser(~"if-modified-since") -> fun cow_http_hd:parse_if_modified_since/1;
@@ -238,12 +248,28 @@ header_parser(~"if-range") -> fun cow_http_hd:parse_if_range/1;
 header_parser(~"if-unmodified-since") -> fun cow_http_hd:parse_if_unmodified_since/1;
 header_parser(~"origin") -> fun cow_http_hd:parse_origin/1;
 header_parser(~"range") -> fun cow_http_hd:parse_range/1;
+header_parser(~"upgrade") -> fun cow_http_hd:parse_upgrade/1;
 header_parser(~"x-forwarded-for") -> fun cow_http_hd:parse_x_forwarded_for/1;
 header_parser(Name) -> error({unsupported_header, Name}).
 
 -spec parse_cookies(req()) -> [{binary(), binary()}].
 parse_cookies(Req) ->
     parse_header(~"cookie", Req, []).
+
+-doc """
+Whether the request asks for a WebSocket: with `Upgrade` over HTTP/1.1, or
+with the extended `CONNECT` of HTTP/2 and HTTP/3. A request whose `Connection`
+or `Upgrade` header does not parse is a request error.
+""".
+-spec is_websocket_upgrade(req()) -> boolean().
+is_websocket_upgrade(#{version := Version, method := ~"CONNECT", protocol := Protocol})
+  when Version =:= 'HTTP/2'; Version =:= 'HTTP/3' ->
+    string:lowercase(Protocol) =:= ~"websocket";
+is_websocket_upgrade(Req = #{version := 'HTTP/1.1', method := ~"GET"}) ->
+    lists:member(~"upgrade", parse_header(~"connection", Req, []))
+        andalso lists:member(~"websocket", parse_header(~"upgrade", Req, []));
+is_websocket_upgrade(_Req) ->
+    false.
 
 %%%===================================================================
 %%% Request body
@@ -441,11 +467,26 @@ set_resp_header(Name, Value, Req) ->
     Headers = maps:get(resp_headers, Req, #{}),
     Req#{resp_headers => Headers#{Name => Value}}.
 
--spec set_resp_headers(http_headers(), Req) -> Req when Req :: req().
+-doc """
+Set headers on the response, from a map or from a list of names and values.
+A name that is in the list more than once is one header with the values
+joined by `, `.
+""".
+-spec set_resp_headers(http_headers() | [{binary(), iodata()}], Req) -> Req when Req :: req().
+set_resp_headers(Headers, Req) when is_list(Headers) ->
+    set_resp_headers(joined(Headers, #{}), Req);
 set_resp_headers(#{~"set-cookie" := _}, _Req) ->
     exit(cookie_as_header());
 set_resp_headers(Headers, Req) ->
     Req#{resp_headers => maps:merge(maps:get(resp_headers, Req, #{}), Headers)}.
+
+joined([], Headers) ->
+    Headers;
+joined([{Name, Value} | Rest], Headers) ->
+    case Headers of
+        #{Name := Earlier} -> joined(Rest, Headers#{Name := [Earlier, ~", ", Value]});
+        #{} -> joined(Rest, Headers#{Name => Value})
+    end.
 
 -spec has_resp_header(binary(), req()) -> boolean().
 has_resp_header(Name, Req) ->
@@ -506,9 +547,11 @@ reply(Status0, Headers, Body, Req) ->
         false ->
             Length = body_size(Body),
             ok = no_body_where_none_is_allowed(Status, Length),
-            Out = response_headers(with_content_length(Status, Length, Headers), Req),
             Server = nova_server:of_req(Req),
-            answered(Server:reply(Status, Out, body_to_send(Body, Req), Req), true);
+            case response_headers(with_content_length(Status, Length, Headers), Req) of
+                {ok, Out} -> answered(Server:reply(Status, Out, body_to_send(Body, Req), Req), true);
+                refused -> answered(Server:reply(500, [{~"content-length", ~"0"}], <<>>, Req), true)
+            end;
         Sent ->
             dropped(Status, Req, Sent)
     end.
@@ -529,7 +572,10 @@ stream_reply(Status0, Headers, Req) ->
             case response_begun(Req) of
                 false ->
                     Server = nova_server:of_req(Req),
-                    answered(Server:stream_reply(Status, response_headers(Headers, Req), Req), headers);
+                    case response_headers(Headers, Req) of
+                        {ok, Out} -> answered(Server:stream_reply(Status, Out, Req), headers);
+                        refused -> answered(Server:reply(500, [{~"content-length", ~"0"}], <<>>, Req), true)
+                    end;
                 Sent ->
                     dropped(Status, Req, Sent)
             end
@@ -567,6 +613,25 @@ response_begun(Req) ->
         undefined -> server_response_begun(Req);
         Sent -> Sent
     end.
+
+-doc false.
+%% The request process serves one request after the other on some servers,
+%% so what it remembers of the last one is forgotten.
+-spec start_request() -> ok.
+start_request() ->
+    _ = erase(nova_response_begun),
+    ok.
+
+-doc false.
+%% The answer to a websocket upgrade is the server's to send. It carries the
+%% headers and cookies set on the request.
+-spec upgrade_websocket(Req, Env, module(), term(), nova_server:ws_opts()) ->
+          {ok, Req, Env} | {stop, Req} when Req :: req(), Env :: nova_server:env().
+upgrade_websocket(Req0, Env, Handler, State, Opts) ->
+    Req = nova_session:with_response_cookies(Req0),
+    Result = (nova_server:of_req(Req)):upgrade_websocket(Req, Env, Handler, State, Opts),
+    _ = put(nova_response_begun, true),
+    Result.
 
 %%%===================================================================
 %%% Internal functions
@@ -623,15 +688,47 @@ body_to_send(_Body, #{method := ~"HEAD"}) -> <<>>;
 body_to_send({sendfile, _Offset, 0, _Path}, _Req) -> <<>>;
 body_to_send(Body, _Req) -> Body.
 
-%% The headers set on the request, those of the call, which win, and a
-%% set-cookie for each cookie.
--spec response_headers(http_headers(), req()) -> nova_server:headers().
+%% The headers set on the request, those of the call, which win, a
+%% set-cookie for each cookie and the session cookie, when the session of the
+%% request asks for one.
+%%
+%% A header whose name is not a token, or whose value has a line break or a
+%% NUL in it, would let whoever chose the value write headers of their own,
+%% or a second response. Nothing of such a response is sent: the request is
+%% answered 500 instead.
+-spec response_headers(http_headers(), req()) -> {ok, nova_server:headers()} | refused.
 response_headers(Headers, Req) ->
     Merged = maps:merge(maps:get(resp_headers, Req, #{}), Headers),
-    header_list(Merged) ++ [{~"set-cookie", Cookie} || _Name := Cookie <- maps:get(resp_cookies, Req, #{})].
+    Cookies = maps:values(maps:get(resp_cookies, Req, #{})) ++ nova_session:response_cookies(Req),
+    Out = header_list(Merged) ++ [{~"set-cookie", Cookie} || Cookie <- Cookies],
+    case [Name || {Name, Value} <- Out, not (valid_header_name(Name) andalso valid_header_value(Value))] of
+        [] ->
+            {ok, Out};
+        Refused ->
+            ?LOG_ERROR(#{msg => ~"Response not sent: a header name is not a token, or a header value has a line break or a NUL in it. The request is answered 500",
+                         headers => Refused, method => maps:get(method, Req, undefined),
+                         path => maps:get(path, Req, undefined)}),
+            refused
+    end.
 
 header_list(Headers) ->
     maps:to_list(Headers).
+
+valid_header_name(Name) when is_binary(Name), Name =/= <<>> ->
+    lists:all(fun is_token_character/1, binary_to_list(Name));
+valid_header_name(_Name) ->
+    false.
+
+is_token_character(C) when C >= $a, C =< $z; C >= $0, C =< $9; C >= $A, C =< $Z -> true;
+is_token_character(C) ->
+    lists:member(C, "!#$%&'*+-.^_`|~").
+
+valid_header_value(Value) ->
+    try iolist_to_binary(Value) of
+        Binary -> binary:match(Binary, [~"\r", ~"\n", <<0>>]) =:= nomatch
+    catch
+        error:badarg -> false
+    end.
 
 cookie_as_header() ->
     {response_error, invalid_header, 'Response cookies must be set using nova_req:set_resp_cookie/3,4.'}.

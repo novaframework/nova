@@ -20,7 +20,7 @@
 
 pre_request(Req, _Env, _Options, State) ->
     bump(?PRE_REQUEST),
-    Req0 = cowboy_req:set_resp_header(<<"x-nova-pre-request">>, <<"1">>, Req),
+    Req0 = nova_req:set_resp_header(<<"x-nova-pre-request">>, <<"1">>, Req),
     {ok, echo_route(Req0), State}.
 
 post_request(Req, _Env, _Options, State) ->
@@ -28,7 +28,7 @@ post_request(Req, _Env, _Options, State) ->
     {ok, Req, State}.
 
 echo_route(Req = #{nova_route := Route}) ->
-    cowboy_req:set_resp_header(<<"x-nova-route">>, Route, Req);
+    nova_req:set_resp_header(<<"x-nova-route">>, Route, Req);
 echo_route(Req) ->
     Req.
 

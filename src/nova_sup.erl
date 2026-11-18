@@ -406,26 +406,19 @@ effective_port(Configuration) ->
     end.
 
 cowboy_options(Configuration, DispatchKey, Dispatch) ->
-    Middlewares = [
-                   nova_router, %% Lookup routes
-                   nova_plugin_handler, %% Handle pre-request plugins
-                   nova_security_handler, %% Handle security
-                   nova_handler, %% Controller
-                   nova_plugin_handler %% Handle post-request plugins
-                  ],
     StreamH = [nova_stream_h,
                cowboy_compress_h,
                cowboy_stream_h],
     StreamHandlers = maps:get(stream_handlers, Configuration, StreamH),
-    MiddlewareHandlers = maps:get(middleware_handlers, Configuration, Middlewares),
+    Steps = maps:get(middleware_handlers, Configuration, nova_pipeline:steps()),
     Options = maps:get(options, Configuration, #{compress => true}),
 
     %% nova_router reads its routing table out of the Env, so a listener always
     %% carries the key of the table it serves.
     Env0 = maps:get(env, Options, #{}),
-    Env = Env0#{nova_dispatch_key => DispatchKey},
+    Env = Env0#{nova_dispatch_key => DispatchKey, nova_steps => Steps},
 
-    CowboyOptions = Options#{middlewares => MiddlewareHandlers,
+    CowboyOptions = Options#{middlewares => [nova_pipeline],
                              stream_handlers => StreamHandlers,
                              env => Env},
 

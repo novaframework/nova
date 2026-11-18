@@ -184,7 +184,7 @@ reflect(Config, Value) ->
     Response.
 
 reflect(Req) ->
-    {~"value", Value} = lists:keyfind(~"value", 1, cowboy_req:parse_qs(Req)),
+    {~"value", Value} = lists:keyfind(~"value", 1, nova_req:parse_qs(Req)),
     {status, 200, #{~"x-reflected" => Value}, ~"reflected"}.
 
 recv_until_closed(Socket, Acc) ->

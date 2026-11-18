@@ -17,7 +17,7 @@ by_header(Req) ->
             ~"qs" => is_map_key(parsed_qs, Req),
             ~"early" => is_map_key(early, Req),
             ~"late" => is_map_key(late, Req)},
-    case cowboy_req:header(~"authorization", Req) of
+    case nova_req:header(~"authorization", Req) of
         ~"letmein" -> {true, Saw};
         _ -> {false, 401, #{~"x-security-saw" => iolist_to_binary(json:encode(Saw))}}
     end.
@@ -25,7 +25,7 @@ by_header(Req) ->
 pre_security(_Req, _Env, #{early := crash}, _State) ->
     error(plugin_failed);
 pre_security(Req, _Env, #{early := mark}, State) ->
-    {ok, cowboy_req:set_resp_header(~"x-early", ~"ran", Req#{early => true}), State};
+    {ok, nova_req:set_resp_header(~"x-early", ~"ran", Req#{early => true}), State};
 pre_security(Req, _Env, _Options, State) ->
     {ok, Req, State}.
 
@@ -34,7 +34,7 @@ pre_request(_Req, _Env, #{action := crash}, _State) ->
 pre_request(Req, _Env, #{action := stop}, State) ->
     {stop, {status, 403}, Req, State};
 pre_request(Req, _Env, #{action := mark}, State) ->
-    {ok, cowboy_req:set_resp_header(~"x-late", ~"ran", Req#{late => true}), State};
+    {ok, nova_req:set_resp_header(~"x-late", ~"ran", Req#{late => true}), State};
 pre_request(Req, _Env, _Options, State) ->
     {ok, Req, State}.
 

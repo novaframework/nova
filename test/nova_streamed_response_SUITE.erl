@@ -41,11 +41,11 @@ end_per_suite(_Config) ->
     nova_test_listener:stop().
 
 handle_stream({test_streamed, Then}, _Callback, Req0) ->
-    Req = cowboy_req:stream_reply(200, #{~"content-type" => ~"text/plain"}, Req0),
-    ok = cowboy_req:stream_body(~"first-chunk", nofin, Req),
+    Req = nova_req:stream_reply(200, #{~"content-type" => ~"text/plain"}, Req0),
+    ok = nova_req:stream_body(~"first-chunk", nofin, Req),
     case Then of
         finish ->
-            ok = cowboy_req:stream_body(~"last-chunk", fin, Req),
+            ok = nova_req:stream_body(~"last-chunk", fin, Req),
             {ok, Req};
         crash ->
             error(crashed_in_the_stream)

@@ -47,8 +47,8 @@ init_successful_upgrade_test_() ->
         Req = make_req(),
         State = make_state(),
         Result = nova_ws_handler:init(Req, State),
-        ?assertMatch({cowboy_websocket, _, _}, Result),
-        {cowboy_websocket, _Req1, State1} = Result,
+        ?assertMatch({websocket, _, _}, Result),
+        {websocket, _Req1, State1} = Result,
         ?assert(maps:is_key(controller_data, State1)),
         ?assertEqual(test_ws_mod, maps:get(mod, State1))
     end}.
@@ -57,7 +57,7 @@ init_injects_req_into_controller_data_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         Req = make_req(),
         State = make_state(),
-        {cowboy_websocket, _Req1, State1} = nova_ws_handler:init(Req, State),
+        {websocket, _Req1, State1} = nova_ws_handler:init(Req, State),
         CD = maps:get(controller_data, State1),
         ?assert(maps:is_key(req, CD))
     end}.
@@ -78,7 +78,7 @@ init_preserves_existing_controller_data_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         Req = make_req(),
         State = #{module => test_ws_mod, controller_data => #{existing => value}},
-        {cowboy_websocket, _Req1, State1} = nova_ws_handler:init(Req, State),
+        {websocket, _Req1, State1} = nova_ws_handler:init(Req, State),
         CD = maps:get(controller_data, State1),
         ?assertEqual(value, maps:get(existing, CD))
     end}.
@@ -86,9 +86,9 @@ init_preserves_existing_controller_data_test_() ->
 init_hands_over_the_auth_data_of_the_request_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         Req = (make_req())#{auth_data => someone},
-        {cowboy_websocket, _Req1, #{controller_data := Given}} = nova_ws_handler:init(Req, make_state()),
+        {websocket, _Req1, #{controller_data := Given}} = nova_ws_handler:init(Req, make_state()),
         ?assertEqual({someone, Req}, {maps:get(auth_data, Given), maps:get(req, Given)}),
-        {cowboy_websocket, _Req2, #{controller_data := Without}} = nova_ws_handler:init(make_req(), make_state()),
+        {websocket, _Req2, #{controller_data := Without}} = nova_ws_handler:init(make_req(), make_state()),
         ?assertNot(maps:is_key(auth_data, Without))
     end}.
 
@@ -96,7 +96,7 @@ init_default_controller_data_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         Req = make_req(),
         State = #{module => test_ws_mod},
-        {cowboy_websocket, _Req1, State1} = nova_ws_handler:init(Req, State),
+        {websocket, _Req1, State1} = nova_ws_handler:init(Req, State),
         ?assert(maps:is_key(controller_data, State1))
     end}.
 
@@ -455,9 +455,9 @@ forward_event(Event, Measurements, Metadata, Pid) ->
 init_stores_route_from_req_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         Req = (make_req())#{nova_route => ~"/ws"},
-        {cowboy_websocket, _Req1, State} = nova_ws_handler:init(Req, make_state()),
+        {websocket, _Req1, State} = nova_ws_handler:init(Req, make_state()),
         ?assertEqual(~"/ws", maps:get(route, State)),
-        {cowboy_websocket, _Req2, Unrouted} = nova_ws_handler:init(make_req(), make_state()),
+        {websocket, _Req2, Unrouted} = nova_ws_handler:init(make_req(), make_state()),
         ?assertEqual(undefined, maps:get(route, Unrouted))
     end}.
 

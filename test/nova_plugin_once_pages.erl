@@ -30,7 +30,7 @@ pre_request(Req, _Env, #{name := Name} = Options, State) ->
         crash -> error(plugin_failed);
         error -> {error, plugin_refused};
         break -> {break, {reply, 403, #{}, ~"refused"}, Req, State};
-        break_replied -> {break, cowboy_req:reply(402, #{}, ~"pay first", Req), State}
+        break_replied -> {break, nova_req:reply(402, #{}, ~"pay first", Req), State}
     end.
 
 post_request(Req, _Env, #{name := Name}, State) ->

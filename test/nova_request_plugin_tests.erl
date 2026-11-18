@@ -248,12 +248,12 @@ multipart_req(ContentType) ->
 multipart_body_not_drained_test_() ->
     {setup,
      fun() ->
-         meck:new(cowboy_req, [passthrough]),
-         meck:expect(cowboy_req, has_body, fun(_Req) -> true end),
-         meck:expect(cowboy_req, read_body,
+         meck:new(nova_req, [passthrough]),
+         meck:expect(nova_req, has_body, fun(_Req) -> true end),
+         meck:expect(nova_req, read_body,
                      fun(_Req, _Opts) -> erlang:error(body_should_not_be_read) end)
      end,
-     fun(_) -> meck:unload(cowboy_req) end,
+     fun(_) -> meck:unload(nova_req) end,
      [fun() ->
           Req0 = multipart_req(<<"multipart/form-data; boundary=----abc">>),
           {ok, Req, state} = nova_request_plugin:pre_request(
@@ -281,8 +281,8 @@ body_req(Chunks, BodyLength) ->
     Req#{has_body => true, body_length => BodyLength, chunks_left => Chunks}.
 
 body_setup() ->
-    meck:new(cowboy_req, [passthrough, no_link]),
-    meck:expect(cowboy_req, read_body,
+    meck:new(nova_req, [passthrough, no_link]),
+    meck:expect(nova_req, read_body,
                 fun(#{chunks_left := 1} = Req, #{length := Length}) when Length =< 64000 ->
                         {ok, <<"{}", (binary:part(?CHUNK, 0, 63998))/binary>>, Req#{chunks_left => 0}};
                    (#{chunks_left := N} = Req, #{length := Length}) when Length =< 64000 ->
@@ -290,10 +290,10 @@ body_setup() ->
                 end).
 
 body_reads() ->
-    meck:num_calls(cowboy_req, read_body, '_').
+    meck:num_calls(nova_req, read_body, '_').
 
 body_length_test_() ->
-    {foreach, fun body_setup/0, fun(_) -> meck:unload(cowboy_req) end,
+    {foreach, fun body_setup/0, fun(_) -> meck:unload(nova_req) end,
      [{"a body as long as the limit is decoded",
        fun() ->
            {ok, Req, state} = nova_request_plugin:pre_request(
@@ -361,8 +361,8 @@ body_length_test_() ->
 %% A chunked body that sends one byte per 50 ms: Cowboy hands over what it
 %% has when the period passes.
 trickle_setup() ->
-    meck:new(cowboy_req, [passthrough, no_link]),
-    meck:expect(cowboy_req, read_body,
+    meck:new(nova_req, [passthrough, no_link]),
+    meck:expect(nova_req, read_body,
                 fun(#{chunks_left := 1} = Req, #{period := _}) ->
                         timer:sleep(50),
                         {ok, ~"{}", Req#{chunks_left => 0}};
@@ -372,13 +372,13 @@ trickle_setup() ->
                 end).
 
 read_periods() ->
-    [Period || {_, {_, read_body, [_, #{period := Period}]}, _} <- meck:history(cowboy_req)].
+    [Period || {_, {_, read_body, [_, #{period := Period}]}, _} <- meck:history(nova_req)].
 
 strictly_decreasing([A, B | Rest]) -> A > B andalso strictly_decreasing([B | Rest]);
 strictly_decreasing(_) -> true.
 
 body_read_timeout_test_() ->
-    {foreach, fun trickle_setup/0, fun(_) -> meck:unload(cowboy_req) end,
+    {foreach, fun trickle_setup/0, fun(_) -> meck:unload(nova_req) end,
      [{"a body still arriving at the deadline gets a 408",
        fun() ->
            T0 = erlang:monotonic_time(millisecond),

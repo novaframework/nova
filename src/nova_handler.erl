@@ -1,6 +1,6 @@
 -module(nova_handler).
 -moduledoc false.
--behaviour(cowboy_middleware).
+-behaviour(nova_pipeline).
 
 %% Callbacks
 -export([
@@ -12,15 +12,16 @@
 -include_lib("kernel/include/logger.hrl").
 -include("../include/nova_router.hrl").
 
--callback init(Req, any()) -> {ok | module(), Req, any()}
-                                  | {module(), Req, any(), any()}
-                                  when Req::cowboy_req:req().
+-callback init(Req, any()) -> {ok | websocket, Req, any()}
+                                  | {websocket, Req, any(), nova_server:ws_opts()}
+                                  | {status, 100..599, Req, any()}
+                                  when Req::nova_req:req().
 
 -callback terminate(any(), map(), any()) -> ok.
 -optional_callbacks([terminate/3]).
 
 -spec execute(Req, Env) -> {ok, Req, Env}
-                               when Req::cowboy_req:req(), Env::cowboy_middleware:env().
+                               when Req::nova_req:req(), Env::nova_server:env().
 execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) when is_atom(Handler) ->
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
     try Handler:init(Req, Arguments) of
@@ -30,10 +31,10 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) when is
         {ok, Req2, State} ->
             Result = call_terminate(Handler, normal, Req2, State),
             {ok, Req2, Env#{result => Result}};
-        {Mod, Req2, State} ->
-            Mod:upgrade(Req2, Env, Handler, State);
-        {Mod, Req2, State, Opts} ->
-            Mod:upgrade(Req2, Env, Handler, State, Opts)
+        {websocket, Req2, State} ->
+            nova_req:upgrade_websocket(Req2, Env, Handler, State, #{});
+        {websocket, Req2, State, Opts} ->
+            nova_req:upgrade_websocket(Req2, Env, Handler, State, Opts)
     catch
         exit:{request_error, Kind, _Message} ->
             render_request_error(Kind, Req, maps:remove(cowboy_handler, Env));
@@ -55,7 +56,7 @@ execute(Req, Env = #{callback := _Callback}) ->
     %% place of the controller is for.
     execute_controller(Req, Env, maps:get(status_page, Env, false)).
 
--spec terminate(any(), Req :: cowboy_req:req() | undefined, function()) -> ok.
+-spec terminate(any(), Req :: nova_req:req() | undefined, function()) -> ok.
 terminate(Reason, Req, Callback) ->
     {module, Module} = erlang:fun_info(Callback, module),
     call_terminate(Module, Reason, Req, #{}).
@@ -157,31 +158,15 @@ render_crash_page(Req, Env, _StatusPage) ->
 %% is rendered for a controller that failed: the page would run for nothing,
 %% and nova_stream_h would drop it. The request that comes back is marked as
 %% answered.
--spec answered(Req) -> false | {true, Req} when Req :: cowboy_req:req().
+-spec answered(Req) -> false | {true, Req} when Req :: nova_req:req().
 answered(Req) ->
     case response_begun(Req) of
         false -> false;
         Sent -> {true, Req#{has_sent_resp => Sent}}
     end.
 
-%% Whether the response to the request has begun, and how far it got. A
-%% controller or handler that calls cowboy_req:reply/4 or
-%% cowboy_req:stream_reply/3 and does not hand back the request it got from
-%% it leaves Nova with the request as it was before the call, so
-%% nova_stream_h, which saw the response go by in the connection process, is
-%% asked.
-response_begun(#{has_sent_resp := Sent}) ->
-    Sent;
-response_begun(#{nova_stream := true} = Req) ->
-    Ref = make_ref(),
-    cowboy_req:cast({nova_response_begun, self(), Ref}, Req),
-    receive
-        {Ref, Sent} -> Sent
-    after 5000 ->
-            false
-    end;
-response_begun(_Req) ->
-    false.
+response_begun(Req) ->
+    nova_req:response_begun(Req).
 
 without_error_page(Req, Env) ->
     ?LOG_WARNING(#{msg => ~"The response had begun when the controller failed, so no error page is sent"}),
@@ -229,8 +214,8 @@ opt_in_request_fields() ->
         _ -> []
     end.
 
--spec execute_fallback(Callback :: function(), Req :: cowboy_req:req(), Response :: any(), Env :: map()) ->
-          {ok, Req0 :: cowboy_req:req(), Env :: map()}.
+-spec execute_fallback(Callback :: function(), Req :: nova_req:req(), Response :: any(), Env :: map()) ->
+          {ok, Req0 :: nova_req:req(), Env :: map()}.
 execute_fallback(Callback, Req, Response, Env) ->
     {module, Module} = erlang:fun_info(Callback, module),
     Attributes = Module:module_info(attributes),
@@ -260,9 +245,9 @@ execute_fallback(Callback, Req, Response, Env) ->
             end
     end.
 
--spec call_handler(Callback :: function(), Req :: cowboy_req:req(),
+-spec call_handler(Callback :: function(), Req :: nova_req:req(),
                    RetObj :: any(), Env :: map(), IsFallbackController :: boolean()) ->
-          {ok, Req0 :: cowboy_req:req(), Env :: map()}.
+          {ok, Req0 :: nova_req:req(), Env :: map()}.
 call_handler(Callback, Req, RetObj, Env, IsFallbackController) ->
     case get_handler(RetObj) of
         {ok, HandlerCallback} ->
@@ -299,8 +284,8 @@ get_handler(RetObj) when is_tuple(RetObj), tuple_size(RetObj) > 0, is_atom(eleme
 get_handler(_RetObj) ->
     {error, not_found}.
 
--spec send_response(Req :: cowboy_req:req(), Env :: map()) ->
-          {ok, Req :: cowboy_req:req(), State :: map()}.
+-spec send_response(Req :: nova_req:req(), Env :: map()) ->
+          {ok, Req :: nova_req:req(), State :: map()}.
 send_response(Req = #{resp_status_code := StatusCode}, Env) when is_integer(StatusCode); is_binary(StatusCode) ->
     reply(StatusCode, without_refused_body(StatusCode, Req), Env);
 send_response(Req, Env) when not is_map_key(resp_status_code, Req) ->
@@ -313,7 +298,7 @@ send_response(Req, Env) when not is_map_key(resp_status_code, Req) ->
 reply(_StatusCode, Req = #{has_sent_resp := _}, Env) ->
     {ok, Req, Env};
 reply(StatusCode, Req, Env) ->
-    {ok, cowboy_req:reply(StatusCode, Req), Env}.
+    {ok, nova_req:reply(StatusCode, Req), Env}.
 
 %% A 204 and a 304 have no body, and Cowboy exits when given one.
 without_refused_body(StatusCode, Req) when StatusCode =:= 204; StatusCode =:= 304 ->

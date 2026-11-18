@@ -20,7 +20,7 @@ group(Req) ->
 decide(Callback, Req) ->
     ?MODULE ! {?MODULE, Callback},
     Name = atom_to_binary(Callback),
-    case proplists:get_value(Name, cowboy_req:parse_qs(Req), ~"allow") of
+    case proplists:get_value(Name, nova_req:parse_qs(Req), ~"allow") of
         ~"allow" -> true;
         ~"data" -> {true, Callback};
         ~"deny" -> {false, 403, #{}, Name}

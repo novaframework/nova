@@ -48,7 +48,7 @@ read_body(Req, _Opts) ->
     {ok, <<>>, Req}.
 
 upgrade_websocket(Req, Env, Handler, State, Opts) ->
-    self() ! {?MODULE, {upgrade_websocket, Handler, State, Opts}},
+    self() ! {?MODULE, {upgrade_websocket, Handler, State, Opts, maps:values(maps:get(resp_cookies, Req, #{}))}},
     {ok, Req, Env}.
 
 req() ->

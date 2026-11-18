@@ -134,7 +134,7 @@ unparseable_upgrade() ->
 
 unparseable_upgrade_is_checked_test() ->
     Req = unparseable_upgrade(),
-    ?assertExit({request_error, _Header, _Text}, cowboy_websocket:is_upgrade_request(Req)),
+    ?assertExit({request_error, _Header, _Text}, nova_req:is_websocket_upgrade(Req)),
     ?assertMatch({stop, {reply, 403, _Body}, _Req, undefined}, pre_request(Req, #{})),
     ?assertMatch({ok, _Req, undefined}, pre_request(Req, #{trusted_origins => [?EVIL]})).
 

@@ -5,7 +5,7 @@
 -export([check/1]).
 
 check(Req) ->
-    case cowboy_req:header(<<"authorization">>, Req) of
+    case nova_req:header(<<"authorization">>, Req) of
         <<"Bearer let-me-in">> ->
             {true, #{user => <<"tester">>, role => <<"admin">>}};
         _ ->

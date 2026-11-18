@@ -40,9 +40,9 @@ with_auth_data(_Req, ControllerData) ->
 upgrade_ws(Module, Req, State, ControllerData) ->
     case Module:init(ControllerData) of
         {ok, NewControllerData} ->
-            {cowboy_websocket, Req, State#{controller_data => NewControllerData}};
+            {websocket, Req, State#{controller_data => NewControllerData}};
         {ok, NewControllerData, WebsocketOptions} when is_map(WebsocketOptions) ->
-            {cowboy_websocket, Req, State#{controller_data => NewControllerData}, WebsocketOptions};
+            {websocket, Req, State#{controller_data => NewControllerData}, WebsocketOptions};
         Error ->
             ?LOG_ERROR(#{msg => ~"Websocket handler returned unknown result", handler => Module,
                          returned => nova_redact:term(Error)}),
