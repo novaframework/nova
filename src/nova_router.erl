@@ -175,7 +175,7 @@ execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
                                            secure = Secure, plugins = Plugins, extra_state = ExtraState}, Pathinfo} ->
             {ok,
              Req#{plugins => Plugins,
-                  extra_state => ExtraState#{pathinfo => Pathinfo},
+                  extra_state => with_pathinfo(ExtraState, Pathinfo),
                   bindings => Bindings},
              Env#{app => App,
                   callback => Callback,
@@ -187,6 +187,18 @@ execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
                                               plugins = Plugins, secure = Secure}} ->
             {ok,
              Req#{plugins => Plugins,
+                  bindings => Bindings},
+             Env#{app => App,
+                  cowboy_handler => Handler,
+                  arguments => Args,
+                  secure => Secure
+                 }
+            };
+        {ok, Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
+                                              plugins = Plugins, secure = Secure}, Pathinfo} ->
+            {ok,
+             Req#{plugins => Plugins,
+                  extra_state => with_pathinfo(handler_extra_state(Args), Pathinfo),
                   bindings => Bindings},
              Env#{app => App,
                   cowboy_handler => Handler,
@@ -642,6 +654,16 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
 
 insert_opts(T) ->
     maps:get(insert_opts, T, #{}).
+
+handler_extra_state(#{extra_state := ExtraState}) -> ExtraState;
+handler_extra_state(_Arguments)                   -> undefined.
+
+with_pathinfo(ExtraState, Pathinfo) when is_map(ExtraState) ->
+    ExtraState#{pathinfo => Pathinfo};
+with_pathinfo(undefined, Pathinfo) ->
+    #{pathinfo => Pathinfo};
+with_pathinfo(ExtraState, _Pathinfo) ->
+    ExtraState.
 
 %% The module the dispatch table is stored in. Configurable, so it has to be
 %% narrowed to a module before it can be called.
