@@ -12,6 +12,7 @@
 -export([
          enabled/0,
          cookie_name/0,
+         needs_https/0,
          cookie_opts/1,
          validate_cookie_config/0,
          valid_cookie/2,
@@ -156,6 +157,11 @@ default_cookie_name() ->
         true -> ~"session_id";
         false -> ~"__Host-session_id"
     end.
+
+-doc false.
+-spec needs_https() -> boolean().
+needs_https() ->
+    enabled() andalso maps:get(secure, cookie_opts_for(~"http"), false).
 
 -doc false.
 -spec cookie_opts(cowboy_req:req()) -> cow_cookie:cookie_opts().

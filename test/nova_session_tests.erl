@@ -389,7 +389,8 @@ cookie_name_test_() ->
       fun name_configured/0,
       fun old_name/0,
       fun ambiguous_cookie/0,
-      fun repeated_cookie/0
+      fun repeated_cookie/0,
+      fun needs_https/0
      ]}.
 
 name_outside_dev() ->
@@ -432,6 +433,27 @@ repeated_cookie() ->
     Req = cookie_req(~"__Host-session_id=same; __Host-session_id=same"),
     ?assertEqual(~"same", nova_session:presented_session_id(Req)),
     ?assert(nova_once:first({nova_session, ambiguous_cookie_warned})).
+
+%% A listener without TLS is where the cookie needs https, unless Secure was
+%% taken off the cookie or sessions are off.
+needs_https() ->
+    ?assert(nova_session:needs_https()),
+    application:set_env(nova, session_cookie_name, ~"session_id"),
+    ?assert(nova_session:needs_https()),
+    application:set_env(nova, session_cookie_opts, #{secure => false}),
+    ?assertNot(nova_session:needs_https()),
+    application:unset_env(nova, session_cookie_name),
+    application:unset_env(nova, session_cookie_opts),
+    application:set_env(nova, environment, dev),
+    ?assertNot(nova_session:needs_https()),
+    application:unset_env(nova, environment),
+    application:set_env(nova, use_sessions, false),
+    try
+        ?assertNot(nova_session:needs_https())
+    after
+        application:unset_env(nova, use_sessions),
+        application:unset_env(nova, session_cookie_opts)
+    end.
 
 cookie_req(Cookie) ->
     nova_test_helper:with_header(~"cookie", Cookie, nova_test_helper:mock_req(~"GET", ~"/")).

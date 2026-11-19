@@ -250,9 +250,23 @@ start_cowboy(Configuration) ->
                                              apps = [BootstrapApp],
                                              dispatch_key = DispatchKey,
                                              tls = Tls}),
+            https_notice(Tls),
             {ok, BootstrapApp, Host, Port};
         {error, Reason} ->
             {error, Reason}
+    end.
+
+https_notice(true) ->
+    ok;
+https_notice(false) ->
+    case nova_session:needs_https() of
+        true ->
+            ?LOG_NOTICE(#{msg => ~"The session cookie is Secure, so a browser keeps it only where it reached the site over https. This listener has no TLS, which is right behind a proxy that terminates TLS. Where browsers reach it over plain http no session is kept: give the listener TLS with use_ssl and ssl_options in cowboy_configuration, or put it behind such a proxy. On a development machine, set environment to dev",
+                          notice => session_cookie_needs_https,
+                          cookie => nova_session:cookie_name(),
+                          settings => [cowboy_configuration, environment]});
+        false ->
+            ok
     end.
 
 %%--------------------------------------------------------------------

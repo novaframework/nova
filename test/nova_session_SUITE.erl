@@ -16,6 +16,7 @@
          delete/1,
          bad_name_runtime/1,
          bad_name_boot/1,
+         https_notice/1,
          delete_no_stream_h/1
         ]).
 
@@ -33,6 +34,7 @@ all() ->
      delete,
      bad_name_runtime,
      bad_name_boot,
+     https_notice,
      {group, without_stream_h}
     ].
 
@@ -186,6 +188,30 @@ bad_name_boot(_Config) ->
         application:stop(nova_test_app),
         application:stop(nova)
     end.
+
+%% The listener of this suite has no TLS and the cookie is Secure, which
+%% Nova says once when it starts. Leaves Nova stopped as well.
+https_notice(_Config) ->
+    application:stop(nova_test_app),
+    application:stop(nova),
+    ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
+    try
+        ?assertMatch([#{cookie := ~"__Host-session_id"}], notices()),
+        application:set_env(nova, session_cookie_name, ~"sid"),
+        application:set_env(nova, session_cookie_opts, #{secure => false}),
+        ?assertEqual([], notices())
+    after
+        application:unset_env(nova, session_cookie_name),
+        application:unset_env(nova, session_cookie_opts),
+        logger:remove_handler(?MODULE)
+    end.
+
+%% Starts and stops Nova, and returns the https notices it logged.
+notices() ->
+    {ok, _} = application:ensure_all_started(nova_test_app),
+    application:stop(nova_test_app),
+    application:stop(nova),
+    [Report || {report, #{notice := session_cookie_needs_https} = Report} <- logged()].
 
 %% Without nova_stream_h nothing gives a request a session id, so the client
 %% brings one.
