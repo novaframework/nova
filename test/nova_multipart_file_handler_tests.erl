@@ -2,18 +2,23 @@
 -include_lib("eunit/include/eunit.hrl").
 
 setup() ->
-    Dir = tmp_dir(),
-    ok = file:make_dir(Dir),
-    Dir.
+    Dir = nova_test_helper:make_tmp_dir("nova_multipart_test"),
+    try
+        {ok, Spool} = nova_multipart_spool:start_link(),
+        unlink(Spool),
+        Dir
+    catch
+        Class:Reason:Stacktrace ->
+            ok = file:del_dir_r(Dir),
+            erlang:raise(Class, Reason, Stacktrace)
+    end.
 
 teardown(Dir) ->
-    {ok, Files} = file:list_dir(Dir),
-    [file:delete(filename:join(Dir, F)) || F <- Files],
-    ok = file:del_dir(Dir).
-
-tmp_dir() ->
-    Name = io_lib:format("nova_multipart_test_~p", [erlang:unique_integer([positive])]),
-    filename:join("/tmp", lists:flatten(Name)).
+    try
+        ok = gen_server:stop(nova_multipart_spool)
+    after
+        ok = file:del_dir_r(Dir)
+    end.
 
 client_filename_never_used_in_path_test_() ->
     {setup, fun setup/0, fun teardown/1,
@@ -130,6 +135,74 @@ abort_deletes_partial_file_with_extension_test_() ->
              ?assertEqual({ok, []}, file:list_dir(Dir))
          end
      end}.
+
+%% A request process can be stopped at any point, also right after a
+%% finished part got its final name: before it told the spool, when it did
+%% the renaming itself, or as soon as the spool had done it.
+part_of_a_request_that_ends_inside_the_rename_is_deleted_test_() ->
+    {setup, fun setup/0, fun teardown/1,
+     fun(Dir) ->
+         fun() ->
+             meck:new(nova_multipart_spool, [passthrough]),
+             meck:expect(nova_multipart_spool, renamed, fun(_Path, _NewPath) -> exit(stopped) end),
+             meck:expect(nova_multipart_spool, rename, fun(Path, NewPath) ->
+                                                               ok = meck:passthrough([Path, NewPath]),
+                                                               exit(stopped)
+                                                       end),
+             try
+                 {Pid, Monitor} = spawn_monitor(
+                                    fun() ->
+                                            PartInfo = #{name => ~"upload", filename => ~"x.bin",
+                                                         content_type => ~"application/octet-stream"},
+                                            {ok, State} = nova_multipart_file_handler:init(PartInfo, #{dir => Dir}),
+                                            {ok, State1} = nova_multipart_file_handler:handle_data(~"data", State),
+                                            nova_multipart_file_handler:handle_end(State1)
+                                    end),
+                 receive {'DOWN', Monitor, process, Pid, Reason} -> ?assertEqual(stopped, Reason) end,
+                 ?assertEqual(#{files => 0, bytes => 0}, nova_multipart_spool:usage()),
+                 ?assertEqual({ok, []}, file:list_dir(Dir))
+             after
+                 meck:unload(nova_multipart_spool)
+             end
+         end
+     end}.
+
+part_is_refused_without_the_spool_test() ->
+    PartInfo = #{name => ~"upload", filename => ~"x.bin", content_type => ~"application/octet-stream"},
+    ?assertEqual({error, spool_not_running}, nova_multipart_file_handler:init(PartInfo, #{dir => "/tmp"})).
+
+part_past_the_file_limit_is_refused_test_() ->
+    {setup, fun() -> with_limits(#{max_files => 1}) end, fun without_limits/1,
+     fun(Dir) ->
+         fun() ->
+             PartInfo = #{name => ~"upload", filename => ~"x.bin", content_type => ~"application/octet-stream"},
+             {ok, _State} = nova_multipart_file_handler:init(PartInfo, #{dir => Dir}),
+             ?assertEqual({error, spool_full}, nova_multipart_file_handler:init(PartInfo, #{dir => Dir})),
+             ?assertMatch({ok, [_OnlyTheFirst]}, file:list_dir(Dir))
+         end
+     end}.
+
+chunk_past_the_byte_limit_is_refused_test_() ->
+    {setup, fun() -> with_limits(#{max_bytes => 10}) end, fun without_limits/1,
+     fun(Dir) ->
+         fun() ->
+             PartInfo = #{name => ~"upload", filename => ~"x.bin", content_type => ~"application/octet-stream"},
+             {ok, State} = nova_multipart_file_handler:init(PartInfo, #{dir => Dir}),
+             {ok, State1} = nova_multipart_file_handler:handle_data(~"12345678", State),
+             ?assertEqual({error, spool_full}, nova_multipart_file_handler:handle_data(~"901", State1)),
+             ok = nova_multipart_file_handler:handle_abort(spool_full, State1),
+             ?assertEqual({ok, []}, file:list_dir(Dir)),
+             ?assertEqual(#{files => 0, bytes => 0}, nova_multipart_spool:usage())
+         end
+     end}.
+
+with_limits(Limits) ->
+    application:set_env(nova, multipart_spool, Limits),
+    setup().
+
+without_limits(Dir) ->
+    application:unset_env(nova, multipart_spool),
+    teardown(Dir).
 
 store(Dir, Filename, Args) ->
     PartInfo = #{name => <<"upload">>, filename => Filename, content_type => <<"application/octet-stream">>},
