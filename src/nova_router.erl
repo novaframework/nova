@@ -173,7 +173,8 @@ route(Req = #{host := Host, path := Path, method := Method}, Env, Dispatch) ->
             AllowHeader = iolist_to_binary(lists:join(<<", ">>, AllowedMethods)),
             %% Set the 'allow'-header
             Req1 = cowboy_req:set_resp_header(<<"allow">>, AllowHeader, Req),
-            render_status_page('_', 405, #{error => "Method not allowed"}, Req1, Env);
+            {ok, Req2, Env1} = render_status_page('_', 405, #{error => "Method not allowed"}, Req1, Env),
+            {ok, with_preflight_plugins(Req2, Host, Path, Dispatch), Env1};
         {ok, Bindings, #nova_handler_value{app = App, callback = Callback, secure = Secure, plugins = RoutePlugins,
                                            extra_state = ExtraState}} ->
             {Route, Plugins} = take_route(RoutePlugins),
@@ -702,6 +703,32 @@ take_route(Plugins)                          -> {undefined, Plugins}.
 
 put_route(undefined, Req) -> Req;
 put_route(Route, Req)     -> Req#{nova_route => Route}.
+
+with_preflight_plugins(Req = #{method := ~"OPTIONS"}, Host, Path, Dispatch) ->
+    case cowboy_req:header(~"origin", Req) =/= undefined andalso
+        cowboy_req:header(~"access-control-request-method", Req) of
+        Requested when is_binary(Requested) ->
+            case route_plugins(nova_routing_trie:find(Host, Path, Requested, Dispatch)) of
+                undefined ->
+                    Req;
+                RoutePlugins ->
+                    {_Route, Plugins} = take_route(RoutePlugins),
+                    Ahead = [Entry || Entry = {Callback, _Options} <- proplists:get_value(pre_request, Plugins, []),
+                                      erlang:fun_info(Callback, name) =:= {name, pre_security}],
+                    Req#{plugins => lists:keystore(pre_request, 1, proplists:delete(after_security, Plugins),
+                                                   {pre_request, Ahead})}
+            end;
+        _ ->
+            Req
+    end;
+with_preflight_plugins(Req, _Host, _Path, _Dispatch) ->
+    Req.
+
+route_plugins({ok, _Bindings, Value})            -> route_plugins(Value);
+route_plugins({ok, _Bindings, Value, _Pathinfo}) -> route_plugins(Value);
+route_plugins(#nova_handler_value{plugins = Plugins})   -> Plugins;
+route_plugins(#cowboy_handler_value{plugins = Plugins}) -> Plugins;
+route_plugins(_NoRoute)                          -> undefined.
 
 route_extra_state(#{extra_state := ExtraState}, _Group) -> ExtraState;
 route_extra_state(_Options, #{extra_state := ExtraState}) -> ExtraState;
