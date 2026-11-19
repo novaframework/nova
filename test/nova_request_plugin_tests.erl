@@ -4,8 +4,8 @@
 %% Logger handler callback: forwards reports to the process that added it.
 -export([log/2]).
 
--define(SETUP, fun() -> nova_test_helper:setup_nova_env() end).
--define(CLEANUP, fun(Prev) -> nova_test_helper:cleanup_nova_env(Prev) end).
+-define(SETUP, fun nova_test_helper:setup_nova_env/0).
+-define(CLEANUP, fun nova_test_helper:cleanup_nova_env/1).
 
 %%====================================================================
 %% should_read_body/1
@@ -127,6 +127,19 @@ modulate_state_decode_json_post_test_() ->
          ?assertEqual(<<"test">>, maps:get(<<"name">>, JSON))
      end}.
 
+%% {json_lib, json} (OTP json) returns the term itself instead of {ok, Term};
+%% every JSON body used to be answered with a 400.
+modulate_state_decode_json_with_otp_json_test_() ->
+    {setup,
+     fun() -> Prev = nova_test_helper:setup_nova_env(), application:set_env(nova, json_lib, json), Prev end,
+     fun(Prev) -> application:unset_env(nova, json_lib), nova_test_helper:cleanup_nova_env(Prev) end,
+     fun() ->
+         Req = nova_test_helper:with_json_body(~"{\"name\":\"test\"}",
+                                               nova_test_helper:mock_req(~"POST", ~"/")),
+         {ok, Req1, state} = nova_request_plugin:modulate_state(Req, [{decode_json_body, true}], state),
+         ?assertEqual(#{~"name" => ~"test"}, maps:get(json, Req1))
+     end}.
+
 %%====================================================================
 %% modulate_state/3 — decode_json_body on POST with empty body -> stop
 %%====================================================================
@@ -139,6 +152,75 @@ modulate_state_decode_json_empty_body_test_() ->
          Req2 = Req1#{body => <<>>},
          {stop, _, state} = nova_request_plugin:modulate_state(
              Req2, [{decode_json_body, true}], state)
+     end}.
+
+%% A body that is not JSON is somebody's data all the same. The log says
+%% what kind of error it is and where, and has none of the body.
+json_that_does_not_decode_is_logged_without_the_body_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Post = fun(Body) ->
+                        Req = nova_test_helper:with_content_type(~"application/json",
+                                                                 nova_test_helper:mock_req(~"POST", ~"/")),
+                        Req#{body => Body}
+                end,
+         [begin
+              {{stop, _Req, state}, Events} =
+                  nova_test_log:collect(fun() ->
+                                                nova_request_plugin:modulate_state(Post(Body), [{decode_json_body, true}],
+                                                                                   state)
+                                        end),
+              ?assertMatch([{warning, {report, Said}}], Events),
+              ?assertEqual(nomatch, string:find(io_lib:format("~0p", [Events]), "hunter2"))
+          end || {Body, Said} <- [{~"{\"password\":\"hunter2\" x}",
+                                   #{status_code => 400, msg => ~"Request refused", reason => ~"Malformed JSON body",
+                                     error => invalid_byte, position => 22}},
+                                  {~"{\"password\":\"\\uhunter2\"}",
+                                   #{status_code => 400, msg => ~"Request refused", reason => ~"Malformed JSON body",
+                                     error => unexpected_sequence, position => 13}},
+                                  {~"{\"password\":\"hunter2\",\"password\":\"hunter2\"}",
+                                   #{status_code => 400, msg => ~"Request refused", reason => ~"Malformed JSON body",
+                                     error => duplicate_key}},
+                                  {~"", #{status_code => 400, msg => ~"Request refused",
+                                          reason => ~"Empty JSON body"}}]]
+     end}.
+
+%% Media types are case-insensitive; a byte prefix match missed these.
+modulate_state_content_type_case_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Post = fun(ContentType, Body) ->
+                        (nova_test_helper:with_content_type(ContentType, nova_test_helper:mock_req(~"POST", ~"/")))#{body => Body}
+                end,
+         {ok, Json, state} = nova_request_plugin:modulate_state(
+                               Post(~"Application/JSON; charset=utf-8", ~"{\"a\":1}"), [{decode_json_body, true}], state),
+         ?assertEqual(#{~"a" => 1}, maps:get(json, Json)),
+         {ok, Form, state} = nova_request_plugin:modulate_state(
+                               Post(~"Application/X-WWW-Form-Urlencoded", ~"a=1"), [{read_urlencoded_body, true}], state),
+         ?assertEqual(#{~"a" => ~"1"}, maps:get(params, Form)),
+         {ok, Other, state} = nova_request_plugin:modulate_state(
+                                Post(~"text/plain", ~"{}"), [{decode_json_body, true}], state),
+         ?assertNot(maps:is_key(json, Other))
+     end}.
+
+%% RFC 6839: any application/*+json type is JSON; types that only start with
+%% application/json are not.
+modulate_state_json_suffix_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Decode = fun(ContentType) ->
+                          Req = (nova_test_helper:with_content_type(ContentType, nova_test_helper:mock_req(~"POST", ~"/")))#{body => ~"{\"a\":1}"},
+                          {ok, Req0, state} = nova_request_plugin:modulate_state(Req, [{decode_json_body, true}], state),
+                          maps:get(json, Req0, undefined)
+                  end,
+         ?assertEqual(#{~"a" => 1}, Decode(~"application/vnd.api+json")),
+         ?assertEqual(#{~"a" => 1}, Decode(~"application/merge-patch+json")),
+         ?assertEqual(#{~"a" => 1}, Decode(~"Application/Problem+JSON; charset=utf-8")),
+         ?assertEqual(#{~"a" => 1}, Decode(~"application/json; charset=utf-8")),
+         ?assertEqual(undefined, Decode(~"application/json-seq")),
+         ?assertEqual(undefined, Decode(~"application/+json")),
+         ?assertEqual(undefined, Decode(~"text/vnd.x+json")),
+         ?assertEqual(undefined, Decode(~"application/x+json+xml"))
      end}.
 
 %%====================================================================

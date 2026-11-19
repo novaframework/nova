@@ -70,24 +70,10 @@ modulate_state(Req, [], State) ->
 
 modulate_state( Req = #{method := Method}, [{decode_json_body, true}|Tail], State) when Method =:= <<"GET">>; Method =:= <<"DELETE">> ->
     modulate_state(Req, Tail, State);
-modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}, body := <<>>}, [{decode_json_body, true}|_Tl], State) ->
-    Req400 = cowboy_req:reply(400, Req),
-    logger:warning(#{status_code => 400,
-                     msg => "Failed to decode json.",
-                     error => "No body to decode."}),
-    {stop, Req400, State};
-modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}, body := Body}, [{decode_json_body, true}|Tl], State) ->
-    %% Decode the data
-    JsonLib = nova:get_env(json_lib, thoas),
-    case JsonLib:decode(Body) of
-        {ok, JSON} ->
-            modulate_state(Req#{json => JSON}, Tl, State);
-        Error ->
-            Req400 = cowboy_req:reply(400, Req),
-            logger:warning(#{status_code => 400,
-                             msg => "Failed to decode json.",
-                             error => Error}),
-            {stop, Req400, State}
+modulate_state(Req = #{body := Body}, [{decode_json_body, true}|Tl], State) ->
+    case is_json(content_type(Req)) of
+        true -> decode_json(Req, Body, Tl, State);
+        false -> modulate_state(Req, Tl, State)
     end;
 modulate_state(Req = #{body := Body}, [{read_urlencoded_body, true}|Tl], State) ->
     case content_type(Req) of
@@ -114,6 +100,25 @@ modulate_state(Req, [_|Tl], State) ->
 refuse(Status, Reason, Req, State) ->
     ?LOG_WARNING(#{msg => ~"Request refused", reason => Reason, status_code => Status}),
     {stop, {status, Status}, Req, State}.
+
+decode_json(Req, <<>>, _Tl, State) ->
+    ?LOG_WARNING(#{msg => ~"Request refused", reason => ~"Empty JSON body", status_code => 400}),
+    {stop, cowboy_req:reply(400, Req), State};
+decode_json(Req, Body, Tl, State) ->
+    case nova_json:try_decode(Body) of
+        {ok, JSON} ->
+            modulate_state(Req#{json => JSON}, Tl, State);
+        {error, _Reason, Why} ->
+            ?LOG_WARNING(Why#{msg => ~"Request refused", reason => ~"Malformed JSON body", status_code => 400}),
+            {stop, cowboy_req:reply(400, Req), State}
+    end.
+
+is_json({~"application", ~"json"}) ->
+    true;
+is_json({~"application", SubType}) when byte_size(SubType) > 5 ->
+    binary:part(SubType, byte_size(SubType), -5) =:= ~"+json";
+is_json(_) ->
+    false.
 
 content_type(Req) ->
     try cowboy_req:parse_header(~"content-type", Req) of
