@@ -21,11 +21,26 @@ With `redact => true` in its configuration the formatter takes request data and 
          system_time_to_iso8601_nano/1]).
 
 %%%_* Types ============================================================
+-doc """
+The configuration of the formatter. All keys are optional.
+
+- `new_line` - end every entry with a line break. Default `false`.
+- `new_line_type` - the line break: `nl` or `unix` for `\n` (the default),
+  `crlf` or `windows` for `\r\n`, `cr` or `macos9` for `\r`.
+- `key_mapping` - renames keys of the entry, as `#{From => To}`.
+- `format_funs` - funs applied to the value of a key, after the renaming, as
+  `#{Key => Fun}`.
+- `meta_with` - the only metadata keys to include.
+- `meta_without` - metadata keys to leave out. Default `[report_cb]`.
+- `redact` - take request data and secrets out of the entry. Default `false`.
+""".
 -type config() :: #{
     new_line => boolean(),
     new_line_type => nl | crlf | cr | unix | windows | macos9,
     key_mapping => #{atom() => atom()},
     format_funs => #{atom() => fun((_) -> _)},
+    meta_with => [atom()],
+    meta_without => [atom()],
     redact => boolean()
 }.
 
@@ -38,6 +53,12 @@ With `redact => true` in its configuration the formatter takes request data and 
 
 %%%_* Code =============================================================
 %%%_ * API -------------------------------------------------------------
+-doc """
+The formatter callback of `logger`. Returns the log event as one JSON object:
+the keys of a report, or `text` for a string or a format with arguments,
+merged with `level` and the metadata. A metadata key replaces a report key
+of the same name.
+""".
 -spec format(logger:log_event(), config()) -> unicode:chardata().
 format(
     #{msg := {report, #{format := Format, args := Args, label := {error_logger, _}}}} = Map, Config
@@ -56,18 +77,26 @@ format(Map = #{msg := {string, String}}, Config) ->
 format(Map = #{msg := {Format, Terms}}, Config) ->
     format(Map#{msg := {string, rendered(Format, Terms, Config)}}, Config).
 
-%%% Useful for converting logger:timestamp() to a readable timestamp.
+-doc """
+Formats a system time in microseconds, such as `logger:timestamp/0`, as an
+RFC 3339 timestamp in UTC with microsecond precision. Meant for
+`format_funs`.
+""".
 -spec system_time_to_iso8601(integer()) -> binary().
 system_time_to_iso8601(Epoch) ->
     system_time_to_iso8601(Epoch, microsecond).
 
+-doc """
+As `system_time_to_iso8601/1`, with nanosecond precision. The argument is
+still in microseconds.
+""".
 -spec system_time_to_iso8601_nano(integer()) -> binary().
 system_time_to_iso8601_nano(Epoch) ->
     system_time_to_iso8601(1000 * Epoch, nanosecond).
 
--spec system_time_to_iso8601(integer(), erlang:time_unit()) -> binary().
+-spec system_time_to_iso8601(integer(), microsecond | nanosecond) -> binary().
 system_time_to_iso8601(Epoch, Unit) ->
-    binary:list_to_bin(calendar:system_time_to_rfc3339(Epoch, [{unit, Unit}, {offset, "Z"}])).
+    iolist_to_binary(calendar:system_time_to_rfc3339(Epoch, [{unit, Unit}, {offset, "Z"}])).
 
 %%%_* Private functions ================================================
 -spec rendered(io:format(), [term()], config()) -> io_lib:chars().
@@ -432,7 +461,7 @@ jsonify_types_test() ->
     %% pid
     ?assert(is_binary(jsonify(self()))),
     %% function
-    ?assert(is_binary(jsonify(fun erlang:now/0))),
+    ?assert(is_binary(jsonify(fun erlang:monotonic_time/0))),
     %% list (string)
     ?assertEqual(<<"hello">>, jsonify("hello")),
     %% list (non-string, falls through to io_lib:format)
