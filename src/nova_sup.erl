@@ -241,11 +241,7 @@ start_cowboy(Configuration) ->
                 ?LOG_ERROR(#{msg => <<"You need to define bootstrap_application option in configuration">>}),
                 throw({error, no_nova_app_defined});
             App ->
-                ExtraApps = application:get_env(App, nova_apps, []),
-                %% nova is compiled last so that its own 404/500 routes act as
-                %% defaults. Routes are first-wins, so compiling nova first
-                %% made an application's own status-code routes unreachable.
-                nova_router:compile_fresh(resolve_nova_apps([App | ExtraApps] ++ [nova]), nova_dispatch)
+                nova_router:compile_fresh(resolve_nova_apps(with_nova_apps(App) ++ [nova]), nova_dispatch)
         end,
 
     Host = maps:get(ip, Configuration, {0, 0, 0, 0}),
@@ -289,8 +285,7 @@ https_notice(false) ->
 start_listener(App, Host, Port, Configuration) ->
     Ref = {?NOVA_LISTENER, App, Port},
     DispatchKey = {nova_dispatch, App, Port},
-    ExtraApps = application:get_env(App, nova_apps, []),
-    Dispatch = nova_router:compile_fresh(resolve_nova_apps([App | ExtraApps] ++ [nova]), DispatchKey),
+    Dispatch = nova_router:compile_fresh(resolve_nova_apps(with_nova_apps(App) ++ [nova]), DispatchKey),
     CowboyOptions = cowboy_options(Configuration, DispatchKey, Dispatch),
     case bind(Ref, Host, Port, Configuration, CowboyOptions) of
         {ok, Tls} ->
@@ -315,8 +310,7 @@ attach_application(App, Listener = #nova_listener{ref = Ref, apps = Apps, bind =
         true ->
             {error, {already_started, App}};
         false ->
-            ExtraApps = application:get_env(App, nova_apps, []),
-            nova_router:compile(resolve_nova_apps([App | ExtraApps]), DispatchKey),
+            nova_router:compile(resolve_nova_apps(with_nova_apps(App)), DispatchKey),
             register_listener(Listener#nova_listener{apps = Apps ++ [App]}),
             ?LOG_NOTICE(#{msg => <<"Added Nova application to an existing listener">>,
                           app => App, port => Port, listener => Ref}),
@@ -442,22 +436,87 @@ get_version(Application) ->
 
 -spec resolve_nova_apps([nova_app()]) -> [nova_app()].
 resolve_nova_apps(Apps) ->
-    {Resolved, _Seen} = resolve_nova_apps(Apps, [], []),
+    {Resolved, _Seen} = resolve_nova_apps(Apps, [], [], []),
     lists:reverse(Resolved).
 
--spec resolve_nova_apps([nova_app()], [nova_app()], [atom()]) -> {[nova_app()], [atom()]}.
-resolve_nova_apps([], Acc, Seen) ->
+-spec resolve_nova_apps([nova_app()], [nova_app()], [{atom(), term()}], [atom()]) ->
+          {[nova_app()], [{atom(), term()}]}.
+resolve_nova_apps([], Acc, Seen, _Around) ->
     {Acc, Seen};
-resolve_nova_apps([App | Rest], Acc, Seen) ->
+resolve_nova_apps([App | Rest], Acc, Seen, Around) ->
     Name = nova_app_name(App),
-    case lists:member(Name, Seen) of
-        true ->
-            resolve_nova_apps(Rest, Acc, Seen);
+    Security = security_in_force(App),
+    case lists:keyfind(Name, 1, Seen) of
         false ->
-            Nested = application:get_env(Name, nova_apps, []),
-            {Acc0, Seen0} = resolve_nova_apps(Nested, [App | Acc], [Name | Seen]),
-            resolve_nova_apps(Rest, Acc0, Seen0)
+            {Acc0, Seen0} = resolve_nova_apps(nested_nova_apps(App), [App | Acc], [{Name, Security} | Seen],
+                                              [Name | Around]),
+            resolve_nova_apps(Rest, Acc0, Seen0, Around);
+        {Name, Mounted} when Mounted =:= Security ->
+            resolve_nova_apps(Rest, Acc, Seen, Around);
+        {Name, Mounted} ->
+            case lists:member(Name, Around) of
+                true ->
+                    resolve_nova_apps(Rest, Acc, Seen, Around);
+                false ->
+                    ?LOG_ERROR(#{msg => ~"Application is mounted by two nova_apps entries that ask for different security callbacks. Mount it once, or give both entries the same secure and override_secure",
+                                 app => Name, mounted_with => in_words(Mounted), also_asked_for => in_words(Security)}),
+                    throw({error, {nova_app_mounted_twice, Name}})
+            end
     end.
+
+-spec security_in_force(nova_app()) -> {[term()], [term()]}.
+security_in_force(App) ->
+    Options = nova_app_options(App),
+    {[callback(Secure) || Secure <- nova_router:secures_in_force(Options)],
+     [callback(Override) || Override <- nova_router:overrides_in_force(Options)]}.
+
+callback({Mod, Fun}) when is_atom(Mod), is_atom(Fun) -> fun Mod:Fun/1;
+callback(Other) -> Other.
+
+in_words({Secures, Overrides}) ->
+    #{secure => Secures, override_secure => Overrides}.
+
+-spec with_nova_apps(atom()) -> [nova_app()].
+with_nova_apps(App) ->
+    case [Entry || Entry <- configured_nova_apps(App), nova_app_name(Entry) =:= App] of
+        [Own | _] ->
+            notice_own_entry(App, nova_app_options(Own)),
+            [Own];
+        [] ->
+            [App]
+    end.
+
+notice_own_entry(App, Options) when map_size(Options) > 0 ->
+    ?LOG_NOTICE(#{msg => ~"Application has an entry for itself in its nova_apps, and is compiled with its options",
+                  app => App, options => lists:sort(maps:keys(Options))});
+notice_own_entry(_App, _Options) ->
+    ok.
+
+-spec nested_nova_apps(nova_app()) -> [nova_app()].
+nested_nova_apps(App) ->
+    Nested = configured_nova_apps(nova_app_name(App)),
+    case security_in_force(App) of
+        {[], []} ->
+            Nested;
+        {Secures, Overrides} ->
+            [{nova_app_name(NestedApp), (nova_app_options(NestedApp))#{inherited_secure => Secures,
+                                                                        inherited_override_secure => Overrides}}
+             || NestedApp <- Nested]
+    end.
+
+-spec configured_nova_apps(atom()) -> [nova_app()].
+configured_nova_apps(Name) ->
+    case application:get_env(Name, nova_apps, []) of
+        Entries when is_list(Entries) -> [nova_app(Entry) || Entry <- Entries]
+    end.
+
+-spec nova_app(term()) -> nova_app().
+nova_app({Name, Options}) when is_atom(Name), is_map(Options) -> {Name, Options};
+nova_app(Name) when is_atom(Name)                             -> Name.
+
+-spec nova_app_options(nova_app()) -> map().
+nova_app_options({_App, Options}) -> Options;
+nova_app_options(_App)            -> #{}.
 
 %% A nova_app is either the application name or {Name, Options}.
 -spec nova_app_name(nova_app()) -> atom().
