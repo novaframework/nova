@@ -5,9 +5,12 @@
 
 -include_lib("kernel/include/logger.hrl").
 
--type key() :: max_sessions.
+-type key() :: max_sessions |
+               secret_key_base.
 -export_type([key/0]).
 
+-define(MIN_SECRET_BYTES, 32).
+-define(MIN_DISTINCT_BYTES, 8).
 -define(DEFAULT_MAX_SESSIONS, 1000000).
 
 -spec validate() -> ok.
@@ -26,19 +29,31 @@ value(Key) ->
     end.
 
 -spec checked(Key :: key(), Value :: term()) -> {ok, term()} | {error, Reason :: term()}.
+checked(secret_key_base, undefined) ->
+    {ok, []};
+checked(secret_key_base, Secret) when is_binary(Secret) ->
+    checked(secret_key_base, [Secret]);
+checked(secret_key_base, Value) ->
+    case secrets(Value) of
+        {ok, Secrets} -> {ok, [nova_secret:derived(Secret) || Secret <- Secrets]};
+        error -> {error, redacted}
+    end;
 checked(max_sessions, Value) when Value =:= infinity; is_integer(Value), Value > 0 ->
     {ok, Value};
 checked(_Key, Value) ->
     {error, Value}.
 
 -spec expected(Key :: key()) -> binary().
+expected(secret_key_base) ->
+    ~"secret_key_base must be a binary of at least 32 bytes out of a random source, or a list of such. A value that repeats a few bytes, an example out of the documentation or a ${VARIABLE} that was not filled in is refused. base64:encode(crypto:strong_rand_bytes(48)) in an Erlang shell, or openssl rand -base64 48, makes one";
 expected(max_sessions) -> ~"max_sessions must be infinity or an integer above 0".
 
 -spec keys() -> [key()].
 keys() ->
-    [max_sessions].
+    [secret_key_base, max_sessions].
 
 -spec default(key()) -> term().
+default(secret_key_base) -> undefined;
 default(max_sessions) -> ?DEFAULT_MAX_SESSIONS.
 
 -spec valid(key()) -> term().
@@ -50,3 +65,43 @@ valid(Key) ->
             ?LOG_ERROR(#{msg => expected(Key), setting => Key, value => Reason}),
             erlang:error({invalid_setting, Key, Reason})
     end.
+
+-spec secrets(term()) -> {ok, [binary()]} | error.
+secrets([Secret]) when is_binary(Secret), byte_size(Secret) >= ?MIN_SECRET_BYTES ->
+    case is_plainly_not_random(Secret) of
+        false -> {ok, [Secret]};
+        true -> error
+    end;
+secrets([Secret | Rest]) when is_binary(Secret), byte_size(Secret) >= ?MIN_SECRET_BYTES ->
+    case is_plainly_not_random(Secret) orelse secrets(Rest) of
+        {ok, Secrets} -> {ok, [Secret | Secrets]};
+        _NotSecrets -> error
+    end;
+secrets(_NotSecrets) ->
+    error.
+
+-spec is_plainly_not_random(Secret :: binary()) -> boolean().
+is_plainly_not_random(Secret) ->
+    length(lists:usort(binary_to_list(Secret))) < ?MIN_DISTINCT_BYTES orelse
+        lists:member(Secret, documented_examples()) orelse is_variable_not_filled_in(Secret).
+
+-spec documented_examples() -> [binary()].
+documented_examples() ->
+    [~"at least 32 bytes that every node of the system is given",
+     ~"the-new-secret-of-at-least-32-bytes-0001",
+     ~"the-old-secret-of-at-least-32-bytes-0000"].
+
+-spec is_variable_not_filled_in(Secret :: binary()) -> boolean().
+is_variable_not_filled_in(<<"${", Name/binary>>) ->
+    is_variable_name(Name);
+is_variable_not_filled_in(_Secret) ->
+    false.
+
+-spec is_variable_name(binary()) -> boolean().
+is_variable_name(<<"}">>) ->
+    true;
+is_variable_name(<<Char, Rest/binary>>)
+  when Char >= $A, Char =< $Z; Char >= $a, Char =< $z; Char >= $0, Char =< $9; Char =:= $_ ->
+    is_variable_name(Rest);
+is_variable_name(_NotAName) ->
+    false.

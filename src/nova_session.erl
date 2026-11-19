@@ -3,6 +3,18 @@
 -moduledoc """
 All kind of operations on sessions is handled by the nova_session-module. The module also presents a behaviour that can be used to create customized backends for the session-data.
 
+The session id lives in the `__Host-session_id` cookie, and in `session_id`
+when the `environment` is `dev` (see `session_cookie_name` in the
+configuration guide). A browser keeps a cookie with the `__Host-` prefix only
+when it is `Secure`, has `Path=/` and no `Domain`, so no other host of the
+domain can set or shadow it. `nova_stream_h` issues it with the response of the
+first request that writes to the session, is given a token by
+`nova_csrf_plugin` or is upgraded to a websocket, so visitors that do none of
+these get no cookie. A request carrying two or more different session ids
+is treated as having no session. A request whose Cookie header does not parse
+gets a session for that request only and no cookie, so a session cookie the
+client already holds is not overwritten.
+
 Sign a user in with `sign_in/3` and out with `delete/1`. `sign_in/3` moves
 the client to a new session id, stores who signed in under it and returns the
 request that carries the new id. That is the defence against session
@@ -13,12 +25,38 @@ factor, a password change, a higher role). As defence in depth, a presented
 id the backend does not know is ignored and replaced, so a client cannot
 simply choose its own session id.
 
+With `secret_key_base` set in the `nova` environment, the ids Nova makes are
+signed with a key of that secret. A client can then hold an id that no
+session is stored under yet, which is what a visitor of a page with a token
+of `nova_csrf_plugin` gets, and the first `set/3` of its request stores the
+session under that id and leaves the cookie as it is. The id of a client
+changes with `sign_in/3`, `renew/1` and `delete/1` and with nothing else, so
+an application that writes who is signed in with `set/3` alone signs in
+whoever holds the id, also somebody who put it in the browser of the user. An id that is
+not signed by a secret in use is replaced as above. So is one whose session
+the request has read, deleted or renewed before it writes: what brought a
+session back that another request ended would not be a new one. A signed id
+is the 44 characters Nova handed out and nothing else: the same bytes
+written another way, with whitespace in it or other bits to spare in its
+last character, are an id nobody signed.
+
 A session that was deleted, by `delete/1`, `renew/1` or `sign_in/3`, does
 not come back. A request that was on its way when another one ended its
 session writes to a session of its own, under another id, and never under
 the one the client was moved off. `nova_session_ets` sees to that for five
 minutes after a session was deleted, and a backend of your own does with
 `c:session_ended/1`.
+
+Session changes reach the cookie only when they are made from the process
+serving the request (where controllers, plugins and `c:nova_websocket:init/1`
+run). A process spawned with the request can read and write the session data,
+but the response will not carry a new cookie for it.
+
+Cookies are written by `nova_stream_h`. A `stream_handlers` configuration
+without it still stores session data, and `renew/1` and `delete/1` set or
+expire the cookie on the returned request themselves, but a `set/3` without a
+cookie does not start a session and presented ids are used without the check
+above.
 """.
 -export([
          get/2,
@@ -28,6 +66,7 @@ minutes after a session was deleted, and a backend of your own does with
          delete/2,
          sign_in/3,
          renew/1,
+         client_id/1,
          generate_session_id/0
         ]).
 
@@ -47,25 +86,43 @@ minutes after a session was deleted, and a backend of your own does with
 -define(DEFAULT_MAX_AGE, 1209600).
 -define(KNOWN, {?MODULE, known}).
 -define(KNOWN_FOR, 1000).
+-define(HAD_A_SESSION, {?MODULE, had_a_session}).
+-define(ID_RANDOM_BYTES, 16).
+-define(ID_SIGNATURE_BYTES, 16).
+-define(ID_CHARACTERS, 44).
 
 %%%===================================================================
 %%% Callbacks
 %%%===================================================================
 
-%% Get a value from a given session_id
+-doc """
+Called by `get/2` for the value stored under `Key` in the session
+`SessionId`. What it returns is returned from `get/2` as it is. Return
+`{error, not_found}` for a session or a key the backend does not have.
+""".
 -callback get_value(SessionId, Key) ->
     {ok, Value :: any()} |
     {error, Reason :: atom()}
         when SessionId :: binary(),
              Key :: binary().
 
-%% Set a value
+-doc """
+Called by `set/3` to store `Value` under `Key` in the session `SessionId`,
+which the backend creates when it does not have it. `Value` is any term, as
+it was given to `set/3`, and `c:get_value/2` has to return it as it was: a
+backend that stores binaries encodes it, for instance with
+`term_to_binary/1`, or returns `{error, Reason}` for a value it cannot store.
+
+What it returns is returned from `set/3` as it is. After `{error, Reason}`
+no session cookie is issued for the write. Any other return counts as a
+write.
+""".
 -callback set_value(SessionId, Key, Value) ->
     ok |
     {error, Reason :: atom()}
         when SessionId :: binary(),
              Key :: binary(),
-             Value :: binary().
+             Value :: term().
 
 -doc """
 Stores a value like `c:set_value/3`, for `set_provisional/3`. A session
@@ -80,20 +137,30 @@ A backend without it gets the value through `c:set_value/3`.
              Key :: binary(),
              Value :: term().
 
-%% Deletes a whole session
+-doc """
+Called by `delete/1`, `renew/1` and `sign_in/3` to drop the session
+`SessionId` and all its data. The return value is not used.
+""".
 -callback delete_value(SessionId) ->
     ok |
     {error, Reason :: atom()}
         when SessionId :: binary().
 
-%% Deletes a specific key of a session
+-doc """
+Called by `delete/2` to drop `Key` from the session `SessionId`. The return
+value is not used.
+""".
 -callback delete_value(SessionId, Key) ->
     ok |
     {error, Reason :: atom()}
         when SessionId :: binary(),
              Key :: binary().
 
-%% Start a server process for session backend, if necessary
+-doc """
+Starts the process of the backend, if it has one. When the backend exports
+it, `nova_sup` runs it as a permanent child that is started before the
+listener.
+""".
 -callback start_link() ->
     {ok, Pid :: pid()} |
     {error, Error :: {already_started, pid()}} |
@@ -110,13 +177,35 @@ A backend without it accepts every presented id.
 """.
 -callback session_exists(SessionId :: binary()) -> boolean().
 
--optional_callbacks([start_link/0, session_exists/1, set_provisional_value/3]).
+-doc """
+Tells whether the session with this id was deleted with `c:delete_value/1` a
+short while ago: at least for as long as a request to the application can
+take. Nova asks before it starts a session under a signed id that no session
+is stored under, so that a request that was on its way when its client
+signed out, or signed in, does not start one under the id the client was
+moved off. Such a request writes to a session of its own instead.
+
+A backend that has it should also refuse to store under such an id, and
+answer `{error, session_ended}` from `c:set_value/3` and
+`c:set_provisional_value/3`: the session may be deleted between the moment
+Nova asks `c:session_exists/1` and the write, and Nova stores what a backend
+refuses this way in a session of its own as well. `nova_session_ets`
+remembers a deleted id for five minutes, on every node.
+
+A backend without it relies on what the process of the request knows: a
+session it has read, deleted or renewed itself is not written again, and one
+that another request ended before this one touched it can be.
+""".
+-callback session_ended(SessionId :: binary()) -> boolean().
+
+-optional_callbacks([start_link/0, session_exists/1, session_ended/1, set_provisional_value/3]).
 
 %%%===================================================================
 %%% Public functions
 %%%===================================================================
+-doc "The value stored under `Key` in the session of the request, as it was given to `set/3`.".
 -spec get(Req :: cowboy_req:req(), Key :: binary()) ->
-          {ok, Value :: binary()} | {error, Reason :: atom()} | no_return().
+          {ok, Value :: term()} | {error, Reason :: atom()} | no_return().
 get(Req, Key) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
@@ -126,7 +215,13 @@ get(Req, Key) ->
             {error, not_found}
     end.
 
--spec set(Req :: cowboy_req:req(), Key :: binary(), Value :: binary()) ->
+-doc """
+Stores `Value` under `Key` in the session of the request. The value is
+handed to the session backend as it is. `nova_session_ets` keeps any term
+and returns it unchanged from `get/2`. A backend of your own decides what it
+can store, and returns `{error, Reason}` for a value it cannot.
+""".
+-spec set(Req :: cowboy_req:req(), Key :: binary(), Value :: term()) ->
           ok | {error, Reason :: atom()} | no_return().
 set(Req, Key, Value) ->
     write(set_value, Req, Key, Value).
@@ -270,8 +365,33 @@ renew(Req) ->
            end,
     {ok, with_session_id(NewSessionId, Req0)}.
 
--spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} |
-          {error, Reason :: atom()} | no_return().
+-doc false.
+-spec client_id(Req :: cowboy_req:req()) -> {ok, SessionId :: binary()} | {error, not_found} | no_return().
+client_id(Req) ->
+    case enabled() of
+        true ->
+            held_id(Req);
+        _ ->
+            ?LOG_ERROR(#{msg => ~"Session called but the 'use_sessions' option is set to false"}),
+            throw({nova_session, unsupported_session_used})
+    end.
+
+held_id(#{nova_session_presented := Presented}) ->
+    {ok, Presented};
+held_id(#{nova_session_id := SessionId} = Req) ->
+    notify(Req, {issued, SessionId}),
+    {ok, SessionId};
+held_id(Req) ->
+    case presented_session_id(Req) of
+        SessionId when is_binary(SessionId) -> {ok, SessionId};
+        _ -> {error, not_found}
+    end.
+
+-doc """
+Deletes `Key` from the session of the request and returns `{ok, Req}` with
+the request as it was given, also when the request has no session.
+""".
+-spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} | no_return().
 delete(Req, Key) ->
     case get_session_id(Req, write) of
         {ok, SessionId} ->
@@ -493,10 +613,12 @@ known(SessionId, read) ->
 known(SessionId, write) ->
     Known = backend_knows(SessionId),
     put(?KNOWN, {SessionId, Known, erlang:monotonic_time(millisecond)}),
+    _ = Known andalso put(?HAD_A_SESSION, SessionId),
     Known.
 
-ended(_SessionId) ->
+ended(SessionId) ->
     erase(?KNOWN),
+    put(?HAD_A_SESSION, SessionId),
     ok.
 
 backend_knows(SessionId) ->
@@ -513,6 +635,22 @@ backend_knows(SessionId) ->
             end;
         false ->
             true
+    end.
+
+backend_ended(SessionId) ->
+    Mod = get_session_module(),
+    _ = code:ensure_loaded(Mod),
+    case erlang:function_exported(Mod, session_ended, 1) of
+        true ->
+            try Mod:session_ended(SessionId) =/= false
+            catch
+                Class:Reason ->
+                    ?LOG_WARNING(#{msg => ~"Session backend failed to say whether a session has ended",
+                                   backend => Mod, class => Class, reason => nova_redact:term(Reason)}),
+                    true
+            end;
+        false ->
+            false
     end.
 
 get_session_module() ->
@@ -532,8 +670,8 @@ get_session_id(Req, Access) ->
 
 session_id(#{nova_session_id := SessionId}, _Access) ->
     {ok, SessionId};
-session_id(#{nova_session_presented := Presented, nova_session_pending := Pending}, Access) ->
-    case known(Presented, Access) of
+session_id(Req = #{nova_session_presented := Presented, nova_session_pending := Pending}, Access) ->
+    case known(Presented, Access) orelse may_start_under(Presented, Req) of
         true -> {ok, Presented};
         false -> {ok, Pending}
     end;
@@ -542,6 +680,34 @@ session_id(Req, _Access) ->
         SessionId when is_binary(SessionId) -> {ok, SessionId};
         _ -> {error, not_found}
     end.
+
+may_start_under(SessionId, #{nova_session_owner := Owner}) when Owner =:= self() ->
+    get(?HAD_A_SESSION) =/= SessionId andalso is_signed(SessionId) andalso not backend_ended(SessionId);
+may_start_under(_SessionId, _Req) ->
+    false.
+
+-spec is_signed(SessionId :: binary()) -> boolean().
+is_signed(<<SessionId:?ID_CHARACTERS/binary>>) ->
+    case nova_secret:keys(session_id) of
+        [] ->
+            false;
+        Keys ->
+            try base64:decode(SessionId) of
+                <<Random:?ID_RANDOM_BYTES/binary, Signature:?ID_SIGNATURE_BYTES/binary>> = Decoded ->
+                    crypto:hash_equals(base64:encode(Decoded), SessionId) andalso
+                        [] =/= [Key || Key <- Keys, crypto:hash_equals(Signature, id_signature(Key, Random))];
+                _AnotherLength ->
+                    false
+            catch
+                error:_NotBase64 -> false
+            end
+    end;
+is_signed(_AnotherLength) ->
+    false.
+
+-spec id_signature(Key :: binary(), Random :: binary()) -> binary().
+id_signature(Key, Random) ->
+    crypto:macN(hmac, sha256, Key, Random, ?ID_SIGNATURE_BYTES).
 
 with_session_id(SessionId, Req) ->
     (maps:without([nova_session_presented, nova_session_pending], Req))#{nova_session_id => SessionId}.
@@ -571,6 +737,17 @@ notify(#{pid := _, streamid := _, nova_session_owner := Owner} = Req, Event) whe
 notify(_Req, _Event) ->
     ok.
 
+-doc """
+A new session id: 32 random bytes in base64, or, with `secret_key_base` set,
+16 random bytes and 16 of their HMAC-SHA-256 under the key Nova has from the
+secret for session ids, in base64.
+""".
 -spec generate_session_id() -> {ok, binary()}.
 generate_session_id() ->
-    {ok, base64:encode(crypto:strong_rand_bytes(32))}.
+    case nova_secret:keys(session_id) of
+        [Key | _] ->
+            Random = crypto:strong_rand_bytes(?ID_RANDOM_BYTES),
+            {ok, base64:encode(<<Random/binary, (id_signature(Key, Random))/binary>>)};
+        [] ->
+            {ok, base64:encode(crypto:strong_rand_bytes(?ID_RANDOM_BYTES + ?ID_SIGNATURE_BYTES))}
+    end.

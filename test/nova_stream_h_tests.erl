@@ -29,6 +29,7 @@ setup() ->
     application:set_env(nova, session_manager, nova_session_ets),
     nova_once:forget({nova_session, ambiguous_cookie_warned}),
     {ok, Pid} = nova_session_ets:start_link(),
+    nova_once:forget({nova_stream_h, dropped}),
     Pid.
 
 cleanup(Pid) ->
@@ -49,6 +50,9 @@ stream_test_() ->
      [
       fun no_cookie_when_session_is_not_written/0,
       fun cookie_issued_when_session_is_written/0,
+      fun cookie_issued_for_an_id_that_is_handed_out/0,
+      fun handed_out_id_is_not_issued_over_a_presented_cookie/0,
+      fun handed_out_id_follows_what_the_session_does_next/0,
       fun default_cookie_attributes/0,
       fun dev_cookie_attributes/0,
       fun secure_over_https/0,
@@ -57,6 +61,7 @@ stream_test_() ->
       fun host_prefixed_cookie_name/0,
       fun two_session_cookies_mean_no_session/0,
       fun repeated_identical_cookie_is_one_session/0,
+      fun unparsable_cookie_header_never_sets_cookie/0,
       fun configured_cookie_attributes/0,
       fun invalid_cookie_opts_are_ignored/0,
       fun known_session_is_kept/0,
@@ -72,6 +77,13 @@ stream_test_() ->
       fun stale_write_after_delete/0,
       fun stream_reply_carries_cookie/0,
       fun status_with_a_reason_phrase_carries_cookie/0,
+      fun request_is_marked_for_nova_handler/0,
+      fun tells_whether_the_response_has_begun/0,
+      fun second_response_is_dropped/0,
+      fun response_after_the_headers_is_dropped/0,
+      fun responses_dropped_within_a_second_are_one_warning/0,
+      fun refused_headers_leave_room_for_the_answer_of_cowboy/0,
+      fun headers_cowboy_is_told_to_ignore_are_an_answer/0,
       fun sessions_disabled/0
      ]}.
 
@@ -90,6 +102,27 @@ cookie_issued_when_session_is_written() ->
     [Cookie] = set_cookies(respond(State1)),
     ?assertMatch(<<"__Host-session_id=", _/binary>>, Cookie),
     ?assertEqual(Id, cookie_value(Cookie)).
+
+%% nova_session:client_id/1 hands the id of the request to a client that
+%% sent no cookie. Nothing is stored for it.
+cookie_issued_for_an_id_that_is_handed_out() ->
+    {#{nova_session_id := Id}, State} = start(req()),
+    [Cookie] = set_cookies(respond(event({issued, Id}, State))),
+    ?assertEqual(Id, cookie_value(Cookie)),
+    ?assertNot(nova_session_ets:session_exists(Id)).
+
+handed_out_id_is_not_issued_over_a_presented_cookie() ->
+    {_Req, State} = start(req(~"__Host-session_id=held")),
+    ?assertEqual([], set_cookies(respond(event({issued, ~"other"}, State)))).
+
+handed_out_id_follows_what_the_session_does_next() ->
+    {#{nova_session_id := Id}, State} = start(req()),
+    Issued = event({issued, Id}, State),
+    [Written] = set_cookies(respond(event({written, Id}, Issued))),
+    ?assertEqual(Id, cookie_value(Written)),
+    [Renewed] = set_cookies(respond(event({renewed, ~"renewed"}, Issued))),
+    ?assertEqual(~"renewed", cookie_value(Renewed)),
+    ?assertEqual([], set_cookies(respond(event({deleted, ~"fresh"}, Issued)))).
 
 %% Behind a proxy that terminates TLS the request is plain http, so the cookie
 %% is Secure unless the environment is explicitly dev.
@@ -146,6 +179,18 @@ two_session_cookies_mean_no_session() ->
 repeated_identical_cookie_is_one_session() ->
     {Req, _} = start(req(~"__Host-session_id=same; __Host-session_id=same")),
     ?assertEqual(~"same", maps:get(nova_session_presented, Req)).
+
+%% The client may hold a valid session cookie Nova cannot read past the rest
+%% of the header, so a write, renew or delete leaves it alone.
+unparsable_cookie_header_never_sets_cookie() ->
+    {Req, State} = start(req(~"__Host-session_id=abc; =x")),
+    #{nova_session_id := Id} = Req,
+    ?assertNot(maps:is_key(nova_session_presented, Req)),
+    ?assertEqual({ok, Id}, nova_session:client_id(Req)),
+    ?assertEqual([], set_cookies(respond(event({issued, Id}, State)))),
+    ?assertEqual([], set_cookies(respond(event({written, Id}, State)))),
+    ?assertEqual([], set_cookies(respond(event({renewed, ~"renewed"}, State)))),
+    ?assertEqual([], set_cookies(respond(event({deleted, ~"fresh"}, State)))).
 
 secure_over_https() ->
     {#{nova_session_id := Id}, State} = start((req())#{scheme => ~"https"}),
@@ -280,6 +325,77 @@ status_with_a_reason_phrase_carries_cookie() ->
     ?assertEqual([Id], [cookie_value(Cookie) || Cookie <- set_cookies(Replied)]),
     ?assertEqual([Id], [cookie_value(Cookie) || Cookie <- set_cookies(Streamed)]).
 
+request_is_marked_for_nova_handler() ->
+    {Req, _State} = start(req()),
+    ?assertEqual(true, maps:get(nova_stream, Req)).
+
+tells_whether_the_response_has_begun() ->
+    {_Req, State} = start(req()),
+    ?assertEqual(false, response_begun(State)),
+    {[{headers, 200, _}], Streaming} = nova_stream_h:info(1, {headers, 200, #{}}, State),
+    ?assertEqual(headers, response_begun(Streaming)),
+    {[{data, fin, ~"chunk"}], Streamed} = nova_stream_h:info(1, {data, fin, ~"chunk"}, Streaming),
+    ?assertEqual(headers, response_begun(Streamed)),
+    {[{response, <<"200 OK">>, _, ~"whole"}], Answered} =
+        nova_stream_h:info(1, {response, <<"200 OK">>, #{}, ~"whole"}, State),
+    ?assertEqual(true, response_begun(Answered)).
+
+%% Cowboy stops the connection process when a request is answered twice.
+second_response_is_dropped() ->
+    {_Req, State} = start(req()),
+    {[{response, 200, _, ~"first"}], Answered} = nova_stream_h:info(1, {response, 200, #{}, ~"first"}, State),
+    {{[], Dropped}, [{warning, {report, #{status := 403, method := ~"GET"}}}]} =
+        nova_test_log:collect(fun() -> nova_stream_h:info(1, {response, 403, #{}, ~"second"}, Answered) end),
+    ?assertEqual({{[], Dropped}, []},
+                 nova_test_log:collect(fun() -> nova_stream_h:info(1, {headers, 200, #{}}, Dropped) end)),
+    ?assertEqual(true, response_begun(Dropped)).
+
+%% A controller that answers twice does it on every request, and the
+%% connection process is where the warning is logged from.
+responses_dropped_within_a_second_are_one_warning() ->
+    {_Req, State} = start((req())#{path => ~"/"}),
+    {[{response, 200, _, ~"first"}], Answered} = nova_stream_h:info(1, {response, 200, #{}, ~"first"}, State),
+    Again = fun() -> nova_stream_h:info(1, {response, 403, #{}, ~"second"}, Answered) end,
+    {{[], _}, [{warning, {report, #{status := 403, path := ~"/", not_logged := 0}}}]} = nova_test_log:collect(Again),
+    ?assertMatch({{[], _}, []}, nova_test_log:collect(fun() -> Again(), Again() end)).
+
+response_after_the_headers_is_dropped() ->
+    {_Req, State} = start(req()),
+    {[{headers, 200, _}], Streaming} = nova_stream_h:info(1, {headers, 200, #{}}, State),
+    {{[], Dropped}, [{warning, _}]} =
+        nova_test_log:collect(fun() -> nova_stream_h:info(1, {response, 500, #{}, ~"page"}, Streaming) end),
+    ?assertEqual(headers, response_begun(Dropped)),
+    ?assertMatch({[{data, fin, ~"chunk"}], _}, nova_stream_h:info(1, {data, fin, ~"chunk"}, Dropped)).
+
+%% Cowboy sends nothing when it refuses the headers of a response and answers
+%% 500 itself, through here.
+refused_headers_leave_room_for_the_answer_of_cowboy() ->
+    {_Req, State} = start(req()),
+    Refused = #{~"location" => ~"/next\r\nset-cookie: a=b"},
+    [begin
+         {[_Forwarded], State1} = nova_stream_h:info(1, Response, State),
+         ?assertEqual(false, response_begun(State1)),
+         ?assertMatch({[{response, 500, #{~"content-length" := ~"0"}, <<>>}], _},
+                      nova_stream_h:info(1, {response, 500, #{~"content-length" => ~"0"}, <<>>}, State1))
+     end || Response <- [{response, 302, Refused, <<>>}, {headers, 302, Refused}]].
+
+%% With invalid_response_headers set to ignore Cowboy sends them as they are.
+headers_cowboy_is_told_to_ignore_are_an_answer() ->
+    {[{next_req, _Req}], State} =
+        nova_stream_h:init(1, req(), #{stream_handlers => [?MODULE], invalid_response_headers => ignore}),
+    {[_Forwarded], Answered} =
+        nova_stream_h:info(1, {response, 302, #{~"location" => ~"/next\r\nset-cookie: a=b"}, <<>>}, State),
+    ?assertEqual(true, response_begun(Answered)).
+
+response_begun(State) ->
+    Ref = make_ref(),
+    {[], State} = nova_stream_h:info(1, {nova_response_begun, self(), Ref}, State),
+    receive
+        {Ref, Sent} -> Sent
+    after 0 ->
+            error(no_answer)
+    end.
+
 sessions_disabled() ->
     application:set_env(nova, use_sessions, false),
     {Req, State} = start(req()),
@@ -321,3 +437,8 @@ set_cookies(Headers) ->
 cookie_value(Cookie) ->
     [<<"__Host-session_id=", Value/binary>> | _] = binary:split(Cookie, ~";"),
     Value.
+
+%% Not a documented function of Cowboy, so a new Cowboy is checked for it here.
+cowboy_validates_response_headers_test() ->
+    {module, cowboy_http} = code:ensure_loaded(cowboy_http),
+    ?assert(erlang:function_exported(cowboy_http, validate_response_headers, 2)).
