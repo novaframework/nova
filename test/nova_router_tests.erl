@@ -295,42 +295,72 @@ plugins_empty_test_() ->
     end}.
 
 %%====================================================================
-%% normalize_plugins/1
+%% normalize_plugins/2
 %%====================================================================
 
 normalize_plugins_empty_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        ?assertEqual([], nova_router:normalize_plugins([]))
+        ?assertEqual([], nova_router:normalize_plugins([], order([])))
     end}.
 
+%% pre_request/4 waits for the security callback, and pre_security/4 of a
+%% plugin that has it runs ahead of it.
 normalize_plugins_single_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        Result = nova_router:normalize_plugins([{pre_request, nova_request_plugin, #{}}]),
-        ?assertMatch([{pre_request, [{_, #{}}]}], Result),
+        Result = nova_router:normalize_plugins([{pre_request, nova_request_plugin, #{}}], order([])),
+        ?assertEqual([{after_security, [{fun nova_request_plugin:pre_request/4, #{}}]},
+                      {pre_request, [{fun nova_request_plugin:pre_security/4, #{}}]}], Result),
         %% Verify the plugin was added to the global store
         Plugins = persistent_term:get(nova_plugins),
         ?assert(lists:member(nova_request_plugin, Plugins))
     end}.
 
-normalize_plugins_multiple_same_type_test_() ->
-    {setup, ?SETUP, ?CLEANUP, fun() ->
-        Result = nova_router:normalize_plugins([
-            {pre_request, nova_request_plugin, #{}},
-            {pre_request, nova_cors_plugin, #{}}
-        ]),
-        ?assertMatch([{pre_request, [_, _]}], Result)
-    end}.
+plugins_before_security_test_() ->
+    Group = #{app => an_app, prefix => "/admin", router_file => "router.erl"},
+    Plugins = [{pre_request, nova_request_plugin, #{}}, {pre_request, nova_cors_plugin, #{}},
+               {post_request, nova_csrf_plugin, #{}}],
+    [?_assertEqual([], nova_router:plugins_before_security(#{}, Plugins, Group)),
+     ?_assertEqual(all, nova_router:plugins_before_security(#{plugins_before_security => all}, Plugins, Group)),
+     ?_assertEqual(all, nova_router:plugins_before_security(#{plugins_before_security => all}, [], Group)),
+     ?_assertEqual([], nova_router:plugins_before_security(#{plugins_before_security => []}, [], Group)),
+     ?_assertEqual([nova_request_plugin],
+                   nova_router:plugins_before_security(#{plugins_before_security => [nova_request_plugin]},
+                                                       Plugins, Group)),
+     [{lists:flatten(io_lib:format("~0p", [Value])),
+       ?_assertThrow({error, {invalid_setting, plugins_before_security, Value}},
+                     nova_router:plugins_before_security(#{plugins_before_security => Value}, Plugins, Group))}
+      || Value <- [none, [~"nova_request_plugin"], nova_test_helper:improper_list([nova_request_plugin], another),
+                   [all],
+                   [nova_reqeust_plugin], [nova_request_plugin, nova_reqeust_plugin], [nova_cors_plugin],
+                   [nova_csrf_plugin], [nova_multipart_plugin]]]].
 
-normalize_plugins_different_types_test_() ->
-    {setup, ?SETUP, ?CLEANUP, fun() ->
-        Result = nova_router:normalize_plugins([
-            {pre_request, nova_request_plugin, #{}},
-            {post_request, nova_cors_plugin, #{}}
-        ]),
-        ?assertEqual(2, length(Result)),
-        ?assertMatch({pre_request, [_]}, lists:keyfind(pre_request, 1, Result)),
-        ?assertMatch({post_request, [_]}, lists:keyfind(post_request, 1, Result))
-    end}.
+%% The one of the nova environment is for every route group, so it may name
+%% a plugin this one does not have.
+plugins_before_security_of_the_environment_test() ->
+    ok = nova_test_settings:set(plugins_before_security, [nova_multipart_plugin]),
+    try
+        ?assertEqual([nova_multipart_plugin],
+                     nova_router:plugins_before_security(#{}, [{pre_request, nova_request_plugin, #{}}],
+                                                         #{app => an_app, prefix => "/", router_file => "router.erl"}))
+    after
+        nova_test_settings:unset(plugins_before_security)
+    end.
+
+plugins_before_security_that_is_refused_names_the_route_group_test() ->
+    {_, Events} = nova_test_log:collect(
+                    fun() ->
+                            ?assertThrow({error, _},
+                                         nova_router:plugins_before_security(
+                                           #{plugins_before_security => [nova_reqeust_plugin]},
+                                           [{pre_request, nova_request_plugin, #{}}],
+                                           #{app => an_app, prefix => "/admin", router_file => "router.erl"}))
+                    end),
+    ?assertMatch([#{setting := plugins_before_security, value := [nova_reqeust_plugin], app := an_app,
+                    prefix := "/admin", router_file := "router.erl"}],
+                 nova_test_log:errors(Events)).
+
+order(Before) ->
+    #{before => Before, secured => false}.
 
 %%====================================================================
 %% add_routes/2

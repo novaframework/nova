@@ -8,7 +8,7 @@
 pre_request_non_options_test() ->
     Req = nova_test_helper:mock_req(<<"GET">>, <<"/">>),
     Opts = #{allow_origins => <<"*">>},
-    {ok, Req1, my_state} = nova_cors_plugin:pre_request(Req, #{}, Opts, my_state),
+    {ok, Req1, my_state} = nova_cors_plugin:pre_security(Req, #{}, Opts, my_state),
     Headers = maps:get(resp_headers, Req1),
     ?assertEqual(<<"*">>, maps:get(<<"Access-Control-Allow-Origin">>, Headers)),
     ?assertEqual(<<"*">>, maps:get(<<"Access-Control-Allow-Headers">>, Headers)),
@@ -17,7 +17,7 @@ pre_request_non_options_test() ->
 pre_request_specific_origin_test() ->
     Req = nova_test_helper:mock_req(<<"POST">>, <<"/api">>),
     Opts = #{allow_origins => <<"https://example.com">>},
-    {ok, Req1, _} = nova_cors_plugin:pre_request(Req, #{}, Opts, state),
+    {ok, Req1, _} = nova_cors_plugin:pre_security(Req, #{}, Opts, state),
     Headers = maps:get(resp_headers, Req1),
     ?assertEqual(<<"https://example.com">>, maps:get(<<"Access-Control-Allow-Origin">>, Headers)).
 
@@ -28,7 +28,7 @@ pre_request_specific_origin_test() ->
 pre_request_options_stop_test() ->
     Req = nova_test_helper:mock_req(<<"OPTIONS">>, <<"/">>),
     Opts = #{allow_origins => <<"*">>},
-    {stop, Req1, my_state} = nova_cors_plugin:pre_request(Req, #{}, Opts, my_state),
+    {stop, Req1, my_state} = nova_cors_plugin:pre_security(Req, #{}, Opts, my_state),
     %% cowboy_req:reply/2 sets resp_status_code on the req
     ?assert(is_map(Req1)).
 

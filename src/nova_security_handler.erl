@@ -11,9 +11,14 @@
 
 execute(Req, Env = #{secure := Secure}) ->
     case check(Secure, Req, Env) of
-        {allowed, _Returned, Req1} -> {ok, Req1, Env};
+        {allowed, Returned, Req1} -> returned_stands(Returned, nova_plugin_handler:after_security(Req1, Env));
         {answered, Answer} -> Answer
     end.
+
+returned_stands({ok, AuthData}, {ok, Req, Env}) ->
+    {ok, Req#{auth_data => AuthData}, Env};
+returned_stands(_Returned, Result) ->
+    Result.
 
 check(false, Req, _Env) ->
     {allowed, none, Req};

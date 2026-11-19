@@ -3,16 +3,16 @@
 -behaviour(nova_plugin).
 
 -export([
-         pre_request/4,
+         pre_security/4,
          post_request/4,
          plugin_info/0
         ]).
 
 %%--------------------------------------------------------------------
 -doc "Pre-request callback".
--spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
+-spec pre_security(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
                          {ok, Req0 :: cowboy_req:req(), NewState :: any()}.
-pre_request(Req, _Env, #{allow_origins := Origins}, State) ->
+pre_security(Req, _Env, #{allow_origins := Origins}, State) ->
     ReqWithOptions = add_cors_headers(Req, Origins),
     continue(ReqWithOptions, State).
 

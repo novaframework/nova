@@ -70,6 +70,10 @@
 -type dispatch_key() :: term().
 -export_type([dispatch_key/0]).
 
+-type plugin() :: {Type :: atom(), Module :: module(), Options :: term()}.
+-type callback() :: {Callback :: fun(), Options :: term()}.
+-type order() :: #{before := all | [module()], secured := boolean()}.
+
 -spec compiled_apps() -> [{App :: atom(), Prefix :: list()}].
 compiled_apps() ->
     compiled_apps(?NOVA_DISPATCH).
@@ -364,6 +368,10 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     App = maps:get(app, Options),
     RouterFile = maps:get(router_file, Options),
 
+    Prefix = concat_strings(maps:get(prefix, Options, ""),
+                            maps:get(prefix, RouteInfo, "")),
+    Named = #{app => App, prefix => Prefix, router_file => RouterFile},
+
     Plugins = resolve_plugins(maps:get(plugin_strategy, Options, local_or_global), RouteInfo, RouterFile),
 
     Secure =
@@ -376,11 +384,10 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
                 normalize_secure(Override, RouterFile)
         end,
 
-    Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins),
+    Order = #{before => plugins_before_security(RouteInfo, Plugins, Named), secured => Secure =/= false},
+    Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins, Order),
                                 extra_state = maps:get(extra_state, RouteInfo, #{})},
 
-    Prefix = concat_strings(maps:get(prefix, Options, ""),
-                            maps:get(prefix, RouteInfo, "")),
     Host = maps:get(host, RouteInfo, '_'),
     SubApps = maps:get(apps, RouteInfo, []),
 
@@ -658,15 +665,56 @@ dedupe_plugins([Plugin|Tl], Seen, Acc) ->
 plugin_key({Type, PluginName, _Options}) -> {Type, PluginName};
 plugin_key(Plugin)                       -> Plugin.
 
-normalize_plugins(Plugins) ->
-    NormalizedPlugins = normalize_plugins(Plugins, []),
-    [{Type, lists:reverse(TypePlugins)} || {Type, TypePlugins} <- NormalizedPlugins].
+normalize_plugins(Plugins, Order) ->
+    Phased = lists:append([phased(Plugin, Order) || Plugin <- Plugins]),
+    [{Phase, [Callback || {In, Callback} <- Phased, In =:= Phase]}
+     || Phase <- lists:usort([Phase || {Phase, _Callback} <- Phased])].
 
-normalize_plugins([], Ack) -> Ack;
-normalize_plugins([{Type, PluginName, Options}|Tl], Ack) ->
-    ExistingPlugins = proplists:get_value(Type, Ack, []),
+-spec phased(plugin(), order()) -> [{Phase :: atom(), callback()}].
+phased({pre_request, PluginName, Options}, Order) ->
     add_plugin(PluginName),
-    normalize_plugins(Tl, [{Type, [{fun PluginName:Type/4, Options}|ExistingPlugins]}|proplists:delete(Type, Ack)]).
+    HasPreSecurity = exports(PluginName, pre_security),
+    [{phase(true), {fun PluginName:pre_security/4, Options}} || HasPreSecurity] ++
+        [{phase(is_ahead(PluginName, Order)), {fun PluginName:pre_request/4, Options}}
+         || not HasPreSecurity orelse exports(PluginName, pre_request)];
+phased({Type, PluginName, Options}, _Order) ->
+    add_plugin(PluginName),
+    [{Type, {fun PluginName:Type/4, Options}}].
+
+-spec phase(AheadOfSecurity :: boolean()) -> pre_request | after_security.
+phase(true) -> pre_request;
+phase(false) -> after_security.
+
+-spec is_ahead(module(), order()) -> boolean().
+is_ahead(PluginName, #{before := Before}) ->
+    Before =:= all orelse lists:member(PluginName, Before).
+
+-spec exports(module(), Function :: atom()) -> boolean().
+exports(Module, Function) ->
+    _ = code:ensure_loaded(Module),
+    erlang:function_exported(Module, Function, 4).
+
+plugins_before_security(#{plugins_before_security := Value}, Plugins, Group) ->
+    Listed = [Module || {pre_request, Module, _Options} <- Plugins],
+    case nova_settings:checked(plugins_before_security, Value) of
+        {ok, all} ->
+            all;
+        {ok, Modules} when is_list(Modules) ->
+            case Modules -- Listed of
+                [] -> Modules;
+                _NotOfTheGroup -> invalid_plugins_before_security(Value, Group)
+            end;
+        {error, Reason} ->
+            invalid_plugins_before_security(Reason, Group)
+    end;
+plugins_before_security(_RouteInfo, _Plugins, _Group) ->
+    nova_settings:value(plugins_before_security).
+
+-spec invalid_plugins_before_security(term(), map()) -> no_return().
+invalid_plugins_before_security(Value, Group) ->
+    ?LOG_ERROR(Group#{msg => ~"plugins_before_security of a route group must be all or a list of its pre_request plugins that have pre_request/4",
+                      setting => plugins_before_security, value => Value}),
+    throw({error, {invalid_setting, plugins_before_security, Value}}).
 
 method_to_binary(get) -> <<"GET">>;
 method_to_binary(post) -> <<"POST">>;
