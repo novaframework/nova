@@ -2,6 +2,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("../include/nova_router.hrl").
 
+-export([log/2]).
+
 setup() ->
     Prev = nova_test_helper:setup_nova_env(),
     application:set_env(nova, dispatch_backend, persistent_term),
@@ -28,6 +30,22 @@ add_routes_no_crash_test_() ->
         ?assertMatch(#nova_handler_value{app = test_app}, Value)
     end}.
 
+missing_static_path_is_named_test_() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
+        Routes = #{routes => [{"/assets", "no/such/directory"}]},
+        ?assertThrow({error, {static_path_not_found, "no/such/directory"}},
+                     nova_router:add_routes(nova, [Routes]))
+    end}.
+
+missing_static_path_is_logged_as_an_error_test_() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
+        ok = nova_test_log:start(),
+        ?assertThrow({error, {static_path_not_found, "no/such/directory"}},
+                     nova_router:add_routes(nova, [#{routes => [{"/assets", "no/such/directory"}]}])),
+        ?assertMatch([error], [Level || #{level := Level, msg := {report, #{local_path := "no/such/directory"}}}
+                                            <- nova_test_log:stop()])
+    end}.
+
 add_routes_registers_app_test_() ->
     {setup, fun setup/0, fun cleanup/1, fun() ->
         Callback = fun(_) -> {json, #{}} end,
@@ -36,6 +54,72 @@ add_routes_registers_app_test_() ->
         Apps = nova_router:compiled_apps(),
         ?assertMatch({my_app, _}, lists:keyfind(my_app, 1, Apps))
     end}.
+
+%% The routing guide for 0.17.0 to 0.18.1 put plugin_strategy on the route
+%% entry, where it is ignored; that is warned about once per application.
+route_entry_plugin_strategy_is_warned_about_once_test_() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
+        nova_once:forget({nova_router, route_plugin_strategy_warned, strategy_app}),
+        Callback = fun(_) -> {json, #{}} end,
+        Routes = [#{plugin_strategy => global_first, routes => [{"/a", Callback, #{methods => [get]}}]},
+                  #{plugin_strategy => local_only, routes => [{"/b", Callback, #{methods => [get]}}]}],
+        ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
+        try
+            nova_router:add_routes(strategy_app, Routes),
+            nova_router:add_routes(strategy_app, Routes),
+            ?assertMatch([#{app := strategy_app, plugin_strategy := global_first}], logged()),
+            nova_router:add_routes(other_app, [#{routes => [{"/c", Callback, #{methods => [get]}}]}]),
+            ?assertEqual([], logged())
+        after
+            logger:remove_handler(?MODULE),
+            nova_once:forget({nova_router, route_plugin_strategy_warned, strategy_app})
+        end
+    end}.
+
+%% A route that sets no extra_state gets the one of its route group, as a
+%% websocket route does. One in a group that declares none has undefined.
+route_takes_the_extra_state_of_its_group_test_() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
+        Callback = fun(_) -> {json, #{}} end,
+        Routes = [#{prefix => "/group", extra_state => #{role => admin},
+                    routes => [{"/inherits", Callback, #{methods => [get]}},
+                               {"/bare", Callback},
+                               {"/own", Callback, #{methods => [get], extra_state => #{role => guest}}},
+                               {"/files/[...]", Callback, #{methods => [get]}}]},
+                  #{prefix => "/plain", routes => [{"/none", Callback, #{methods => [get]}}]}],
+        ok = nova_router:add_routes(extra_state_app, Routes),
+        ?assertEqual(#{role => admin}, extra_state(~"/group/inherits")),
+        ?assertEqual(#{role => admin}, extra_state(~"/group/bare")),
+        ?assertEqual(#{role => guest}, extra_state(~"/group/own")),
+        ?assertEqual(#{role => admin, pathinfo => [~"a", ~"b"]}, extra_state(~"/group/files/a/b")),
+        ?assertEqual(undefined, extra_state(~"/plain/none"))
+    end}.
+
+%% An empty map is a value like any other: a controller that reads a key out
+%% of its extra_state with a default needs a map to read from.
+declared_empty_extra_state_is_taken_from_the_group_test_() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
+        Callback = fun(_) -> {json, #{}} end,
+        Routes = [#{prefix => "/empty", extra_state => #{},
+                    routes => [{"/route", Callback, #{methods => [get]}},
+                               {"/ws", extra_state_ws, #{protocol => ws}}]},
+                  #{prefix => "/none",
+                    routes => [{"/route", Callback, #{methods => [get]}},
+                               {"/ws", extra_state_ws, #{protocol => ws}}]}],
+        ok = nova_router:add_routes(empty_extra_state_app, Routes),
+        Declared = fun(Path) ->
+                           {ok, Req, _Env} = nova_router:execute(nova_test_helper:mock_req(~"GET", Path), #{}),
+                           maps:get(extra_state, Req, not_set)
+                   end,
+        ?assertEqual(#{}, Declared(~"/empty/route")),
+        ?assertEqual(#{}, Declared(~"/empty/ws")),
+        ?assertEqual(undefined, Declared(~"/none/route")),
+        ?assertEqual(not_set, Declared(~"/none/ws"))
+    end}.
+
+extra_state(Path) ->
+    {ok, Req, _Env} = nova_router:execute(nova_test_helper:mock_req(~"GET", Path), #{}),
+    maps:get(extra_state, Req).
 
 %% A security callback is declared with `security` on a route group.
 %% Written on a single route, or as `secure` on the group, it is not read.
@@ -91,3 +175,17 @@ misplaced_security_key_that_is_false_is_warned_about_test_() ->
         ?assertMatch({ok, _, #nova_handler_value{secure = Check}},
                      nova_router:lookup_url('_', ~"/guarded/page", ~"GET"))
     end}.
+
+log(#{msg := {report, #{msg := <<"plugin_strategy on a route entry", _/binary>>} = Report}},
+    #{config := #{test_pid := Pid}}) ->
+    Pid ! {?MODULE, Report},
+    ok;
+log(_Event, _Config) ->
+    ok.
+
+logged() ->
+    receive
+        {?MODULE, Report} -> [Report | logged()]
+    after 50 ->
+            []
+    end.

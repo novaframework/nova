@@ -175,7 +175,7 @@ execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
                                            secure = Secure, plugins = Plugins, extra_state = ExtraState}, Pathinfo} ->
             {ok,
              Req#{plugins => Plugins,
-                  extra_state => ExtraState#{pathinfo => Pathinfo},
+                  extra_state => with_pathinfo(ExtraState, Pathinfo),
                   bindings => Bindings},
              Env#{app => App,
                   callback => Callback,
@@ -186,7 +186,20 @@ execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
         {ok, Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
                                               plugins = Plugins, secure = Secure}} ->
             {ok,
+             put_extra_state(handler_extra_state(Args),
+                             Req#{plugins => Plugins,
+                                  bindings => Bindings}),
+             Env#{app => App,
+                  cowboy_handler => Handler,
+                  arguments => Args,
+                  secure => Secure
+                 }
+            };
+        {ok, Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
+                                              plugins = Plugins, secure = Secure}, Pathinfo} ->
+            {ok,
              Req#{plugins => Plugins,
+                  extra_state => with_pathinfo(handler_extra_state(Args), Pathinfo),
                   bindings => Bindings},
              Env#{app => App,
                   cowboy_handler => Handler,
@@ -410,20 +423,49 @@ overrides_in_force(Options) ->
     maps:get(inherited_override_secure, Options, []) ++
         [Override || Override <- [maps:get(override_secure, Options, false)], Override =/= false].
 
--doc "The router module for an application. Either configured explicitly with the `router_module` application environment key, or derived from the application name using the convention for the language in use.".
 router_module(App) ->
     case application:get_env(App, router_module) of
         {ok, RouterModule} ->
             RouterModule;
         undefined ->
-            case nova:detect_language() of
-                elixir ->
-                    %% We build the router as App.Router
-                    erlang:list_to_atom(lists:flatten(io_lib:format("~s.Router", [App])));
-                _ ->
-                    %% All other languages are using the app_router convention
-                    erlang:list_to_atom(lists:flatten(io_lib:format("~s_router", [App])))
+            Names = router_names(nova:detect_language(), atom_to_list(App)),
+            case first_module(Names) of
+                {ok, RouterModule} ->
+                    RouterModule;
+                error ->
+                    ?LOG_ERROR(#{msg => ~"Could not find the router module of the application",
+                                 app => App, router_module => Names}),
+                    throw({error, {router_module_not_found, App}})
             end
+    end.
+
+router_names(elixir, App) ->
+    [App ++ ".Router", "Elixir." ++ camelised(App) ++ ".Router"];
+router_names(_Language, App) ->
+    [App ++ "_router"].
+
+camelised([]) ->
+    [];
+camelised([$_ | Rest]) ->
+    camelised(Rest);
+camelised([First | Rest]) ->
+    {Part, Parts} = lists:splitwith(fun(Char) -> Char =/= $_ end, Rest),
+    [upper(First) | Part] ++ camelised(Parts).
+
+upper(Char) when Char >= $a, Char =< $z -> Char - ($a - $A);
+upper(Char) -> Char.
+
+first_module([]) ->
+    error;
+first_module([Name | Names]) ->
+    case nova_code:module_named(Name) of
+        {ok, Module} ->
+            case code:ensure_loaded(Module) of
+                {module, Module} -> {ok, Module};
+                {error, _Reason} -> first_module(Names)
+            end;
+        error ->
+            first_module(Names)
     end.
 
 compile_paths([], Dispatch, Options) -> {ok, Dispatch, Options};
@@ -435,6 +477,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
                             maps:get(prefix, RouteInfo, "")),
     Named = #{app => App, prefix => Prefix, router_file => RouterFile},
 
+    ok = warn_route_plugin_strategy(App, RouteInfo, RouterFile),
     Plugins = resolve_plugins(maps:get(plugin_strategy, Options, local_or_global), RouteInfo, RouterFile),
 
     Secure = resolve_secure(Options, RouteInfo, RouterFile),
@@ -453,10 +496,11 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     NovaEnv0 = lists:keystore(App, 1, NovaEnv, {App, #{prefix => Prefix}}),
     nova:set_env(apps, NovaEnv0),
 
+    Group = maps:with([extra_state], RouteInfo),
     {ok, Dispatch1} = parse_url(Host, maps:get(routes, RouteInfo, []),
-                                #{prefix => Prefix,
-                                  router_file => maps:get(router_file, Options),
-                                  insert_opts => maps:get(insert_opts, Options, #{})},
+                                Group#{prefix => Prefix,
+                                       router_file => maps:get(router_file, Options),
+                                       insert_opts => maps:get(insert_opts, Options, #{})},
                                 Value, Dispatch),
 
     Dispatch2 = compile(SubApps, Dispatch1,
@@ -488,11 +532,11 @@ parse_url(Host, [{RemotePath, LocalPath, Options}|Tl], T = #{prefix := Prefix},
                 case {filelib:is_file(LocalPath), filelib:is_file(PrivPath)} of
                     {false, false} ->
                         %% No dir nor file
-                        ?LOG_WARNING(#{reason => <<"Could not find local path for the given resource">>,
-                                       local_path => LocalPath,
-                                       remote_path => RemotePath,
-                                       router_file => maps:get(router_file, Options, undefined)}),
-                        not_found;
+                        ?LOG_ERROR(#{msg => ~"Could not find local path for the given resource",
+                                     local_path => LocalPath,
+                                     remote_path => RemotePath,
+                                     router_file => maps:get(router_file, Options, undefined)}),
+                        throw({error, {static_path_not_found, LocalPath}});
                     {true, false} ->
                         {file, LocalPath};
                     {_, true} ->
@@ -536,7 +580,7 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
 
             Methods = maps:get(methods, Options, ['_']),
 
-            ExtraState = maps:get(extra_state, Options, undefined),
+            ExtraState = route_extra_state(Options, T),
             Value0 = Value#nova_handler_value{extra_state = ExtraState},
 
             Value1 = Value0#nova_handler_value{callback = Callback},
@@ -551,13 +595,13 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
             parse_url(Host, Tl, T, Value, Tree)
     end;
 parse_url(Host,
-          [{Path, Mod, #{protocol := ws}} | Tl],
+          [{Path, Mod, #{protocol := ws} = Options} | Tl],
           T = #{prefix := Prefix}, #nova_handler_value{app = App, secure = Secure} = Value,
           Tree) when is_atom(Mod) ->
     Value0 =  #cowboy_handler_value{
                   app = App,
                   handler = nova_ws_handler,
-                  arguments = #{module => Mod},
+                  arguments = websocket_arguments(Mod, App, Options, T),
                   plugins = Value#nova_handler_value.plugins,
                   secure = Secure},
 
@@ -614,6 +658,30 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
 insert_opts(T) ->
     maps:get(insert_opts, T, #{}).
 
+route_extra_state(#{extra_state := ExtraState}, _Group) -> ExtraState;
+route_extra_state(_Options, #{extra_state := ExtraState}) -> ExtraState;
+route_extra_state(_Options, _Group) -> undefined.
+
+websocket_arguments(Mod, App, #{extra_state := ExtraState}, _Group) ->
+    #{module => Mod, app => App, extra_state => ExtraState};
+websocket_arguments(Mod, App, _Options, #{extra_state := ExtraState}) ->
+    #{module => Mod, app => App, extra_state => ExtraState};
+websocket_arguments(Mod, App, _Options, _Group) ->
+    #{module => Mod, app => App}.
+
+handler_extra_state(#{extra_state := ExtraState}) -> ExtraState;
+handler_extra_state(_Arguments)                   -> undefined.
+
+put_extra_state(undefined, Req)  -> Req;
+put_extra_state(ExtraState, Req) -> Req#{extra_state => ExtraState}.
+
+with_pathinfo(ExtraState, Pathinfo) when is_map(ExtraState) ->
+    ExtraState#{pathinfo => Pathinfo};
+with_pathinfo(undefined, Pathinfo) ->
+    #{pathinfo => Pathinfo};
+with_pathinfo(ExtraState, _Pathinfo) ->
+    ExtraState.
+
 %% The module the dispatch table is stored in. Configurable, so it has to be
 %% narrowed to a module before it can be called.
 -spec storage_backend() -> module().
@@ -639,7 +707,15 @@ apps_key(DispatchKey)     -> {?NOVA_APPS, DispatchKey}.
 insert_methods([], _Host, _Path, _Value, Tree, _Options, _ToComparator) ->
     Tree;
 insert_methods([Method|Tl], Host, Path, Value, Tree, Options, ToComparator) ->
-    Tree0 = insert(Host, Path, ToComparator(Method), Value, Tree, Options),
+    Comparator =
+        try ToComparator(Method)
+        catch
+            throw:{error, {invalid_method, _}} = Error ->
+                ?LOG_ERROR(#{msg => ~"Unknown HTTP method in the methods of a route. Use get, post, put, delete, options, head, connect, trace, patch or '_', or a binary or string for any other method.",
+                             route => Path, method => Method}),
+                throw(Error)
+        end,
+    Tree0 = insert(Host, Path, Comparator, Value, Tree, Options),
     insert_methods(Tl, Host, Path, Value, Tree0, Options, ToComparator).
 
 insert(Host, Path, Combinator, Value, Tree, Options) ->
@@ -730,6 +806,18 @@ resolve_plugins(Strategy, RouteInfo, RouterFile) ->
     ?LOG_ERROR(#{reason => <<"Unknown plugin_strategy, falling back to local_or_global">>,
                  plugin_strategy => Strategy, router_file => RouterFile}),
     resolve_plugins(local_or_global, RouteInfo, RouterFile).
+
+warn_route_plugin_strategy(App, #{plugin_strategy := Strategy}, RouterFile) ->
+    Key = {?MODULE, route_plugin_strategy_warned, App},
+    case nova_once:first(Key) of
+        true ->
+            ?LOG_WARNING(#{msg => ~"plugin_strategy on a route entry is ignored. Set it in the application's nova_apps options instead: {nova_apps, [{App, #{plugin_strategy => Strategy}}]}",
+                           app => App, plugin_strategy => Strategy, router_file => RouterFile});
+        false ->
+            ok
+    end;
+warn_route_plugin_strategy(_App, _RouteInfo, _RouterFile) ->
+    ok.
 
 misplaced_in_group(Prefix, RouteInfo) ->
     [{secure, Value, Prefix} || secure := Value <- RouteInfo] ++
@@ -934,16 +1022,47 @@ invalid_plugins_before_security(Value, Group) ->
                       setting => plugins_before_security, value => Value}),
     throw({error, {invalid_setting, plugins_before_security, Value}}).
 
-method_to_binary(get) -> <<"GET">>;
-method_to_binary(post) -> <<"POST">>;
-method_to_binary(put) -> <<"PUT">>;
-method_to_binary(delete) -> <<"DELETE">>;
-method_to_binary(options) -> <<"OPTIONS">>;
-method_to_binary(head) -> <<"HEAD">>;
-method_to_binary(connect) -> <<"CONNECT">>;
-method_to_binary(trace) -> <<"TRACE">>;
-method_to_binary(patch) -> <<"PATCH">>;
-method_to_binary(_) -> '_'.
+method_to_binary('_') ->
+    '_';
+method_to_binary(Method) when is_atom(Method) ->
+    known_method(atom_to_binary(Method), Method);
+method_to_binary(Method) when is_binary(Method) ->
+    method_token(Method, Method);
+method_to_binary(Method) when is_list(Method) ->
+    try unicode:characters_to_binary(Method) of
+        Name when is_binary(Name) -> method_token(Name, Method);
+        _ -> throw({error, {invalid_method, Method}})
+    catch
+        error:badarg -> throw({error, {invalid_method, Method}})
+    end;
+method_to_binary(Method) ->
+    throw({error, {invalid_method, Method}}).
+
+known_method(Name, Method) ->
+    case string:uppercase(Name) of
+        Upper when Upper =:= <<"GET">>; Upper =:= <<"POST">>; Upper =:= <<"PUT">>;
+                   Upper =:= <<"DELETE">>; Upper =:= <<"OPTIONS">>; Upper =:= <<"HEAD">>;
+                   Upper =:= <<"CONNECT">>; Upper =:= <<"TRACE">>; Upper =:= <<"PATCH">> ->
+            Upper;
+        _ ->
+            throw({error, {invalid_method, Method}})
+    end.
+
+method_token(Name, Method) ->
+    case Name =/= <<>> andalso is_token(Name) of
+        true -> Name;
+        false -> throw({error, {invalid_method, Method}})
+    end.
+
+is_token(<<Char, Rest/binary>>) ->
+    is_token_char(Char) andalso is_token(Rest);
+is_token(<<>>) ->
+    true.
+
+is_token_char(Char) when Char >= $a, Char =< $z; Char >= $A, Char =< $Z; Char >= $0, Char =< $9 ->
+    true;
+is_token_char(Char) ->
+    lists:member(Char, "!#$%&'*+-.^_`|~").
 
 concat_strings(Path1, Path2) when is_binary(Path1) ->
     concat_strings(unicode:characters_to_list(uri_string:unquote(Path1)), Path2);
