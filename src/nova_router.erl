@@ -517,11 +517,11 @@ parse_url(Host, [{RemotePath, LocalPath, Options}|Tl], T = #{prefix := Prefix},
                 case {filelib:is_file(LocalPath), filelib:is_file(PrivPath)} of
                     {false, false} ->
                         %% No dir nor file
-                        ?LOG_WARNING(#{reason => <<"Could not find local path for the given resource">>,
-                                       local_path => LocalPath,
-                                       remote_path => RemotePath,
-                                       router_file => maps:get(router_file, Options, undefined)}),
-                        not_found;
+                        ?LOG_ERROR(#{msg => ~"Could not find local path for the given resource",
+                                     local_path => LocalPath,
+                                     remote_path => RemotePath,
+                                     router_file => maps:get(router_file, Options, undefined)}),
+                        throw({error, {static_path_not_found, LocalPath}});
                     {true, false} ->
                         {file, LocalPath};
                     {_, true} ->
