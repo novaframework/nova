@@ -79,13 +79,23 @@ minutes after a session was deleted, and a backend of your own does with
         when SessionId :: binary(),
              Key :: binary().
 
-%% Set a value
+-doc """
+Called by `set/3` to store `Value` under `Key` in the session `SessionId`,
+which the backend creates when it does not have it. `Value` is any term, as
+it was given to `set/3`, and `c:get_value/2` has to return it as it was: a
+backend that stores binaries encodes it, for instance with
+`term_to_binary/1`, or returns `{error, Reason}` for a value it cannot store.
+
+What it returns is returned from `set/3` as it is. After `{error, Reason}`
+no session cookie is issued for the write. Any other return counts as a
+write.
+""".
 -callback set_value(SessionId, Key, Value) ->
     ok |
     {error, Reason :: atom()}
         when SessionId :: binary(),
              Key :: binary(),
-             Value :: binary().
+             Value :: term().
 
 -doc """
 Stores a value like `c:set_value/3`, for `set_provisional/3`. A session
@@ -156,8 +166,9 @@ that another request ended before this one touched it can be.
 %%%===================================================================
 %%% Public functions
 %%%===================================================================
+-doc "The value stored under `Key` in the session of the request, as it was given to `set/3`.".
 -spec get(Req :: cowboy_req:req(), Key :: binary()) ->
-          {ok, Value :: binary()} | {error, Reason :: atom()} | no_return().
+          {ok, Value :: term()} | {error, Reason :: atom()} | no_return().
 get(Req, Key) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
@@ -167,7 +178,13 @@ get(Req, Key) ->
             {error, not_found}
     end.
 
--spec set(Req :: cowboy_req:req(), Key :: binary(), Value :: binary()) ->
+-doc """
+Stores `Value` under `Key` in the session of the request. The value is
+handed to the session backend as it is. `nova_session_ets` keeps any term
+and returns it unchanged from `get/2`. A backend of your own decides what it
+can store, and returns `{error, Reason}` for a value it cannot.
+""".
+-spec set(Req :: cowboy_req:req(), Key :: binary(), Value :: term()) ->
           ok | {error, Reason :: atom()} | no_return().
 set(Req, Key, Value) ->
     write(set_value, Req, Key, Value).
