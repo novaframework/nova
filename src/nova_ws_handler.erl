@@ -89,7 +89,8 @@ terminate_controller(Reason, PartialReq, State = #{controller_data := Controller
     _ = run_plugins(TerminatePlugins, post_ws_connection, ControllerState, State),
     ok;
 terminate_controller(Reason, PartialReq, State) ->
-    ?LOG_ERROR(#{msg => <<"Terminate called">>, reason => Reason, partial_req => PartialReq, state => State}),
+    ?LOG_ERROR(#{msg => ~"Terminate called", reason => nova_redact:term(Reason),
+                 partial_req => nova_redact:term(PartialReq), state => nova_redact:term(State)}),
     ok.
 
 
@@ -122,7 +123,7 @@ handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData, plugins
                     end
             end;
         {stop, _} = Stop ->
-            ?LOG_WARNING(#{msg => <<"Got stop signal">>, signal => Stop}),
+            ?LOG_WARNING(#{msg => ~"Got stop signal", signal => nova_redact:term(Stop)}),
             Stop
     end;
 handle_ws(Mod, Func, Args, State) ->
@@ -140,7 +141,8 @@ invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData})
     catch
         Class:Reason:Stacktrace ->
             ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class,
-                           reason => Reason, stacktrace => Stacktrace}),
+                           reason => nova_redact:term(Reason),
+                           stacktrace => nova_redact:stacktrace(Stacktrace)}),
             {stop, State}
     end.
 
@@ -182,11 +184,12 @@ run_plugins([{Module, Options}|Tl], Callback, ControllerState, State) ->
         {break, State0} ->
             {ok, State0};
         {error, Reason} ->
-            ?LOG_ERROR(#{msg => <<"Plugin returned error">>, plugin => Module, function => Callback, reason => Reason}),
+            ?LOG_ERROR(#{msg => ~"Plugin returned error", plugin => Module, function => Callback, reason => nova_redact:term(Reason)}),
             {stop, State}
     catch
         Class:Reason:Stacktrace ->
-            ?LOG_ERROR(#{msg => <<"Plugin crashed">>, class => Class, reason => Reason, stacktrace => Stacktrace}),
+            ?LOG_ERROR(#{msg => ~"Plugin crashed", class => Class, reason => nova_redact:term(Reason),
+                         stacktrace => nova_redact:stacktrace(Stacktrace)}),
             {stop, State}
     end.
 
