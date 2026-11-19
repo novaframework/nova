@@ -66,10 +66,11 @@ init_module_error_renders_status_page_test_() ->
         meck:expect(test_ws_mod, init, fun(_CD) -> {error, bad_stuff} end),
         Req = make_req(),
         State = make_state(),
-        Result = nova_ws_handler:init(Req, State),
-        ?assertMatch({ok, _, _}, Result),
-        {ok, Req1, _Env} = Result,
-        ?assertEqual(500, maps:get(resp_status_code, Req1))
+        ?assertMatch({status, 500,
+                      #{crash_info := #{class := error,
+                                        reason := unsupported_websocket_init_result}},
+                      _},
+                     nova_ws_handler:init(Req, State))
     end}.
 
 init_preserves_existing_controller_data_test_() ->

@@ -41,8 +41,9 @@ upgrade_ws(Module, Req, State, ControllerData) ->
         {ok, NewControllerData, WebsocketOptions} when is_map(WebsocketOptions) ->
             {cowboy_websocket, Req, State#{controller_data => NewControllerData}, WebsocketOptions};
         Error ->
-            ?LOG_ERROR(#{msg => <<"Websocket handler returned unknown result">>, handler => Module, returned => Error}),
-            nova_router:render_status_page(500, Req)
+            ?LOG_ERROR(#{msg => ~"Websocket handler returned unknown result", handler => Module,
+                         returned => nova_redact:term(Error)}),
+            {status, 500, Req#{crash_info => #{class => error, reason => unsupported_websocket_init_result}}, State}
     end.
 
 websocket_init(State = #{mod := Mod}) ->
