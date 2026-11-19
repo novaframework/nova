@@ -127,10 +127,9 @@ handle_ok({ok, Variables, Options}, Callback, Req) ->
             undefined ->
                 get_view_name(Module);
             CustomView when is_atom(CustomView) ->
-                ViewName = atom_to_list(CustomView) ++ "_dtl",
-                list_to_atom(ViewName);
+                view_module(atom_to_list(CustomView) ++ "_dtl");
             CustomView ->
-                list_to_atom(CustomView ++ "_dtl")
+                view_module(CustomView ++ "_dtl")
         end,
     handle_view(View, Variables, Options, Req);
 handle_ok({ok, Variables, Options, Req0}, Callback, _Req) ->
@@ -402,9 +401,7 @@ render_dtl(View, Variables, Options) ->
         false ->
             case code:load_file(View) of
                 {error, Reason} ->
-                    %% Cast a warning since the module could not be found
-                    ?LOG_ERROR(#{msg => <<"Nova could not render template">>, template => View, reason => Reason}),
-                    throw({404, {template_not_found, View}});
+                    template_not_found(View, Reason);
                 _ ->
                     View:render(Variables, Options)
             end;
@@ -422,11 +419,25 @@ maybe_inject_csrf_token(Variables, _Req) ->
 
 get_view_name({Mod, _Opts}) -> get_view_name(Mod);
 get_view_name(Mod) when is_atom(Mod) ->
-    StrName = get_view_name(erlang:atom_to_list(Mod)),
-    erlang:list_to_atom(StrName);
-get_view_name([$_, $c, $o, $n, $t, $r, $o, $l, $l, $e, $r]) ->
+    view_module(view_name(atom_to_list(Mod))).
+
+view_name([$_, $c, $o, $n, $t, $r, $o, $l, $l, $e, $r]) ->
     "_dtl";
-get_view_name([]) ->
+view_name([]) ->
     "_dtl";
-get_view_name([H|T]) ->
-    [H|get_view_name(T)].
+view_name([H|T]) ->
+    [H|view_name(T)].
+
+view_module(Name) ->
+    case nova_code:module_named(Name) of
+        {ok, View} ->
+            View;
+        error ->
+            template_not_found(Name, nofile)
+    end.
+
+-spec template_not_found(atom() | string(), term()) -> no_return().
+template_not_found(Template, Reason) ->
+    ?LOG_ERROR(#{msg => ~"Nova could not render template", template => Template, reason => Reason}),
+    throw({500, #{status_code => 500,
+                  extra_msg => unicode:characters_to_binary(io_lib:format("Template ~ts could not be loaded", [Template]))}}).
