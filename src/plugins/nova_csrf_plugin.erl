@@ -16,10 +16,13 @@ __Important:__`nova_request_plugin` must run before this plugin so that form par
 -behaviour(nova_plugin).
 
 -export([
+         init/0,
          pre_request/4,
          post_request/4,
          plugin_info/0
         ]).
+
+-include_lib("kernel/include/logger.hrl").
 
 -define(NONCE_BYTES, 16).
 -define(SIGNATURE_BYTES, 32).
@@ -35,6 +38,15 @@ __Important:__`nova_request_plugin` must run before this plugin so that form par
 -endif.
 
 %%--------------------------------------------------------------------
+-doc false.
+-spec init() -> nova:state().
+init() ->
+    Unset = nova_settings:value(csrf_token) =:= undefined andalso nova_secret:keys(csrf_token) =:= [],
+    _ = Unset andalso
+        ?LOG_NOTICE(#{msg => ~"secret_key_base is not set, so nova_csrf_plugin keeps its tokens in the session store and starts a session for every visitor. Set secret_key_base for signed tokens that store nothing, or csrf_token to session to say that this is intended",
+                      key => secret_key_base, csrf_token => session}),
+    #{}.
+
 -spec tokens() -> {stateless, [binary()]} | session.
 tokens() ->
     case nova_settings:value(csrf_token) =/= session andalso nova_secret:keys(csrf_token) of
