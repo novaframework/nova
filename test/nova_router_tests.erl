@@ -191,6 +191,25 @@ execute_cowboy_handler_test_() ->
         ?assert(is_list(maps:get(plugins, Req1)))
     end}.
 
+execute_keeps_the_dispatch_key_on_the_request_test_() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
+        Key = {nova_dispatch, test_app, 8081},
+        persistent_term:put(Key, persistent_term:get(nova_dispatch)),
+        try
+            [begin
+                 {ok, Req1, _Env1} = nova_router:execute(nova_test_helper:mock_req(Method, Path),
+                                                         #{nova_dispatch_key => Key}),
+                 ?assertEqual(Key, nova_router:dispatch_key(Req1), {Method, Path})
+             end || {Method, Path} <- [{~"GET", ~"/users"}, {~"GET", ~"/static/a/b"}, {~"GET", ~"/ws"},
+                                       {~"GET", ~"/nonexistent"}, {~"DELETE", ~"/users"}]]
+        after
+            persistent_term:erase(Key)
+        end
+    end}.
+
+dispatch_key_of_a_request_outside_the_router_test() ->
+    ?assertEqual(nova_dispatch, nova_router:dispatch_key(nova_test_helper:mock_req(~"GET", ~"/users"))).
+
 %%====================================================================
 %% lookup_url/1,2,3
 %%====================================================================

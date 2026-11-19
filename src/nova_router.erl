@@ -18,6 +18,8 @@
          lookup_url/1,
          lookup_url/2,
          lookup_url/3,
+         lookup_url/4,
+         dispatch_key/1,
          render_status_page/2,
          render_status_page/3,
          render_status_page/5,
@@ -30,6 +32,7 @@
          forget_plugins/0,
          compiled_apps/0,
          compiled_apps/1,
+         dispatch_keys/0,
 
          %% Modulates the routes-table
          add_routes/1,
@@ -77,6 +80,11 @@
 -type order() :: #{before := all | [module()], secured := boolean()}.
 -type order_warning() :: body_behind_security | form_behind_security | pre_request_behind_security |
                          pre_request_not_for_preflight.
+
+-doc "The key of the routing table of every listener Nova has started, for the functions that take a `DispatchKey`.".
+-spec dispatch_keys() -> [dispatch_key()].
+dispatch_keys() ->
+    nova_sup:dispatch_keys().
 
 -spec compiled_apps() -> [{App :: atom(), Prefix :: list()}].
 compiled_apps() ->
@@ -136,8 +144,9 @@ compile_fresh(Apps, DispatchKey) ->
                                                                Env0::cowboy_middleware:env().
 execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
     StorageBackend = storage_backend(),
-    Req = Req0#{nova_session_owner => self()},
-    Dispatch = StorageBackend:get(dispatch_key(Env)),
+    DispatchKey = dispatch_key(Env),
+    Req = Req0#{nova_dispatch_key => DispatchKey, nova_session_owner => self()},
+    Dispatch = StorageBackend:get(DispatchKey),
     case nova_routing_trie:find(Host, Path, Method, Dispatch) of
         {error, not_found} ->
             logger:debug(<<"Path ~p not found for ~p in ~p">>, [Path, Method, Host]),
@@ -200,15 +209,15 @@ lookup_url(Host, Path) ->
 -spec lookup_url(Host :: binary() | atom(), Path :: nova_routing_trie:path(),
                  Method :: nova_routing_trie:comparator()) -> lookup_result().
 lookup_url(Host, Path, Method) ->
-    StorageBackend = storage_backend(),
-    Dispatch = StorageBackend:get(?NOVA_DISPATCH),
-    lookup_url(Host, Path, Method, Dispatch).
+    lookup_url(Host, Path, Method, ?NOVA_DISPATCH).
 
+-doc "As lookup_url/3, but in the routing table addressed by `DispatchKey`. dispatch_key/1 gives the key of the listener a request came in on.".
 -spec lookup_url(Host :: binary() | atom(), Path :: nova_routing_trie:path(),
                  Method :: nova_routing_trie:comparator(),
-                 Dispatch :: nova_routing_trie:trie()) -> lookup_result().
-lookup_url(Host, Path, Method, Dispatch) ->
-    nova_routing_trie:find(Host, Path, Method, Dispatch).
+                 DispatchKey :: dispatch_key()) -> lookup_result().
+lookup_url(Host, Path, Method, DispatchKey) ->
+    StorageBackend = storage_backend(),
+    nova_routing_trie:find(Host, Path, Method, StorageBackend:get(DispatchKey)).
 
 
 %%--------------------------------------------------------------------
@@ -540,7 +549,7 @@ render_status_page(StatusCode, Req) ->
 -spec render_status_page(StatusCode :: integer(), Data :: map(), Req :: cowboy_req:req()) ->
                                 {ok, Req0 :: cowboy_req:req(), Env :: map()}.
 render_status_page(StatusCode, Data, Req) ->
-    render_status_page('_', StatusCode, Data, Req, #{}).
+    render_status_page('_', StatusCode, Data, Req, #{nova_dispatch_key => dispatch_key(Req)}).
 
 -spec render_status_page(Host :: binary() | atom(),
                          StatusCode :: integer(),
@@ -589,10 +598,12 @@ storage_backend() ->
             persistent_term
     end.
 
-%% The listener's dispatch key, defaulting to the one the bootstrap listener
-%% uses so an Env built before multi-listener support still resolves.
-dispatch_key(Env) ->
-    maps:get(nova_dispatch_key, Env, ?NOVA_DISPATCH).
+-doc "The key of the routing table serving a request, for the functions that take a `DispatchKey`. Takes the request, which carries the key once it has passed the router, or the middleware environment where that is at hand. Anything else gives the key of the default listener.".
+-spec dispatch_key(ReqOrEnv :: cowboy_req:req() | cowboy_middleware:env()) -> dispatch_key().
+dispatch_key(#{nova_dispatch_key := DispatchKey}) ->
+    DispatchKey;
+dispatch_key(_) ->
+    ?NOVA_DISPATCH.
 
 %% Each dispatch table keeps its own list of compiled applications.
 apps_key(?NOVA_DISPATCH)  -> ?NOVA_APPS;
