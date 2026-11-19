@@ -610,7 +610,8 @@ add_plugin(Plugin) ->
             ok;
         _ ->
             StorageBackend:put(?NOVA_PLUGINS, Plugins1)
-    end.
+    end,
+    nova_plugin_manager:ensure_plugin(Plugin).
 
 %%--------------------------------------------------------------------
 -doc """
