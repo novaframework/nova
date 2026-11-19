@@ -136,19 +136,30 @@ handle_ws(Mod, Func, Args, State) ->
 invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData}) ->
     try erlang:apply(Mod, Func, Args ++ [ControllerData]) of
         RetObj ->
-            case nova_handlers:get_handler(ws) of
-                {ok, Callback} ->
-                    Callback(RetObj, State);
-                {error, not_found} ->
-                    ?LOG_ERROR(#{msg => <<"Websocket handler not found. Check that a handler is
-                                           registered on handle 'ws'">>,
-                                   controller => Mod, function => Func, return => RetObj}),
-                    {stop, State}
-            end
+            handle_result(Mod, Func, RetObj, State)
     catch
         Class:Reason:Stacktrace ->
             ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class,
                            reason => Reason, stacktrace => Stacktrace}),
+            {stop, State}
+    end.
+
+handle_result(Mod, Func, RetObj, State) ->
+    case nova_handlers:get_handler(ws) of
+        {ok, Callback} ->
+            try
+                Callback(RetObj, State)
+            catch
+                Class:Reason:Stacktrace ->
+                    ?LOG_ERROR(#{msg => ~"Websocket handler failed on what the controller returned",
+                                 controller => Mod, function => Func, class => Class,
+                                 reason => nova_redact:term(Reason),
+                                 stacktrace => nova_redact:stacktrace(Stacktrace)}),
+                    {stop, State}
+            end;
+        {error, not_found} ->
+            ?LOG_ERROR(#{msg => ~"Websocket handler not found. Check that a handler is registered on handle 'ws'",
+                           controller => Mod, function => Func, return => nova_redact:term(RetObj)}),
             {stop, State}
     end.
 

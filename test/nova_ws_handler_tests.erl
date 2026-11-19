@@ -299,6 +299,23 @@ controller_crash_returns_stop_test_() ->
         ?assertMatch({stop, _}, Result)
     end}.
 
+controller_return_the_handler_cannot_take_stops_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        meck:expect(test_ws_mod, websocket_handle, fun(_Frame, CD) ->
+            {reply, {text, ~"one"}, {text, ~"two"}, CD}
+        end),
+        Canary = ~"Bearer canary-9f2c",
+        State = (make_ws_state())#{controller_data => #{req => #{headers => #{~"authorization" => Canary}}}},
+        {Result, Events} = nova_test_log:collect(
+                             fun() -> nova_ws_handler:websocket_handle({text, ~"boom"}, State) end),
+        ?assertMatch({stop, _}, Result),
+        ?assertMatch([#{msg := ~"Websocket handler failed on what the controller returned",
+                        controller := test_ws_mod, function := websocket_handle}],
+                     nova_test_log:errors(Events)),
+        ?assertEqual(1, length([Level || {Level, _} <- Events, Level =:= error])),
+        ?assertEqual(nomatch, binary:match(iolist_to_binary(io_lib:format("~0p", [Events])), ~"canary-9f2c"))
+    end}.
+
 %%====================================================================
 %% Plugin returning stop signal
 %%====================================================================
