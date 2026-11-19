@@ -477,6 +477,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
                             maps:get(prefix, RouteInfo, "")),
     Named = #{app => App, prefix => Prefix, router_file => RouterFile},
 
+    ok = warn_route_plugin_strategy(App, RouteInfo, RouterFile),
     Plugins = resolve_plugins(maps:get(plugin_strategy, Options, local_or_global), RouteInfo, RouterFile),
 
     Secure = resolve_secure(Options, RouteInfo, RouterFile),
@@ -805,6 +806,18 @@ resolve_plugins(Strategy, RouteInfo, RouterFile) ->
     ?LOG_ERROR(#{reason => <<"Unknown plugin_strategy, falling back to local_or_global">>,
                  plugin_strategy => Strategy, router_file => RouterFile}),
     resolve_plugins(local_or_global, RouteInfo, RouterFile).
+
+warn_route_plugin_strategy(App, #{plugin_strategy := Strategy}, RouterFile) ->
+    Key = {?MODULE, route_plugin_strategy_warned, App},
+    case nova_once:first(Key) of
+        true ->
+            ?LOG_WARNING(#{msg => ~"plugin_strategy on a route entry is ignored. Set it in the application's nova_apps options instead: {nova_apps, [{App, #{plugin_strategy => Strategy}}]}",
+                           app => App, plugin_strategy => Strategy, router_file => RouterFile});
+        false ->
+            ok
+    end;
+warn_route_plugin_strategy(_App, _RouteInfo, _RouterFile) ->
+    ok.
 
 misplaced_in_group(Prefix, RouteInfo) ->
     [{secure, Value, Prefix} || secure := Value <- RouteInfo] ++
