@@ -174,12 +174,13 @@ route(Req = #{host := Host, path := Path, method := Method}, Env, Dispatch) ->
             %% Set the 'allow'-header
             Req1 = cowboy_req:set_resp_header(<<"allow">>, AllowHeader, Req),
             render_status_page('_', 405, #{error => "Method not allowed"}, Req1, Env);
-        {ok, Bindings, #nova_handler_value{app = App, callback = Callback, secure = Secure, plugins = Plugins,
+        {ok, Bindings, #nova_handler_value{app = App, callback = Callback, secure = Secure, plugins = RoutePlugins,
                                            extra_state = ExtraState}} ->
+            {Route, Plugins} = take_route(RoutePlugins),
             {ok,
-             Req#{plugins => Plugins,
-                  extra_state => ExtraState,
-                  bindings => Bindings},
+             put_route(Route, Req#{plugins => Plugins,
+                                   extra_state => ExtraState,
+                                   bindings => Bindings}),
              Env#{app => App,
                   callback => Callback,
                   secure => Secure,
@@ -187,11 +188,12 @@ route(Req = #{host := Host, path := Path, method := Method}, Env, Dispatch) ->
                  }
             };
         {ok, Bindings, #nova_handler_value{app = App, callback = Callback,
-                                           secure = Secure, plugins = Plugins, extra_state = ExtraState}, Pathinfo} ->
+                                           secure = Secure, plugins = RoutePlugins, extra_state = ExtraState}, Pathinfo} ->
+            {Route, Plugins} = take_route(RoutePlugins),
             {ok,
-             Req#{plugins => Plugins,
-                  extra_state => with_pathinfo(ExtraState, Pathinfo),
-                  bindings => Bindings},
+             put_route(Route, Req#{plugins => Plugins,
+                                   extra_state => with_pathinfo(ExtraState, Pathinfo),
+                                   bindings => Bindings}),
              Env#{app => App,
                   callback => Callback,
                   secure => Secure,
@@ -199,11 +201,12 @@ route(Req = #{host := Host, path := Path, method := Method}, Env, Dispatch) ->
                  }
             };
         {ok, Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
-                                              plugins = Plugins, secure = Secure}} ->
+                                              plugins = RoutePlugins, secure = Secure}} ->
+            {Route, Plugins} = take_route(RoutePlugins),
             {ok,
-             put_extra_state(handler_extra_state(Args),
-                             Req#{plugins => Plugins,
-                                  bindings => Bindings}),
+             put_route(Route, put_extra_state(handler_extra_state(Args),
+                                              Req#{plugins => Plugins,
+                                                   bindings => Bindings})),
              Env#{app => App,
                   cowboy_handler => Handler,
                   arguments => Args,
@@ -211,11 +214,12 @@ route(Req = #{host := Host, path := Path, method := Method}, Env, Dispatch) ->
                  }
             };
         {ok, Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
-                                              plugins = Plugins, secure = Secure}, Pathinfo} ->
+                                              plugins = RoutePlugins, secure = Secure}, Pathinfo} ->
+            {Route, Plugins} = take_route(RoutePlugins),
             {ok,
-             Req#{plugins => Plugins,
-                  extra_state => with_pathinfo(handler_extra_state(Args), Pathinfo),
-                  bindings => Bindings},
+             put_route(Route, Req#{plugins => Plugins,
+                                   extra_state => with_pathinfo(handler_extra_state(Args), Pathinfo),
+                                   bindings => Bindings}),
              Env#{app => App,
                   cowboy_handler => Handler,
                   arguments => Args,
@@ -585,14 +589,15 @@ parse_url(Host, [{RemotePath, LocalPath, Options}|Tl], T = #{prefix := Prefix},
                     {priv_dir, _, _} -> get_dir
                 end,
 
+    RealPath = string:concat(Prefix, RemotePath),
     Value0 = #nova_handler_value{
                 app = App,
                 callback = fun nova_file_controller:TargetFun/1,
                 extra_state = #{static => Payload, options => Options},
-                plugins = Value#nova_handler_value.plugins,
+                plugins = with_route(RealPath, Value#nova_handler_value.plugins),
                 secure = Secure
                },
-    Tree0 = insert(Host, string:concat(Prefix, RemotePath), '_', Value0, Tree, insert_opts(T)),
+    Tree0 = insert(Host, RealPath, '_', Value0, Tree, insert_opts(T)),
     parse_url(Host, Tl, T, Value, Tree0);
 parse_url(Host, [{Path, {Mod, Func}, Options}|Tl], T, Value = #nova_handler_value{app = _App, secure = _Secure}, Tree) ->
     RouterFile = maps:get(router_file, T, undefined),
@@ -613,7 +618,8 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
             ExtraState = route_extra_state(Options, T),
             Value0 = Value#nova_handler_value{extra_state = ExtraState},
 
-            Value1 = Value0#nova_handler_value{callback = Callback},
+            Value1 = Value0#nova_handler_value{callback = Callback,
+                                               plugins = with_route(RealPath, Value#nova_handler_value.plugins)},
             ?LOG_DEBUG(#{action => <<"Adding route">>, route => RealPath, app => App, methods => Methods,
                          router_file => maps:get(router_file, Options, undefined)}),
             CompiledPaths = insert_methods(Methods, Host, RealPath, Value1, Tree, insert_opts(T),
@@ -628,16 +634,16 @@ parse_url(Host,
           [{Path, Mod, #{protocol := ws} = Options} | Tl],
           T = #{prefix := Prefix}, #nova_handler_value{app = App, secure = Secure} = Value,
           Tree) when is_atom(Mod) ->
+    RealPath = concat_strings(Prefix, Path),
     Value0 =  #cowboy_handler_value{
                   app = App,
                   handler = nova_ws_handler,
                   arguments = websocket_arguments(Mod, App, Options, T),
-                  plugins = Value#nova_handler_value.plugins,
+                  plugins = with_route(RealPath, Value#nova_handler_value.plugins),
                   secure = Secure},
 
     ?LOG_DEBUG(#{action => <<"Adding route">>, protocol => <<"ws">>, route => Path, app => App,
                  router_file => maps:get(router_file, T, undefined)}),
-    RealPath = concat_strings(Prefix, Path),
     CompiledPaths = insert(Host, RealPath, '_', Value0, Tree, insert_opts(T)),
     parse_url(Host, Tl, T, Value, CompiledPaths).
 
@@ -687,6 +693,15 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
 
 insert_opts(T) ->
     maps:get(insert_opts, T, #{}).
+
+with_route(RealPath, Plugins) ->
+    [{nova_route, unicode:characters_to_binary(RealPath)} | Plugins].
+
+take_route([{nova_route, Route} | Plugins]) -> {Route, Plugins};
+take_route(Plugins)                          -> {undefined, Plugins}.
+
+put_route(undefined, Req) -> Req;
+put_route(Route, Req)     -> Req#{nova_route => Route}.
 
 route_extra_state(#{extra_state := ExtraState}, _Group) -> ExtraState;
 route_extra_state(_Options, #{extra_state := ExtraState}) -> ExtraState;
