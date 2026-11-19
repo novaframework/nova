@@ -23,8 +23,11 @@
                 req,
                 session :: #session{} | undefined,
                 sent = false :: false | headers | true,
-                invalid_headers = error_terminate :: error_terminate | ignore
+                invalid_headers = error_terminate :: error_terminate | ignore,
+                dropped = false :: boolean()
                }).
+
+-define(DROPPED_INTERVAL, 1000).
 
 -type state() :: #state{}.
 
@@ -53,6 +56,10 @@ info(_StreamID, {nova_session, Event}, State = #state{session = Session}) ->
 info(_StreamID, {nova_response_begun, From, Ref}, State = #state{sent = Sent}) when is_pid(From) ->
     From ! {Ref, Sent},
     {[], State};
+info(_StreamID, {response, Code, _Headers, _Body}, State = #state{sent = Sent}) when Sent =/= false ->
+    {[], dropped(Code, State)};
+info(_StreamID, {headers, Code, _Headers}, State = #state{sent = Sent}) when Sent =/= false ->
+    {[], dropped(Code, State)};
 info(StreamID, Info, State) ->
     respond(StreamID, Info, State).
 
@@ -78,6 +85,19 @@ begun(Sent, Headers, State = #state{invalid_headers = Mode}) ->
         ok -> State#state{sent = Sent};
         error_terminate -> State
     end.
+
+dropped(_Code, State = #state{dropped = true}) ->
+    State;
+dropped(Code, State = #state{req = Req}) ->
+    case nova_once:per_interval({?MODULE, dropped}, ?DROPPED_INTERVAL) of
+        {true, NotLogged} ->
+            ?LOG_WARNING(#{msg => ~"The request was answered already, so this response is not sent. A controller, plugin or security callback that answers with cowboy_req has to hand back the request it got from it",
+                           status => Code, method => maps:get(method, Req, undefined),
+                           path => maps:get(path, Req, undefined), not_logged => NotLogged});
+        false ->
+            ok
+    end,
+    State#state{dropped = true}.
 
 forward(StreamID, Info, State = #state{next = Next}) ->
     {Commands, Next0} = cowboy_stream:info(StreamID, Info, Next),
