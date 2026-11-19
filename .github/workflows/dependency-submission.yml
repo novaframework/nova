@@ -16,4 +16,4 @@ jobs:
         with:
           otp-version: '27'
           rebar3-version: '3.24'
-      - uses: Taure/rebar3-dependency-submission@main
+      - uses: Taure/rebar3-dependency-submission@423cf7b88adc28081d1796b153804ba9305ffd47 # main
