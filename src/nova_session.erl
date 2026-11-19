@@ -10,7 +10,8 @@
         ]).
 
 -export([
-         enabled/0
+         enabled/0,
+         cookie_opts/1
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -89,7 +90,7 @@ delete(Req) ->
             Mod = get_session_module(),
             Mod:delete_value(SessionId),
             Req1 = cowboy_req:set_resp_cookie(<<"session_id">>, SessionId, Req,
-                                              #{max_age => 0}),
+                                              (cookie_opts(Req))#{max_age => 0}),
             {ok, Req1};
         _ ->
             %% Session not found
@@ -114,6 +115,28 @@ delete(Req, Key) ->
 -spec enabled() -> boolean().
 enabled() ->
     nova_config:get_env(use_sessions, true) =:= true.
+
+-doc false.
+-spec cookie_opts(cowboy_req:req()) -> cow_cookie:cookie_opts().
+cookie_opts(Req) ->
+    Secure = not nova:is_dev_environment() orelse maps:get(scheme, Req, ~"http") =:= ~"https",
+    Defaults = #{path => ~"/", http_only => true, same_site => lax, secure => Secure},
+    case nova_config:get_env(session_cookie_opts, #{}) of
+        Configured when is_map(Configured) -> merge_cookie_opts(maps:to_list(Configured), Defaults);
+        _ -> Defaults
+    end.
+
+merge_cookie_opts([], Opts) ->
+    Opts;
+merge_cookie_opts([{Key, Value} | Rest], Opts) when (Key =:= path orelse Key =:= domain), is_binary(Value) ->
+    merge_cookie_opts(Rest, Opts#{Key => Value});
+merge_cookie_opts([{Key, Value} | Rest], Opts) when (Key =:= secure orelse Key =:= http_only), is_boolean(Value) ->
+    merge_cookie_opts(Rest, Opts#{Key => Value});
+merge_cookie_opts([{same_site, Value} | Rest], Opts)
+  when Value =:= default; Value =:= none; Value =:= strict; Value =:= lax ->
+    merge_cookie_opts(Rest, Opts#{same_site => Value});
+merge_cookie_opts([_ | Rest], Opts) ->
+    merge_cookie_opts(Rest, Opts).
 
 %%%===================================================================
 %%% Private functions

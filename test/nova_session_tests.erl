@@ -177,7 +177,8 @@ delete_sets_expired_cookie() ->
     ok = nova_session:set(Req, <<"key">>, <<"val">>),
     sync(),
     {ok, Req1} = nova_session:delete(Req),
-    ?assertMatch(#{resp_cookie := #{name := <<"session_id">>, opts := #{max_age := 0}}}, Req1).
+    ?assertMatch(#{resp_cookie := #{name := <<"session_id">>,
+                                    opts := #{max_age := 0, path := ~"/", http_only := true}}}, Req1).
 
 delete_key_preserves_other_keys() ->
     {ok, SId} = nova_session:generate_session_id(),
@@ -208,3 +209,43 @@ generate_session_id_format() ->
     ?assertEqual(32, byte_size(Decoded)),
     {ok, Id2} = nova_session:generate_session_id(),
     ?assertNotEqual(Id, Id2).
+
+%%--------------------------------------------------------------------
+%% cookie_opts/1
+%%--------------------------------------------------------------------
+
+cookie_opts_test_() ->
+    {foreach,
+     fun() -> application:set_env(nova, bootstrap_application, nova) end,
+     fun(_) ->
+             [application:unset_env(nova, Key) || Key <- [environment, session_cookie_opts, bootstrap_application]]
+     end,
+     [
+      fun opts_prod/0,
+      fun opts_dev/0,
+      fun opts_configured/0,
+      fun opts_no_max_age/0
+     ]}.
+
+opts_prod() ->
+    application:set_env(nova, environment, prod),
+    ?assertEqual(#{path => ~"/", http_only => true, same_site => lax, secure => true},
+                 nova_session:cookie_opts(#{scheme => ~"http"})).
+
+opts_dev() ->
+    application:set_env(nova, environment, dev),
+    ?assertMatch(#{secure := false}, nova_session:cookie_opts(#{scheme => ~"http"})),
+    ?assertMatch(#{secure := true}, nova_session:cookie_opts(#{scheme => ~"https"})).
+
+%% A value of the wrong type leaves the default in place.
+opts_configured() ->
+    application:set_env(nova, session_cookie_opts,
+                        #{same_site => strict, path => "/x", http_only => false, domain => ~"example.com"}),
+    ?assertMatch(#{same_site := strict, path := ~"/", http_only := false, domain := ~"example.com"},
+                 nova_session:cookie_opts(#{scheme => ~"http"})).
+
+%% The cookie ends with the browser session, also when the options ask for
+%% a Max-Age.
+opts_no_max_age() ->
+    application:set_env(nova, session_cookie_opts, #{max_age => 3600}),
+    ?assertNot(is_map_key(max_age, nova_session:cookie_opts(#{scheme => ~"https"}))).

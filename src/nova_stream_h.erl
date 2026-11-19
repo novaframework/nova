@@ -27,7 +27,8 @@ init(StreamID, Req, Opts) ->
                     present -> Req;
                     absent ->
                         {ok, SessionId} = nova_session:generate_session_id(),
-                        ReqWithCookie = cowboy_req:set_resp_cookie(~"session_id", SessionId, Req),
+                        ReqWithCookie = cowboy_req:set_resp_cookie(~"session_id", SessionId, Req,
+                                                                   nova_session:cookie_opts(Req)),
                         ReqWithCookie#{nova_session_id => SessionId};
                     unparsable ->
                         {ok, SessionId} = nova_session:generate_session_id(),
