@@ -997,6 +997,15 @@ plugin_key({Type, PluginName, _Options}) -> {Type, PluginName};
 plugin_key(Plugin)                       -> Plugin.
 
 -spec with_checked_options(Plugin :: plugin(), Named :: map()) -> plugin().
+with_checked_options({pre_request, nova_csrf_plugin, _Options} = Plugin, Named) ->
+    case nova_session:enabled() of
+        true ->
+            with_checked_origins(Plugin, Named);
+        false ->
+            ?LOG_ERROR(Named#{msg => ~"nova_csrf_plugin keeps its token in the session, or signs it for the session cookie, and use_sessions is false",
+                              setting => use_sessions, value => false, plugin => nova_csrf_plugin}),
+            throw({error, {invalid_setting, use_sessions, {required_by, nova_csrf_plugin}}})
+    end;
 with_checked_options(Plugin, Named) ->
     with_checked_origins(Plugin, Named).
 
