@@ -233,7 +233,7 @@ without_refused_body(_StatusCode, Req) ->
 render_response(Req, Env, StatusCode) ->
     case application:get_env(nova, render_error_pages, true) of
         true ->
-            case nova_router:lookup_url(StatusCode) of
+            case nova_router:lookup_url('_', StatusCode, '_', nova_router:dispatch_key(Env)) of
                 {error, _} ->
                     %% Render the internal view of nova
                     {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, fun erlang:date/0, Req),
