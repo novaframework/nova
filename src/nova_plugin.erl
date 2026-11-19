@@ -3,17 +3,23 @@
 %%% Created : 12 Feb 2020 by Niclas Axelsson <niclas@burbas.se>
 -module(nova_plugin).
 -moduledoc """
-Plugins can be run at two different times; either in the beginning or at the end of a request. They can modify both the actual request or the nova-state. A plugin is implemented with the nova_plugin behaviour and needs to implement three different functions: pre_request/2, post_request/2 and plugin_info/0.
+Plugins run at the beginning or at the end of a request. They can modify both the actual request or the nova-state. A plugin is implemented with the nova_plugin behaviour and needs to implement pre_security/4, pre_request/4 and/or post_request/4, and plugin_info/0.
 
-A plugin can return either \{ok, NewState\}, \{break, NewState\}, \{stop, NewState\}, \{error, Reason\}.
+A plugin returns one of:
 
-\{ok, NewState\} will continue the normal execution with the NewState.
+`{ok, Req, State}` continues with the next plugin.
 
-\{break, NewState\} breaks the execution of the current plugin-chain. This means that if a pre_request-plugin returns the break-statement the rest of the plugins in that chain will be skipped.
+`{ok, Reply, Req, State}` sets the reply on `Req` and continues. `Reply` must be a `{reply, ...}` here: the controller answers later, so a redirect or a bare status would be overwritten. Any other reply renders the 500 status page and logs that `stop` is needed.
 
-\{stop, NewState\} stops the execution. The plugin is responsible in this case for returning a proper response to the client.
+`{stop, Req, State}` stops the execution. The plugin is responsible in this case for returning a proper response to the client. `{stop, Reply, Req, State}` stops and sends `Reply`. `{stop, Req}` is a deprecated form of `{stop, Req, State}` that keeps the plugin's state as it was; it will be removed in 1.0.
 
-\{error, Reason\} will stop the execution and call the nova_error plugin, resulting in a 500 response back to the user. If debug mode is enabled the reason will be returned in the 500-response.
+`{break, Req, State}` and `{break, Reply, Req, State}` are deprecated aliases of the matching `stop` returns and will be removed in 1.0. They log a warning, once per plugin module; return `stop` instead.
+
+`{error, Reason}` stops the execution and renders the 500 status page.
+
+`Reply` is `{reply, Body}`, `{reply, Status, Body}`, `{reply, Status, Headers, Body}`, `{redirect, Url}`, `{redirect_local, Path}`, `{status, Status}` or `{status, Status, Headers}`. `Headers` is a map or a list of `{Name, Value}` pairs. Any other reply renders the 500 status page.
+
+When a pre_request plugin stops the request, or the security function refuses it, the controller and the post_request plugins do not run.
 
 ## Before and after the security callback
 
@@ -36,26 +42,47 @@ What this order changes without anything failing is said once for a route group,
 - `pre_request_not_for_preflight`: a plugin from outside Nova only has `pre_request/4`, in a route group with a route that does not take `OPTIONS`. It does not run for a CORS preflight to such a route, also when it is listed under `plugins_before_security`.
 
 A plugin that has `pre_security/4` is named by neither of the last two, and exporting it is what ends them for a plugin.
+
+The state a plugin returns is kept per plugin module and shared by every request. Nova writes it back only when it changed, and concurrent requests overwrite each other's writes (the last writer wins). Keep per-request data in `Req`, and use `ets` or `counters` for anything shared that has to add up, such as counters.
+
+These callbacks run for HTTP requests. Websocket handlers run their plugins through `nova_ws_handler`, which has its own contract; see `nova_websocket`.
+
 """.
 
+-doc "The two points of a request a plugin can run at.".
 -type request_type() :: pre_request | post_request.
 -export_type([request_type/0, reply/0]).
 
--type reply() :: {reply, Body :: binary()} |
-                 {reply, Status :: integer(), Body :: binary()} |
-                 {reply, Status :: integer(), Headers :: [{binary(), binary()}], Body :: binary()}.
+-doc """
+A reply a plugin hands to Nova to send. `{reply, ...}` takes a body, with a
+status of `200` unless one is given. `{redirect, Url}` answers `302` with a
+`location` header. `{redirect_local, Path}` does the same for a path on the
+site the request was made to, and answers `400` for anything else.
+`{status, ...}` answers with that status and no body.
+""".
+-type reply() :: {reply, Body :: iodata()} |
+                 {reply, Status :: integer(), Body :: iodata()} |
+                 {reply, Status :: integer(), Headers :: cowboy:http_headers() | [{binary(), iodata()}],
+                  Body :: iodata()} |
+                 {redirect, Url :: binary() | string()} |
+                 {redirect_local, Path :: binary() | string()} |
+                 {status, Status :: integer()} |
+                 {status, Status :: integer(), Headers :: cowboy:http_headers() | [{binary(), iodata()}]}.
 
 -doc """
-Start function for the plugin. This function is called when the plugin is started
-and will return a state that will be passed to the other functions during
-the life cycle of the plugin. The state can be any term.
+Called when the plugin is first found in a routing table: at start for the
+routes compiled then, and later for a plugin that first appears in routes
+added at runtime. Returns the state of the plugin, any term, which
+`pre_request/4` and `post_request/4` get as `PluginState`. A plugin without
+`init/0` starts with `#{}`.
 """.
 -callback init() -> State :: nova:state().
 -optional_callbacks([init/0]).
 
 -doc """
-Stop function for the plugin. This function is called when the application is stopped.
-It takes a state as argument and should return ok.
+Called with the state of the plugin when the plugin manager terminates,
+which it does when `nova` stops. The return value is not used, and an
+exception is logged.
 """.
 -callback stop(State :: nova:state()) -> ok.
 -optional_callbacks([stop/1]).
@@ -91,15 +118,15 @@ Nova does with each.
     {break, Req0 :: cowboy_req:req(), NewState :: any()} |
     {break, Reply :: reply(), Req0 :: cowboy_req:req(), NewState :: any()} |
     {stop, Req0 :: cowboy_req:req(), NewState :: any()} |
+    {stop, Req0 :: cowboy_req:req()} |
     {stop, Reply :: reply(), Req0 :: cowboy_req:req(), NewState :: any()} |
     {error, Reason :: term()}.
 -optional_callbacks([pre_request/4]).
 
 -doc """
-This function is called after the request is processed. It can modify the request.
-It takes a state and a map of options as arguments and should return
-either `{ok, NewState}`, `{break, NewState}`, `{stop, NewState}` or `{error, Reason}`.
-The state is only used if there's another plugin invoked after this one.
+Called for every HTTP request on a route that lists the plugin under
+`post_request`, after the controller has returned. The arguments and the
+returns are those of `pre_request/4`.
 """.
 -callback post_request(Req :: cowboy_req:req(), Env :: any(),
                        Options :: map(), PluginState :: any()) ->
@@ -108,13 +135,15 @@ The state is only used if there's another plugin invoked after this one.
     {break, Req0 :: cowboy_req:req(), NewState :: any()} |
     {break, Reply :: reply(), Req0 :: cowboy_req:req(), NewState :: any()} |
     {stop, Req0 :: cowboy_req:req(), NewState :: any()} |
+    {stop, Req0 :: cowboy_req:req()} |
     {stop, Reply :: reply(), Req0 :: cowboy_req:req(), NewState :: any()} |
     {error, Reason :: term()}.
 -optional_callbacks([post_request/4]).
 
 -doc """
-This function should return information about the plugin. The information is used
-in the documentation and in the plugin-listing.
+Called when the plugin is added, and has to return a map with at least
+`title` and `version`. The other keys describe the plugin and are not read by
+Nova.
 """.
 -callback plugin_info() -> #{title := binary(),
                             version := binary(),

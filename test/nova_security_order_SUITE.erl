@@ -15,6 +15,7 @@
          plugin_listed_before_security_runs_ahead_of_it/1,
          every_plugin_runs_ahead_of_security_with_all/1,
          plugin_after_security_can_stop_the_request/1,
+         plugins_behind_security_are_skipped_once_an_earlier_one_failed/1,
          plugin_that_fails_after_security_ends_the_request/1,
          list_from_the_environment_applies/1,
          route_group_list_wins_over_the_environment/1]).
@@ -42,6 +43,7 @@ groups() ->
                                plugin_listed_before_security_runs_ahead_of_it,
                                every_plugin_runs_ahead_of_security_with_all,
                                plugin_after_security_can_stop_the_request,
+                               plugins_behind_security_are_skipped_once_an_earlier_one_failed,
                                plugin_that_fails_after_security_ends_the_request]},
      {environment_option, [], [list_from_the_environment_applies,
                                route_group_list_wins_over_the_environment]}].
@@ -158,6 +160,10 @@ every_plugin_runs_ahead_of_security_with_all(Config) ->
 plugin_after_security_can_stop_the_request(Config) ->
     ?assertMatch({401, _, _}, post(Config, "/stopping/echo", [], <<>>)),
     ?assertMatch({403, _, _}, post(Config, "/stopping/echo", [?ALLOWED], <<>>)).
+
+%% The malformed body would be a 400 if the plugin reading it still ran.
+plugins_behind_security_are_skipped_once_an_earlier_one_failed(Config) ->
+    ?assertMatch({500, _, _}, post(Config, "/failing/echo", [?JSON, ?ALLOWED], ~"{")).
 
 plugin_that_fails_after_security_ends_the_request(Config) ->
     ?assertMatch({401, _, _}, post(Config, "/failing-late/echo", [?JSON], ~"{")),
