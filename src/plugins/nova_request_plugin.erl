@@ -89,21 +89,39 @@ modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", 
                              error => Error}),
             {stop, Req400, State}
     end;
-modulate_state(#{headers := #{<<"content-type">> := <<"application/x-www-form-urlencoded", _/binary>>}, body := Body} = Req,
-               [{read_urlencoded_body, true}|Tl], State) ->
-    Data = cow_qs:parse_qs(Body),
-    %% First read in the body
-    Params = maps:from_list(Data),
-    modulate_state(Req#{params => Params}, Tl, State);
-modulate_state(Req, [{parse_qs, Type}|T1], State) ->
-    Qs = cowboy_req:parse_qs(Req),
-    case Type of
-        true -> MapQs = maps:from_list(Qs),
-                modulate_state(Req#{parsed_qs => MapQs}, T1, State);
-        list -> modulate_state(Req#{parsed_qs => Qs}, T1, State)
+modulate_state(Req = #{body := Body}, [{read_urlencoded_body, true}|Tl], State) ->
+    case content_type(Req) of
+        {~"application", ~"x-www-form-urlencoded"} ->
+            try maps:from_list(cow_qs:parse_qs(Body)) of
+                Params -> modulate_state(Req#{params => Params}, Tl, State)
+            catch
+                error:limit_reached -> refuse(413, ~"Too many fields in the urlencoded body", Req, State);
+                error:_ -> refuse(400, ~"Malformed urlencoded body", Req, State)
+            end;
+        _ ->
+            modulate_state(Req, Tl, State)
+    end;
+modulate_state(Req, [{parse_qs, Type}|Tl], State) when Type =:= true; Type =:= list ->
+    try cowboy_req:parse_qs(Req) of
+        Qs when Type =:= true -> modulate_state(Req#{parsed_qs => maps:from_list(Qs)}, Tl, State);
+        Qs -> modulate_state(Req#{parsed_qs => Qs}, Tl, State)
+    catch
+        exit:{request_error, _, _} -> refuse(400, ~"Malformed query string", Req, State)
     end;
 modulate_state(Req, [_|Tl], State) ->
     modulate_state(Req, Tl, State).
+
+refuse(Status, Reason, Req, State) ->
+    ?LOG_WARNING(#{msg => ~"Request refused", reason => Reason, status_code => Status}),
+    {stop, {status, Status}, Req, State}.
+
+content_type(Req) ->
+    try cowboy_req:parse_header(~"content-type", Req) of
+        {Type, SubType, _Params} -> {Type, SubType};
+        _ -> undefined
+    catch
+        _:_ -> undefined
+    end.
 
 %% A multipart body is never buffered here; nova_multipart_plugin or the
 %% controller reads the parts from the stream.
@@ -133,12 +151,7 @@ invalid_limit(Key, Value, Default) ->
     Default.
 
 is_multipart(Req) ->
-    try cowboy_req:parse_header(<<"content-type">>, Req) of
-        {<<"multipart">>, <<"form-data">>, _Params} -> true;
-        _ -> false
-    catch
-        _:_ -> false
-    end.
+    content_type(Req) =:= {~"multipart", ~"form-data"}.
 
 read_body(Req, MaxLength, Timeout) ->
     Deadline = case Timeout of
