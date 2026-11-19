@@ -14,6 +14,7 @@
 %%====================================================================
 
 start(_StartType, _StartArgs) ->
+    nova_router:forget_plugins(),
     nova_sup:start_link().
 
 prep_stop(State) ->
