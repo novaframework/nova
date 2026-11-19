@@ -2,8 +2,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("../include/nova_router.hrl").
 
--define(SETUP, fun() -> setup() end).
--define(CLEANUP, fun(S) -> cleanup(S) end).
+-define(SETUP, fun setup/0).
+-define(CLEANUP, fun cleanup/1).
 
 setup() ->
     Prev = nova_test_helper:setup_nova_env(),
@@ -281,6 +281,17 @@ render_status_page_custom_handler_test_() ->
         ControllerData = maps:get(controller_data, Env1),
         ?assertEqual(404, maps:get(status, ControllerData)),
         ?assertEqual(#{error => <<"test">>}, maps:get(data, ControllerData))
+    end}.
+
+%% A controller is called with the request and nothing else, so what a
+%% caller hands to the status page has to be in it.
+render_status_page_data_reaches_the_controller_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Req = nova_test_helper:mock_req(~"GET", ~"/"),
+        {ok, Custom, _} = nova_router:render_status_page('_', 404, #{error => ~"test"}, Req, #{}),
+        ?assertEqual(#{status => 404, data => #{error => ~"test"}}, maps:get(controller_data, Custom)),
+        {ok, Fallback, _} = nova_router:render_status_page(500, #{reason => test}, Req),
+        ?assertEqual(#{status => 500, data => #{reason => test}}, maps:get(controller_data, Fallback))
     end}.
 
 render_status_page_fallback_test_() ->
@@ -686,6 +697,25 @@ plugins_before_security_that_is_refused_names_the_route_group_test() ->
 
 order(Before) ->
     #{before => Before, secured => false}.
+
+%% plugins_after_security was in no release. A route group that has it is
+%% refused, and told what changes the order now.
+plugins_after_security_of_a_route_group_is_refused_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Group = #{prefix => "/after", plugins => [{pre_request, nova_request_plugin, #{}}],
+                  plugins_after_security => [nova_request_plugin],
+                  routes => [{"/page", fun(_) -> {json, #{}} end, #{methods => [post]}}]},
+        {_, Events} = nova_test_log:collect(
+                        fun() ->
+                                ?assertThrow({error, {invalid_setting, plugins_after_security,
+                                                      {replaced_by, plugins_before_security}}},
+                                             nova_router:add_routes(route_app, Group))
+                        end),
+        ?assertMatch([#{setting := plugins_after_security, replaced_by := plugins_before_security,
+                        app := route_app, prefix := "/after"}],
+                     nova_test_log:errors(Events)),
+        ?assertEqual({error, not_found}, nova_router:lookup_url('_', ~"/after/page", ~"POST"))
+    end}.
 
 %% trusted_origins is an option of two plugins as well as a setting. The
 %% option is checked as the setting is, when the routes are compiled.
