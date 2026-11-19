@@ -11,7 +11,8 @@
 %%--------------------------------------------------------------------
 -doc "Pre-request callback".
 -spec pre_security(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
-                         {ok, Req0 :: cowboy_req:req(), NewState :: any()}.
+                          {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
+                          {stop, Req0 :: cowboy_req:req(), NewState :: any()}.
 pre_security(Req, _Env, #{allow_origins := Origins}, State) ->
     ReqWithOptions = add_cors_headers(Req, Origins),
     continue(ReqWithOptions, State).
@@ -47,11 +48,17 @@ plugin_info() ->
 %% Private functions
 %%%%%%%%%%%%%%%%%%%%%%
 
-continue(#{method := <<"OPTIONS">>} = Req, State) ->
-    Reply = cowboy_req:reply(200, Req),
-    {stop, Reply, State};
 continue(Req, State) ->
-    {ok, Req, State}.
+    case is_preflight(Req) of
+        true -> {stop, cowboy_req:reply(204, Req), State};
+        false -> {ok, Req, State}
+    end.
+
+is_preflight(#{method := ~"OPTIONS"} = Req) ->
+    cowboy_req:header(~"origin", Req) =/= undefined andalso
+        cowboy_req:header(~"access-control-request-method", Req) =/= undefined;
+is_preflight(_Req) ->
+    false.
 
 add_cors_headers(Req, Origins) ->
     OriginsReq = cowboy_req:set_resp_header(

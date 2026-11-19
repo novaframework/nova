@@ -22,15 +22,37 @@ pre_request_specific_origin_test() ->
     ?assertEqual(<<"https://example.com">>, maps:get(<<"Access-Control-Allow-Origin">>, Headers)).
 
 %%====================================================================
-%% pre_request/4 — OPTIONS returns {stop, ...} with 200
+%% pre_request/4: OPTIONS returns {stop, ...} with 204
 %%====================================================================
 
 pre_request_options_stop_test() ->
-    Req = nova_test_helper:mock_req(<<"OPTIONS">>, <<"/">>),
-    Opts = #{allow_origins => <<"*">>},
-    {stop, Req1, my_state} = nova_cors_plugin:pre_security(Req, #{}, Opts, my_state),
-    %% cowboy_req:reply/2 sets resp_status_code on the req
-    ?assert(is_map(Req1)).
+    meck:new(cowboy_req, [passthrough]),
+    meck:expect(cowboy_req, reply, fun(Status, R) -> R#{replied => Status} end),
+    try
+        Opts = #{allow_origins => ~"*"},
+        {stop, Req1, my_state} = nova_cors_plugin:pre_security(preflight(~"https://a.example"), #{}, Opts,
+                                                              my_state),
+        ?assertEqual(204, maps:get(replied, Req1))
+    after
+        meck:unload(cowboy_req)
+    end.
+
+%% An OPTIONS request without Origin and Access-Control-Request-Method is not
+%% a preflight; the application answers it.
+pre_request_plain_options_reaches_app_test() ->
+    Opts = #{allow_origins => ~"*"},
+    NoMethod = with_origin(~"https://a.example", nova_test_helper:mock_req(~"OPTIONS", ~"/")),
+    ?assertMatch({ok, _, state}, nova_cors_plugin:pre_security(NoMethod, #{}, Opts, state)),
+    NoOrigin = nova_test_helper:with_header(~"access-control-request-method", ~"POST",
+                                            nova_test_helper:mock_req(~"OPTIONS", ~"/")),
+    ?assertMatch({ok, _, state}, nova_cors_plugin:pre_security(NoOrigin, #{}, Opts, state)).
+
+preflight(Origin) ->
+    nova_test_helper:with_header(~"access-control-request-method", ~"POST",
+                                 with_origin(Origin, nova_test_helper:mock_req(~"OPTIONS", ~"/"))).
+
+with_origin(Origin, Req) ->
+    nova_test_helper:with_header(~"origin", Origin, Req).
 
 %%====================================================================
 %% post_request/4 — passes through unchanged
