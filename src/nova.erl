@@ -9,12 +9,15 @@
          get_main_app/0,
          get_apps/0,
          get_environment/0,
+         is_dev_environment/0,
          get_env/2,
          set_env/2,
          use_stacktrace/1,
          format_stacktrace/1,
          detect_language/0
         ]).
+
+-define(DEFAULT_ENVIRONMENT, prod).
 
 -type state() :: any().
 -export_type([state/0]).
@@ -33,10 +36,21 @@ get_apps() ->
     nova_router:compiled_apps().
 
 %%--------------------------------------------------------------------
--doc "Returns which environment nova is started in. This fetches the environment-variable in sys.config for Nova and returns the value found. Defaults to: dev".
+-doc """
+The environment Nova runs in: the `environment` key of the `nova`
+application, and `prod` when the key is not set. Routers are asked for
+`routes(Environment)`. Only `dev` turns on what is meant for development, so
+it has to be written out: `{nova, [{environment, dev}]}`.
+""".
 -spec get_environment() -> any().
 get_environment() ->
-    application:get_env(nova, environment, dev).
+    application:get_env(nova, environment, ?DEFAULT_ENVIRONMENT).
+
+%%--------------------------------------------------------------------
+-doc "Whether `get_environment/0` is `dev`, which an unset `environment` is not. Nova asks this where `dev` relaxes a default, such as the crash details on error pages.".
+-spec is_dev_environment() -> boolean().
+is_dev_environment() ->
+    get_environment() =:= dev.
 
 %%--------------------------------------------------------------------
 -doc "Works as the regular application:get_env/3 but instead of giving a specific application we target the application that started nova.".

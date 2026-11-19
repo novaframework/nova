@@ -14,7 +14,8 @@ nova_test_() ->
      fun cleanup/1,
      [
       fun get_main_app_returns_nova/0,
-      fun get_environment_returns_dev/0,
+      fun unset_environment/0,
+      fun set_environment/0,
       fun get_env_returns_value/0,
       fun get_env_returns_default_when_missing/0,
       fun set_env_sets_value/0,
@@ -29,8 +30,31 @@ nova_test_() ->
 get_main_app_returns_nova() ->
     ?assertEqual({ok, nova}, nova:get_main_app()).
 
-get_environment_returns_dev() ->
-    ?assertEqual(dev, nova:get_environment()).
+%% Leaving the key out must never turn on what is meant for development.
+unset_environment() ->
+    with_environment(undefined, fun() ->
+                                        ?assertEqual(prod, nova:get_environment()),
+                                        ?assertNot(nova:is_dev_environment())
+                                end).
+
+set_environment() ->
+    [with_environment({ok, Environment},
+                      fun() ->
+                              ?assertEqual(Environment, nova:get_environment()),
+                              ?assertEqual(Environment =:= dev, nova:is_dev_environment())
+                      end) || Environment <- [dev, prod, staging]].
+
+with_environment(Wanted, Fun) ->
+    Before = application:get_env(nova, environment),
+    Set = fun({ok, Environment}) -> application:set_env(nova, environment, Environment);
+             (undefined) -> application:unset_env(nova, environment)
+          end,
+    try
+        Set(Wanted),
+        Fun()
+    after
+        Set(Before)
+    end.
 
 get_env_returns_value() ->
     application:set_env(nova, test_param, <<"hello">>),
