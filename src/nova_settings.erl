@@ -5,7 +5,7 @@
 
 -include_lib("kernel/include/logger.hrl").
 
--type key() :: max_sessions | plugins_before_security |
+-type key() :: max_sessions | non_canonical_paths | plugins_before_security |
                secret_key_base.
 -export_type([key/0]).
 
@@ -35,6 +35,8 @@ returns a secret that was refused. Also for a route group or a plugin that
 takes one of the settings as an option of its own.
 """.
 -spec checked(Key :: key(), Value :: term()) -> {ok, term()} | {error, Reason :: term()}.
+checked(non_canonical_paths, Value) when Value =:= reject; Value =:= resolve ->
+    {ok, Value};
 checked(secret_key_base, undefined) ->
     {ok, []};
 checked(secret_key_base, Secret) when is_binary(Secret) ->
@@ -57,6 +59,7 @@ checked(_Key, Value) ->
     {error, Value}.
 
 -spec expected(Key :: key()) -> binary().
+expected(non_canonical_paths) -> ~"non_canonical_paths must be reject or resolve";
 expected(secret_key_base) ->
     ~"secret_key_base must be a binary of at least 32 bytes out of a random source, or a list of such. A value that repeats a few bytes, an example out of the documentation or a ${VARIABLE} that was not filled in is refused. base64:encode(crypto:strong_rand_bytes(48)) in an Erlang shell, or openssl rand -base64 48, makes one";
 expected(max_sessions) -> ~"max_sessions must be infinity or an integer above 0";
@@ -65,9 +68,10 @@ expected(plugins_before_security) ->
 
 -spec keys() -> [key()].
 keys() ->
-    [secret_key_base, max_sessions, plugins_before_security].
+    [non_canonical_paths, secret_key_base, max_sessions, plugins_before_security].
 
 -spec default(key()) -> term().
+default(non_canonical_paths) -> reject;
 default(secret_key_base) -> undefined;
 default(max_sessions) -> ?DEFAULT_MAX_SESSIONS;
 default(plugins_before_security) -> [].
