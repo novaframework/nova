@@ -181,15 +181,18 @@ a_failed_bind_leaves_no_routing_table(_Config) ->
 %% Cowboy says why a TLS listener did not start with the options it was
 %% given. Neither the answer nor a log event has the key or its password.
 tls_secrets(_Config) ->
+    {ok, Socket} = gen_tcp:listen(0, [{ip, {0, 0, 0, 0}}]),
+    {ok, Port} = inet:port(Socket),
     ok = logger:add_handler(?FUNCTION_NAME, ?MODULE, #{config => #{to => self()}}),
     try
-        Answer = nova_sup:add_application(nova_test_sub_app, tls_configuration(free_port())),
+        Answer = nova_sup:add_application(nova_test_sub_app, tls_configuration(Port)),
         Logged = logged(),
         ?assertMatch({error, _}, Answer),
         ?assertMatch([_ | _], Logged),
         without_secrets([Answer | Logged])
     after
-        logger:remove_handler(?FUNCTION_NAME)
+        logger:remove_handler(?FUNCTION_NAME),
+        gen_tcp:close(Socket)
     end.
 
 %% Cowboy raises with the options as well, as when ranch is not there to
