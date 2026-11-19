@@ -1,6 +1,7 @@
 -module(nova_test_helper).
 -export([
          mock_req/2,
+         reply/2,
          with_header/3,
          with_json_body/2,
          with_bindings/2,
@@ -78,3 +79,25 @@ cleanup_nova_env(undefined) ->
 cleanup_nova_env({ok, Val}) ->
     application:set_env(nova, bootstrap_application, Val),
     ok.
+
+%% Stands in for cowboy_req:reply/2 where a test mocks it. It refuses what
+%% Cowboy refuses: a second reply, and a body with a 204 or a 304. Unlike
+%% Cowboy it leaves the response in the request and adds the status, for the
+%% test to look at.
+-spec reply(cowboy:http_status(), map()) -> map().
+reply(_Status, #{has_sent_resp := _}) ->
+    exit({response_error, response_already_sent, 'The final response has already been sent.'});
+reply(Status, Req) when Status =:= 204; Status =:= 304 ->
+    case maps:get(resp_body, Req, <<>>) of
+        Body when is_binary(Body); is_list(Body) ->
+            case iolist_size(Body) of
+                0 -> Req#{resp_status_code => Status, has_sent_resp => true};
+                _ -> exit({response_error, payload_too_large,
+                           '204 and 304 responses must not include a body. (RFC7230 3.3)'})
+            end;
+        _Sendfile ->
+            exit({response_error, payload_too_large,
+                  '204 and 304 responses must not include a body. (RFC7230 3.3)'})
+    end;
+reply(Status, Req) ->
+    Req#{resp_status_code => Status, has_sent_resp => true}.

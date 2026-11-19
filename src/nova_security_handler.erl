@@ -3,56 +3,55 @@
 -behaviour(cowboy_middleware).
 
 -export([
-         execute/2
+         execute/2,
+         deny/1
         ]).
 
 -include_lib("kernel/include/logger.hrl").
--include("../include/nova.hrl").
 
-execute(Req, Env = #{secure := false}) ->
-    {ok, Req, Env};
-execute(Req = #{host := Host}, Env = #{secure := Callback}) ->
+execute(Req, Env = #{secure := Secure}) ->
+    case check(Secure, Req, Env) of
+        {allowed, _Returned, Req1} -> {ok, Req1, Env};
+        {answered, Answer} -> Answer
+    end.
+
+check(false, Req, _Env) ->
+    {allowed, none, Req};
+check(Callback, Req = #{host := Host}, Env) when is_function(Callback, 1) ->
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
     try Callback(Req) of
         Result ->
             handle_response(Result, Req, Env)
     catch
-        Class:Reason:Stacktrace when UseStacktrace == true ->
+        Class:Reason0:Stacktrace0 when UseStacktrace == true ->
+            Reason = nova_redact:term(Reason0),
+            Stacktrace = nova_redact:stacktrace(Stacktrace0),
             ?LOG_ERROR(#{msg => <<"Security handler crashed">>,
                          class => Class,
                          reason => Reason,
                          stacktrace => Stacktrace}),
-            Payload = #{status_code => 500,
-                        stacktrace => Stacktrace,
-                        class => Class,
-                        reason => Reason},
-            {ok, Req0, _Env} = nova_router:render_status_page(Host, 500, #{}, Req#{crash_info => Payload}, Env),
-            Req1 = cowboy_req:reply(500, Req0),
-            {stop, Req1};
-        Class:Reason ->
+            Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 500, stacktrace => Stacktrace}),
+            {answered, nova_router:render_status_page(Host, 500, #{}, Req#{crash_info => Payload}, Env)};
+        Class:Reason0 ->
+            Reason = nova_redact:term(Reason0),
             ?LOG_ERROR(#{msg => <<"Security handler crashed">>,
                          class => Class,
                          reason => Reason}),
-            Payload = #{status_code => 500,
-                        class => Class,
-                        reason => Reason},
-            {ok, Req0, _Env} = nova_router:render_status_page(Host, 500, #{}, Req#{crash_info => Payload}, Env),
-            Req1 = cowboy_req:reply(500, Req0),
-            {stop, Req1}
-    end.
-
-
-
-handle_response({true, AuthData}, Req, Env) ->
-    case maps:get(cowboy_handler, Env, undefined) of
-        nova_ws_handler ->
-            Args = maps:get(arguments, Env, #{}),
-            {ok, Req, Env#{arguments => Args#{controller_data => #{auth_data => AuthData}}}};
-        _ ->
-            {ok, Req#{auth_data => AuthData}, Env}
+            Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 500}),
+            {answered, nova_router:render_status_page(Host, 500, #{}, Req#{crash_info => Payload}, Env)}
     end;
-handle_response(true, Req, Env) ->
-    {ok, Req, Env};
+check(_Invalid, Req, Env) ->
+    check(fun deny/1, Req, Env).
+
+-doc false.
+-spec deny(Req :: cowboy_req:req()) -> false.
+deny(_Req) ->
+    false.
+
+handle_response({true, AuthData}, Req, _Env) ->
+    {allowed, {ok, AuthData}, Req#{auth_data => AuthData}};
+handle_response(true, Req, _Env) ->
+    {allowed, none, Req};
 handle_response({false, Headers}, Req, Env) ->
     handle_response({false, 401, Headers, false}, Req, Env);
 handle_response({false, StatusCode, Headers}, Req, Env) ->
@@ -68,12 +67,28 @@ handle_response({false, StatusCode, Headers, Body}, Req = #{host := Host}, Env) 
         end,
     Req2 = cowboy_req:set_resp_headers(Headers, Req1),
     Req3 = cowboy_req:reply(StatusCode, Req2),
-    {stop, Req3};
-handle_response({redirect, Route}, Req, _Env) ->
-    Req0 = cowboy_req:set_resp_headers(#{<<"location">> => list_to_binary(Route)}, Req),
-    Req1 = cowboy_req:reply(302, Req0),
-    {stop, Req1};
+    {answered, {stop, Req3}};
+handle_response({redirect, Route}, Req, Env) when is_binary(Route); is_list(Route) ->
+    case nova_basic_handler:location(Route) of
+        error ->
+            ?LOG_ERROR(#{msg => ~"Security callback redirected to an invalid location"}),
+            handle_response(invalid_redirect, Req, Env);
+        Location ->
+            Req0 = cowboy_req:set_resp_headers(#{~"location" => Location}, Req),
+            Req1 = cowboy_req:reply(302, Req0),
+            {answered, {stop, Req1}}
+    end;
+handle_response({redirect_local, Route}, Req, _Env) when is_binary(Route); is_list(Route) ->
+    case nova_basic_handler:local_location(Route) of
+        error ->
+            ?LOG_WARNING(#{msg => ~"Security callback refused to redirect to a location that is not a local path",
+                           location => nova_basic_handler:loggable_location(Route)}),
+            {answered, {stop, cowboy_req:reply(400, Req)}};
+        Location ->
+            Req0 = cowboy_req:set_resp_headers(#{~"location" => Location}, Req),
+            {answered, {stop, cowboy_req:reply(302, Req0)}}
+    end;
 handle_response(_, Req = #{host := Host}, Env) ->
     {ok, Req0, _Env0} = nova_router:render_status_page(Host, 401, #{}, Req, Env),
     Req1 = cowboy_req:reply(401, Req0),
-    {stop, Req1}.
+    {answered, {stop, Req1}}.

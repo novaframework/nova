@@ -27,9 +27,12 @@ init(Req = #{method := _Method, plugins := Plugins}, State = #{module := Module}
     ControllerData = maps:get(controller_data, State, #{}),
     State0 = State#{mod => Module,
                     plugins => Plugins},
-    ControllerData2 = ControllerData#{req => Req},
-    upgrade_ws(Module, Req, State0, ControllerData2).
+    upgrade_ws(Module, Req, State0, with_auth_data(Req, ControllerData#{req => Req})).
 
+with_auth_data(#{auth_data := AuthData}, ControllerData) ->
+    ControllerData#{auth_data => AuthData};
+with_auth_data(_Req, ControllerData) ->
+    ControllerData.
 
 upgrade_ws(Module, Req, State, ControllerData) ->
     case Module:init(ControllerData) of

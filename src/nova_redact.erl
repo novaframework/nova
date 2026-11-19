@@ -4,7 +4,8 @@
 -export([tls_options/1, stacktrace/1]).
 
 -export([
-         term/1
+         term/1,
+         crash_info/3
         ]).
 
 -define(DEFAULT_FRAGMENTS, [~"passw", ~"secret", ~"token", ~"apikey", ~"authorization", ~"cookie",
@@ -162,10 +163,17 @@ tls_list([]) ->
 tls_list(Tail) ->
     tls_options(Tail).
 
--doc "Replaces the argument list a stacktrace frame may carry with its arity.".
--spec stacktrace(erlang:stacktrace()) -> erlang:stacktrace().
-stacktrace(Stacktrace) ->
-    [frame(Frame) || Frame <- Stacktrace].
+-doc """
+Replaces the argument list a stacktrace frame may carry with its arity.
+
+The first frame of a `function_clause` (and of `erlang:error/2`) holds the
+actual arguments, which for a controller is the whole request.
+""".
+-spec stacktrace(Stacktrace) -> Stacktrace when Stacktrace :: [term()].
+stacktrace(Stacktrace) when is_list(Stacktrace) ->
+    [frame(Frame) || Frame <- Stacktrace];
+stacktrace(Other) ->
+    Other.
 
 frame({Module, Function, Args, Location}) when is_list(Args) ->
     {Module, Function, length(Args), Location};
@@ -175,3 +183,12 @@ frame(Frame) ->
 is_tls_secret(Option) ->
     lists:member(Option, [key, password, certs_keys, sni_hosts, sni_fun, user_lookup_fun, psk_identity,
                           srp_identity, stateless_tickets_seed]).
+
+-doc """
+Builds the `crash_info` an error page is rendered from, with `Reason`
+redacted. `Extra` carries the rest, such as `status_code` and an already
+formatted `stacktrace`.
+""".
+-spec crash_info(Class :: atom(), Reason :: term(), Extra :: map()) -> map().
+crash_info(Class, Reason, Extra) ->
+    Extra#{class => Class, reason => term(Reason)}.

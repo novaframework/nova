@@ -519,11 +519,12 @@ render_status_page(StatusCode, Data, Req) ->
 render_status_page(Host, StatusCode, Data, Req, Env) ->
     StorageBackend = storage_backend(),
     Dispatch = StorageBackend:get(dispatch_key(Env)),
+    Env1 = maps:without([cowboy_handler, arguments], Env),
     {Req0, Env0} =
         case nova_routing_trie:find(Host, StatusCode, '_', Dispatch) of
             {error, _} ->
                 %% Render nova page if exists - We need to determine where to find this path?
-                {Req, Env#{app => nova,
+                {Req, Env1#{app => nova,
                            callback => fun nova_error_controller:status_code/1,
                            secure => false,
                            controller_data => #{status => StatusCode, data => Data}}};
@@ -533,7 +534,7 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
                                                extra_state = ExtraState}} ->
                 {
                  Req#{extra_state => ExtraState, bindings => Bindings, resp_status_code => StatusCode},
-                 Env#{app => App,
+                 Env1#{app => App,
                       callback => Callback,
                       secure => Secure,
                       controller_data => #{status => StatusCode, data => Data},
