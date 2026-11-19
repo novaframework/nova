@@ -8,8 +8,15 @@
          with_qs/2,
          with_content_type/2,
          setup_nova_env/0,
-         cleanup_nova_env/1
+         cleanup_nova_env/1,
+         improper_list/2
         ]).
+
+%% `[a, b | Tail]` for a tail that is no list, which is what a setting holds
+%% when somebody writes a cons where a list was meant.
+-spec improper_list(Elements :: [term()], Tail :: term()) -> term().
+improper_list(Elements, Tail) ->
+    apply(erlang, '++', [Elements, Tail]).
 
 %% Build a minimal cowboy_req-like map for testing pure handler logic.
 %% We avoid depending on nova_test (circular dep) and cowboy internals.
