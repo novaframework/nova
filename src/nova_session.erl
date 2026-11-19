@@ -14,6 +14,7 @@
          cookie_name/0,
          cookie_opts/1,
          validate_cookie_config/0,
+         valid_cookie/2,
          presented_session_id/1
         ]).
 
@@ -80,21 +81,43 @@ set(Req, Key, Value) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
             Mod = get_session_module(),
-            Mod:set_value(SessionId, Key, Value);
+            written(Mod:set_value(SessionId, Key, Value), SessionId, Req);
         _ ->
             {error, session_id_not_set}
     end.
 
--spec delete(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} |
-          {error, Reason :: atom()}.
+written({error, _} = Error, _SessionId, _Req) ->
+    Error;
+written(Result, SessionId, Req) ->
+    notify(Req, {written, SessionId}),
+    Result.
+
+-doc """
+Signs a user out: deletes the whole session and clears the session cookie.
+The returned request carries a fresh session id, and is the one to use for
+what follows in the same request: a `set/3` on it starts a new session. A
+`set/3` on the request that was passed in writes under the id that was just
+deleted, which the client no longer holds.
+
+```erlang
+logout(Req) ->
+    {ok, SignedOut} = nova_session:delete(Req),
+    {redirect, "/", SignedOut}.
+```
+""".
+-spec delete(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} | no_return().
 delete(Req) ->
     case get_session_id(Req) of
         {ok, SessionId} ->
             Mod = get_session_module(),
             Mod:delete_value(SessionId),
-            Req1 = cowboy_req:set_resp_cookie(cookie_name(), SessionId, Req,
-                                              (cookie_opts(Req))#{max_age => 0}),
-            {ok, Req1};
+            {ok, NewSessionId} = generate_session_id(),
+            notify(Req, {deleted, NewSessionId}),
+            Req0 = case stream_handled(Req) of
+                       true -> Req;
+                       false -> set_cookie(<<>>, (cookie_opts(Req))#{max_age => 0}, Req)
+                   end,
+            {ok, with_session_id(NewSessionId, Req0)};
         _ ->
             %% Session not found
             {ok, Req}
@@ -245,6 +268,7 @@ check_secure(_Name, #{same_site := none, secure := false}) ->
 check_secure(_Name, _Opts) ->
     ok.
 
+-doc false.
 -spec valid_cookie(term(), cow_cookie:cookie_opts()) -> boolean().
 valid_cookie(Name, Opts) ->
     Name =/= <<>> andalso is_token(Name) andalso
@@ -311,6 +335,17 @@ get_session_id(Req) ->
             throw({nova_session, unsupported_session_used})
     end.
 
+with_session_id(SessionId, Req) ->
+    (maps:remove(nova_session_presented, Req))#{nova_session_id => SessionId}.
+
+stream_handled(Req) ->
+    is_map_key(nova_session_id, Req) orelse is_map_key(nova_session_presented, Req).
+
+set_cookie(Value, Opts, Req) ->
+    Name = cookie_name(),
+    valid_cookie(Name, Opts) orelse erlang:error(invalid_cookie_config(Name, Opts)),
+    cowboy_req:set_resp_cookie(Name, Value, Req, Opts).
+
 warn_ambiguous_cookie(Name) ->
     case nova_once:first({?MODULE, ambiguous_cookie_warned}) of
         true ->
@@ -319,6 +354,11 @@ warn_ambiguous_cookie(Name) ->
         false ->
             ok
     end.
+
+notify(#{pid := _, streamid := _, nova_session_owner := Owner} = Req, Event) when Owner =:= self() ->
+    cowboy_req:cast({nova_session, Event}, Req);
+notify(_Req, _Event) ->
+    ok.
 
 -spec generate_session_id() -> {ok, binary()}.
 generate_session_id() ->

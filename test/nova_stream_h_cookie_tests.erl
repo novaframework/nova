@@ -36,15 +36,6 @@ assert_session_cookie_kept(Cookie) ->
         exit:{request_error, _, _} -> ?assertMatch(#{nova_session_id := _}, Req)
     end.
 
-attributes_test() ->
-    application:unset_env(nova, environment),
-    {[{req, Req}], _} = nova_stream_h:init(1, #{headers => #{}}, #{stream_handlers => [?MODULE]}),
-    #{resp_cookies := #{~"__Host-session_id" := Set}} = Req,
-    Cookie = iolist_to_binary(Set),
-    [?assertMatch({_, _}, binary:match(Cookie, Attribute))
-     || Attribute <- [~"; Path=/", ~"; HttpOnly", ~"; SameSite=Lax", ~"; Secure"]],
-    ?assertEqual(nomatch, binary:match(Cookie, ~"Max-Age")).
-
 %% use_sessions is read from the bootstrap application or from nova.
 sessions_off_test() ->
     application:set_env(nova, use_sessions, false),

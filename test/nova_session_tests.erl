@@ -33,6 +33,7 @@ setup() ->
                 fun(Name, Value, Req, Opts) ->
                     Req#{resp_cookie => #{name => Name, value => Value, opts => Opts}}
                 end),
+    meck:expect(cowboy_req, cast, fun(Event, Req) -> meck:passthrough([Event, Req]) end),
     Pid.
 
 cleanup(Pid) ->
@@ -52,6 +53,33 @@ req_with_session(SessionId) ->
 
 req_with_cookie(SessionId) ->
     #{cookie_session_id => SessionId}.
+
+%% A request whose connection process is a stand-in that forwards what
+%% nova_session tells the stream handler.
+stream_req(SessionId) ->
+    Self = self(),
+    Conn = spawn_link(fun() ->
+                              receive
+                                  {{_Pid, 7}, Event} -> Self ! {stream_event, Event}
+                              after 2000 ->
+                                      ok
+                              end
+                      end),
+    #{nova_session_id => SessionId, pid => Conn, streamid => 7, nova_session_owner => self()}.
+
+no_stream_event() ->
+    receive
+        {stream_event, Event} -> error({unexpected_stream_event, Event})
+    after 200 ->
+            ok
+    end.
+
+stream_event() ->
+    receive
+        {stream_event, {nova_session, Event}} -> Event
+    after 1000 ->
+            error(no_stream_event)
+    end.
 
 %%====================================================================
 %% Test generators
@@ -74,7 +102,13 @@ nova_session_ets_test_() ->
       fun no_session_delete_returns_ok/0,
       fun sessions_disabled_throws/0,
       fun use_sessions_env/0,
-      fun delete_sets_expired_cookie/0,
+      fun delete_moves_request_to_new_session/0,
+      fun delete_tells_stream_handler/0,
+      fun set_tells_stream_handler/0,
+      fun delete_expires_cookie_without_stream_handler/0,
+      fun spawned_process_does_not_notify/0,
+      fun request_without_owner_does_not_notify/0,
+      fun non_error_set_results_notify/0,
       fun delete_key_preserves_other_keys/0,
       fun set_overwrites_existing_key/0,
       fun generate_session_id_format/0
@@ -182,14 +216,70 @@ use_sessions_env() ->
         application:set_env(nova, use_sessions, true)
     end.
 
-delete_sets_expired_cookie() ->
+delete_moves_request_to_new_session() ->
     {ok, SId} = nova_session:generate_session_id(),
     Req = req_with_session(SId),
-    ok = nova_session:set(Req, <<"key">>, <<"val">>),
-    sync(),
+    ok = nova_session:set(Req, ~"key", ~"val"),
     {ok, Req1} = nova_session:delete(Req),
-    ?assertMatch(#{resp_cookie := #{name := ~"__Host-session_id",
+    #{nova_session_id := NewId} = Req1,
+    ?assertNotEqual(SId, NewId),
+    ok = nova_session:set(Req1, ~"other", ~"x"),
+    ?assertEqual({error, not_found}, nova_session:get(Req, ~"other")),
+    ?assertEqual({ok, ~"x"}, nova_session:get(Req1, ~"other")).
+
+delete_tells_stream_handler() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    Req = stream_req(SId),
+    {ok, #{nova_session_id := NewId} = Req1} = nova_session:delete(Req),
+    ?assertEqual({deleted, NewId}, stream_event()),
+    ?assertNot(is_map_key(resp_cookie, Req1)).
+
+set_tells_stream_handler() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    ok = nova_session:set(stream_req(SId), ~"k", ~"v"),
+    ?assertEqual({written, SId}, stream_event()).
+
+delete_expires_cookie_without_stream_handler() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    {ok, Req1} = nova_session:delete(req_with_cookie(SId)),
+    ?assertMatch(#{resp_cookie := #{name := ~"__Host-session_id", value := <<>>,
                                     opts := #{max_age := 0, path := ~"/", http_only := true}}}, Req1).
+
+%% Only the request process tells the stream handler. A message from anywhere
+%% else would reach whatever owns the connection by then, a websocket handler
+%% for instance.
+spawned_process_does_not_notify() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    Req = stream_req(SId),
+    Self = self(),
+    _ = spawn_link(fun() -> Self ! {spawned, nova_session:set(Req, ~"k", ~"v")} end),
+    receive {spawned, Result} -> ?assertEqual(ok, Result) after 1000 -> error(timeout) end,
+    no_stream_event(),
+    ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")).
+
+request_without_owner_does_not_notify() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    ok = nova_session:set(maps:remove(nova_session_owner, stream_req(SId)), ~"k", ~"v"),
+    no_stream_event().
+
+%% Backends that answer true or {ok, _} wrote the value too.
+non_error_set_results_notify() ->
+    meck:new(fake_session_backend, [non_strict]),
+    application:set_env(nova, session_manager, fake_session_backend),
+    try
+        meck:expect(fake_session_backend, set_value, fun(_, _, _) -> true end),
+        ?assertEqual(true, nova_session:set(stream_req(~"a"), ~"k", ~"v")),
+        ?assertEqual({written, ~"a"}, stream_event()),
+        meck:expect(fake_session_backend, set_value, fun(_, _, _) -> {ok, stored} end),
+        ?assertEqual({ok, stored}, nova_session:set(stream_req(~"b"), ~"k", ~"v")),
+        ?assertEqual({written, ~"b"}, stream_event()),
+        meck:expect(fake_session_backend, set_value, fun(_, _, _) -> {error, full} end),
+        ?assertEqual({error, full}, nova_session:set(stream_req(~"c"), ~"k", ~"v")),
+        no_stream_event()
+    after
+        application:set_env(nova, session_manager, nova_session_ets),
+        meck:unload(fake_session_backend)
+    end.
 
 delete_key_preserves_other_keys() ->
     {ok, SId} = nova_session:generate_session_id(),
@@ -477,3 +567,14 @@ secure_prefix() ->
 validate(Opts) ->
     application:set_env(nova, session_cookie_opts, Opts),
     nova_session:validate_cookie_config().
+
+%% What nova_stream_h asks before it puts the cookie on a response.
+valid_cookie_test_() ->
+    [?_assert(nova_session:valid_cookie(~"__Host-session_id", #{path => ~"/", domain => ~"example.com"})),
+     ?_assert(nova_session:valid_cookie(~"a!#$%&'*+-.^_`|~9", #{})),
+     ?_assertNot(nova_session:valid_cookie(<<>>, #{})),
+     ?_assertNot(nova_session:valid_cookie("session_id", #{})),
+     ?_assertNot(nova_session:valid_cookie(session_id, #{})),
+     ?_assertNot(nova_session:valid_cookie(~"app:sid", #{})),
+     ?_assertNot(nova_session:valid_cookie(~"sid", #{path => ~"/a\nb"})),
+     ?_assertNot(nova_session:valid_cookie(~"sid", #{domain => <<"a", 127>>}))].

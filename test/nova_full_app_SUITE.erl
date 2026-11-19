@@ -37,6 +37,8 @@
          custom_not_found/1,
          controller_crash_is_a_500/1,
          websocket_echo/1,
+         websocket_session_write/1,
+         websocket_spawned_write/1,
          sub_app_mounted_under_prefix/1,
          add_and_remove_application/1
         ]).
@@ -91,7 +93,9 @@ groups() ->
                            controller_crash_is_a_500
                           ]},
      {websocket, [], [
-                      websocket_echo
+                      websocket_echo,
+                      websocket_session_write,
+                      websocket_spawned_write
                      ]},
      {sub_apps, [parallel], [
                              sub_app_mounted_under_prefix
@@ -271,6 +275,27 @@ websocket_echo(Config) ->
     ?assertEqual(<<"echo:hello">>, ws_recv(Socket)),
     gen_tcp:close(Socket).
 
+%% A websocket callback runs after the upgrade, where no cookie can be set
+%% any more. A client without a session cookie gets one on the 101, so what
+%% the callback writes is there on its next request.
+websocket_session_write(Config) ->
+    {ok, Socket, Response} = ws_upgrade(Config, "/session/ws"),
+    {match, [Id]} = re:run(Response, ~"set-cookie: __Host-session_id=([^;\r]+)",
+                           [caseless, {capture, all_but_first, list}]),
+    ok = ws_send(Socket, ~"write"),
+    ?assertEqual(~"written", ws_recv(Socket)),
+    gen_tcp:close(Socket),
+    {200, _Headers, Body} = get(Config, "/session/get", [{"cookie", "__Host-session_id=" ++ Id}]),
+    ?assertEqual(#{~"value" => ~"from-ws"}, json(Body)).
+
+%% A process spawned with the request must not message the connection, which
+%% runs the websocket by then.
+websocket_spawned_write(Config) ->
+    {ok, Socket, _Response} = ws_upgrade(Config, "/session/ws"),
+    ok = ws_send(Socket, ~"spawn-write"),
+    ?assertEqual(~"written", ws_recv(Socket)),
+    gen_tcp:close(Socket).
+
 %%====================================================================
 %% Sub-applications
 %%====================================================================
@@ -357,6 +382,12 @@ free_port() ->
 %%====================================================================
 
 ws_connect(Config, Path) ->
+    case ws_upgrade(Config, Path) of
+        {ok, Socket, _Response} -> {ok, Socket};
+        Error -> Error
+    end.
+
+ws_upgrade(Config, Path) ->
     Port = ?config(port, Config),
     {ok, Socket} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, raw}]),
     Key = base64:encode(crypto:strong_rand_bytes(16)),
@@ -369,10 +400,19 @@ ws_connect(Config, Path) ->
                  "Sec-WebSocket-Version: 13\r\n\r\n"
                 ],
     ok = gen_tcp:send(Socket, Handshake),
-    {ok, Response} = gen_tcp:recv(Socket, 0, 5000),
+    Response = recv_handshake(Socket, <<>>),
     case binary:match(Response, <<"101">>) of
         nomatch -> {error, {handshake_failed, Response}};
-        _       -> {ok, Socket}
+        _       -> {ok, Socket, Response}
+    end.
+
+%% Read byte by byte so a frame sent right after the 101 stays in the socket.
+recv_handshake(Socket, Acc) ->
+    case binary:longest_common_suffix([Acc, ~"\r\n\r\n"]) of
+        4 -> Acc;
+        _ ->
+            {ok, <<Byte>>} = gen_tcp:recv(Socket, 1, 5000),
+            recv_handshake(Socket, <<Acc/binary, Byte>>)
     end.
 
 ws_send(Socket, Payload) ->

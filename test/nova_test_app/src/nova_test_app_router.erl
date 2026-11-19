@@ -53,5 +53,20 @@ routes(_Environment) ->
        host => <<"api.localhost">>,
        routes => [
                   {"/host", fun nova_test_app_controller:host/1, #{methods => [get]}}
+                 ]},
+
+     %% Sessions, driven by nova_session_SUITE and by the websocket group of
+     %% nova_full_app_SUITE.
+     #{prefix => "/session",
+       routes => [
+                  {"/set/:value", fun nova_test_app_session_controller:set/1, #{methods => [get]}},
+                  {"/set-with-status-text/:value", fun nova_test_app_session_controller:set_with_status_text/1,
+                   #{methods => [get]}},
+                  {"/set-and-stream/:value", fun nova_test_app_session_controller:set_and_stream/1,
+                   #{methods => [get]}},
+                  {"/get", fun nova_test_app_session_controller:read/1, #{methods => [get]}},
+                  {"/delete", fun nova_test_app_session_controller:delete/1, #{methods => [get]}},
+                  {"/untouched", fun nova_test_app_session_controller:untouched/1, #{methods => [get]}},
+                  {"/ws", nova_test_app_session_ws_controller, #{protocol => ws}}
                  ]}
     ].

@@ -1,6 +1,7 @@
 -module(nova_stream_h).
 -moduledoc false.
 -behavior(cowboy_stream).
+-include_lib("kernel/include/logger.hrl").
 
 -export([
          init/3,
@@ -10,9 +11,17 @@
          early_error/5
         ]).
 
+-record(session, {
+                  presented :: binary() | undefined,
+                  current :: binary(),
+                  issue = false :: boolean(),
+                  expire = false :: boolean()
+                 }).
+
 -record(state, {
                 next :: any(),
-                req
+                req,
+                session :: #session{} | undefined
                }).
 
 -type state() :: #state{}.
@@ -20,39 +29,11 @@
 -spec init(cowboy_stream:streamid(), cowboy_req:req(), cowboy:opts())
           -> {cowboy_stream:commands(), state()}.
 init(StreamID, Req, Opts) ->
-    Req0 =
-        case nova_session:enabled() of
-            true ->
-                case session_cookie(Req) of
-                    present -> Req;
-                    absent ->
-                        {ok, SessionId} = nova_session:generate_session_id(),
-                        ReqWithCookie = cowboy_req:set_resp_cookie(nova_session:cookie_name(), SessionId, Req,
-                                                                   nova_session:cookie_opts(Req)),
-                        ReqWithCookie#{nova_session_id => SessionId};
-                    unparsable ->
-                        {ok, SessionId} = nova_session:generate_session_id(),
-                        Req#{nova_session_id => SessionId}
-                end;
-            _ ->
-                Req
-        end,
+    {Req0, Session} = init_session(Req),
     %% Set the correct server-header information
     Req1 = cowboy_req:set_resp_header(<<"server">>, <<"Cowboy/Nova">>, Req0),
     {Commands, Next} = cowboy_stream:init(StreamID, Req1, Opts),
-    {Commands, #state{req = Req0, next = Next}}.
-
-%% parse_cookies/1 exits on a malformed Cookie header, and Cowboy would then
-%% log the whole request, Authorization included. Such a request gets a session
-%% id but no cookie: the client may hold a valid session cookie Nova cannot
-%% read, and a new one would overwrite it on every request.
-session_cookie(Req) ->
-    try lists:keymember(nova_session:cookie_name(), 1, cowboy_req:parse_cookies(Req)) of
-        true -> present;
-        false -> absent
-    catch
-        exit:{request_error, _, _} -> unparsable
-    end.
+    {Commands, #state{req = Req0, next = Next, session = Session}}.
 
 -spec data(cowboy_stream:streamid(), cowboy_stream:fin(), cowboy_req:resp_body(), State)
           -> {cowboy_stream:commands(), State} when State::state().
@@ -62,11 +43,29 @@ data(StreamID, IsFin, Data, State = #state{next = Next}) ->
 
 -spec info(cowboy_stream:streamid(), any(), State)
           -> {cowboy_stream:commands(), State} when State::state().
-info(StreamID, {response, Code, _Headers, _Body} = Info, State = #state{next = Next})
-  when is_integer(Code) ->
-    {Commands, Next0} = cowboy_stream:info(StreamID, Info, Next),
-    {Commands, State#state{next = Next0}};
-info(StreamID, Info, State = #state{next = Next}) ->
+info(_StreamID, {nova_session, Event}, State = #state{session = Session}) ->
+    {[], State#state{session = session_event(Event, Session)}};
+info(StreamID, Info, State) ->
+    respond(StreamID, Info, State).
+
+respond(StreamID, {response, Code, Headers, Body}, State) when is_integer(Code); is_binary(Code) ->
+    {Headers0, State0} = session_cookie(Headers, State),
+    forward(StreamID, {response, Code, Headers0, Body}, State0);
+respond(StreamID, {headers, Code, Headers}, State) when is_integer(Code); is_binary(Code) ->
+    {Headers0, State0} = session_cookie(Headers, State),
+    forward(StreamID, {headers, Code, Headers0}, State0);
+respond(StreamID, {switch_protocol, Headers, Module, ModState}, State) when is_map(Headers) ->
+    {Headers0, State0} = session_cookie(Headers, upgrading(State)),
+    forward(StreamID, {switch_protocol, Headers0, Module, ModState}, State0);
+respond(StreamID, Info, State) ->
+    forward(StreamID, Info, State).
+
+upgrading(State = #state{session = #session{presented = undefined} = Session}) ->
+    State#state{session = Session#session{issue = true}};
+upgrading(State) ->
+    State.
+
+forward(StreamID, Info, State = #state{next = Next}) ->
     {Commands, Next0} = cowboy_stream:info(StreamID, Info, Next),
     {Commands, State#state{next = Next0}}.
 
@@ -80,3 +79,70 @@ terminate(StreamID, Reason, #state{next = Next}) ->
                         when Resp::cowboy_stream:resp_command().
 early_error(StreamID, Reason, PartialReq, {_, _Status, _Headers, _} = Resp, Opts) ->
     cowboy_stream:early_error(StreamID, Reason, PartialReq, Resp, Opts).
+
+init_session(Req) ->
+    case nova_session:enabled() of
+        true ->
+            {ok, Pending} = nova_session:generate_session_id(),
+            case nova_session:presented_session_id(Req) of
+                undefined ->
+                    {Req#{nova_session_id => Pending}, #session{current = Pending}};
+                unparsable ->
+                    {Req#{nova_session_id => Pending}, undefined};
+                Presented ->
+                    {Req#{nova_session_presented => Presented},
+                     #session{presented = Presented, current = Presented}}
+            end;
+        false ->
+            {Req, undefined}
+    end.
+
+session_event(_Event, undefined) ->
+    undefined;
+session_event({written, SessionId}, Session = #session{presented = Presented}) ->
+    Session#session{current = SessionId, issue = SessionId =/= Presented};
+session_event({deleted, SessionId}, Session = #session{presented = Presented}) ->
+    Session#session{current = SessionId, issue = false, expire = Presented =/= undefined};
+session_event(_Event, Session) ->
+    Session.
+
+session_cookie(Headers, State = #state{session = #session{issue = true, current = SessionId} = Session,
+                                       req = Req}) ->
+    {with_cookie(SessionId, nova_session:cookie_opts(Req), Headers),
+     State#state{session = Session#session{presented = SessionId, issue = false, expire = false}}};
+session_cookie(Headers, State = #state{session = #session{expire = true} = Session, req = Req}) ->
+    {with_cookie(<<>>, (nova_session:cookie_opts(Req))#{max_age => 0}, Headers),
+     State#state{session = Session#session{presented = undefined, expire = false}}};
+session_cookie(Headers, State) ->
+    {Headers, State}.
+
+with_cookie(Value, Opts, Headers) ->
+    Name = nova_session:cookie_name(),
+    try nova_session:valid_cookie(Name, Opts) andalso cow_cookie:setcookie(Name, Value, Opts) of
+        false ->
+            log_invalid_cookie(Name),
+            Headers;
+        Cookie ->
+            add_cookie(Cookie, Headers)
+    catch
+        error:_ ->
+            log_invalid_cookie(Name),
+            Headers
+    end.
+
+log_invalid_cookie(Name) ->
+    Key = {?MODULE, invalid_cookie_logged, Name},
+    case nova_once:first(Key) of
+        true ->
+            ?LOG_ERROR(#{msg => ~"Session cookie not set: session_cookie_name or session_cookie_opts is invalid",
+                         cookie => Name});
+        false ->
+            ok
+    end.
+
+add_cookie(Cookie, Headers) ->
+    Cookies = case maps:get(~"set-cookie", Headers, []) of
+                  List when is_list(List) -> List;
+                  Single -> [Single]
+              end,
+    Headers#{~"set-cookie" => Cookies ++ [Cookie]}.
