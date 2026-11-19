@@ -8,7 +8,10 @@
          handle_redirect/3,
          handle_sendfile/3,
          handle_websocket/3,
-         handle_ws/2
+         handle_ws/2,
+         location/1,
+         local_location/1,
+         loggable_location/1
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -153,18 +156,81 @@ handle_status({status, Status}, Callback, State) when is_integer(Status) ->
 Handles redirects. This will return a 302-status code with a location given by the user. Something like \{redirect, "/login"\} will send a 302 with location set to "/login"
 
 Optionally you can attach the request object as the third argument. This is useful if you want to set cookies or other headers that are not supported by the handler.
+
+\{redirect, Url\} sends any location, another site included. Use \{redirect_local, Path\} for a target that comes from the request, such as a `next` parameter: it only redirects to a path on the site the request was made to, and answers anything else with a 400.
 """.
--spec handle_redirect({redirect, Route :: list()|binary()}, Callback :: function(),
-                      Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()}.
-handle_redirect({redirect, Route, Req0}, Callback, _Req) ->
-    handle_redirect({redirect, Route}, Callback, Req0);
-handle_redirect({redirect, Route}, Callback, Req) when is_list(Route) ->
-    handle_redirect({redirect, list_to_binary(Route)}, Callback, Req);
-handle_redirect({redirect, Route}, _Callback, Req) ->
-    Headers = #{<<"location">> => Route},
-    Req0 = cowboy_req:set_resp_headers(Headers, Req),
-    Req1 = Req0#{resp_status_code => 302},
-    {ok, Req1}.
+-spec handle_redirect({redirect | redirect_local, Route :: list()|binary()} |
+                      {redirect | redirect_local, Route :: list()|binary(), Req :: cowboy_req:req()},
+                      Callback :: function(), Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()}.
+handle_redirect({Keyword, Route, Req0}, Callback, _Req) ->
+    handle_redirect({Keyword, Route}, Callback, Req0);
+handle_redirect({redirect_local, Route}, Callback, Req) ->
+    case local_location(Route) of
+        error ->
+            {module, Module} = erlang:fun_info(Callback, module),
+            ?LOG_WARNING(#{msg => ~"Controller refused to redirect to a location that is not a local path",
+                           controller => Module, location => loggable_location(Route)}),
+            {ok, Req#{resp_status_code => 400}};
+        Location ->
+            Req0 = cowboy_req:set_resp_headers(#{~"location" => Location}, Req),
+            {ok, Req0#{resp_status_code => 302}}
+    end;
+handle_redirect({redirect, Route}, Callback, Req) ->
+    case location(Route) of
+        error ->
+            {module, Module} = erlang:fun_info(Callback, module),
+            ?LOG_ERROR(#{msg => ~"Controller redirected to an invalid location", controller => Module,
+                         location => loggable_location(Route)}),
+            throw({500, #{status_code => 500, class => error, reason => invalid_redirect_location}});
+        Location ->
+            Req0 = cowboy_req:set_resp_headers(#{~"location" => Location}, Req),
+            {ok, Req0#{resp_status_code => 302}}
+    end.
+
+-doc false.
+-spec location(binary() | string()) -> binary() | error.
+location(Url) when is_binary(Url) ->
+    case valid_location(Url) of
+        true -> Url;
+        false -> error
+    end;
+location(Url) ->
+    try unicode:characters_to_binary(Url) of
+        Location when is_binary(Location) -> location(Location);
+        _ -> error
+    catch
+        error:badarg -> error
+    end.
+
+-doc false.
+-spec local_location(binary() | string()) -> binary() | error.
+local_location(Url) ->
+    case location(Url) of
+        <<$/, C, _/binary>> when C =:= $/; C =:= $\\ ->
+            error;
+        <<$/, _/binary>> = Location ->
+            case binary:match(Location, ~"\t") of
+                nomatch -> Location;
+                _ -> error
+            end;
+        _ ->
+            error
+    end.
+
+valid_location(<<C/utf8, Rest/binary>>) when C =:= $\t; C >= 16#20, C =/= 16#7F ->
+    valid_location(Rest);
+valid_location(<<>>) ->
+    true;
+valid_location(_) ->
+    false.
+
+-doc false.
+-spec loggable_location(term()) -> binary() | redacted.
+loggable_location(Url) when is_binary(Url) ->
+    [Target | _] = binary:split(Url, [~"?", ~"#"]),
+    re:replace(Target, "^((?:[A-Za-z][A-Za-z0-9+.-]*:)?//)[^/]*@", "\\1", [{return, binary}]);
+loggable_location(_Url) ->
+    redacted.
 
 %%--------------------------------------------------------------------
 -doc """
