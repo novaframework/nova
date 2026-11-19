@@ -39,6 +39,8 @@ Each listener owns its own routing table, so an application started on a second 
 
 -type nova_app() :: atom() | {atom(), map()}.
 
+-export([start_listener_child/1]).
+
 %% Keyed on bind: one listener per {Host, Port} is the invariant
 %% add_application/2 relies on, so that pair is the table key.
 -record(nova_listener, {
@@ -164,10 +166,12 @@ init([]) ->
             _ -> Children0
         end,
 
-    setup_cowboy(Configuration),
+    {ok, {SupFlags, Children ++ [listener_child(Configuration)]}}.
 
-
-    {ok, {SupFlags, Children}}.
+-doc false.
+-spec start_listener_child(Configuration :: map()) -> ignore | {error, Reason :: any()}.
+start_listener_child(Configuration) ->
+    setup_cowboy(Configuration).
 
 %%%===================================================================
 %%% Internal functions
@@ -185,6 +189,12 @@ child(Id, Type, Mod) ->
 
 child(Id, Mod) ->
     child(Id, worker, Mod).
+
+listener_child(Configuration) ->
+    #{id => ?NOVA_LISTENER,
+      start => {?MODULE, start_listener_child, [Configuration]},
+      restart => temporary,
+      type => worker}.
 
 %% The table survives a nova_sup restart, so creating it has to be idempotent.
 %% It is public because add_application/2 and remove_application/1 are called
@@ -225,9 +235,11 @@ setup_cowboy(Configuration) ->
             persistent_term:put(nova_use_stacktrace, UseStacktrace),
             ?LOG_NOTICE(#{msg => <<"Nova is running">>,
                           url => unicode:characters_to_binary(io_lib:format("http://~s:~B", [Host0, Port])),
-                          cowboy_version => CowboyVersion, nova_version => NovaVersion, app => App});
+                          cowboy_version => CowboyVersion, nova_version => NovaVersion, app => App}),
+            ignore;
         {error, Error} ->
-            ?LOG_ERROR(#{msg => <<"Cowboy could not start">>, reason => Error})
+            ?LOG_ERROR(#{msg => <<"Cowboy could not start">>, reason => Error}),
+            {error, {listener_not_started, Error}}
     end.
 
 -spec start_cowboy(Configuration :: map()) ->

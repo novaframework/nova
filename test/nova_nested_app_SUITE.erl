@@ -114,7 +114,8 @@ nested_application_without_an_override_around_it_keeps_its_own(_Config) ->
 %% protects the application, so Nova does not start.
 application_mounted_twice_with_different_security_is_refused(_Config) ->
     Nested = [#{prefix => "/nested", routes => ?PAGE}],
-    [?assertMatch({error, {nova, {{nova_app_mounted_twice, nova_test_nested_app}, _}}},
+    [?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
+                                              {nova_app_mounted_twice, nova_test_nested_app}}}, _}}},
                   nova_test_listener:try_start(#{nova_apps => NovaApps,
                                                  mounted_nova_apps => [nova_test_nested_app],
                                                  nested => Nested}))
