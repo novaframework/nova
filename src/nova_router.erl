@@ -26,6 +26,7 @@
          render_status_page/2,
          render_status_page/3,
          render_status_page/5,
+         status_page_request/3,
 
          %% Expose the router-callback
          routes/1,
@@ -731,6 +732,7 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
     StorageBackend = storage_backend(),
     Dispatch = StorageBackend:get(dispatch_key(Env)),
     Env1 = maps:without([cowboy_handler, arguments], Env),
+    ControllerData = #{status => StatusCode, data => Data},
     {Req0, Env0} =
         case nova_routing_trie:find(Host, StatusCode, '_', Dispatch) of
             {error, _} ->
@@ -738,7 +740,7 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
                 {Req, Env1#{app => nova,
                            callback => fun nova_error_controller:status_code/1,
                            secure => false,
-                           controller_data => #{status => StatusCode, data => Data}}};
+                           controller_data => ControllerData}};
             {ok, Bindings, #nova_handler_value{app = App,
                                                callback = Callback,
                                                secure = Secure,
@@ -748,11 +750,16 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
                  Env1#{app => App,
                       callback => Callback,
                       secure => Secure,
-                      controller_data => #{status => StatusCode, data => Data},
+                      controller_data => ControllerData,
                       bindings => Bindings}
                 }
         end,
-    {ok, Req0#{resp_status_code => StatusCode}, Env0}.
+    {ok, status_page_request(StatusCode, Data, Req0), Env0#{status_page => StatusCode}}.
+
+-doc false.
+-spec status_page_request(StatusCode :: integer(), Data :: map(), Req :: routed_req()) -> routed_req().
+status_page_request(StatusCode, Data, Req) ->
+    Req#{resp_status_code => StatusCode, controller_data => #{status => StatusCode, data => Data}}.
 
 
 insert_opts(T) ->
