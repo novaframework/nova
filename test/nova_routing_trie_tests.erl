@@ -160,6 +160,25 @@ duplicate_route_overwrite_option_test() ->
     T1 = ins('_', "/profile", "GET", "TWO", T0),
     ?assertEqual({ok, #{}, "TWO"}, find('_', <<"/profile">>, "GET", T1)).
 
+%% The warning for a clash names who declared the route that came second,
+%% and what became of that route.
+duplicate_route_warning_names_the_application_test_() ->
+    Clash = fun(Options, Comparator) ->
+                    T0 = ins('_', "/profile", Comparator, "ONE", new(Options)),
+                    ok = nova_test_log:start(),
+                    {ok, _T1} = insert('_', "/profile", "GET", "TWO", T0, #{app => second_app}),
+                    [Report || #{level := warning, msg := {report, Report}} <- nova_test_log:stop()]
+            end,
+    [{"a route that is ignored",
+      ?_assertMatch([#{app := second_app, outcome := ignored, route := <<"/profile">>, method := <<"GET">>}],
+                    Clash(#{}, "GET"))},
+     {"a route that is ignored because every method is taken",
+      ?_assertMatch([#{app := second_app, outcome := ignored, route := <<"/profile">>, method := <<"GET">>}],
+                    Clash(#{}, '_'))},
+     {"a route that replaces the first",
+      ?_assertMatch([#{app := second_app, outcome := replaced_existing, route := <<"/profile">>, method := <<"GET">>}],
+                    Clash(#{on_duplicate => overwrite}, "GET"))}].
+
 strict_duplicate_route_errors_test() ->
     T0 = ins('_', "/profile", "GET", "ONE", new(#{strict => true})),
     {error, conflict, Conflict} = insert('_', "/profile", "GET", "TWO", T0),
