@@ -10,6 +10,8 @@
 -include_lib("kernel/include/logger.hrl").
 
 -define(MAX_SYMLINKS, 40).
+-define(MAX_RANGE_DIGITS, 19).
+-define(PAST_ANY_FILE, 1 bsl 64).
 
 -type static() :: {file, file:name_all()} | {priv_file, atom(), file:name_all()} |
                   {dir, file:name_all()} | {priv_dir, atom(), file:name_all()}.
@@ -29,7 +31,15 @@ directory_state(Dir, Options) ->
     Root = get_filepath(Dir),
     #{static => Dir, options => Options, static_root => {Root, resolve_root(Root, Options)}}.
 
-get_file(#{extra_state := #{static := File, options := Options}, headers := Headers}) ->
+get_file(#{headers := #{<<"range">> := Range} = Headers} = Req) ->
+    case is_map_key(~"if-range", Headers) orelse ignored_range(Range) of
+        true -> serve_file(Req#{headers => maps:remove(<<"range">>, Headers)});
+        false -> serve_file(Req)
+    end;
+get_file(Req) ->
+    serve_file(Req).
+
+serve_file(#{extra_state := #{static := File, options := Options}, headers := Headers}) ->
     Filepath = get_filepath(File),
     MimeType =
         case maps:get(mimetype, Options, undefined) of
@@ -46,7 +56,7 @@ get_file(#{extra_state := #{static := File, options := Options}, headers := Head
             unusable_file(Filepath, Reason),
             {status, 404}
     end;
-get_file(_Req) ->
+serve_file(_Req) ->
     {status, 404}.
 
 serve_file(Filepath, Size, MimeType, Headers) ->
@@ -66,8 +76,9 @@ serve_file(Filepath, Size, MimeType, Headers) ->
                                                              (integer_to_binary(Size))/binary>>,
                                     <<"content-length">> => integer_to_binary(Length)},
                     {sendfile, 206, RespHeaders, {Start, Length, Filepath}, MimeType};
+                error ->
+                    {sendfile, 200, #{}, {0, Size, Filepath}, MimeType};
                 _ ->
-                    %% Invalid range request
                     {status, 416, #{<<"content-range">> => <<"bytes */", (integer_to_binary(Size))/binary>>}}
             end
     end.
@@ -247,26 +258,66 @@ canonical_path([Segment | Rest], Resolved, true, LinksLeft) ->
             canonical_path(Rest, [Segment | Resolved], true, LinksLeft)
     end.
 
+ignored_range(<<"bytes=", RangeSpec/binary>>) ->
+    binary:match(RangeSpec, <<",">>) =/= nomatch;
+ignored_range(_OtherUnit) ->
+    true.
+
 parse_range(RangeSpec, FileSize) ->
-    %% Parse the "bytes=" range header value
     case binary:split(RangeSpec, <<"-">>, [global]) of
-        [StartBin, EndBin] when EndBin =/= <<>> ->
-            case {binary_to_integer(StartBin), binary_to_integer(EndBin)} of
-                {Start, End} when Start >= 0, End >= Start, End < FileSize ->
-                    {ok, {Start, End}};
-                _ ->
+        [<<>>, SuffixLength] ->
+            case digits(SuffixLength) of
+                {ok, 0} ->
+                    unsatisfiable;
+                {ok, Length} ->
+                    {ok, {max(FileSize - Length, 0), FileSize - 1}};
+                error ->
                     error
             end;
-        [StartBin, <<>>] when StartBin =/= <<>> ->
-            case binary_to_integer(StartBin) of
-                Start when Start >= 0, Start < FileSize ->
+        [First, <<>>] ->
+            case digits(First) of
+                {ok, Start} ->
                     {ok, {Start, FileSize - 1}};
+                error ->
+                    error
+            end;
+        [First, Last] ->
+            case {digits(First), digits(Last)} of
+                {{ok, Start}, {ok, End}} when Start =< End ->
+                    {ok, {Start, min(End, FileSize - 1)}};
                 _ ->
                     error
             end;
         _ ->
             error
     end.
+
+digits(<<>>) ->
+    error;
+digits(Binary) ->
+    case all_digits(Binary) of
+        true -> significant_digits(without_leading_zeros(Binary));
+        false -> error
+    end.
+
+all_digits(<<Digit, Rest/binary>>) when Digit >= $0, Digit =< $9 ->
+    all_digits(Rest);
+all_digits(<<>>) ->
+    true;
+all_digits(_NotADigit) ->
+    false.
+
+without_leading_zeros(<<$0, Rest/binary>>) ->
+    without_leading_zeros(Rest);
+without_leading_zeros(Digits) ->
+    Digits.
+
+significant_digits(<<>>) ->
+    {ok, 0};
+significant_digits(Digits) when byte_size(Digits) > ?MAX_RANGE_DIGITS ->
+    {ok, ?PAST_ANY_FILE};
+significant_digits(Digits) ->
+    {ok, binary_to_integer(Digits)}.
 
 get_index_file([], _) -> false;
 get_index_file([File|Tl], IndexFiles) ->
