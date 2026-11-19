@@ -21,6 +21,9 @@ __Important:__`nova_request_plugin` must run before this plugin so that form par
          plugin_info/0
         ]).
 
+-define(NONCE_BYTES, 16).
+-define(SIGNATURE_BYTES, 32).
+
 -ifdef(TEST).
 -export([
          generate_token/0,
@@ -32,7 +35,14 @@ __Important:__`nova_request_plugin` must run before this plugin so that form par
 -endif.
 
 %%--------------------------------------------------------------------
--doc "Pre-request callback. On safe methods, ensures a CSRF token exists in the session and injects it into the Req map. On unsafe methods, validates the submitted token against the session token.".
+-spec tokens() -> {stateless, [binary()]} | session.
+tokens() ->
+    case nova_settings:value(csrf_token) =/= session andalso nova_secret:keys(csrf_token) of
+        [_ | _] = Keys -> {stateless, Keys};
+        _NoSecret -> session
+    end.
+
+-doc "Pre-request callback. On safe methods, puts a CSRF token into the Req map. On unsafe methods, validates the submitted token.".
 -spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
     {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
     {stop, nova_plugin:reply(), Req0 :: cowboy_req:req(), NewState :: any()}.
@@ -41,11 +51,21 @@ pre_request(Req = #{method := Method, path := Path}, _Env, Options, State) ->
     HeaderName = maps:get(header_name, Options, <<"x-csrf-token">>),
     SessionKey = maps:get(session_key, Options, <<"_csrf_token">>),
     ExcludedPaths = maps:get(excluded_paths, Options, []),
-    case is_safe_method(Method) orelse is_excluded_path(Path, ExcludedPaths) of
-        true ->
+    Safe = is_safe_method(Method) orelse is_excluded_path(Path, ExcludedPaths),
+    case tokens() of
+        session when Safe ->
             handle_safe_request(Req, SessionKey, State);
-        false ->
-            handle_unsafe_request(Req, SessionKey, FieldName, HeaderName, State)
+        session ->
+            handle_unsafe_request(Req, SessionKey, FieldName, HeaderName, State);
+        {stateless, Keys} when Safe ->
+            {ok, with_signed_token(nova_session:client_id(Req), Keys, Req), State};
+        {stateless, Keys} ->
+            Presented = nova_session:presented_session_id(Req),
+            Submitted = get_submitted_token(Req, FieldName, HeaderName),
+            case is_signed_for(Presented, Submitted, Keys) orelse is_session_token(Req, SessionKey, Submitted) of
+                true -> {ok, with_signed_token({ok, Presented}, Keys, Req), State};
+                false -> reject(Req, State)
+            end
     end.
 
 %%--------------------------------------------------------------------
@@ -144,6 +164,37 @@ decoded(Submitted) when is_binary(Submitted) ->
     end;
 decoded(_Submitted) ->
     undefined.
+
+-spec with_signed_token(SessionId :: {ok, term()} | {error, term()}, Keys :: [binary()], Req) -> Req
+              when Req :: cowboy_req:req().
+with_signed_token({ok, SessionId}, [Key | _], Req) when is_binary(SessionId) ->
+    Nonce = crypto:strong_rand_bytes(?NONCE_BYTES),
+    Signed = <<Nonce/binary, (signature(Key, SessionId, Nonce))/binary>>,
+    Req#{csrf_token => base64:encode(Signed, #{mode => urlsafe, padding => false})};
+with_signed_token(_NoSessionId, _Keys, Req) ->
+    Req.
+
+-spec signature(Key :: binary(), SessionId :: binary(), Nonce :: binary()) -> binary().
+signature(Key, SessionId, Nonce) ->
+    crypto:mac(hmac, sha256, Key, [~"nova_csrf_plugin", SessionId, Nonce]).
+
+-spec is_signed_for(SessionId :: term(), Submitted :: term(), Keys :: [binary()]) -> boolean().
+is_signed_for(SessionId, <<Token:64/binary>>, Keys) when is_binary(SessionId) ->
+    case decoded(Token) of
+        <<Nonce:?NONCE_BYTES/binary, Signature:?SIGNATURE_BYTES/binary>> ->
+            [] =/= [Key || Key <- Keys, constant_time_compare(Signature, signature(Key, SessionId, Nonce))];
+        _NotSigned ->
+            false
+    end;
+is_signed_for(_SessionId, _Submitted, _Keys) ->
+    false.
+
+-spec is_session_token(Req :: cowboy_req:req(), SessionKey :: binary(), Submitted :: term()) -> boolean().
+is_session_token(Req, SessionKey, Submitted) ->
+    case nova_session:get(Req, SessionKey) of
+        {ok, SessionToken} -> is_token(SessionToken, Submitted);
+        {error, _} -> false
+    end.
 
 reject(Req, State) ->
     {stop, {reply, 403, [{<<"content-type">>, <<"text/plain">>}], <<"Forbidden - CSRF token invalid">>}, Req, State}.

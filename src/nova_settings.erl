@@ -5,7 +5,7 @@
 
 -include_lib("kernel/include/logger.hrl").
 
--type key() :: trusted_origins | max_sessions | non_canonical_paths | plugins_before_security |
+-type key() :: trusted_origins | csrf_token | max_sessions | non_canonical_paths | plugins_before_security |
                secret_key_base.
 -export_type([key/0]).
 
@@ -16,6 +16,7 @@
 -spec validate() -> ok.
 validate() ->
     Settings = #{Key => valid(Key) || Key <- keys()},
+    ok = secret_to_sign_with(Settings),
     persistent_term:put(?MODULE, Settings).
 
 -spec value(Key :: key()) -> term().
@@ -44,6 +45,8 @@ checked(trusted_origins, Value) ->
         {ok, Origins} -> {ok, Origins};
         error -> {error, Value}
     end;
+checked(csrf_token, Value) when Value =:= undefined; Value =:= stateless; Value =:= session ->
+    {ok, Value};
 checked(secret_key_base, undefined) ->
     {ok, []};
 checked(secret_key_base, Secret) when is_binary(Secret) ->
@@ -68,6 +71,7 @@ checked(_Key, Value) ->
 -spec expected(Key :: key()) -> binary().
 expected(non_canonical_paths) -> ~"non_canonical_paths must be reject or resolve";
 expected(trusted_origins) -> ~"trusted_origins must be same_host, same_origin, any or a list of origins";
+expected(csrf_token) -> ~"csrf_token must be stateless or session";
 expected(secret_key_base) ->
     ~"secret_key_base must be a binary of at least 32 bytes out of a random source, or a list of such. A value that repeats a few bytes, an example out of the documentation or a ${VARIABLE} that was not filled in is refused. base64:encode(crypto:strong_rand_bytes(48)) in an Erlang shell, or openssl rand -base64 48, makes one";
 expected(max_sessions) -> ~"max_sessions must be infinity or an integer above 0";
@@ -76,11 +80,12 @@ expected(plugins_before_security) ->
 
 -spec keys() -> [key()].
 keys() ->
-    [non_canonical_paths, trusted_origins, secret_key_base, max_sessions, plugins_before_security].
+    [non_canonical_paths, trusted_origins, csrf_token, secret_key_base, max_sessions, plugins_before_security].
 
 -spec default(key()) -> term().
 default(non_canonical_paths) -> reject;
 default(trusted_origins) -> same_host;
+default(csrf_token) -> undefined;
 default(secret_key_base) -> undefined;
 default(max_sessions) -> ?DEFAULT_MAX_SESSIONS;
 default(plugins_before_security) -> [].
@@ -94,6 +99,23 @@ valid(Key) ->
             ?LOG_ERROR(#{msg => expected(Key), setting => Key, value => Reason}),
             erlang:error({invalid_setting, Key, Reason})
     end.
+
+-spec secret_to_sign_with(map()) -> ok.
+secret_to_sign_with(#{csrf_token := stateless, secret_key_base := []}) ->
+    ?LOG_ERROR(#{msg => ~"csrf_token is stateless and secret_key_base, which signs the tokens, is not set",
+                 setting => secret_key_base, value => not_set}),
+    erlang:error({invalid_setting, secret_key_base, not_set});
+secret_to_sign_with(#{csrf_token := stateless}) ->
+    case nova_session:enabled() of
+        true ->
+            ok;
+        false ->
+            ?LOG_ERROR(#{msg => ~"csrf_token is stateless and use_sessions is false. A signed token is for the session cookie of a client, which Nova does not hand out without sessions",
+                         setting => csrf_token, value => stateless}),
+            erlang:error({invalid_setting, csrf_token, {requires, use_sessions}})
+    end;
+secret_to_sign_with(_Settings) ->
+    ok.
 
 -spec origins(term(), [binary()]) -> {ok, [binary()]} | error.
 origins([], Origins) ->

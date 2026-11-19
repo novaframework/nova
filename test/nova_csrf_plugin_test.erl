@@ -292,3 +292,33 @@ masked_token_is_accepted_test() ->
     after
         cleanup_meck([cowboy_req, nova_session])
     end.
+
+-define(SECRET, ~"a secret of thirty-two bytes or more, for the tests").
+
+%% base64 skips whitespace, so 64 characters can hold fewer bytes than a
+%% nonce and its signature are.
+signed_token_that_decodes_short_is_refused_test_() ->
+    {setup,
+     fun() ->
+             application:unset_env(nova, environment),
+             nova_test_settings:set(secret_key_base, ?SECRET)
+     end,
+     fun(_) -> nova_test_settings:unset(secret_key_base) end,
+     [{Name, ?_assertMatch({stop, {reply, 403, _, _}, _, _}, submitted_with(Token))}
+      || {Name, Token} <- [{"spaces inside", <<(binary:copy(~"A", 10))/binary, (binary:copy(~" ", 44))/binary,
+                                              (binary:copy(~"A", 10))/binary>>},
+                           {"three bytes", <<"AA", (binary:copy(~" ", 60))/binary, "AA">>},
+                           {"newlines inside", <<"AA", (binary:copy(~"\n", 60))/binary, "AA">>},
+                           {"nothing but spaces", binary:copy(~" ", 64)},
+                           {"nothing but tabs", binary:copy(~"\t", 64)},
+                           {"a nonce and a signature that is too short",
+                            <<(binary:copy(~"A", 60))/binary, "    ">>},
+                           {"not base64", binary:copy(~"!", 64)}]]}.
+
+submitted_with(Token) ->
+    Req = nova_test_helper:with_header(~"cookie", ~"__Host-session_id=the-id-of-a-client",
+                                       nova_test_helper:with_header(~"x-csrf-token", Token,
+                                                                    nova_test_helper:mock_req(~"POST", ~"/submit"))),
+    try nova_csrf_plugin:pre_request(Req, #{}, #{}, #{})
+    catch Class:Reason -> {raised, Class, Reason}
+    end.
