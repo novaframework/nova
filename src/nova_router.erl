@@ -570,7 +570,9 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     Named = #{app => App, prefix => Prefix, router_file => RouterFile},
 
     ok = warn_route_plugin_strategy(App, RouteInfo, RouterFile),
-    Plugins = resolve_plugins(maps:get(plugin_strategy, Options, local_or_global), RouteInfo, RouterFile),
+    Plugins = [with_checked_options(Plugin, Named)
+               || Plugin <- resolve_plugins(maps:get(plugin_strategy, Options, local_or_global), RouteInfo,
+                                            RouterFile)],
 
     Secure = resolve_secure(Options, RouteInfo, RouterFile),
 
@@ -992,6 +994,24 @@ dedupe_plugins([Plugin|Tl], Seen, Acc) ->
 
 plugin_key({Type, PluginName, _Options}) -> {Type, PluginName};
 plugin_key(Plugin)                       -> Plugin.
+
+-spec with_checked_options(Plugin :: plugin(), Named :: map()) -> plugin().
+with_checked_options(Plugin, Named) ->
+    with_checked_origins(Plugin, Named).
+
+-spec with_checked_origins(Plugin :: plugin(), Named :: map()) -> plugin().
+with_checked_origins({Type, Plugin, Options = #{trusted_origins := Value}}, Named)
+  when Plugin =:= nova_csrf_plugin; Plugin =:= nova_ws_origin_plugin ->
+    case nova_settings:checked(trusted_origins, Value) of
+        {ok, Origins} ->
+            {Type, Plugin, Options#{trusted_origins := Origins}};
+        {error, Reason} ->
+            ?LOG_ERROR(Named#{msg => nova_settings:expected(trusted_origins), setting => trusted_origins,
+                              value => Reason, plugin => Plugin}),
+            throw({error, {invalid_setting, trusted_origins, Reason}})
+    end;
+with_checked_origins(Plugin, _Named) ->
+    Plugin.
 
 normalize_plugins(Plugins, Order) ->
     Phased = lists:append([phased(Plugin, Order) || Plugin <- Plugins]),

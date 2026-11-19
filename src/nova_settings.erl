@@ -1,7 +1,7 @@
 -module(nova_settings).
 -moduledoc false.
 
--export([validate/0, value/1, checked/2]).
+-export([validate/0, value/1, checked/2, expected/1]).
 
 -include_lib("kernel/include/logger.hrl").
 
