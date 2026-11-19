@@ -5,7 +5,8 @@
 %% Callbacks
 -export([
          execute/2,
-         terminate/3
+         terminate/3,
+         request_error_status/1
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -31,6 +32,8 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) ->
         {Mod, Req2, State, Opts} ->
             Mod:upgrade(Req2, Env, Handler, State, Opts)
     catch
+        exit:{request_error, Kind, _Message} ->
+            render_request_error(Kind, Req, maps:remove(cowboy_handler, Env));
         Class:Reason:Stacktrace when UseStacktrace == true ->
             FormattedStacktrace = nova:format_stacktrace(Stacktrace),
             Payload = #{status_code => 404,
@@ -55,6 +58,8 @@ execute(Req, Env = #{callback := Callback}) ->
         HandlerReturn ->
             HandlerReturn
     catch
+        exit:{request_error, Kind, _Message} ->
+            render_request_error(Kind, Req, Env);
         Class:{Status, Reason} when is_integer(Status) ->
             %% This makes it so that we don't need to fetch the stacktrace
             ?LOG_ERROR(#{msg => <<"Controller threw an exception">>,
@@ -95,6 +100,17 @@ terminate(Reason, Req, Callback) ->
         false ->
             ok
     end.
+
+-doc false.
+-spec request_error_status(Kind :: term()) -> 400 | 408 | 413.
+request_error_status(timeout)           -> 408;
+request_error_status(payload_too_large) -> 413;
+request_error_status(_Kind)             -> 400.
+
+render_request_error(Kind, Req, Env) ->
+    Status = request_error_status(Kind),
+    ?LOG_WARNING(#{msg => ~"Request error in controller", kind => nova_redact:term(Kind), status_code => Status}),
+    render_response(Req, Env, Status).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%

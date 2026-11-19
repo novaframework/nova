@@ -18,7 +18,11 @@ setup() ->
     end),
     meck:expect(cowboy_req, set_resp_headers, fun(Headers, Req) ->
         Existing = maps:get(resp_headers, Req, #{}),
-        Req#{resp_headers => maps:merge(Existing, Headers)}
+        New = case is_list(Headers) of
+                  true -> maps:from_list(Headers);
+                  false -> Headers
+              end,
+        Req#{resp_headers => maps:merge(Existing, New)}
     end),
     meck:expect(cowboy_req, set_resp_body, fun(Body, Req) ->
         Req#{resp_body => Body}
@@ -325,4 +329,15 @@ stop_reply_default_status_test_() ->
         {stop, Req1} = nova_plugin_handler:execute(Req, env()),
         ?assertEqual(200, maps:get(resp_status_code, Req1)),
         ?assert(meck:called(cowboy_req, reply, [200, '_']))
+    end}.
+
+status_with_map_and_list_headers_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Map = fun(R, _Env, _Opts, _State) -> {stop, {status, 401, #{~"www-authenticate" => ~"Bearer"}}, R, #{}} end,
+        List = fun(R, _Env, _Opts, _State) -> {stop, {status, 401, [{~"www-authenticate", ~"Bearer"}]}, R, #{}} end,
+        [begin
+             {stop, Req1} = nova_plugin_handler:execute(req([{pre_request, [plugin(P)]}]), env()),
+             ?assertEqual(401, maps:get(resp_status_code, Req1)),
+             ?assertEqual(~"Bearer", maps:get(~"www-authenticate", maps:get(resp_headers, Req1)))
+         end || P <- [Map, List]]
     end}.

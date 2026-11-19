@@ -1,5 +1,31 @@
 -module(nova_request_plugin).
--moduledoc false.
+-moduledoc """
+Reads and decodes the body and the query string of a request. Use it as a
+`pre_request` plugin with the options for what it should do:
+
+- `decode_json_body => true` - decodes the body of a request whose content
+  type is `application/json` or ends in `+json`, and puts it in the request
+  under `json`. `GET` and `DELETE` requests are left alone. An empty body or
+  one that is not JSON is answered with a `400`, and with the default
+  `json_lib` so is an object that has a key twice and a body with anything
+  but whitespace after its value.
+- `read_urlencoded_body => true` - parses an
+  `application/x-www-form-urlencoded` body and puts its fields in the request
+  under `params`. A malformed body is answered with a `400`, one with too
+  many fields with a `413`.
+- `parse_qs => true | list` - parses the query string and puts it in the
+  request under `parsed_qs`, as a map or as a list of pairs. A malformed
+  query string is answered with a `400`.
+- `max_body_length` - a body longer than this many bytes is answered with a
+  `413`. Default `1000000`. Takes `infinity`.
+- `body_read_timeout` - a body that is not read within this many
+  milliseconds is answered with a `408`. Default `60000`. Takes `infinity`.
+
+The body is read only when `decode_json_body` or `read_urlencoded_body` is
+set, and is then also in the request under `body`. Otherwise `body` is
+`<<>>`. A `multipart/form-data` body is never read here, see
+`nova_multipart_plugin`.
+""".
 -behaviour(nova_plugin).
 
 -export([
@@ -8,14 +34,33 @@
          plugin_info/0
         ]).
 
+-ifdef(TEST).
+-export([modulate_state/3, should_read_body/1]).
+-endif.
+
+-include_lib("kernel/include/logger.hrl").
+
+-define(DEFAULT_MAX_BODY_LENGTH, 1000000).
+-define(DEFAULT_BODY_READ_TIMEOUT, 60000).
+-define(CHUNK_LENGTH, 64000).
+-define(CHUNK_PERIOD, 15000).
+
 %%--------------------------------------------------------------------
 -doc "Pre-request callback".
 -spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
                          {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
-                         {stop, Req0 :: cowboy_req:req(), NewState :: any()}.
+                         {stop, Req0 :: cowboy_req:req(), NewState :: any()} |
+                         {stop, {status, 400 | 413} | {status, 408 | 413, #{binary() => binary()}},
+                          Req0 :: cowboy_req:req(), NewState :: any()}.
 pre_request(Req, _Env, Options, State) ->
     ListOptions = maps:to_list(Options),
-    modulate_state(read_request_body(Req, ListOptions), ListOptions, State).
+    MaxLength = limit(max_body_length, Options, ?DEFAULT_MAX_BODY_LENGTH, 0),
+    Timeout = limit(body_read_timeout, Options, ?DEFAULT_BODY_READ_TIMEOUT, 1),
+    case read_request_body(Req, ListOptions, MaxLength, Timeout) of
+        {ok, Req0} -> modulate_state(Req0, ListOptions, State);
+        {too_large, Req0} -> {stop, {status, 413, #{~"connection" => ~"close"}}, Req0, State};
+        {timeout, Req0} -> {stop, {status, 408, #{~"connection" => ~"close"}}, Req0, State}
+    end.
 
 %%--------------------------------------------------------------------
 -doc "Post-request callback".
@@ -26,7 +71,7 @@ post_request(Req, _Env, _Options, State) ->
 
 
 %%--------------------------------------------------------------------
--doc "nova_plugin callback. Returns information about the plugin.".
+-doc "The title, version, description and options of the plugin.".
 -spec plugin_info() -> #{title := binary(),
                          version := binary(),
                          url := binary(),
@@ -40,8 +85,11 @@ plugin_info() ->
       authors => [<<"Nova team <info@novaframework.org">>],
       description => <<"This plugin modulates the body of a request.">>,
       options => [
-                  {decode_json_body, <<"Decodes the body as JSON and puts it under `json`">>},
-                  {read_urlencoded_body, <<"Used to parse body as query-string and put them in state under `qs` key">>}
+                  {decode_json_body, ~"Decodes a body sent as JSON and puts it in the request under `json`"},
+                  {read_urlencoded_body, ~"Parses an application/x-www-form-urlencoded body and puts its fields in the request under `params`"},
+                  {parse_qs, ~"Parses the query string and puts it in the request under `parsed_qs`: as a map with true, as a list of pairs with list"},
+                  {max_body_length, ~"Reply 413 when the body read for decode_json_body or read_urlencoded_body is longer than this many bytes, or infinity (default 1 000 000)"},
+                  {body_read_timeout, ~"Reply 408 when reading that body takes longer than this many milliseconds (at least 1), or infinity (default 60 000)"}
                  ]
      }.
 
@@ -55,68 +103,138 @@ modulate_state(Req, [], State) ->
 
 modulate_state( Req = #{method := Method}, [{decode_json_body, true}|Tail], State) when Method =:= <<"GET">>; Method =:= <<"DELETE">> ->
     modulate_state(Req, Tail, State);
-modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}, body := <<>>}, [{decode_json_body, true}|_Tl], State) ->
-    Req400 = cowboy_req:reply(400, Req),
-    logger:warning(#{status_code => 400,
-                     msg => "Failed to decode json.",
-                     error => "No body to decode."}),
-    {stop, Req400, State};
-modulate_state(Req = #{headers := #{<<"content-type">> := <<"application/json", _/binary>>}, body := Body}, [{decode_json_body, true}|Tl], State) ->
-    %% Decode the data
-    JsonLib = nova:get_env(json_lib, thoas),
-    case JsonLib:decode(Body) of
-        {ok, JSON} ->
-            modulate_state(Req#{json => JSON}, Tl, State);
-        Error ->
-            Req400 = cowboy_req:reply(400, Req),
-            logger:warning(#{status_code => 400,
-                             msg => "Failed to decode json.",
-                             error => Error}),
-            {stop, Req400, State}
+modulate_state(Req = #{body := Body}, [{decode_json_body, true}|Tl], State) ->
+    case is_json(content_type(Req)) of
+        true -> decode_json(Req, Body, Tl, State);
+        false -> modulate_state(Req, Tl, State)
     end;
-modulate_state(#{headers := #{<<"content-type">> := <<"application/x-www-form-urlencoded", _/binary>>}, body := Body} = Req,
-               [{read_urlencoded_body, true}|Tl], State) ->
-    Data = cow_qs:parse_qs(Body),
-    %% First read in the body
-    Params = maps:from_list(Data),
-    modulate_state(Req#{params => Params}, Tl, State);
-modulate_state(Req, [{parse_qs, Type}|T1], State) ->
-    Qs = cowboy_req:parse_qs(Req),
-    case Type of
-        true -> MapQs = maps:from_list(Qs),
-                modulate_state(Req#{parsed_qs => MapQs}, T1, State);
-        list -> modulate_state(Req#{parsed_qs => Qs}, T1, State)
+modulate_state(Req = #{body := Body}, [{read_urlencoded_body, true}|Tl], State) ->
+    case content_type(Req) of
+        {~"application", ~"x-www-form-urlencoded"} ->
+            try maps:from_list(cow_qs:parse_qs(Body)) of
+                Params -> modulate_state(Req#{params => Params}, Tl, State)
+            catch
+                error:limit_reached -> refuse(413, ~"Too many fields in the urlencoded body", Req, State);
+                error:_ -> refuse(400, ~"Malformed urlencoded body", Req, State)
+            end;
+        _ ->
+            modulate_state(Req, Tl, State)
+    end;
+modulate_state(Req, [{parse_qs, Type}|Tl], State) when Type =:= true; Type =:= list ->
+    try cowboy_req:parse_qs(Req) of
+        Qs when Type =:= true -> modulate_state(Req#{parsed_qs => maps:from_list(Qs)}, Tl, State);
+        Qs -> modulate_state(Req#{parsed_qs => Qs}, Tl, State)
+    catch
+        exit:{request_error, _, _} -> refuse(400, ~"Malformed query string", Req, State)
     end;
 modulate_state(Req, [_|Tl], State) ->
     modulate_state(Req, Tl, State).
 
+refuse(Status, Reason, Req, State) ->
+    ?LOG_WARNING(#{msg => ~"Request refused", reason => Reason, status_code => Status}),
+    {stop, {status, Status}, Req, State}.
+
+decode_json(Req, <<>>, _Tl, State) ->
+    ?LOG_WARNING(#{msg => ~"Request refused", reason => ~"Empty JSON body", status_code => 400}),
+    {stop, cowboy_req:reply(400, Req), State};
+decode_json(Req, Body, Tl, State) ->
+    case nova_json:try_decode(Body) of
+        {ok, JSON} ->
+            modulate_state(Req#{json => JSON}, Tl, State);
+        {error, _Reason, Why} ->
+            ?LOG_WARNING(Why#{msg => ~"Request refused", reason => ~"Malformed JSON body", status_code => 400}),
+            {stop, cowboy_req:reply(400, Req), State}
+    end.
+
+is_json({~"application", ~"json"}) ->
+    true;
+is_json({~"application", SubType}) when byte_size(SubType) > 5 ->
+    binary:part(SubType, byte_size(SubType), -5) =:= ~"+json";
+is_json(_) ->
+    false.
+
+content_type(Req) ->
+    try cowboy_req:parse_header(~"content-type", Req) of
+        {Type, SubType, _Params} -> {Type, SubType};
+        _ -> undefined
+    catch
+        _:_ -> undefined
+    end.
+
 %% A multipart body is never buffered here; nova_multipart_plugin or the
 %% controller reads the parts from the stream.
-read_request_body(Req, Options) ->
+read_request_body(Req, Options, MaxLength, Timeout) ->
     case not is_multipart(Req) andalso should_read_body(Options) andalso cowboy_req:has_body(Req) of
-        true -> read_body(Req, <<>>);
-        false -> Req#{body => <<>>}
+        true -> read_body(Req, MaxLength, Timeout);
+        false -> {ok, Req#{body => <<>>}}
     end.
+
+-spec limit(atom(), map(), non_neg_integer(), non_neg_integer()) -> non_neg_integer() | infinity.
+limit(Key, Options, Default, Min) ->
+    case maps:get(Key, Options, Default) of
+        infinity -> infinity;
+        Value when is_integer(Value), Value >= Min -> Value;
+        Value -> invalid_limit(Key, Value, Default)
+    end.
+
+invalid_limit(Key, Value, Default) ->
+    Warned = {?MODULE, invalid_limit, Key, Value},
+    case nova_once:first(Warned) of
+        true ->
+            ?LOG_WARNING(#{msg => ~"Invalid nova_request_plugin option, using the default",
+                           option => Key, value => Value, default => Default});
+        false ->
+            ok
+    end,
+    Default.
 
 is_multipart(Req) ->
-    try cowboy_req:parse_header(<<"content-type">>, Req) of
-        {<<"multipart">>, <<"form-data">>, _Params} -> true;
-        _ -> false
-    catch
-        _:_ -> false
+    content_type(Req) =:= {~"multipart", ~"form-data"}.
+
+read_body(Req, MaxLength, Timeout) ->
+    Deadline = case Timeout of
+                   infinity -> infinity;
+                   _ -> erlang:monotonic_time(millisecond) + Timeout
+               end,
+    case cowboy_req:body_length(Req) of
+        Length when is_integer(Length), MaxLength =/= infinity, Length > MaxLength -> {too_large, Req};
+        _ -> read_body(Req, MaxLength, Deadline, <<>>)
     end.
 
-read_body(Req, Acc) ->
-    case cowboy_req:read_body(Req) of
-        {ok, Data, Req0} -> Req0#{body => <<Acc/binary, Data/binary>>};
-        {more, Data, Req0} -> read_body(Req0, <<Acc/binary, Data/binary>>)
+-spec read_body(cowboy_req:req(), non_neg_integer() | infinity, integer() | infinity, binary()) ->
+          {ok | too_large | timeout, cowboy_req:req()}.
+read_body(Req, MaxLength, Deadline, Acc) ->
+    case time_left(Deadline) of
+        0 ->
+            {timeout, Req};
+        TimeLeft ->
+            ReadLength = case MaxLength of
+                             infinity -> ?CHUNK_LENGTH;
+                             _ -> min(?CHUNK_LENGTH, MaxLength - byte_size(Acc) + 1)
+                         end,
+            Period = case TimeLeft of
+                         infinity -> ?CHUNK_PERIOD;
+                         _ -> min(?CHUNK_PERIOD, TimeLeft)
+                     end,
+            {Status, Data, Req0} = cowboy_req:read_body(Req, #{length => ReadLength, period => Period}),
+            Body = <<Acc/binary, Data/binary>>,
+            case {Status, MaxLength =/= infinity andalso byte_size(Body) > MaxLength} of
+                {_, true} -> {too_large, Req0};
+                {ok, false} -> {ok, Req0#{body => Body}};
+                {more, false} -> read_body(Req0, MaxLength, Deadline, Body)
+            end
+    end.
+
+-spec time_left(integer() | infinity) -> non_neg_integer() | infinity.
+time_left(infinity) ->
+    infinity;
+time_left(Deadline) ->
+    case Deadline - erlang:monotonic_time(millisecond) of
+        Left when Left > 0 -> Left;
+        _ -> 0
     end.
 
 should_read_body([]) -> false;
 should_read_body([{decode_json_body, true}|_Tl]) -> true;
 should_read_body([{read_urlencoded_body, true}|_Tl]) -> true;
 should_read_body([_|Tl]) -> should_read_body(Tl).
-
--ifdef(TEST).
--compile(export_all).
--endif.

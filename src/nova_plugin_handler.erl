@@ -59,6 +59,11 @@ run_plugins([{Callback, Options}|Tl], CallbackType, Req, Env) when is_function(C
                     {stop, Req1}
             end
     catch
+        exit:{request_error, Kind, _Message} when CallbackType =:= pre_request ->
+            Status = nova_handler:request_error_status(Kind),
+            ?LOG_WARNING(#{msg => ~"Request error in plugin", plugin => plugin_module(Callback),
+                           kind => nova_redact:term(Kind), status_code => Status}),
+            {stop, cowboy_req:reply(Status, Req)};
         Class:Reason:Stacktrace ->
             ?LOG_ERROR(#{msg => <<"Plugin crashed">>, class => Class, reason => Reason, stacktrace => Stacktrace}),
             Req0 = Req#{crash_info => #{class => Class,
@@ -75,8 +80,17 @@ handle_reply({reply, Status, Headers, Body}, Req) ->
     Req0 = cowboy_req:set_resp_headers(Headers, Req),
     Req1 = cowboy_req:set_resp_body(Body, Req0),
     Req1#{resp_status_code => Status};
+handle_reply({status, Status}, Req) ->
+    handle_reply({status, Status, #{}}, Req);
+handle_reply({status, Status, Headers}, Req)
+  when is_integer(Status), is_map(Headers) orelse is_list(Headers) ->
+    (cowboy_req:set_resp_headers(Headers, Req))#{resp_status_code => Status};
 handle_reply(_, Req) ->
     Req.
+
+plugin_module(Callback) ->
+    {module, Module} = erlang:fun_info(Callback, module),
+    Module.
 
 
 
