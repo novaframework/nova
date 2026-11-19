@@ -33,7 +33,7 @@
 -define(SERVER, ?MODULE).
 
 -record(state, {
-                process_refs = [] :: [pid()]
+                process_refs = [] :: [port()]
                }).
 
 %%%===================================================================
@@ -80,8 +80,7 @@ stop() ->
                               ignore.
 init([]) ->
     process_flag(trap_exit, true),
-    CmdList = nova:get_env(watchers, []),
-    [ erlang:apply(?MODULE, async_cast, tuple_to_list(X)) || X <- CmdList ],
+    [ start_watcher(Watcher) || Watcher <- configured_watchers() ],
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------
@@ -151,7 +150,7 @@ handle_info({_ProcessRef, {data, Data}}, State) ->
     {noreply, State};
 handle_info({'EXIT', Ref, Reason}, State = #state{process_refs = Refs}) ->
     %% Remove the port from our list
-    Refs2 = lists:delete(Ref, Refs),
+    Refs2 = [Port || Port <- Refs, Port =/= Ref],
     case Reason of
         normal ->
             ok;
@@ -218,6 +217,15 @@ port_options(undefined) ->
 port_options(Workdir) ->
     [{cd, Workdir} | port_options(undefined)].
 
+-spec configured_watchers() -> [term()].
+configured_watchers() ->
+    case nova:get_env(watchers, []) of
+        Watchers when is_list(Watchers) -> Watchers
+    end.
+
+start_watcher(Watcher) when is_tuple(Watcher) ->
+    erlang:apply(?MODULE, async_cast, tuple_to_list(Watcher)).
+
 -spec characters(term()) -> string().
 characters([]) -> [];
 characters([Char | Rest]) when is_integer(Char) -> [Char | characters(Rest)];
@@ -232,7 +240,6 @@ argument_string(Args) -> string:join(Args, " ").
 
 
 
-
 %%%===================================================================
 %%% Tests
 %%%===================================================================
@@ -242,9 +249,7 @@ argument_string(Args) -> string:join(Args, " ").
 
 simple_ls_test_() ->
     {setup,
-     fun() ->
-             ?MODULE:start_link()
-     end,
+     fun start_link/0,
      fun(_) ->
              ?MODULE:stop()
      end,

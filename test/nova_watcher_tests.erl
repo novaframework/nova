@@ -29,6 +29,22 @@ watcher_test_() ->
       fun command_holding_more_than_characters_does_not_stop_the_watcher/1,
       fun arguments_that_are_not_strings_do_not_stop_the_watcher/1]}.
 
+configured_watchers_start_with_the_watcher_test() ->
+    {ok, Cwd} = file:get_cwd(),
+    Dir = fresh_dir(Cwd),
+    application:load(nova),
+    application:set_env(nova, bootstrap_application, nova),
+    application:set_env(nova, watchers, [{"touch", [filename:join(Dir, "ran")]}]),
+    {ok, _Pid} = nova_watcher:start_link(),
+    try
+        ?assert(appears(filename:join(Dir, "ran")))
+    after
+        ok = nova_watcher:stop(),
+        application:unset_env(nova, watchers),
+        application:unset_env(nova, bootstrap_application),
+        ok = file:del_dir_r(Dir)
+    end.
+
 %% The number is unique in this node only, so a directory a run that was
 %% stopped half way left behind can have the same name.
 fresh_dir(Cwd) ->
