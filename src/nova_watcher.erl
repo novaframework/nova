@@ -33,7 +33,7 @@
 -define(SERVER, ?MODULE).
 
 -record(state, {
-                process_refs = [] :: [pid()]
+                process_refs = [] :: [port()]
                }).
 
 %%%===================================================================
@@ -55,8 +55,10 @@ async_cast(Application, Cmd, Args, Options) ->
 async_cast(Application, Cmd, Options) ->
     async_cast(Application, Cmd, [], Options).
 
+async_cast(Cmd, Args) when is_list(Args) ->
+    async_cast(main_app(), Cmd, Args, #{});
 async_cast(Cmd, Options) ->
-    async_cast(nova:get_main_app(), Cmd, Options).
+    async_cast(main_app(), Cmd, Options).
 
 async_cast(Cmd) ->
     async_cast(Cmd, #{}).
@@ -78,8 +80,7 @@ stop() ->
                               ignore.
 init([]) ->
     process_flag(trap_exit, true),
-    CmdList = nova:get_env(watchers, []),
-    [ erlang:apply(?MODULE, async_cast, tuple_to_list(X)) || X <- CmdList ],
+    [ start_watcher(Watcher) || Watcher <- configured_watchers() ],
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------
@@ -108,21 +109,24 @@ handle_call(Request, From, State) ->
                          {noreply, NewState :: term(), Timeout :: timeout()} |
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), NewState :: term()}.
-handle_cast({async, Application, Cmd, Args, Options}, State = #state{process_refs = ProcessRefs}) ->
-    LibDir = code:lib_dir(Application),
-    Workdir =
-        case maps:get(workdir, Options, undefined) of
-            undefined ->
-                LibDir;
-            Subdir ->
-                filename:join([LibDir, Subdir])
-        end,
-    %% Set working directory
-    file:set_cwd(Workdir),
-    ArgList = string:join(Args, " "),
-    Port = erlang:open_port({spawn, Cmd ++ " " ++ ArgList}, [use_stdio, {line, 1024}, stderr_to_stdout]),
-    ?LOG_NOTICE(#{action => <<"Started async command">>, command => Cmd, arguments => ArgList}),
-    {noreply, State#state{process_refs = [Port|ProcessRefs]}};
+handle_cast({async, Application, Cmd, Args, Options}, State = #state{process_refs = ProcessRefs})
+  when is_atom(Application), is_list(Cmd), is_list(Args), is_map(Options) ->
+    try
+        ArgList = argument_string(Args),
+        Port = erlang:open_port({spawn, characters(Cmd ++ " " ++ ArgList)},
+                                port_options(workdir(Application, maps:get(workdir, Options, undefined)))),
+        ?LOG_NOTICE(#{action => <<"Started async command">>, command => Cmd, arguments => ArgList}),
+        {noreply, State#state{process_refs = [Port|ProcessRefs]}}
+    catch
+        error:Reason ->
+            ?LOG_ERROR(#{msg => <<"Could not start watcher">>, application => Application,
+                         command => Cmd, arguments => Args, reason => Reason}),
+            {noreply, State}
+    end;
+handle_cast({async, Application, Cmd, Args, Options}, State) ->
+    ?LOG_ERROR(#{msg => <<"Could not start watcher">>, application => Application,
+                 command => Cmd, arguments => Args, options => Options, reason => invalid_watcher}),
+    {noreply, State};
 handle_cast(_Request, State) ->
     {noreply, State}.
 
@@ -146,7 +150,7 @@ handle_info({_ProcessRef, {data, Data}}, State) ->
     {noreply, State};
 handle_info({'EXIT', Ref, Reason}, State = #state{process_refs = Refs}) ->
     %% Remove the port from our list
-    Refs2 = lists:delete(Ref, Refs),
+    Refs2 = [Port || Port <- Refs, Port =/= Ref],
     case Reason of
         normal ->
             ok;
@@ -194,6 +198,43 @@ format_status(Status) ->
 %%% Internal functions
 %%%===================================================================
 
+main_app() ->
+    case nova:get_main_app() of
+        {ok, Application} -> Application;
+        undefined -> undefined
+    end.
+
+workdir(Application, Subdir) ->
+    case code:lib_dir(Application) of
+        {error, bad_name} when Subdir =:= undefined -> undefined;
+        {error, bad_name} -> error({unknown_application, Application});
+        LibDir when Subdir =:= undefined -> LibDir;
+        LibDir -> filename:join(LibDir, Subdir)
+    end.
+
+port_options(undefined) ->
+    [use_stdio, {line, 1024}, stderr_to_stdout];
+port_options(Workdir) ->
+    [{cd, Workdir} | port_options(undefined)].
+
+-spec configured_watchers() -> [term()].
+configured_watchers() ->
+    case nova:get_env(watchers, []) of
+        Watchers when is_list(Watchers) -> Watchers
+    end.
+
+start_watcher(Watcher) when is_tuple(Watcher) ->
+    erlang:apply(?MODULE, async_cast, tuple_to_list(Watcher)).
+
+-spec characters(term()) -> string().
+characters([]) -> [];
+characters([Char | Rest]) when is_integer(Char) -> [Char | characters(Rest)];
+characters([Nested | Rest]) when is_list(Nested) -> characters(Nested) ++ characters(Rest);
+characters(_NotCharacters) -> error(badarg).
+
+argument_string([]) -> "";
+argument_string(Args = [Char | _]) when is_integer(Char) -> Args;
+argument_string(Args) -> string:join(Args, " ").
 
 
 
@@ -208,9 +249,7 @@ format_status(Status) ->
 
 simple_ls_test_() ->
     {setup,
-     fun() ->
-             ?MODULE:start_link()
-     end,
+     fun start_link/0,
      fun(_) ->
              ?MODULE:stop()
      end,
