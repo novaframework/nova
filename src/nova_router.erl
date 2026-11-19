@@ -46,21 +46,51 @@
          delete_dispatch/1
         ]).
 
+-ifdef(TEST).
+-export([add_plugin/1, apply_callback/3, concat_strings/2, insert/6, method_to_binary/1, normalize_plugins/2,
+         normalize_secure/2, plugins_before_security/3, resolve_secure/3, router_module/1]).
+-endif.
+
 -include_lib("kernel/include/logger.hrl").
 -include("../include/nova_router.hrl").
 -include("../include/nova.hrl").
 
--type bindings() :: #{binary() := binary()}.
+-doc "The values of the bindings of a matched route, keyed by the name of the binding.".
+-type bindings() :: #{binary() => binary()}.
 
+-doc "A request the router has matched.".
+-type routed_req() :: map().
+
+-doc """
+What a lookup in a routing table gives: the bindings and the value stored
+for the route, with the remaining path segments for a route that ends in a
+wildcard. `{error, not_found}` when no route matches, and
+`{error, comparator_not_found, AllowedMethods}` when the path matches for
+other methods only.
+""".
 -type lookup_result() :: {ok, bindings(), Value :: term()} |
                          {ok, bindings(), Value :: term(), PathInfo :: [binary()]} |
                          {error, not_found} |
-                         {error, comparator_not_found, AllowedMethods :: [binary()]}.
+                         {error, comparator_not_found, AllowedMethods :: [nova_routing_trie:comparator()]}.
 
 -export_type([bindings/0, lookup_result/0]).
 
-%% This module is also exposing callbacks for routers
+-doc """
+Called when the routes of the application are compiled: when the
+application starts on a listener, when it is mounted by another application
+and from `add_routes/1`. `Env` is what `nova:get_environment/0` returns.
+
+Returns the route groups of the application, each a map as described in the
+routing guide. A router without `routes/1` adds no routes of its own.
+""".
 -callback routes(Env :: atom()) -> Routes :: [map()].
+
+-doc """
+Called together with `routes/1`, with the same `Env`. Returns the controller
+modules to ask for routes, each as `Module` or `{Module, Options}`. Nova
+calls `c:nova_controller:routes/2` of every one that exports it and adds what
+it returns after the routes of `routes/1`.
+""".
 -callback controllers(Env :: atom()) -> Controllers :: [module() | {module(), map()}].
 
 -optional_callbacks([routes/1, controllers/1]).
@@ -75,6 +105,10 @@
 %% listeners on different ports do not serve each other's routes. The default
 %% listener uses nova_dispatch, which is also what every existing caller and
 %% every stored dispatch table already uses.
+-doc """
+The key of the routing table of a listener. `nova_dispatch` is the table of
+the listener of the bootstrap application.
+""".
 -type dispatch_key() :: term().
 -export_type([dispatch_key/0]).
 
@@ -89,10 +123,15 @@
 dispatch_keys() ->
     nova_sup:dispatch_keys().
 
+-doc """
+The applications compiled into the routing table of the default listener,
+each with the prefix it is mounted under.
+""".
 -spec compiled_apps() -> [{App :: atom(), Prefix :: list()}].
 compiled_apps() ->
     compiled_apps(?NOVA_DISPATCH).
 
+-doc "As `compiled_apps/0`, but for the routing table addressed by `DispatchKey`.".
 -spec compiled_apps(DispatchKey :: dispatch_key()) -> [{App :: atom(), Prefix :: list()}].
 compiled_apps(DispatchKey) ->
     StorageBackend = storage_backend(),
@@ -100,6 +139,7 @@ compiled_apps(DispatchKey) ->
 
 
 %% TODO! We need to implement a way to get and remove plugins for a path
+-doc false.
 plugins() ->
     StorageBackend = storage_backend(),
     StorageBackend:get(?NOVA_PLUGINS, []).
@@ -111,6 +151,7 @@ forget_plugins() ->
     StorageBackend:put(?NOVA_PLUGINS, []),
     ok.
 
+-doc "As `compile/2`, into the routing table of the default listener.".
 -spec compile(Apps :: [atom() | {atom(), map()}]) -> nova_routing_trie:trie().
 compile(Apps) ->
     compile(Apps, ?NOVA_DISPATCH).
@@ -142,6 +183,7 @@ compile_fresh(Apps, DispatchKey) ->
     StorageBackend:put(DispatchKey, Dispatch),
     Dispatch.
 
+-doc false.
 -spec execute(Req, Env :: cowboy_middleware:env()) -> {ok, Req, Env0} | {stop, Req}
                                                           when Req::cowboy_req:req(),
                                                                Env0::cowboy_middleware:env().
@@ -170,7 +212,8 @@ route(Req = #{host := Host, path := Path, method := Method}, Env, Dispatch) ->
             render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
         {error, comparator_not_found, AllowedMethods} ->
             logger:debug(<<"Method not allowed: ~p for ~p. Allowed methods: ~p">>, [Method, Path, AllowedMethods]),
-            AllowHeader = iolist_to_binary(lists:join(<<", ">>, AllowedMethods)),
+            Allowed = [AllowedMethod || AllowedMethod <- AllowedMethods, is_binary(AllowedMethod)],
+            AllowHeader = iolist_to_binary(lists:join(<<", ">>, Allowed)),
             %% Set the 'allow'-header
             Req1 = cowboy_req:set_resp_header(<<"allow">>, AllowHeader, Req),
             {ok, Req2, Env1} = render_status_page('_', 405, #{error => "Method not allowed"}, Req1, Env),
@@ -228,19 +271,33 @@ route(Req = #{host := Host, path := Path, method := Method}, Env, Dispatch) ->
                  }
             };
         Error ->
-            ?LOG_ERROR(#{reason => <<"Unexpected return from nova_routing_trie:find/4">>,
+            ?LOG_ERROR(#{msg => ~"Unexpected return from nova_routing_trie:find/4",
                          return_object => Error}),
             render_status_page(Host, 404, #{error => Error}, Req, Env)
     end.
 
+-doc """
+Look up a path in the routing table of the default listener, among the
+routes declared without a host, with `'_'` as the method. Use `lookup_url/4`
+for the table of another listener.
+""".
 -spec lookup_url(Path :: nova_routing_trie:path()) -> lookup_result().
 lookup_url(Path) ->
     lookup_url('_', Path).
 
+-doc """
+As `lookup_url/1`, among the routes of `Host`. `'_'`, and a host that has no
+routes of its own, give the routes declared without a host.
+""".
 -spec lookup_url(Host :: binary() | atom(), Path :: nova_routing_trie:path()) -> lookup_result().
 lookup_url(Host, Path) ->
     lookup_url(Host, Path, '_').
 
+-doc """
+As `lookup_url/2`, for `Method`, a binary such as `~"GET"`. With `'_'` only
+a route declared without `methods` is found. A route declared for some
+methods gives `{error, comparator_not_found, Methods}`.
+""".
 -spec lookup_url(Host :: binary() | atom(), Path :: nova_routing_trie:path(),
                  Method :: nova_routing_trie:comparator()) -> lookup_result().
 lookup_url(Host, Path, Method) ->
@@ -279,13 +336,13 @@ add_routes(App) ->
 
 %%--------------------------------------------------------------------
 -doc "Add routes to the dispatch-table for the given app. The routes can be either a list of maps or a map. It use the same structure as the routes-callback in the router-module. Throws `{error, {misplaced_security, App, Key, Path}}` for routes with a security callback under a key that is not read: `secure` on a route group, or `security` or `secure` in the options of a route.".
--spec add_routes(App :: atom(), Routes :: [map()] | map()) -> ok.
+-spec add_routes(App :: atom(), Routes :: [map() | [map()]] | map()) -> ok.
 add_routes(App, Routes) ->
     add_routes(App, Routes, ?NOVA_DISPATCH).
 
 %%--------------------------------------------------------------------
 -doc "As add_routes/2, but against the routing table addressed by `DispatchKey`.".
--spec add_routes(App :: atom(), Routes :: [map()] | map(), DispatchKey :: dispatch_key()) -> ok.
+-spec add_routes(App :: atom(), Routes :: [map() | [map()]] | map(), DispatchKey :: dispatch_key()) -> ok.
 add_routes(_App, [], _DispatchKey) ->
     ok;
 add_routes(App, Routes, DispatchKey) when is_map(Routes) ->
@@ -298,7 +355,7 @@ add_routes(App, [Routes|Tl], DispatchKey) when is_list(Routes) ->
 add_routes(App, [RouteInfo|_Tl] = Routes, DispatchKey) when is_map(RouteInfo) ->
     insert_route_maps(App, Routes, DispatchKey);
 add_routes(App, Routes, _DispatchKey) ->
-    ?LOG_ERROR(#{reason => <<"Invalid routes structure">>, app => App, routes => Routes}),
+    ?LOG_ERROR(#{msg => ~"Invalid routes structure", app => App, routes => Routes}),
     throw({error, {invalid_routes, App, Routes}}).
 
 insert_route_maps(App, Routes, DispatchKey) ->
@@ -346,7 +403,7 @@ remove_application(Application, DispatchKey) when is_atom(Application) ->
     AppsKey = apps_key(DispatchKey),
     StorageBackend:put(DispatchKey, Dispatch0),
     StorageBackend:put(AppsKey, lists:keydelete(Application, 1, StorageBackend:get(AppsKey, []))),
-    nova:set_env(apps, lists:keydelete(Application, 1, nova:get_env(apps, []))),
+    nova:set_env(apps, lists:keydelete(Application, 1, mounted_apps())),
     ok.
 
 %% Both handler kinds carry the owning application, and dropping the cowboy
@@ -527,9 +584,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     ok = misplaced_security(misplaced_in_group(Prefix, RouteInfo), App, RouterFile),
 
     %% We need to add this app info to nova-env
-    NovaEnv = nova:get_env(apps, []),
-    NovaEnv0 = lists:keystore(App, 1, NovaEnv, {App, #{prefix => Prefix}}),
-    nova:set_env(apps, NovaEnv0),
+    nova:set_env(apps, lists:keystore(App, 1, mounted_apps(), {App, #{prefix => Prefix}})),
 
     Group = maps:with([extra_state], RouteInfo),
     {ok, Dispatch1} = parse_url(Host, maps:get(routes, RouteInfo, []),
@@ -627,7 +682,7 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
                                            fun method_to_binary/1),
             parse_url(Host, Tl, T, Value, CompiledPaths);
         OtherProtocol ->
-            ?LOG_ERROR(#{reason => <<"Unknown protocol">>, protocol => OtherProtocol,
+            ?LOG_ERROR(#{msg => ~"Unknown protocol", protocol => OtherProtocol,
                         router_file => maps:get(router_file, Options, undefined)}),
             parse_url(Host, Tl, T, Value, Tree)
     end;
@@ -649,13 +704,18 @@ parse_url(Host,
     parse_url(Host, Tl, T, Value, CompiledPaths).
 
 
+-doc "As `render_status_page/3` with no data.".
 -spec render_status_page(StatusCode :: integer(), Req :: cowboy_req:req()) ->
-                                {ok, Req0 :: cowboy_req:req(), Env :: map()}.
+                                {ok, Req0 :: routed_req(), Env :: map()}.
 render_status_page(StatusCode, Req) ->
     render_status_page(StatusCode, #{}, Req).
 
+-doc """
+As `render_status_page/5`, for any host and the routing table that serves
+`Req`.
+""".
 -spec render_status_page(StatusCode :: integer(), Data :: map(), Req :: cowboy_req:req()) ->
-                                {ok, Req0 :: cowboy_req:req(), Env :: map()}.
+                                {ok, Req0 :: routed_req(), Env :: map()}.
 render_status_page(StatusCode, Data, Req) ->
     render_status_page('_', StatusCode, Data, Req, #{nova_dispatch_key => dispatch_key(Req)}).
 
@@ -663,7 +723,7 @@ render_status_page(StatusCode, Data, Req) ->
                          StatusCode :: integer(),
                          Data :: map(),
                          Req :: cowboy_req:req(),
-                         Env :: map()) -> {ok, Req0 :: cowboy_req:req(), Env :: map()}.
+                         Env :: map()) -> {ok, Req0 :: routed_req(), Env :: map()}.
 render_status_page(Host, StatusCode, Data, Req, Env) ->
     StorageBackend = storage_backend(),
     Dispatch = StorageBackend:get(dispatch_key(Env)),
@@ -694,6 +754,13 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
 
 insert_opts(T) ->
     maps:get(insert_opts, T, #{}).
+
+-spec mounted_apps() -> [{atom(), map()}].
+mounted_apps() ->
+    case nova:get_env(apps, []) of
+        Apps when is_list(Apps) ->
+            [{App, Info} || {App, Info} <- Apps, is_atom(App), is_map(Info)]
+    end.
 
 with_route(RealPath, Plugins) ->
     [{nova_route, unicode:characters_to_binary(RealPath)} | Plugins].
@@ -761,7 +828,7 @@ storage_backend() ->
     case application:get_env(nova, dispatch_backend, persistent_term) of
         Backend when is_atom(Backend) -> Backend;
         Other ->
-            ?LOG_ERROR(#{reason => <<"dispatch_backend must be a module">>, value => Other}),
+            ?LOG_ERROR(#{msg => ~"dispatch_backend must be a module", value => Other}),
             persistent_term
     end.
 
@@ -796,15 +863,15 @@ insert(Host, Path, Combinator, Value, Tree, Options) ->
         {ok, Tree0} ->
             Tree0;
         {error, conflict, Conflict} ->
-            ?LOG_ERROR(#{reason => <<"Conflicting route">>, route => Path, combinator => Combinator,
+            ?LOG_ERROR(#{msg => ~"Conflicting route", route => Path, combinator => Combinator,
                          conflict => Conflict}),
             throw({error, {route_conflict, Conflict}})
     catch
         throw:Exception ->
-            ?LOG_ERROR(#{reason => <<"Error when inserting route">>, route => Path, combinator => Combinator}),
+            ?LOG_ERROR(#{msg => ~"Error when inserting route", route => Path, combinator => Combinator}),
             throw(Exception);
         Type:Exception ->
-            ?LOG_ERROR(#{reason => <<"Unexpected exit">>, type => Type, exception => Exception}),
+            ?LOG_ERROR(#{msg => ~"Unexpected exit", type => Type, exception => Exception}),
             throw(Exception)
     end.
 
@@ -821,12 +888,6 @@ add_plugin(Plugin) ->
     end,
     nova_plugin_manager:ensure_plugin(Plugin).
 
-%%--------------------------------------------------------------------
--doc """
-Work out which plugins apply to a route entry.
-
-`local_or_global` is the default and is how Nova has always behaved: a route entry that declares `plugins` uses exactly those, otherwise it uses the globally configured ones. The merging strategies exist for the cases where you want both, and dedupe on `{Type, Module}` keeping the first occurrence, so ordering within a phase is preserved.
-""".
 normalize_secure(false, _RouterFile) ->
     false;
 normalize_secure({SMod, SFun}, RouterFile) when is_atom(SMod), is_atom(SFun) ->
@@ -875,7 +936,7 @@ resolve_plugins(global_only, _RouteInfo, _RouterFile) ->
 resolve_plugins({override, PluginList}, _RouteInfo, _RouterFile) when is_list(PluginList) ->
     PluginList;
 resolve_plugins(Strategy, RouteInfo, RouterFile) ->
-    ?LOG_ERROR(#{reason => <<"Unknown plugin_strategy, falling back to local_or_global">>,
+    ?LOG_ERROR(#{msg => ~"Unknown plugin_strategy, falling back to local_or_global",
                  plugin_strategy => Strategy, router_file => RouterFile}),
     resolve_plugins(local_or_global, RouteInfo, RouterFile).
 
@@ -1148,6 +1209,7 @@ concat_strings(Path1, Path2) when is_list(Path1), is_list(Path2) ->
 %% ============================
 %% Callbacks for nova_router
 %% ===========================
+-doc false.
 -spec routes(Env :: atom()) -> [map()].
 routes(_) ->
  [#{
@@ -1156,10 +1218,3 @@ routes(_) ->
                {500, fun nova_error_controller:server_error/1, #{}}
               ]
    }].
-
-%% =============================
-%% Test cases
-%% ============================
--ifdef(TEST).
--compile(export_all).
--endif.

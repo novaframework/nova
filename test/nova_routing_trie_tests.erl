@@ -461,10 +461,10 @@ foldl_preserves_options_test() ->
 
 foldl_badreturn_test() ->
     T = ins('_', "/a", "GET", payload_a, new()),
-    ?assertError({badreturn, _}, foldl(T, fun(_Routes) -> not_a_list end)).
+    ?assertError({badreturn, _}, apply(nova_routing_trie, foldl, [T, fun(_Routes) -> not_a_list end])).
 
 from_list_bad_route_test() ->
-    ?assertError({bad_route, _}, from_list([{"/a"}])).
+    ?assertError({bad_route, _}, apply(nova_routing_trie, from_list, [[{"/a"}]])).
 
 %%====================================================================
 %% Empty trie
