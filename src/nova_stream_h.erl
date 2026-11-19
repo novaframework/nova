@@ -21,7 +21,7 @@
           -> {cowboy_stream:commands(), state()}.
 init(StreamID, Req, Opts) ->
     Req0 =
-        case nova:get_env(use_sessions, true) of
+        case nova_session:enabled() of
             true ->
                 case session_cookie(Req) of
                     present -> Req;

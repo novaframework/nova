@@ -35,6 +35,17 @@ assert_session_cookie_kept(Cookie) ->
         exit:{request_error, _, _} -> ?assertMatch(#{nova_session_id := _}, Req)
     end.
 
+%% use_sessions is read from the bootstrap application or from nova.
+sessions_off_test() ->
+    application:set_env(nova, use_sessions, false),
+    try
+        {[{req, Req}], _} = nova_stream_h:init(1, #{headers => #{}}, #{stream_handlers => [?MODULE]}),
+        ?assertNot(is_map_key(nova_session_id, Req)),
+        ?assertNot(is_map_key(resp_cookies, Req))
+    after
+        application:unset_env(nova, use_sessions)
+    end.
+
 malformed_cookie_header_over_a_socket_test_() ->
     {setup, fun start_listener/0, fun stop_listener/1,
      fun() ->

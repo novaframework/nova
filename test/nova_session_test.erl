@@ -89,13 +89,10 @@ nova_session_id_takes_priority_over_cookie_test() ->
 %%====================================================================
 
 setup_meck() ->
-    meck:new(nova, [passthrough]),
     meck:new(cowboy_req, [passthrough]),
     meck:new(nova_session_ets, [passthrough]),
-    meck:expect(nova, get_env, fun(use_sessions, true) -> true end),
     application:set_env(nova, session_manager, nova_session_ets).
 
 cleanup_meck() ->
     meck:unload(nova_session_ets),
-    meck:unload(cowboy_req),
-    meck:unload(nova).
+    meck:unload(cowboy_req).

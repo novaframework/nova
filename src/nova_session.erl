@@ -9,6 +9,10 @@
          generate_session_id/0
         ]).
 
+-export([
+         enabled/0
+        ]).
+
 -include_lib("kernel/include/logger.hrl").
 
 %%%===================================================================
@@ -106,6 +110,11 @@ delete(Req, Key) ->
     end.
 
 
+-doc false.
+-spec enabled() -> boolean().
+enabled() ->
+    nova_config:get_env(use_sessions, true) =:= true.
+
 %%%===================================================================
 %%% Private functions
 %%%===================================================================
@@ -113,7 +122,7 @@ get_session_module() ->
     application:get_env(nova, session_manager, nova_session_ets).
 
 get_session_id(Req) ->
-    case nova:get_env(use_sessions, true) of
+    case enabled() of
         true ->
             case maps:get(nova_session_id, Req, undefined) of
                 undefined ->
@@ -128,7 +137,7 @@ get_session_id(Req) ->
                     {ok, SessionId}
             end;
         _ ->
-            ?LOG_ERROR(#{msg => <<"Session called but 'use_session' option is set to false">>}),
+            ?LOG_ERROR(#{msg => ~"Session called but the 'use_sessions' option is set to false"}),
             throw({nova_session, unsupported_session_used})
     end.
 

@@ -68,6 +68,7 @@ nova_session_ets_test_() ->
       fun no_session_returns_error/0,
       fun no_session_delete_returns_ok/0,
       fun sessions_disabled_throws/0,
+      fun use_sessions_env/0,
       fun delete_sets_expired_cookie/0,
       fun delete_key_preserves_other_keys/0,
       fun set_overwrites_existing_key/0,
@@ -150,6 +151,25 @@ sessions_disabled_throws() ->
     ?assertThrow({nova_session, unsupported_session_used}, nova_session:delete(Req)),
     ?assertThrow({nova_session, unsupported_session_used}, nova_session:delete(Req, <<"k">>)),
     application:set_env(nova, use_sessions, true).
+
+%% Same rule as json_lib: the bootstrap application wins, then nova.
+use_sessions_env() ->
+    application:set_env(nova, bootstrap_application, nova_session_tests_app),
+    application:set_env(nova_session_tests_app, use_sessions, true),
+    application:set_env(nova, use_sessions, false),
+    try
+        ?assert(nova_session:enabled()),
+        application:unset_env(nova_session_tests_app, use_sessions),
+        ?assertNot(nova_session:enabled()),
+        ?assertThrow({nova_session, unsupported_session_used},
+                     nova_session:get(req_with_session(~"id"), ~"k")),
+        application:unset_env(nova, use_sessions),
+        ?assert(nova_session:enabled())
+    after
+        application:unset_env(nova_session_tests_app, use_sessions),
+        application:set_env(nova, bootstrap_application, nova),
+        application:set_env(nova, use_sessions, true)
+    end.
 
 delete_sets_expired_cookie() ->
     {ok, SId} = nova_session:generate_session_id(),
