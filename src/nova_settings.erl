@@ -1,11 +1,11 @@
 -module(nova_settings).
 -moduledoc false.
 
--export([validate/0, value/1]).
+-export([validate/0, value/1, checked/2]).
 
 -include_lib("kernel/include/logger.hrl").
 
--type key() :: max_sessions |
+-type key() :: max_sessions | plugins_before_security |
                secret_key_base.
 -export_type([key/0]).
 
@@ -28,6 +28,12 @@ value(Key) ->
             maps:get(Key, persistent_term:get(?MODULE))
     end.
 
+-doc """
+What `Value` is kept as when it can be used for `Key`, and otherwise the
+`Reason` of `{invalid_setting, Key, Reason}`. Never raises, and never
+returns a secret that was refused. Also for a route group or a plugin that
+takes one of the settings as an option of its own.
+""".
 -spec checked(Key :: key(), Value :: term()) -> {ok, term()} | {error, Reason :: term()}.
 checked(secret_key_base, undefined) ->
     {ok, []};
@@ -40,21 +46,31 @@ checked(secret_key_base, Value) ->
     end;
 checked(max_sessions, Value) when Value =:= infinity; is_integer(Value), Value > 0 ->
     {ok, Value};
+checked(plugins_before_security, all) ->
+    {ok, all};
+checked(plugins_before_security, Value) ->
+    case is_list_of_plugins(Value) of
+        true -> {ok, Value};
+        false -> {error, Value}
+    end;
 checked(_Key, Value) ->
     {error, Value}.
 
 -spec expected(Key :: key()) -> binary().
 expected(secret_key_base) ->
     ~"secret_key_base must be a binary of at least 32 bytes out of a random source, or a list of such. A value that repeats a few bytes, an example out of the documentation or a ${VARIABLE} that was not filled in is refused. base64:encode(crypto:strong_rand_bytes(48)) in an Erlang shell, or openssl rand -base64 48, makes one";
-expected(max_sessions) -> ~"max_sessions must be infinity or an integer above 0".
+expected(max_sessions) -> ~"max_sessions must be infinity or an integer above 0";
+expected(plugins_before_security) ->
+    ~"plugins_before_security must be all or a list of plugin modules that have pre_request/4".
 
 -spec keys() -> [key()].
 keys() ->
-    [secret_key_base, max_sessions].
+    [secret_key_base, max_sessions, plugins_before_security].
 
 -spec default(key()) -> term().
 default(secret_key_base) -> undefined;
-default(max_sessions) -> ?DEFAULT_MAX_SESSIONS.
+default(max_sessions) -> ?DEFAULT_MAX_SESSIONS;
+default(plugins_before_security) -> [].
 
 -spec valid(key()) -> term().
 valid(Key) ->
@@ -105,3 +121,16 @@ is_variable_name(<<Char, Rest/binary>>)
     is_variable_name(Rest);
 is_variable_name(_NotAName) ->
     false.
+
+-spec is_list_of_plugins(term()) -> boolean().
+is_list_of_plugins([]) ->
+    true;
+is_list_of_plugins([Module | Modules]) ->
+    is_atom(Module) andalso has_pre_request(Module) andalso is_list_of_plugins(Modules);
+is_list_of_plugins(_NotAList) ->
+    false.
+
+-spec has_pre_request(module()) -> boolean().
+has_pre_request(Module) ->
+    _ = code:ensure_loaded(Module),
+    erlang:function_exported(Module, pre_request, 4).

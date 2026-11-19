@@ -3,7 +3,7 @@
 %%% Created : 10 Aug 2024 by Niclas Axelsson <niclas@burbas.se>
 %%%-------------------------------------------------------------------
 -module(nova_plugin_manager).
--moduledoc "Main manager for handling plugins".
+-moduledoc false.
 
 -behaviour(gen_server).
 
@@ -11,6 +11,7 @@
 -export([
          start_link/0,
          add_plugin/1,
+         ensure_plugin/1,
          add_plugin/3,
          get_state/1,
          set_state/2
@@ -35,8 +36,8 @@
 
 -record(plugin, {
                  module :: atom(),
-                 name :: binary(),
-                 version :: binary(),
+                 name :: term(),
+                 version :: term(),
                  state :: nova:state()
                 }).
 
@@ -55,7 +56,7 @@ start_link() ->
 
 %%--------------------------------------------------------------------
 -doc """
-Adds a plugin to the manager. The plugin module must implement the plugin_info/0 function returning #\{title := Title, version := Version\}. Optionally it can implement init/0 returning the initial state for the plugin, and stop/0 for cleaning up when the manager terminates.
+Adds a plugin to the manager. The plugin module must implement the plugin_info/0 function returning #\{title := Title, version := Version\}. Optionally it can implement init/0 returning the initial state for the plugin, and stop/1, which gets that state, for cleaning up when the manager terminates.
 """.
 -spec add_plugin({Class :: atom(), Module :: atom(), Opts :: map()} |
                  Module :: atom() | Callback :: function()) ->
@@ -82,6 +83,20 @@ add_plugin(Module, Name, Version) ->
             ok;
         [] ->
             gen_server:cast(?SERVER, {add_plugin, Module, Name, Version})
+    end.
+
+-doc false.
+-spec ensure_plugin(Module :: atom()) -> ok.
+ensure_plugin(Module) when is_atom(Module) ->
+    case ets:whereis(?TABLE) =/= undefined andalso not ets:member(?TABLE, Module) of
+        true ->
+            #{title := Title, version := Version} = case Module:plugin_info() of
+                                                        {Title0, Version0, _, _, _} -> #{title => Title0, version => Version0};
+                                                        PluginInfo -> PluginInfo
+                                                    end,
+            ok = gen_server:call(?SERVER, {add_plugin, Module, Title, Version});
+        false ->
+            ok
     end.
 
 %%--------------------------------------------------------------------
@@ -151,10 +166,18 @@ init([]) ->
           {noreply, NewState :: term(), hibernate} |
           {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
           {stop, Reason :: term(), NewState :: term()}.
-handle_call({set_state, Module, P, NewState}, _From, State) ->
+handle_call({set_state, Module, #plugin{} = P, NewState}, _From, State) ->
     ?LOG_DEBUG(<<"Set state for plugin ~p; NewState: ~p">>, [Module, NewState]),
     ets:insert(?TABLE, P#plugin{state = NewState}),
     {reply, ok, State};
+handle_call({add_plugin, Module, Name, Version}, _From, State) ->
+    case ets:member(?TABLE, Module) of
+        true ->
+            {reply, ok, State};
+        false ->
+            {noreply, State0} = handle_cast({add_plugin, Module, Name, Version}, State),
+            {reply, ok, State0}
+    end;
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -167,7 +190,7 @@ handle_call(_Request, _From, State) ->
           {noreply, NewState :: term(), Timeout :: timeout()} |
           {noreply, NewState :: term(), hibernate} |
           {stop, Reason :: term(), NewState :: term()}.
-handle_cast({add_plugin, Module, Name, Version}, State) ->
+handle_cast({add_plugin, Module, Name, Version}, State) when is_atom(Module) ->
     PluginState =
         case erlang:function_exported(Module, init, 0) of
             true ->
@@ -203,9 +226,7 @@ handle_info(_Info, State) ->
                 State :: term()) -> any().
 terminate(_Reason, _State) ->
     %% Stop all plugins and clean state
-    Plugins = ets:tab2list(?TABLE),
-    [ Plugin:stop() || #plugin{module = Plugin} <- Plugins,
-                       erlang:function_exported(Plugin, stop, 0) ],
+    [stop_plugin(Plugin) || Plugin <- ets:tab2list(?TABLE)],
     ets:delete(?TABLE),
     ok.
 
@@ -223,3 +244,15 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+stop_plugin(#plugin{module = Module, state = State}) ->
+    try
+        case {erlang:function_exported(Module, stop, 1), erlang:function_exported(Module, stop, 0)} of
+            {true, _} -> Module:stop(State);
+            {false, true} -> Module:stop();
+            _ -> ok
+        end
+    catch
+        Class:Reason ->
+            ?LOG_ERROR(#{msg => ~"Plugin stop failed", plugin => Module, class => Class, reason => Reason})
+    end.

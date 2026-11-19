@@ -3,7 +3,8 @@
 -behaviour(cowboy_middleware).
 
 -export([
-         execute/2
+         execute/2,
+         after_security/2
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -18,6 +19,16 @@ execute(Req = #{plugins := Plugins}, Env) ->
     run_plugins(PrePlugins, pre_request, Req, Env);
 execute(Req, Env) ->
     %% The router could not find any match for us
+    {ok, Req, Env}.
+
+-spec after_security(Req, Env) -> {ok, Req, Env} | {stop, Req}
+              when Req :: cowboy_req:req(), Env :: cowboy_middleware:env().
+after_security(Req = #{plugins := Plugins}, Env) when is_list(Plugins) ->
+    case proplists:get_value(after_security, Plugins, []) of
+        [] -> {ok, Req, Env};
+        AfterSecurity -> run_plugins(AfterSecurity, pre_request, Req, Env)
+    end;
+after_security(Req, Env) ->
     {ok, Req, Env}.
 
 

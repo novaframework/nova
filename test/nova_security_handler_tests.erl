@@ -1,9 +1,22 @@
 -module(nova_security_handler_tests).
 -include_lib("eunit/include/eunit.hrl").
--include("../include/nova_router.hrl").
 
--define(SETUP, fun() -> setup() end).
--define(CLEANUP, fun(S) -> cleanup(S) end).
+%% Logger handler callback: forwards every event to the test process.
+-export([log/2]).
+
+log(#{msg := Msg}, #{config := #{test_pid := Pid}}) ->
+    Pid ! {logged, Msg},
+    ok.
+
+logged() ->
+    receive
+        {logged, Msg} -> [Msg | logged()]
+    after 50 ->
+            []
+    end.
+
+-define(SETUP, fun setup/0).
+-define(CLEANUP, fun cleanup/1).
 
 setup() ->
     Prev = nova_test_helper:setup_nova_env(),
@@ -12,9 +25,7 @@ setup() ->
     persistent_term:put(nova_dispatch, Tree),
     persistent_term:put(nova_use_stacktrace, false),
     meck:new(cowboy_req, [passthrough, no_link]),
-    meck:expect(cowboy_req, reply, fun(Status, Req) ->
-        Req#{resp_status_code => Status}
-    end),
+    meck:expect(cowboy_req, reply, fun nova_test_helper:reply/2),
     meck:expect(cowboy_req, set_resp_headers, fun(Headers, Req) ->
         ExistingHeaders = maps:get(resp_headers, Req, #{}),
         Req#{resp_headers => maps:merge(ExistingHeaders, Headers)}
@@ -89,10 +100,8 @@ callback_true_auth_data_websocket_test_() ->
         Env = (env())#{secure => Callback,
                      cowboy_handler => nova_ws_handler,
                      arguments => #{existing => data}},
-        {ok, _Req1, Env1} = nova_security_handler:execute(Req, Env),
-        Args = maps:get(arguments, Env1),
-        ?assertEqual(#{auth_data => AuthData}, maps:get(controller_data, Args)),
-        ?assertEqual(data, maps:get(existing, Args))
+        %% nova_ws_handler takes it from the request, as a controller does.
+        ?assertEqual({ok, Req#{auth_data => AuthData}, Env}, nova_security_handler:execute(Req, Env))
     end}.
 
 %%====================================================================
@@ -155,6 +164,40 @@ callback_redirect_test_() ->
         ?assertEqual(<<"/login">>, maps:get(<<"location">>, maps:get(resp_headers, Req1)))
     end}.
 
+%% The routing guide documents the redirect target as a binary.
+callback_redirect_binary_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Callback = fun(_) -> {redirect, ~"/login"} end,
+        {stop, Req1} = nova_security_handler:execute(req(), (env())#{secure => Callback}),
+        ?assertEqual(302, maps:get(resp_status_code, Req1)),
+        ?assertEqual(~"/login", maps:get(~"location", maps:get(resp_headers, Req1)))
+    end}.
+
+callback_redirect_with_control_bytes_is_a_401_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
+        try
+            [begin
+                 Callback = fun(_) -> {redirect, Url} end,
+                 {stop, Req1} = nova_security_handler:execute(req(), (env())#{secure => Callback}),
+                 ?assertEqual(401, maps:get(resp_status_code, Req1)),
+                 ?assertNot(maps:is_key(~"location", maps:get(resp_headers, Req1, #{}))),
+                 ?assertMatch([{report, #{msg := ~"Security callback redirected to an invalid location"}} | _],
+                              logged())
+             end || Url <- [<<"/a", 0, "b">>, ~"/a\r\nset-cookie: x=1", <<"/x", 255>>]]
+        after
+            logger:remove_handler(?MODULE)
+        end
+    end}.
+
+callback_redirect_invalid_location_is_a_401_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Callback = fun(_) -> {redirect, [16#D800]} end,
+        {stop, Req1} = nova_security_handler:execute(req(), (env())#{secure => Callback}),
+        ?assertEqual(401, maps:get(resp_status_code, Req1)),
+        ?assertNot(maps:is_key(~"location", maps:get(resp_headers, Req1, #{})))
+    end}.
+
 %%====================================================================
 %% Callback returns unexpected value -> 401 stop
 %%====================================================================
@@ -169,20 +212,35 @@ callback_unexpected_value_test_() ->
     end}.
 
 %%====================================================================
-%% Callback crashes -> 500 stop (stacktrace disabled)
+%% A value that is not a callback -> 401 stop
+%%====================================================================
+
+invalid_secure_value_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     [fun() ->
+              {stop, Req1} = nova_security_handler:execute(req(), (env())#{secure => Invalid}),
+              ?assertEqual(401, maps:get(resp_status_code, Req1))
+      end || Invalid <- [true, enabled, {my_auth, check}, fun() -> true end]]}.
+
+%%====================================================================
+%% Callback crashes -> the 500 page in place of the route (stacktrace disabled)
 %%====================================================================
 
 callback_crash_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         Req = req(),
         Callback = fun(_) -> error(boom) end,
-        Env = (env())#{secure => Callback},
-        {stop, Req1} = nova_security_handler:execute(Req, Env),
-        ?assertEqual(500, maps:get(resp_status_code, Req1))
+        Route = fun ?MODULE:module_info/1,
+        Env = (env())#{secure => Callback, callback => Route},
+        {ok, Req1, Env1} = nova_security_handler:execute(Req, Env),
+        ?assertEqual(500, maps:get(resp_status_code, Req1)),
+        ?assertNot(is_map_key(has_sent_resp, Req1)),
+        ?assertEqual(false, maps:get(secure, Env1)),
+        ?assertNotEqual(Route, maps:get(callback, Env1))
     end}.
 
 %%====================================================================
-%% Callback crashes with stacktrace enabled -> 500 stop
+%% Callback crashes with stacktrace enabled -> the 500 page as well
 %%====================================================================
 
 callback_crash_stacktrace_test_() ->
@@ -191,7 +249,7 @@ callback_crash_stacktrace_test_() ->
         Req = req(),
         Callback = fun(_) -> error(boom) end,
         Env = (env())#{secure => Callback},
-        {stop, Req1} = nova_security_handler:execute(Req, Env),
+        {ok, Req1, _Env1} = nova_security_handler:execute(Req, Env),
         ?assertEqual(500, maps:get(resp_status_code, Req1)),
         ?assert(is_map(maps:get(crash_info, Req1))),
         CrashInfo = maps:get(crash_info, Req1),

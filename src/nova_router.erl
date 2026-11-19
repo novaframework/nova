@@ -70,6 +70,12 @@
 -type dispatch_key() :: term().
 -export_type([dispatch_key/0]).
 
+-type plugin() :: {Type :: atom(), Module :: module(), Options :: term()}.
+-type callback() :: {Callback :: fun(), Options :: term()}.
+-type order() :: #{before := all | [module()], secured := boolean()}.
+-type order_warning() :: body_behind_security | form_behind_security | pre_request_behind_security |
+                         pre_request_not_for_preflight.
+
 -spec compiled_apps() -> [{App :: atom(), Prefix :: list()}].
 compiled_apps() ->
     compiled_apps(?NOVA_DISPATCH).
@@ -364,6 +370,10 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     App = maps:get(app, Options),
     RouterFile = maps:get(router_file, Options),
 
+    Prefix = concat_strings(maps:get(prefix, Options, ""),
+                            maps:get(prefix, RouteInfo, "")),
+    Named = #{app => App, prefix => Prefix, router_file => RouterFile},
+
     Plugins = resolve_plugins(maps:get(plugin_strategy, Options, local_or_global), RouteInfo, RouterFile),
 
     Secure =
@@ -376,11 +386,11 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
                 normalize_secure(Override, RouterFile)
         end,
 
-    Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins),
+    Order = #{before => plugins_before_security(RouteInfo, Plugins, Named), secured => Secure =/= false},
+    ok = warn_about_order(RouteInfo, Secure, Plugins, Order, Named),
+    Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins, Order),
                                 extra_state = maps:get(extra_state, RouteInfo, #{})},
 
-    Prefix = concat_strings(maps:get(prefix, Options, ""),
-                            maps:get(prefix, RouteInfo, "")),
     Host = maps:get(host, RouteInfo, '_'),
     SubApps = maps:get(apps, RouteInfo, []),
 
@@ -519,11 +529,12 @@ render_status_page(StatusCode, Data, Req) ->
 render_status_page(Host, StatusCode, Data, Req, Env) ->
     StorageBackend = storage_backend(),
     Dispatch = StorageBackend:get(dispatch_key(Env)),
+    Env1 = maps:without([cowboy_handler, arguments], Env),
     {Req0, Env0} =
         case nova_routing_trie:find(Host, StatusCode, '_', Dispatch) of
             {error, _} ->
                 %% Render nova page if exists - We need to determine where to find this path?
-                {Req, Env#{app => nova,
+                {Req, Env1#{app => nova,
                            callback => fun nova_error_controller:status_code/1,
                            secure => false,
                            controller_data => #{status => StatusCode, data => Data}}};
@@ -533,7 +544,7 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
                                                extra_state = ExtraState}} ->
                 {
                  Req#{extra_state => ExtraState, bindings => Bindings, resp_status_code => StatusCode},
-                 Env#{app => App,
+                 Env1#{app => App,
                       callback => Callback,
                       secure => Secure,
                       controller_data => #{status => StatusCode, data => Data},
@@ -599,7 +610,8 @@ add_plugin(Plugin) ->
             ok;
         _ ->
             StorageBackend:put(?NOVA_PLUGINS, Plugins1)
-    end.
+    end,
+    nova_plugin_manager:ensure_plugin(Plugin).
 
 %%--------------------------------------------------------------------
 -doc """
@@ -657,15 +669,167 @@ dedupe_plugins([Plugin|Tl], Seen, Acc) ->
 plugin_key({Type, PluginName, _Options}) -> {Type, PluginName};
 plugin_key(Plugin)                       -> Plugin.
 
-normalize_plugins(Plugins) ->
-    NormalizedPlugins = normalize_plugins(Plugins, []),
-    [{Type, lists:reverse(TypePlugins)} || {Type, TypePlugins} <- NormalizedPlugins].
+normalize_plugins(Plugins, Order) ->
+    Phased = lists:append([phased(Plugin, Order) || Plugin <- Plugins]),
+    [{Phase, [Callback || {In, Callback} <- Phased, In =:= Phase]}
+     || Phase <- lists:usort([Phase || {Phase, _Callback} <- Phased])].
 
-normalize_plugins([], Ack) -> Ack;
-normalize_plugins([{Type, PluginName, Options}|Tl], Ack) ->
-    ExistingPlugins = proplists:get_value(Type, Ack, []),
+-spec phased(plugin(), order()) -> [{Phase :: atom(), callback()}].
+phased({pre_request, PluginName, Options}, Order) ->
     add_plugin(PluginName),
-    normalize_plugins(Tl, [{Type, [{fun PluginName:Type/4, Options}|ExistingPlugins]}|proplists:delete(Type, Ack)]).
+    HasPreSecurity = exports(PluginName, pre_security),
+    [{phase(true), {fun PluginName:pre_security/4, Options}} || HasPreSecurity] ++
+        [{phase(is_ahead(PluginName, Order)), {fun PluginName:pre_request/4, Options}}
+         || not HasPreSecurity orelse exports(PluginName, pre_request)];
+phased({Type, PluginName, Options}, _Order) ->
+    add_plugin(PluginName),
+    [{Type, {fun PluginName:Type/4, Options}}].
+
+-spec phase(AheadOfSecurity :: boolean()) -> pre_request | after_security.
+phase(true) -> pre_request;
+phase(false) -> after_security.
+
+-spec is_ahead(module(), order()) -> boolean().
+is_ahead(PluginName, #{before := Before}) ->
+    Before =:= all orelse lists:member(PluginName, Before).
+
+-spec exports(module(), Function :: atom()) -> boolean().
+exports(Module, Function) ->
+    _ = code:ensure_loaded(Module),
+    erlang:function_exported(Module, Function, 4).
+
+-spec warn_about_order(RouteInfo :: map(), Secure :: term(), [plugin()], order(), Named :: map()) -> ok.
+warn_about_order(RouteInfo, Secure, Plugins, Order = #{secured := Secured}, Named) ->
+    Behind = [{Module, Options} || {pre_request, Module, Options} <- Plugins, Secured, not is_ahead(Module, Order)],
+    ok = body_behind_security(said_about_the_body(RouteInfo, Secure),
+                              [Plugin || Plugin = {Module, Options} <- Behind, reads_body(Module, Options)],
+                              lists:keymember(nova_csrf_plugin, 2, Plugins), Named),
+    Outside = [Module || {pre_request, Module, _Options} <- Plugins, not is_plugin_of_nova(Module),
+                         not exports(Module, pre_security)],
+    Refused = [Module || Module <- Outside, lists:keymember(Module, 1, Behind)],
+    ok = say_once(warning, pre_request_behind_security, Refused, Named),
+    case has_route_without_options(RouteInfo) of
+        true -> say_once(warning, pre_request_not_for_preflight, Outside -- Refused, Named);
+        false -> ok
+    end.
+
+-spec said_about_the_body(RouteInfo :: map(), Secure :: term()) -> {said, term()} | not_said.
+said_about_the_body(RouteInfo = #{security_reads_body := false}, Secure) ->
+    case is_declared_by_the_group(Secure, RouteInfo) of
+        true -> {said, false};
+        false -> not_said
+    end;
+said_about_the_body(#{security_reads_body := Value}, _Secure) ->
+    {said, Value};
+said_about_the_body(_RouteInfo, _Secure) ->
+    not_said.
+
+-spec is_declared_by_the_group(Secure :: term(), RouteInfo :: map()) -> boolean().
+is_declared_by_the_group(Callbacks, RouteInfo) when is_list(Callbacks) ->
+    [] =:= [Callback || Callback <- Callbacks, not is_declared_by_the_group(Callback, RouteInfo)];
+is_declared_by_the_group(false, _RouteInfo) ->
+    true;
+is_declared_by_the_group(Callback, RouteInfo) ->
+    case maps:get(security, RouteInfo, false) of
+        {Module, Function} when is_atom(Module), is_atom(Function) -> Callback =:= fun Module:Function/1;
+        Security -> Callback =:= Security
+    end.
+
+-spec body_behind_security(Said :: {said, term()} | not_said, Readers :: [{module(), Options :: term()}],
+                           HasCsrfPlugin :: boolean(), Named :: map()) -> ok.
+body_behind_security({said, false}, _Readers, _HasCsrfPlugin, _Named) ->
+    ok;
+body_behind_security({said, true}, [], _HasCsrfPlugin, _Named) ->
+    ok;
+body_behind_security({said, true}, _Readers, _HasCsrfPlugin, Named) ->
+    invalid_security_reads_body({requires, plugins_before_security}, Named);
+body_behind_security({said, Value}, _Readers, _HasCsrfPlugin, Named) ->
+    invalid_security_reads_body(Value, Named);
+body_behind_security(not_said, Readers, HasCsrfPlugin, Named) ->
+    ForTheToken = [Module || {Module, Options} <- Readers, HasCsrfPlugin andalso reads_a_form_alone(Options)],
+    ok = say_once(warning, body_behind_security, [Module || {Module, _Options} <- Readers] -- ForTheToken, Named),
+    say_once(notice, form_behind_security, ForTheToken, Named).
+
+-spec invalid_security_reads_body(term(), Named :: map()) -> no_return().
+invalid_security_reads_body(Value, Named) ->
+    ?LOG_ERROR(Named#{msg => ~"security_reads_body of a route group must be true or false, and true needs the plugin that decodes the body to be listed under plugins_before_security",
+                      setting => security_reads_body, value => Value}),
+    throw({error, {invalid_setting, security_reads_body, Value}}).
+
+-spec reads_a_form_alone(Options :: term()) -> boolean().
+reads_a_form_alone(Options) when is_map(Options) ->
+    maps:get(decode_json_body, Options, false) =/= true;
+reads_a_form_alone(_Options) ->
+    false.
+
+-spec say_once(Level :: warning | notice, order_warning(), [module()], Named :: map()) -> ok.
+say_once(_Level, _About, [], _Named) ->
+    ok;
+say_once(Level, About, Listed, Named = #{app := App, prefix := Prefix}) ->
+    Plugins = lists:usort(Listed),
+    case nova_once:first({?MODULE, About, App, Prefix, Plugins}) of
+        true -> ?LOG(Level, Named#{msg => order_warning(About), notice => About, plugins => Plugins});
+        false -> ok
+    end.
+
+-spec order_warning(order_warning()) -> binary().
+order_warning(body_behind_security) ->
+    ~"The security callback of this route group runs before nova_request_plugin reads the body, so it finds no json or params in the request. Earlier releases read the body first. If the callback reads them, list nova_request_plugin under plugins_before_security of the route group. If it does not, set security_reads_body => false in the route group. That answers for the callback the route group declares as its security, and not for one the application is mounted behind: the secure or override_secure of a nova_apps entry, or the security of a route group that lists the application";
+order_warning(form_behind_security) ->
+    ~"The security callback of this route group runs before nova_request_plugin reads the form, which the route group reads for the token of nova_csrf_plugin, so the callback finds no params in the request. Nothing shows whether it reads them. If it does not, say so with security_reads_body => false in the route group, which ends this notice. If it does, list nova_request_plugin under plugins_before_security of the route group";
+order_warning(pre_request_behind_security) ->
+    ~"pre_request/4 of these plugins runs once the security callback of this route group has let a request through, where earlier releases ran it first. It does not run for a request that is refused, nor for a CORS preflight to a route that does not take OPTIONS. What has to run for those belongs in pre_security/4. To run pre_request/4 ahead of the security callback as before, list the plugin under plugins_before_security";
+order_warning(pre_request_not_for_preflight) ->
+    ~"pre_request/4 of these plugins does not run for a CORS preflight to a route of this group that does not take OPTIONS, also when the plugin is listed under plugins_before_security. A plugin that answers preflights has to do it in pre_security/4".
+
+-spec reads_body(module(), Options :: term()) -> boolean().
+reads_body(nova_request_plugin, Options) when is_map(Options) ->
+    maps:get(decode_json_body, Options, false) =:= true orelse
+        maps:get(read_urlencoded_body, Options, false) =:= true;
+reads_body(_Module, _Options) ->
+    false.
+
+-spec has_route_without_options(RouteInfo :: map()) -> boolean().
+has_route_without_options(RouteInfo) ->
+    [] =/= [Path || {Path, _Target, #{methods := Methods}} <- maps:get(routes, RouteInfo, []),
+                    not is_integer(Path), is_list(Methods), not takes_options(Methods)].
+
+-spec takes_options(Methods :: [term()]) -> boolean().
+takes_options(Methods) ->
+    [] =/= [Method || Method <- Methods, Method =:= '_' orelse is_options(Method)].
+
+-spec is_options(Method :: term()) -> boolean().
+is_options(Method) when is_atom(Method) ->
+    string:uppercase(atom_to_binary(Method)) =:= ~"OPTIONS";
+is_options(Method) ->
+    Method =:= ~"OPTIONS" orelse Method =:= "OPTIONS".
+
+-spec is_plugin_of_nova(module()) -> boolean().
+is_plugin_of_nova(PluginName) ->
+    _ = application:load(nova),
+    application:get_application(PluginName) =:= {ok, nova}.
+
+plugins_before_security(#{plugins_before_security := Value}, Plugins, Group) ->
+    Listed = [Module || {pre_request, Module, _Options} <- Plugins],
+    case nova_settings:checked(plugins_before_security, Value) of
+        {ok, all} ->
+            all;
+        {ok, Modules} when is_list(Modules) ->
+            case Modules -- Listed of
+                [] -> Modules;
+                _NotOfTheGroup -> invalid_plugins_before_security(Value, Group)
+            end;
+        {error, Reason} ->
+            invalid_plugins_before_security(Reason, Group)
+    end;
+plugins_before_security(_RouteInfo, _Plugins, _Group) ->
+    nova_settings:value(plugins_before_security).
+
+-spec invalid_plugins_before_security(term(), map()) -> no_return().
+invalid_plugins_before_security(Value, Group) ->
+    ?LOG_ERROR(Group#{msg => ~"plugins_before_security of a route group must be all or a list of its pre_request plugins that have pre_request/4",
+                      setting => plugins_before_security, value => Value}),
+    throw({error, {invalid_setting, plugins_before_security, Value}}).
 
 method_to_binary(get) -> <<"GET">>;
 method_to_binary(post) -> <<"POST">>;
