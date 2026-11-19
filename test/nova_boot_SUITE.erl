@@ -25,8 +25,10 @@
          session_store_for_no_session_fails_the_boot/1,
          plugins_before_security_that_names_no_plugin_fails_the_boot/1,
          plugins_before_security_of_a_route_group_that_names_none_of_its_plugins_fails_the_boot/1,
+         setting_that_is_gone_fails_the_boot/1,
          csrf_settings_nothing_can_go_by_fail_the_boot/1,
          secret_that_fails_the_boot_is_not_told/1,
+         secret_is_not_told_by_a_boot/1,
          csrf_plugin_without_sessions_fails_the_boot/1,
          csrf_tokens_kept_in_the_session_store_are_said_once/1,
          body_decoded_behind_a_security_callback_is_warned_about/1,
@@ -63,8 +65,10 @@ all() ->
      session_store_for_no_session_fails_the_boot,
      plugins_before_security_that_names_no_plugin_fails_the_boot,
      plugins_before_security_of_a_route_group_that_names_none_of_its_plugins_fails_the_boot,
+     setting_that_is_gone_fails_the_boot,
      csrf_settings_nothing_can_go_by_fail_the_boot,
      secret_that_fails_the_boot_is_not_told,
+     secret_is_not_told_by_a_boot,
      csrf_plugin_without_sessions_fails_the_boot,
      csrf_tokens_kept_in_the_session_store_are_said_once,
      body_decoded_behind_a_security_callback_is_warned_about,
@@ -302,6 +306,14 @@ plugins_before_security_of_a_route_group_that_names_none_of_its_plugins_fails_th
          ?assertEqual(undefined, whereis(nova_sup))
      end || Value <- [[nova_reqeust_plugin], [all], [nova_csrf_plugin], nova_request_plugin]].
 
+%% A setting that was in no release is not read any more. A configuration
+%% that still has it is stopped and told which setting to use.
+setting_that_is_gone_fails_the_boot(_Config) ->
+    [?assertEqual({invalid_setting, Key, {replaced_by, Replacement}}, stopped_by([{Key, Value}]))
+     || {Key, Value, Replacement} <- [{plugins_after_security, [nova_request_plugin], plugins_before_security},
+                                      {allowed_origins, any, trusted_origins},
+                                      {csrf_secret, binary:copy(~"s", 32), secret_key_base}]].
+
 csrf_settings_nothing_can_go_by_fail_the_boot(_Config) ->
     [?assertEqual({Settings, Reason}, {Settings, stopped_by(Settings)})
      || {Settings, Reason} <- [{[{csrf_token, stateless}], {invalid_setting, secret_key_base, not_set}},
@@ -330,6 +342,25 @@ secret_that_fails_the_boot_is_not_told(_Config) ->
          end
      end || Value <- [nova_test_helper:improper_list([New], Old), nova_test_helper:improper_list([New, Old], New),
                       {New, Old}, [[New, Old]], binary:part(Old, 0, 31)]].
+
+%% The secret under the name it had before any release is in a boot that
+%% stops, and under its own name in one that goes on. Neither says it.
+secret_is_not_told_by_a_boot(_Config) ->
+    Secret = ~"the-secret-in-use-of-32-bytes-or-more",
+    Csrf = [#{plugins => [{pre_request, nova_csrf_plugin, #{}}],
+              routes => [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}]}],
+    [begin
+         application:set_env(nova, Key, Secret),
+         try
+             {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => Csrf}) end),
+             ?assertMatch({Key, {Outcome, _}}, {Key, Result}),
+             Told = iolist_to_binary(io_lib:format("~0p", [{Result, Events}])),
+             ?assertEqual({Key, nomatch}, {Key, binary:match(Told, Secret)})
+         after
+             application:unset_env(nova, Key),
+             nova_test_listener:stop()
+         end
+     end || {Key, Outcome} <- [{csrf_secret, error}, {secret_key_base, ok}]].
 
 %% The token of nova_csrf_plugin is kept in the session or signed for the
 %% session cookie. Without sessions every request to its routes would fail.

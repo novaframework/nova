@@ -187,6 +187,38 @@ secret_of_a_random_source_is_taken_test_() ->
                            {eight_bytes, ~"abcdefghabcdefghhgfedcbahgfedcba"},
                            {two, [?SECRET, ~"9f2c41d7a0b3e85c6d1f7a924be03c58"]}]].
 
+%% A setting that was in no release and is gone stops the boot, and what is
+%% raised and logged names the one that took its place and not the value.
+removed_settings_stop_the_boot_test_() ->
+    [{atom_to_list(Key),
+      fun() ->
+              application:set_env(nova, Key, Value),
+              try
+                  {Raised, Events} = nova_test_log:collect(fun() ->
+                                                                   try nova_settings:validate()
+                                                                   catch error:Reason -> {stopped, Reason}
+                                                                   end
+                                                           end),
+                  ?assertEqual({stopped, {invalid_setting, Key, {replaced_by, Replacement}}}, Raised),
+                  ?assertMatch([#{setting := Key, replaced_by := Replacement, msg := _}],
+                               nova_test_log:errors(Events)),
+                  [#{msg := Notice} = Report] = nova_test_log:errors(Events),
+                  ?assertNotEqual(nomatch, binary:match(Notice, atom_to_binary(Replacement))),
+                  ?assertNot(is_map_key(value, Report)),
+                  ?assertEqual(nomatch, binary:match(iolist_to_binary(io_lib:format("~0p", [{Raised, Events}])),
+                                                     ?SECRET))
+              after
+                  application:unset_env(nova, Key),
+                  nova_settings:validate()
+              end
+      end}
+     || {Key, Value, Replacement} <- removed()].
+
+removed() ->
+    [{plugins_after_security, [nova_request_plugin], plugins_before_security},
+     {allowed_origins, [~"https://example.com"], trusted_origins},
+     {csrf_secret, ?SECRET, secret_key_base}].
+
 invalid_setting_is_logged_with_what_it_may_be_test() ->
     application:set_env(nova, non_canonical_paths, allow),
     try
