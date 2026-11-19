@@ -41,6 +41,7 @@
          cors_preflight_on_a_route_that_accepts_options/1,
          custom_not_found/1,
          controller_crash_is_a_500/1,
+         handler_init_crash_is_a_500/1,
          websocket_echo/1,
          websocket_session_write/1,
          websocket_spawned_write/1,
@@ -106,7 +107,8 @@ groups() ->
                    ]},
      {errors, [parallel], [
                            custom_not_found,
-                           controller_crash_is_a_500
+                           controller_crash_is_a_500,
+                           handler_init_crash_is_a_500
                           ]},
      {websocket, [], [
                       websocket_echo,
@@ -349,6 +351,9 @@ custom_not_found(Config) ->
 
 controller_crash_is_a_500(Config) ->
     {500, _Headers, _Body} = get(Config, "/crash").
+
+handler_init_crash_is_a_500(Config) ->
+    {500, _Headers, _Body} = get(Config, "/ws-crash").
 
 %%====================================================================
 %% WebSocket

@@ -1,7 +1,7 @@
 %%% Author: Niclas Axelsson <niclas@burbas.se>
 
 -module(nova_ws_handler).
--moduledoc "Callback controller for handling websockets".
+-moduledoc false.
 
 -export([
          init/2,
@@ -15,7 +15,7 @@
 
 -type nova_ws_state() :: #{controller_data := map(),
                            mod := atom(),
-                           _ := _}.
+                           _ => _}.
 
 -export_type([nova_ws_state/0]).
 
@@ -38,9 +38,12 @@ upgrade_ws(Module, Req, State, ControllerData) ->
     case Module:init(ControllerData) of
         {ok, NewControllerData} ->
             {cowboy_websocket, Req, State#{controller_data => NewControllerData}};
+        {ok, NewControllerData, WebsocketOptions} when is_map(WebsocketOptions) ->
+            {cowboy_websocket, Req, State#{controller_data => NewControllerData}, WebsocketOptions};
         Error ->
-            ?LOG_ERROR(#{msg => <<"Websocket handler returned unknown result">>, handler => Module, returned => Error}),
-            nova_router:render_status_page(500, Req)
+            ?LOG_ERROR(#{msg => ~"Websocket handler returned unknown result", handler => Module,
+                         returned => nova_redact:term(Error)}),
+            {status, 500, Req#{crash_info => #{class => error, reason => unsupported_websocket_init_result}}, State}
     end.
 
 websocket_init(State = #{mod := Mod}) ->
@@ -61,21 +64,33 @@ websocket_handle(Frame, State = #{mod := Mod}) ->
 websocket_info(Msg, State = #{mod := Mod}) ->
     handle_ws(Mod, websocket_info, [Msg], State).
 
-terminate(Reason, PartialReq, State = #{controller_data := ControllerData, mod := Mod, plugins := Plugins}) ->
+terminate(Reason, PartialReq, State) ->
+    terminate_controller(Reason, PartialReq, State).
+
+terminate_controller(Reason, PartialReq, State = #{controller_data := ControllerData, mod := Mod,
+                                                   plugins := Plugins}) ->
     case erlang:function_exported(Mod, terminate, 3) of
         true ->
-            erlang:apply(Mod, terminate, [Reason, PartialReq, ControllerData]),
-            %% Call post_ws_connection-plugins
-            TerminatePlugins = proplists:get_value(post_ws_connection, Plugins, []),
-            ControllerState = #{module => Mod,
-                                function => terminate,
-                                arguments => [Reason, PartialReq, State]},
-            run_plugins(TerminatePlugins, post_ws_connection, ControllerState, State);
-        _ ->
+            try
+                Mod:terminate(Reason, PartialReq, ControllerData)
+            catch
+                Class:TerminateReason:Stacktrace ->
+                    ?LOG_ERROR(#{msg => ~"Controller crashed", class => Class,
+                                 reason => nova_redact:term(TerminateReason),
+                                 stacktrace => nova_redact:stacktrace(Stacktrace)})
+            end;
+        false ->
             ok
-    end;
-terminate(Reason, PartialReq, State) ->
-    ?LOG_ERROR(#{msg => <<"Terminate called">>, reason => Reason, partial_req => PartialReq, state => State}),
+    end,
+    TerminatePlugins = proplists:get_value(post_ws_connection, Plugins, []),
+    ControllerState = #{module => Mod,
+                        function => terminate,
+                        arguments => [Reason, PartialReq, State]},
+    _ = run_plugins(TerminatePlugins, post_ws_connection, ControllerState, State),
+    ok;
+terminate_controller(Reason, PartialReq, State) ->
+    ?LOG_ERROR(#{msg => ~"Terminate called", reason => nova_redact:term(Reason),
+                 partial_req => nova_redact:term(PartialReq), state => nova_redact:term(State)}),
     ok.
 
 
@@ -108,7 +123,7 @@ handle_ws(Mod, Func, Args, State = #{controller_data := _ControllerData, plugins
                     end
             end;
         {stop, _} = Stop ->
-            ?LOG_WARNING(#{msg => <<"Got stop signal">>, signal => Stop}),
+            ?LOG_WARNING(#{msg => ~"Got stop signal", signal => nova_redact:term(Stop)}),
             Stop
     end;
 handle_ws(Mod, Func, Args, State) ->
@@ -122,19 +137,31 @@ handle_ws(Mod, Func, Args, State) ->
 invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData}) ->
     try erlang:apply(Mod, Func, Args ++ [ControllerData]) of
         RetObj ->
-            case nova_handlers:get_handler(ws) of
-                {ok, Callback} ->
-                    Callback(RetObj, State);
-                {error, not_found} ->
-                    ?LOG_ERROR(#{msg => <<"Websocket handler not found. Check that a handler is
-                                           registered on handle 'ws'">>,
-                                   controller => Mod, function => Func, return => RetObj}),
-                    {stop, State}
-            end
+            handle_result(Mod, Func, RetObj, State)
     catch
         Class:Reason:Stacktrace ->
             ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class,
-                           reason => Reason, stacktrace => Stacktrace}),
+                           reason => nova_redact:term(Reason),
+                           stacktrace => nova_redact:stacktrace(Stacktrace)}),
+            {stop, State}
+    end.
+
+handle_result(Mod, Func, RetObj, State) ->
+    case nova_handlers:get_handler(ws) of
+        {ok, Callback} ->
+            try
+                Callback(RetObj, State)
+            catch
+                Class:Reason:Stacktrace ->
+                    ?LOG_ERROR(#{msg => ~"Websocket handler failed on what the controller returned",
+                                 controller => Mod, function => Func, class => Class,
+                                 reason => nova_redact:term(Reason),
+                                 stacktrace => nova_redact:stacktrace(Stacktrace)}),
+                    {stop, State}
+            end;
+        {error, not_found} ->
+            ?LOG_ERROR(#{msg => ~"Websocket handler not found. Check that a handler is registered on handle 'ws'",
+                           controller => Mod, function => Func, return => nova_redact:term(RetObj)}),
             {stop, State}
     end.
 
@@ -143,6 +170,9 @@ run_plugins([], _Callback, #{controller_result := {stop, _} = Signal}, _State) -
     Signal;
 run_plugins([], _Callback, _ControllerState, State) ->
     {ok, State};
+run_plugins([{Plugin, Options}|Tl], Callback, ControllerState, State) when is_function(Plugin) ->
+    {module, Module} = erlang:fun_info(Plugin, module),
+    run_plugins([{Module, Options}|Tl], Callback, ControllerState, State);
 run_plugins([{Module, Options}|Tl], Callback, ControllerState, State) ->
     try erlang:apply(Module, Callback, [ControllerState, State, Options]) of
         {ok, ControllerState0, State0} ->
@@ -154,11 +184,12 @@ run_plugins([{Module, Options}|Tl], Callback, ControllerState, State) ->
         {break, State0} ->
             {ok, State0};
         {error, Reason} ->
-            ?LOG_ERROR(#{msg => <<"Plugin returned error">>, plugin => Module, function => Callback, reason => Reason}),
+            ?LOG_ERROR(#{msg => ~"Plugin returned error", plugin => Module, function => Callback, reason => nova_redact:term(Reason)}),
             {stop, State}
     catch
         Class:Reason:Stacktrace ->
-            ?LOG_ERROR(#{msg => <<"Plugin crashed">>, class => Class, reason => Reason, stacktrace => Stacktrace}),
+            ?LOG_ERROR(#{msg => ~"Plugin crashed", class => Class, reason => nova_redact:term(Reason),
+                         stacktrace => nova_redact:stacktrace(Stacktrace)}),
             {stop, State}
     end.
 

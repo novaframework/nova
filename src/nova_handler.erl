@@ -24,6 +24,8 @@
 execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) when is_atom(Handler) ->
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
     try Handler:init(Req, Arguments) of
+        {status, StatusCode, Req2, _State} when is_integer(StatusCode) ->
+            render_response(Req2, maps:remove(cowboy_handler, Env), StatusCode);
         {ok, Req2, State} ->
             Result = call_terminate(Handler, normal, Req2, State),
             {ok, Req2, Env#{result => Result}};
