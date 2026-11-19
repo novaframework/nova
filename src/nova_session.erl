@@ -132,8 +132,6 @@ get_session_id(Req) ->
             throw({nova_session, unsupported_session_used})
     end.
 
+-spec generate_session_id() -> {ok, binary()}.
 generate_session_id() ->
-    SessionId =
-        << <<X:8/unsigned-integer>> ||
-            X <- [ rand:uniform(255) || _ <- lists:seq(0, 31) ] >>,
-    {ok, base64:encode(SessionId)}.
+    {ok, base64:encode(crypto:strong_rand_bytes(32))}.
