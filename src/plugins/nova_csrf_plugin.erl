@@ -121,13 +121,14 @@ is_safe_method(<<"HEAD">>) -> true;
 is_safe_method(<<"OPTIONS">>) -> true;
 is_safe_method(_) -> false.
 
-is_excluded_path(_Path, []) ->
-    false;
-is_excluded_path(Path, [Prefix | Rest]) ->
-    case binary:match(Path, Prefix) of
-        {0, _} -> true;
-        _ -> is_excluded_path(Path, Rest)
-    end.
+-spec is_excluded_path(Path :: binary(), Prefixes :: [iodata()]) -> boolean().
+is_excluded_path(Path, Prefixes) ->
+    Segments = routed_segments(Path),
+    [] =/= [Prefix || Prefix <- Prefixes,
+                      lists:prefix(routed_segments(iolist_to_binary(Prefix)), Segments)].
+
+routed_segments(Path) ->
+    binary:split(nova_router:canonical_path(Path), ~"/", [global, trim_all]).
 
 get_submitted_token(Req, FieldName, HeaderName) ->
     case cowboy_req:header(HeaderName, Req) of
