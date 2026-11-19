@@ -723,6 +723,16 @@ As `render_status_page/5`, for any host and the routing table that serves
 render_status_page(StatusCode, Data, Req) ->
     render_status_page('_', StatusCode, Data, Req, #{nova_dispatch_key => dispatch_key(Req)}).
 
+-doc """
+Points a request at the status page for `StatusCode`. For a Cowboy
+middleware: nothing is sent here, the page is rendered by the controller step
+that the returned `{ok, Req, Env}` is handed to.
+
+The page is the route registered for `StatusCode` on `Host`, or the page of
+Nova when there is none. Its controller is called with the request, which
+has `StatusCode` under `resp_status_code` and `#{status => StatusCode,
+data => Data}` under `controller_data`.
+""".
 -spec render_status_page(Host :: binary() | atom(),
                          StatusCode :: integer(),
                          Data :: map(),
