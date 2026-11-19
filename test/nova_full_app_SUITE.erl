@@ -38,6 +38,7 @@
          secure_route_accepts_token/1,
          auth_data_reaches_controller/1,
          pre_and_post_request_plugins_run/1,
+         cors_preflight_on_a_route_that_accepts_options/1,
          custom_not_found/1,
          controller_crash_is_a_500/1,
          websocket_echo/1,
@@ -100,7 +101,8 @@ groups() ->
                              auth_data_reaches_controller
                             ]},
      {plugins, [], [
-                    pre_and_post_request_plugins_run
+                    pre_and_post_request_plugins_run,
+                    cors_preflight_on_a_route_that_accepts_options
                    ]},
      {errors, [parallel], [
                            custom_not_found,
@@ -326,6 +328,17 @@ pre_and_post_request_plugins_run(Config) ->
     ?assert(counters:get(Counters, 1) > PreBefore),
     ?assert(counters:get(Counters, 2) > PostBefore).
 
+%% The route lists options in its methods, so the router hands the preflight
+%% to nova_cors_plugin, which answers it; the controller only sees the plain
+%% OPTIONS request.
+cors_preflight_on_a_route_that_accepts_options(Config) ->
+    Origin = {"origin", "https://app.example.com"},
+    {204, Headers, <<>>} = options(Config, "/cors/", [Origin, {"access-control-request-method", "POST"}]),
+    ?assertEqual(~"https://app.example.com", header(~"access-control-allow-origin", Headers)),
+    {200, PlainHeaders, Body} = options(Config, "/cors/", [Origin]),
+    ?assertEqual(~"https://app.example.com", header(~"access-control-allow-origin", PlainHeaders)),
+    ?assertEqual(#{~"method" => ~"OPTIONS"}, json(Body)).
+
 %%====================================================================
 %% Errors
 %%====================================================================
@@ -445,6 +458,11 @@ get_no_redirect(Config, Path) ->
 
 request(Config, Method, Path) ->
     do_request(Method, url(Config, Path), [], [{autoredirect, false}]).
+
+options(Config, Path, Headers) ->
+    {ok, {{_Version, Status, _Reason}, RespHeaders, Body}} =
+        httpc:request(options, {url(Config, Path), Headers}, [], [{body_format, binary}]),
+    {Status, RespHeaders, Body}.
 
 do_request(Method, Url, Headers, Options) ->
     Request =

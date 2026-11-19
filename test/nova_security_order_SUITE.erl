@@ -7,6 +7,7 @@
          body_is_decoded_for_an_allowed_request/1,
          upload_is_not_read_for_a_refused_request/1,
          refused_request_has_its_correlation_id_and_cors_headers/1,
+         preflight_is_answered_ahead_of_security/1,
          preflight_nothing_answers_runs_pre_security_alone/1,
          options_that_is_no_preflight_runs_no_plugin/1,
          preflight_to_a_route_that_takes_options_meets_its_security/1,
@@ -36,6 +37,7 @@ groups() ->
                                body_is_decoded_for_an_allowed_request,
                                upload_is_not_read_for_a_refused_request,
                                refused_request_has_its_correlation_id_and_cors_headers,
+                               preflight_is_answered_ahead_of_security,
                                preflight_nothing_answers_runs_pre_security_alone,
                                options_that_is_no_preflight_runs_no_plugin,
                                preflight_to_a_route_that_takes_options_meets_its_security,
@@ -113,6 +115,18 @@ refused_request_has_its_correlation_id_and_cors_headers(Config) ->
     {401, Headers, _Body} = post(Config, "/default/echo", [{"origin", "https://app.example"}], <<>>),
     ?assert(is_map_key(~"x-correlation-id", Headers)),
     ?assertEqual(~"https://app.example", maps:get(~"access-control-allow-origin", Headers)).
+
+%% A preflight carries no credentials, so the security callback would refuse
+%% it and the browser would never send the request it asks about.
+preflight_is_answered_ahead_of_security(Config) ->
+    {Status, Headers, _Body} =
+        nova_test_listener:response(?config(port, Config), "OPTIONS", "/default/echo",
+                                    [{"origin", "https://app.example"},
+                                     {"access-control-request-method", "POST"},
+                                     {"access-control-request-headers", "authorization"}], <<>>),
+    ?assertEqual(204, Status),
+    ?assertEqual(~"https://app.example", maps:get(~"access-control-allow-origin", Headers)),
+    ?assertEqual(~"authorization", maps:get(~"access-control-allow-headers", Headers)).
 
 %% The route does not take OPTIONS, so there is no security callback to wait
 %% for. What a route group lists to run ahead of its callback is not
