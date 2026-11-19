@@ -23,26 +23,26 @@ not_found(Req) ->
          Req).
 
 server_error(#{crash_info := #{status_code := StatusCode} = CrashInfo} = Req) ->
-    Variables = #{status => maps:get(status, CrashInfo, undefined),
-                  title => maps:get(title, CrashInfo, undefined),
-                  message => maps:get(message, CrashInfo, undefined),
-                  extra_msg => maps:get(extra_msg, CrashInfo, undefined),
-                  stacktrace => format_stacktrace(maps:get(stacktrace, CrashInfo, []))},
+    Variables = debug_details(#{status => maps:get(status, CrashInfo, ~"Internal Server Error"),
+                                title => maps:get(title, CrashInfo, ~"500 Internal Server Error"),
+                                message => maps:get(message, CrashInfo,
+                                                    ~"Something internal crashed. Please take a look!")},
+                              maps:get(extra_msg, CrashInfo, ~""),
+                              stacktrace(CrashInfo)),
     render(StatusCode, Variables, Req);
-server_error(#{crash_info := #{class := Class, reason := Reason}} = Req) ->
-    Stacktrace = maps:get(stacktrace, Req, []),
-    Variables = #{status => "Internal Server Error",
-                  title => "500 Internal Server Error",
-                  message => "Something internal crashed. Please take a look!",
-                  extra_msg => io_lib:format("Class: ~p<br /> Reason: ~p", [Class, Reason]),
-                  stacktrace => format_stacktrace(Stacktrace)},
-
-    case nova:is_dev_environment() of
+server_error(#{crash_info := #{class := Class, reason := Reason} = CrashInfo} = Req) ->
+    Variables = #{status => ~"Internal Server Error",
+                  title => ~"500 Internal Server Error",
+                  message => ~"Something internal crashed. Please take a look!"},
+    case show_details() of
         true ->
-            render(500, Variables, Req);
+            Details = iolist_to_binary(io_lib:format("Class: ~p~nReason: ~p", [Class, Reason])),
+            render(500, debug_details(Variables, Details, maps:get(stacktrace, CrashInfo, [])), Req);
         false ->
-            {status, 500}
-    end.
+            render(500, Variables, Req)
+    end;
+server_error(Req) ->
+    server_error(Req#{crash_info => #{status_code => 500}}).
 
 render(StatusCode, Variables, Req) ->
     page(StatusCode, Variables, Variables, Req).
@@ -91,6 +91,22 @@ rank(html, {~"text", ~"html", _Parameters}) -> [1];
 rank(html, {~"text", ~"*", _Parameters}) -> [2];
 rank(_Type, {~"*", ~"*", _Parameters}) -> [3];
 rank(_Type, _Range) -> [].
+
+debug_details(Variables, ExtraMsg, Stacktrace) ->
+    case show_details() of
+        true -> Variables#{extra_msg => ExtraMsg, stacktrace => format_stacktrace(Stacktrace)};
+        false -> Variables
+    end.
+
+show_details() ->
+    nova:is_dev_environment().
+
+stacktrace(#{stacktrace := Stacktrace}) ->
+    Stacktrace;
+stacktrace(#{class := _Class}) ->
+    not_enabled;
+stacktrace(_CrashInfo) ->
+    [].
 
 format_stacktrace(not_enabled) ->
     logger:warning(<<"Stacktrace disabled. If you want to enable stacktraces call nova:stracktrace(true) or update your sys.config - Read more in the docs">>),

@@ -81,22 +81,6 @@ not_found_no_accept_test_() ->
          ?assertEqual(<<"application/json">>, maps:get(<<"content-type">>, Headers))
      end}.
 
-server_error_test_() ->
-    Req = (nova_test_helper:mock_req(~"GET", ~"/crash"))#{crash_info => #{class => error, reason => badarg}},
-    {foreach,
-     fun() -> application:get_env(nova, environment) end,
-     fun({ok, Environment}) -> application:set_env(nova, environment, Environment);
-        (undefined) -> application:unset_env(nova, environment)
-     end,
-     [fun() ->
-              application:unset_env(nova, environment),
-              ?assertEqual({status, 500}, nova_error_controller:server_error(Req))
-      end,
-      fun() ->
-              application:set_env(nova, environment, dev),
-              ?assertMatch({status, 500, #{}, _Body}, nova_error_controller:server_error(Req))
-      end]}.
-
 %% The message used to be encoded as a list of character codes.
 not_found_json_message_is_a_string_test_() ->
     {setup, ?SETUP, ?CLEANUP,
@@ -115,9 +99,79 @@ not_found_json_with_parameters_test_() ->
          ?assertEqual(~"application/json", maps:get(~"content-type", Headers))
      end}.
 
+%% nova_handler's crash payload has a status code but no title or message.
+server_error_has_title_and_message_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Req = nova_test_helper:with_header(~"accept", ~"application/json",
+                                            nova_test_helper:mock_req(~"GET", ~"/")),
+         CrashInfo = #{status_code => 500, class => error, reason => boom},
+         {status, 500, _Headers, Body} = nova_error_controller:server_error(Req#{crash_info => CrashInfo}),
+         #{~"title" := Title, ~"status" := Status, ~"message" := Message} =
+             json:decode(iolist_to_binary(Body)),
+         ?assertEqual(~"500 Internal Server Error", Title),
+         ?assertEqual(~"Internal Server Error", Status),
+         ?assertNotEqual(~"undefined", Message)
+     end}.
+
+%% A thrown {500, Reason} leaves the reason as crash_info, which need not be a
+%% map, and a 500 page can be asked for with no crash_info at all.
+server_error_without_a_crash_map_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Req = nova_test_helper:with_header(~"accept", ~"application/json",
+                                            nova_test_helper:mock_req(~"GET", ~"/")),
+         [begin
+              {status, 500, _Headers, Body} = nova_error_controller:server_error(Req0),
+              ?assertMatch(#{~"title" := ~"500 Internal Server Error"}, json:decode(iolist_to_binary(Body)))
+          end || Req0 <- [Req, Req#{crash_info => not_a_map}]]
+     end}.
+
+%% Without an accept header the 500 page is JSON, as the 404 page is.
+server_error_no_accept_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Req = nova_test_helper:mock_req(~"GET", ~"/"),
+         [begin
+              {status, 500, Headers, Body} = nova_error_controller:server_error(Req0),
+              ?assertEqual(~"application/json", maps:get(~"content-type", Headers)),
+              ?assertMatch(#{~"title" := ~"500 Internal Server Error"}, json:decode(iolist_to_binary(Body)))
+          end || Req0 <- [Req, Req#{crash_info => #{status_code => 500, class => error, reason => boom}}]]
+     end}.
+
+%% An accept header that asks for neither JSON nor HTML gets no body, on
+%% both pages.
+unknown_accept_has_no_body_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Req = nova_test_helper:with_header(~"accept", ~"image/png", nova_test_helper:mock_req(~"GET", ~"/")),
+         ?assertEqual({status, 404}, nova_error_controller:not_found(Req)),
+         ?assertEqual({status, 500}, nova_error_controller:server_error(Req))
+     end}.
+
+server_error_html_for_browsers_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Accept = ~"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+         Req = nova_test_helper:with_header(~"accept", Accept, nova_test_helper:mock_req(~"GET", ~"/")),
+         CrashInfo = #{status_code => 500, class => error, reason => boom},
+         {status, 500, Headers, Body} = nova_error_controller:server_error(Req#{crash_info => CrashInfo}),
+         ?assertEqual(~"text/html", maps:get(~"content-type", Headers)),
+         ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Body), ~"500 Internal Server Error"))
+     end}.
+
 %%====================================================================
 %% Crash details are escaped and only shown in dev
 %%====================================================================
+
+%% The payload nova_handler builds when a controller returns
+%% {error, #{x => <<"<script>x</script>">>}} and there is no fallback.
+unsupported_return_crash_info() ->
+    Response = {error, #{x => ~"<script>x</script>"}},
+    #{status_code => 500,
+      status => ~"Problems with controller",
+      title => ~"Controller returned unsupported data",
+      extra_msg => list_to_binary(io_lib:format("Controller returned unsupported data: ~p", [Response]))}.
 
 browser_req() ->
     nova_test_helper:with_header(~"accept", ~"text/html,application/xhtml+xml;q=0.9",
@@ -125,6 +179,88 @@ browser_req() ->
 
 json_req() ->
     nova_test_helper:with_header(~"accept", ~"application/json", nova_test_helper:mock_req(~"GET", ~"/")).
+
+extra_msg_is_hidden_outside_dev_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         application:set_env(nova, environment, prod),
+         try
+             CrashInfo = unsupported_return_crash_info(),
+             {status, 500, _, Html} =
+                 nova_error_controller:server_error((browser_req())#{crash_info => CrashInfo}),
+             ?assertEqual(nomatch, binary:match(iolist_to_binary(Html), ~"script&gt;")),
+             {status, 500, _, Json} =
+                 nova_error_controller:server_error((json_req())#{crash_info => CrashInfo}),
+             Decoded = json:decode(iolist_to_binary(Json)),
+             ?assertMatch(#{~"title" := _}, Decoded),
+             ?assertNot(is_map_key(~"extra_msg", Decoded)),
+             ?assertNot(is_map_key(~"stacktrace", Decoded))
+         after
+             application:set_env(nova, environment, dev)
+         end
+     end}.
+
+%% The dev 500 for a crash used to encode its texts as charlists, which JSON
+%% turned into arrays of numbers.
+crash_details_are_strings_in_dev_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         CrashInfo = #{class => error, reason => boom, stacktrace => []},
+         {status, 500, _, Json} = nova_error_controller:server_error((json_req())#{crash_info => CrashInfo}),
+         #{~"status" := Status, ~"extra_msg" := ExtraMsg} = json:decode(iolist_to_binary(Json)),
+         ?assertEqual(~"Internal Server Error", Status),
+         ?assertEqual(~"Class: error\nReason: boom", ExtraMsg)
+     end}.
+
+%% Crash details must not reach clients unless dev was chosen.
+extra_msg_is_hidden_when_environment_is_unset_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         application:unset_env(nova, environment),
+         try
+             CrashInfo = unsupported_return_crash_info(),
+             {status, 500, _, Json} =
+                 nova_error_controller:server_error((json_req())#{crash_info => CrashInfo}),
+             #{} = Decoded = json:decode(iolist_to_binary(Json)),
+             ?assertNot(is_map_key(~"extra_msg", Decoded)),
+             ?assertNot(is_map_key(~"stacktrace", Decoded)),
+             {status, 500, _, Crash} =
+                 nova_error_controller:server_error((json_req())#{crash_info => #{class => error, reason => secret}}),
+             ?assertEqual(nomatch, binary:match(iolist_to_binary(Crash), ~"secret"))
+         after
+             application:set_env(nova, environment, dev)
+         end
+     end}.
+
+%% A crash in a plugin leaves a class and a reason and no status code.
+%% Outside dev its page is the generic one, in the form the client accepts.
+crash_page_outside_dev_follows_the_accept_header_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         application:set_env(nova, environment, prod),
+         try
+             CrashInfo = #{class => error, reason => secret, stacktrace => [{secret_mod, secret_fun, 1, []}]},
+             {status, 500, JsonHeaders, Json} =
+                 nova_error_controller:server_error((json_req())#{crash_info => CrashInfo}),
+             ?assertEqual(~"application/json", maps:get(~"content-type", JsonHeaders)),
+             ?assertEqual(#{~"status" => ~"Internal Server Error",
+                            ~"title" => ~"500 Internal Server Error",
+                            ~"message" => ~"Something internal crashed. Please take a look!"},
+                          json:decode(iolist_to_binary(Json))),
+             {status, 500, NoAcceptHeaders, _} =
+                 nova_error_controller:server_error((nova_test_helper:mock_req(~"GET", ~"/"))#{crash_info => CrashInfo}),
+             ?assertEqual(~"application/json", maps:get(~"content-type", NoAcceptHeaders)),
+             {status, 500, HtmlHeaders, Html} =
+                 nova_error_controller:server_error((browser_req())#{crash_info => CrashInfo}),
+             ?assertEqual(~"text/html", maps:get(~"content-type", HtmlHeaders)),
+             ?assertNotEqual(nomatch, binary:match(iolist_to_binary(Html), ~"500 Internal Server Error")),
+             ?assertEqual(nomatch, binary:match(iolist_to_binary(Html), ~"secret")),
+             Png = nova_test_helper:with_header(~"accept", ~"image/png", nova_test_helper:mock_req(~"GET", ~"/")),
+             ?assertEqual({status, 500}, nova_error_controller:server_error(Png#{crash_info => CrashInfo}))
+         after
+             application:set_env(nova, environment, dev)
+         end
+     end}.
 
 %% render_error_pages turns the pages of Nova off for every client, whatever
 %% form it asks for.
@@ -173,6 +309,16 @@ accept_header_chooses_the_body_test_() ->
     [{iolist_to_binary(io_lib:format("~p", [Accept])),
       ?_assertEqual(Type, nova_error_controller:response_type(accepting(Accept)))}
      || {Accept, Type} <- Chosen].
+
+accept_header_chooses_the_body_of_both_pages_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Req = accepting(~"*/*"),
+         {status, 404, NotFound, _} = nova_error_controller:not_found(Req),
+         {status, 500, ServerError, _} = nova_error_controller:server_error(Req),
+         ?assertEqual(~"application/json", maps:get(~"content-type", NotFound)),
+         ?assertEqual(~"application/json", maps:get(~"content-type", ServerError))
+     end}.
 
 %% Cowboy joins repeated accept headers, up to some hundred kilobytes, so
 %% reading them must stay linear.
