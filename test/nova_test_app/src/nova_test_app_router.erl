@@ -65,6 +65,7 @@ routes(_Environment) ->
                   {"/set-and-stream/:value", fun nova_test_app_session_controller:set_and_stream/1,
                    #{methods => [get]}},
                   {"/get", fun nova_test_app_session_controller:read/1, #{methods => [get]}},
+                  {"/renew", fun nova_test_app_session_controller:renew/1, #{methods => [get]}},
                   {"/delete", fun nova_test_app_session_controller:delete/1, #{methods => [get]}},
                   {"/untouched", fun nova_test_app_session_controller:untouched/1, #{methods => [get]}},
                   {"/ws", nova_test_app_session_ws_controller, #{protocol => ws}}

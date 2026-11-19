@@ -66,6 +66,7 @@ stream_test_() ->
       fun switch_protocol_carries_cookie/0,
       fun upgrade_without_cookie/0,
       fun upgrade_with_cookie/0,
+      fun renew_issues_new_cookie/0,
       fun delete_expires_cookie/0,
       fun write_after_delete_issues_new_cookie/0,
       fun stale_write_after_delete/0,
@@ -232,6 +233,12 @@ upgrade_without_cookie() ->
 upgrade_with_cookie() ->
     {_Req, State} = start(req(~"__Host-session_id=known")),
     ?assertEqual([], set_cookies(upgrade(State))).
+
+renew_issues_new_cookie() ->
+    ok = nova_session_ets:set_value(~"before-login", ~"k", ~"v"),
+    {_Req, State} = start(req(~"__Host-session_id=before-login")),
+    [Cookie] = set_cookies(respond(event({renewed, ~"after-login"}, State))),
+    ?assertEqual(~"after-login", cookie_value(Cookie)).
 
 delete_expires_cookie() ->
     ok = nova_session_ets:set_value(~"logged-in", ~"k", ~"v"),

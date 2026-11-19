@@ -13,10 +13,13 @@
          old_name/1,
          survives/1,
          reason_phrase/1,
+         unknown_id/1,
+         renew/1,
          delete/1,
          bad_name_runtime/1,
          bad_name_boot/1,
          https_notice/1,
+         renew_no_stream_h/1,
          delete_no_stream_h/1
         ]).
 
@@ -31,6 +34,8 @@ all() ->
      old_name,
      survives,
      reason_phrase,
+     unknown_id,
+     renew,
      delete,
      bad_name_runtime,
      bad_name_boot,
@@ -39,7 +44,7 @@ all() ->
     ].
 
 groups() ->
-    [{without_stream_h, [], [delete_no_stream_h]}].
+    [{without_stream_h, [], [renew_no_stream_h, delete_no_stream_h]}].
 
 init_per_suite(Config) ->
     application:load(nova),
@@ -50,7 +55,7 @@ init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(inets),
     start(#{}, Config).
 
-%% nova_session expires the cookie itself when the listener has no
+%% nova_session sets and expires the cookie itself when the listener has no
 %% nova_stream_h.
 init_per_group(without_stream_h, Config) ->
     application:stop(nova_test_app),
@@ -138,6 +143,30 @@ reason_phrase(Config) ->
          ?assertEqual(#{~"value" => ~"kept"}, json:decode(Body))
      end || Path <- ["/session/set-with-status-text/kept", "/session/set-and-stream/kept"]].
 
+%% Session fixation: an id the server never issued is not adopted.
+unknown_id(Config) ->
+    Planted = "planted-by-attacker",
+    {200, _, Body} = request(Config, "/session/get", Planted),
+    ?assertEqual(#{~"value" => null}, json:decode(Body)),
+    {200, H2, _} = request(Config, "/session/set/victim", Planted),
+    Issued = session_id(H2),
+    ?assertNotEqual(Planted, Issued),
+    {200, _, Planted1} = request(Config, "/session/get", Planted),
+    ?assertEqual(#{~"value" => null}, json:decode(Planted1)),
+    {200, _, Victim} = request(Config, "/session/get", Issued),
+    ?assertEqual(#{~"value" => ~"victim"}, json:decode(Victim)).
+
+renew(Config) ->
+    {200, H1, _} = request(Config, "/session/set/before", undefined),
+    Old = session_id(H1),
+    {200, H2, _} = request(Config, "/session/renew", Old),
+    New = session_id(H2),
+    ?assertNotEqual(Old, New),
+    {200, _, OldBody} = request(Config, "/session/get", Old),
+    ?assertEqual(#{~"value" => null}, json:decode(OldBody)),
+    {200, _, NewBody} = request(Config, "/session/get", New),
+    ?assertEqual(#{~"value" => ~"renewed"}, json:decode(NewBody)).
+
 delete(Config) ->
     {200, H1, _} = request(Config, "/session/set/bye", undefined),
     Id = session_id(H1),
@@ -211,6 +240,13 @@ notices() ->
     application:stop(nova_test_app),
     application:stop(nova),
     [Report || {report, #{notice := session_cookie_needs_https} = Report} <- logged()].
+
+renew_no_stream_h(Config) ->
+    {200, H1, _} = request(Config, "/session/renew", undefined),
+    Id = session_id(H1),
+    {200, H2, Body} = request(Config, "/session/get", Id),
+    ?assertEqual(#{~"value" => ~"renewed"}, json:decode(Body)),
+    ?assertEqual([], session_cookies(H2)).
 
 %% Without nova_stream_h nothing gives a request a session id, so the client
 %% brings one.

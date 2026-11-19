@@ -6,6 +6,7 @@
          set/3,
          delete/1,
          delete/2,
+         renew/1,
          generate_session_id/0
         ]).
 
@@ -139,6 +140,40 @@ delete(Req) ->
             %% Session not found
             {ok, Req}
     end.
+
+-doc """
+Moves the client to a new, empty session: the current session's data is
+deleted and the response carries a new session cookie. It is the lower-level
+piece of `sign_in/3`, which is what to call where a user signs in. Call
+`renew/1` itself for another change of what the client may do, such as a
+second factor or a new password, and use the returned request for the
+`set/3` calls that follow:
+
+```erlang
+second_factor_passed(Req, UserId) ->
+    {ok, Renewed} = nova_session:renew(Req),
+    ok = nova_session:set(Renewed, ~"user_id", UserId),
+    ok = nova_session:set(Renewed, ~"second_factor", true),
+    {redirect, "/"}.
+```
+""".
+-spec renew(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} | no_return().
+renew(Req) ->
+    case get_session_id(Req) of
+        {ok, SessionId} ->
+            Mod = get_session_module(),
+            Mod:delete_value(SessionId),
+            ended(SessionId);
+        _ ->
+            ok
+    end,
+    {ok, NewSessionId} = generate_session_id(),
+    notify(Req, {renewed, NewSessionId}),
+    Req0 = case stream_handled(Req) of
+               true -> Req;
+               false -> set_cookie(NewSessionId, cookie_opts(Req), Req)
+           end,
+    {ok, with_session_id(NewSessionId, Req0)}.
 
 -spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} |
           {error, Reason :: atom()} | no_return().
@@ -416,13 +451,16 @@ session_id(Req, _Access) ->
 with_session_id(SessionId, Req) ->
     (maps:without([nova_session_presented, nova_session_pending], Req))#{nova_session_id => SessionId}.
 
+stream_handled(#{nova_session_direct := true}) ->
+    false;
 stream_handled(Req) ->
     is_map_key(nova_session_id, Req) orelse is_map_key(nova_session_presented, Req).
 
 set_cookie(Value, Opts, Req) ->
     Name = cookie_name(),
     valid_cookie(Name, Opts) orelse erlang:error(invalid_cookie_config(Name, Opts)),
-    cowboy_req:set_resp_cookie(Name, Value, Req, Opts).
+    Req0 = cowboy_req:set_resp_cookie(Name, Value, Req, Opts),
+    Req0#{nova_session_direct => true}.
 
 warn_ambiguous_cookie(Name) ->
     case nova_once:first({?MODULE, ambiguous_cookie_warned}) of
