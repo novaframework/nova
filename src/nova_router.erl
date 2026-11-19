@@ -186,8 +186,9 @@ execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
         {ok, Bindings, #cowboy_handler_value{app = App, handler = Handler, arguments = Args,
                                               plugins = Plugins, secure = Secure}} ->
             {ok,
-             Req#{plugins => Plugins,
-                  bindings => Bindings},
+             put_extra_state(handler_extra_state(Args),
+                             Req#{plugins => Plugins,
+                                  bindings => Bindings}),
              Env#{app => App,
                   cowboy_handler => Handler,
                   arguments => Args,
@@ -494,10 +495,11 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     NovaEnv0 = lists:keystore(App, 1, NovaEnv, {App, #{prefix => Prefix}}),
     nova:set_env(apps, NovaEnv0),
 
+    Group = maps:with([extra_state], RouteInfo),
     {ok, Dispatch1} = parse_url(Host, maps:get(routes, RouteInfo, []),
-                                #{prefix => Prefix,
-                                  router_file => maps:get(router_file, Options),
-                                  insert_opts => maps:get(insert_opts, Options, #{})},
+                                Group#{prefix => Prefix,
+                                       router_file => maps:get(router_file, Options),
+                                       insert_opts => maps:get(insert_opts, Options, #{})},
                                 Value, Dispatch),
 
     Dispatch2 = compile(SubApps, Dispatch1,
@@ -577,7 +579,7 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
 
             Methods = maps:get(methods, Options, ['_']),
 
-            ExtraState = maps:get(extra_state, Options, undefined),
+            ExtraState = route_extra_state(Options, T),
             Value0 = Value#nova_handler_value{extra_state = ExtraState},
 
             Value1 = Value0#nova_handler_value{callback = Callback},
@@ -592,13 +594,13 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
             parse_url(Host, Tl, T, Value, Tree)
     end;
 parse_url(Host,
-          [{Path, Mod, #{protocol := ws}} | Tl],
+          [{Path, Mod, #{protocol := ws} = Options} | Tl],
           T = #{prefix := Prefix}, #nova_handler_value{app = App, secure = Secure} = Value,
           Tree) when is_atom(Mod) ->
     Value0 =  #cowboy_handler_value{
                   app = App,
                   handler = nova_ws_handler,
-                  arguments = #{module => Mod},
+                  arguments = websocket_arguments(Mod, App, Options, T),
                   plugins = Value#nova_handler_value.plugins,
                   secure = Secure},
 
@@ -655,8 +657,22 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
 insert_opts(T) ->
     maps:get(insert_opts, T, #{}).
 
+route_extra_state(#{extra_state := ExtraState}, _Group) -> ExtraState;
+route_extra_state(_Options, #{extra_state := ExtraState}) -> ExtraState;
+route_extra_state(_Options, _Group) -> undefined.
+
+websocket_arguments(Mod, App, #{extra_state := ExtraState}, _Group) ->
+    #{module => Mod, app => App, extra_state => ExtraState};
+websocket_arguments(Mod, App, _Options, #{extra_state := ExtraState}) ->
+    #{module => Mod, app => App, extra_state => ExtraState};
+websocket_arguments(Mod, App, _Options, _Group) ->
+    #{module => Mod, app => App}.
+
 handler_extra_state(#{extra_state := ExtraState}) -> ExtraState;
 handler_extra_state(_Arguments)                   -> undefined.
+
+put_extra_state(undefined, Req)  -> Req;
+put_extra_state(ExtraState, Req) -> Req#{extra_state => ExtraState}.
 
 with_pathinfo(ExtraState, Pathinfo) when is_map(ExtraState) ->
     ExtraState#{pathinfo => Pathinfo};

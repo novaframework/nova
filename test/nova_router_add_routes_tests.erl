@@ -53,6 +53,51 @@ add_routes_registers_app_test_() ->
         ?assertMatch({my_app, _}, lists:keyfind(my_app, 1, Apps))
     end}.
 
+%% A route that sets no extra_state gets the one of its route group, as a
+%% websocket route does. One in a group that declares none has undefined.
+route_takes_the_extra_state_of_its_group_test_() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
+        Callback = fun(_) -> {json, #{}} end,
+        Routes = [#{prefix => "/group", extra_state => #{role => admin},
+                    routes => [{"/inherits", Callback, #{methods => [get]}},
+                               {"/bare", Callback},
+                               {"/own", Callback, #{methods => [get], extra_state => #{role => guest}}},
+                               {"/files/[...]", Callback, #{methods => [get]}}]},
+                  #{prefix => "/plain", routes => [{"/none", Callback, #{methods => [get]}}]}],
+        ok = nova_router:add_routes(extra_state_app, Routes),
+        ?assertEqual(#{role => admin}, extra_state(~"/group/inherits")),
+        ?assertEqual(#{role => admin}, extra_state(~"/group/bare")),
+        ?assertEqual(#{role => guest}, extra_state(~"/group/own")),
+        ?assertEqual(#{role => admin, pathinfo => [~"a", ~"b"]}, extra_state(~"/group/files/a/b")),
+        ?assertEqual(undefined, extra_state(~"/plain/none"))
+    end}.
+
+%% An empty map is a value like any other: a controller that reads a key out
+%% of its extra_state with a default needs a map to read from.
+declared_empty_extra_state_is_taken_from_the_group_test_() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
+        Callback = fun(_) -> {json, #{}} end,
+        Routes = [#{prefix => "/empty", extra_state => #{},
+                    routes => [{"/route", Callback, #{methods => [get]}},
+                               {"/ws", extra_state_ws, #{protocol => ws}}]},
+                  #{prefix => "/none",
+                    routes => [{"/route", Callback, #{methods => [get]}},
+                               {"/ws", extra_state_ws, #{protocol => ws}}]}],
+        ok = nova_router:add_routes(empty_extra_state_app, Routes),
+        Declared = fun(Path) ->
+                           {ok, Req, _Env} = nova_router:execute(nova_test_helper:mock_req(~"GET", Path), #{}),
+                           maps:get(extra_state, Req, not_set)
+                   end,
+        ?assertEqual(#{}, Declared(~"/empty/route")),
+        ?assertEqual(#{}, Declared(~"/empty/ws")),
+        ?assertEqual(undefined, Declared(~"/none/route")),
+        ?assertEqual(not_set, Declared(~"/none/ws"))
+    end}.
+
+extra_state(Path) ->
+    {ok, Req, _Env} = nova_router:execute(nova_test_helper:mock_req(~"GET", Path), #{}),
+    maps:get(extra_state, Req).
+
 %% A security callback is declared with `security` on a route group.
 %% Written on a single route, or as `secure` on the group, it is not read.
 %% A callback there is refused, since the routes its author believes
