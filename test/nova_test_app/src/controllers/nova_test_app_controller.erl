@@ -52,5 +52,9 @@ auth_data(#{auth_data := AuthData}) ->
 host(_Req) ->
     {json, #{host_scoped => true}}.
 
-not_found(_Req) ->
-    {status, 404, #{<<"content-type">> => <<"text/plain">>}, <<"custom not found">>}.
+not_found(Req) ->
+    Headers = case Req of
+                  #{nova_route := Route} -> #{<<"x-nova-route">> => Route};
+                  _ -> #{}
+              end,
+    {status, 404, Headers#{<<"content-type">> => <<"text/plain">>}, <<"custom not found">>}.

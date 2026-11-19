@@ -17,6 +17,8 @@ websocket_init(State) ->
 
 websocket_handle({text, <<"ping">>}, State) ->
     {reply, {text, <<"pong">>}, State};
+websocket_handle({text, <<"route">>}, State = #{req := #{req := Req}}) ->
+    {reply, {text, maps:get(nova_route, Req, <<"absent">>)}, State};
 websocket_handle({text, <<"close">>}, State) ->
     {stop, State};
 websocket_handle({text, Message}, State = #{received := Received}) ->
