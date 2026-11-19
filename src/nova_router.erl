@@ -410,20 +410,49 @@ overrides_in_force(Options) ->
     maps:get(inherited_override_secure, Options, []) ++
         [Override || Override <- [maps:get(override_secure, Options, false)], Override =/= false].
 
--doc "The router module for an application. Either configured explicitly with the `router_module` application environment key, or derived from the application name using the convention for the language in use.".
 router_module(App) ->
     case application:get_env(App, router_module) of
         {ok, RouterModule} ->
             RouterModule;
         undefined ->
-            case nova:detect_language() of
-                elixir ->
-                    %% We build the router as App.Router
-                    erlang:list_to_atom(lists:flatten(io_lib:format("~s.Router", [App])));
-                _ ->
-                    %% All other languages are using the app_router convention
-                    erlang:list_to_atom(lists:flatten(io_lib:format("~s_router", [App])))
+            Names = router_names(nova:detect_language(), atom_to_list(App)),
+            case first_module(Names) of
+                {ok, RouterModule} ->
+                    RouterModule;
+                error ->
+                    ?LOG_ERROR(#{msg => ~"Could not find the router module of the application",
+                                 app => App, router_module => Names}),
+                    throw({error, {router_module_not_found, App}})
             end
+    end.
+
+router_names(elixir, App) ->
+    [App ++ ".Router", "Elixir." ++ camelised(App) ++ ".Router"];
+router_names(_Language, App) ->
+    [App ++ "_router"].
+
+camelised([]) ->
+    [];
+camelised([$_ | Rest]) ->
+    camelised(Rest);
+camelised([First | Rest]) ->
+    {Part, Parts} = lists:splitwith(fun(Char) -> Char =/= $_ end, Rest),
+    [upper(First) | Part] ++ camelised(Parts).
+
+upper(Char) when Char >= $a, Char =< $z -> Char - ($a - $A);
+upper(Char) -> Char.
+
+first_module([]) ->
+    error;
+first_module([Name | Names]) ->
+    case nova_code:module_named(Name) of
+        {ok, Module} ->
+            case code:ensure_loaded(Module) of
+                {module, Module} -> {ok, Module};
+                {error, _Reason} -> first_module(Names)
+            end;
+        error ->
+            first_module(Names)
     end.
 
 compile_paths([], Dispatch, Options) -> {ok, Dispatch, Options};
