@@ -20,25 +20,27 @@
 
 Nova is the web framework for the **BEAM**. Whether you write Erlang, Elixir, or LFE, Nova gives you the productivity of a modern web framework on the runtime you already trust:
 
-- **Routing, controllers, and views** — familiar MVC patterns that map naturally to Erlang modules
-- **Plugin pipeline** — composable middleware for auth, CORS, logging, and custom concerns
-- **WebSockets and Pub/Sub** — real-time features backed by OTP's `pg` module, distributed out of the box
-- **Session management** — ETS-backed by default, pluggable for custom backends
-- **Template rendering** — ErlyDTL (Django Template Language) with hot reload
-- **OTP-native** — your web app is a proper OTP application with supervision trees, hot code upgrades, and releases
+- **Routing, controllers, and views**: familiar MVC patterns that map naturally to Erlang modules
+- **Plugin pipeline**: composable middleware for auth, CORS, logging, and custom concerns
+- **WebSockets and Pub/Sub**: real-time features backed by OTP's `pg` module, distributed out of the box
+- **Session management**: ETS-backed by default, pluggable for custom backends
+- **Template rendering**: ErlyDTL (Django Template Language) with hot reload
+- **OTP-native**: your web app is a proper OTP application with supervision trees, hot code upgrades, and releases
 
 Nova runs on [Cowboy](https://github.com/ninenines/cowboy) and supports **Erlang**, **Elixir**, and **LFE**.
 
 ## Quick start
 
-Install the rebar3 plugin:
+Install the rebar3 plugin with the installer:
 
 ```bash
-# One-line install
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/novaframework/rebar3_nova/master/install.sh)"
+```
 
-# Or add to ~/.config/rebar3/rebar.config
-{project_plugins, [rebar3_nova]}.
+Or add it to `~/.config/rebar3/rebar.config` yourself:
+
+```erlang
+{plugins, [rebar3_nova]}.
 ```
 
 Create and run your app:
@@ -49,55 +51,71 @@ cd my_app
 rebar3 nova serve
 ```
 
-Open [localhost:8080](http://localhost:8080) — you're running Nova.
+Open [localhost:8080](http://localhost:8080). `rebar3 nova serve` rebuilds on
+file changes and needs `inotifywait` from inotify-tools on Linux; `rebar3 shell`
+works without it.
 
 ## What a controller looks like
 
+A controller is a module of functions that take the request map and return a
+tuple saying what to answer:
+
 ```erlang
--module(my_app_main_controller).
--export([index/1, create/1]).
+-module(my_app_items_controller).
+-export([index/1, show/1, create/1]).
 
-index(#{method := <<"GET">>} = _Req) ->
-    {json, #{message => <<"Hello from Nova!">>}}.
+index(_Req) ->
+    {json, #{items => []}}.
 
-create(#{method := <<"POST">>, json := Body} = _Req) ->
-    %% Validate, persist, respond
-    {json, #{status => <<"created">>, data => Body}}.
+show(#{bindings := #{~"id" := Id}}) ->
+    {json, #{id => Id}}.
+
+create(#{json := Item}) ->
+    {json, #{created => Item}}.
 ```
 
-Route it:
+Route it in the router module of the application:
 
 ```erlang
 routes(_Environment) ->
     [#{prefix => "/api",
        security => false,
+       plugins => [{pre_request, nova_request_plugin, #{decode_json_body => true}}],
        routes => [
-           {"/", {my_app_main_controller, index}},
-           {"/items", {my_app_main_controller, create}}
+           {"/items", fun my_app_items_controller:index/1, #{methods => [get]}},
+           {"/items", fun my_app_items_controller:create/1, #{methods => [post]}},
+           {"/items/:id", fun my_app_items_controller:show/1, #{methods => [get]}}
        ]}].
 ```
+
+`GET /api/items/42` answers `{"id":"42"}`. A `POST` to `/api/items` with a JSON
+body answers `201` with the decoded body under `created`; the `json` key is
+there because the route group runs `nova_request_plugin` with
+`decode_json_body`.
 
 ## Features
 
 | Feature | Details |
 |---------|---------|
-| **Routing** | Path parameters, prefixes, per-route security, environment-based routing |
-| **Controllers** | Return `{json, Map}`, `{ok, Variables}`, `{status, Code}`, `{redirect, Path}`, `{sendfile, ...}` |
-| **Plugins** | Pre/post request hooks — built-in CORS, CSRF, correlation ID, or write your own |
+| **Routing** | Path parameters, prefixes, security per route group, environment-based routing, matched route template in `Req` (`nova_route`) |
+| **Controllers** | Return `{json, Map}`, `{ok, Variables}`, `{status, Code}`, `{redirect, Path}`, `{redirect_local, Path}`, `{sendfile, ...}` |
+| **Plugins** | Pre/post request hooks. Built in: request body parsing, CORS, CSRF, correlation id, multipart uploads, websocket origin check. Or write your own |
 | **WebSockets** | Full WebSocket support via `nova_websocket` behaviour |
-| **Pub/Sub** | Distributed messaging via `nova_pubsub` — channels, topics, broadcast |
+| **Pub/Sub** | Distributed messaging via `nova_pubsub`: channels, topics, broadcast |
 | **Sessions** | ETS-backed sessions with pluggable backends |
 | **Templates** | ErlyDTL (Django-style) with hot reload via `rebar3 nova serve` |
-| **Security** | Per-route security functions for authentication and authorization |
+| **Security** | Security functions per route group for authentication and authorization, see the [security guide](guides/security.md) |
 | **Static files** | Built-in file controller with range request support |
-| **Observability** | [OpenTelemetry integration](https://github.com/novaframework/opentelemetry_nova) for tracing and metrics |
-| **Database** | [Kura](https://github.com/novaframework/kura) — an Ecto-inspired database layer for Erlang |
+| **Observability** | `telemetry` events for controllers, plugins, websockets and pubsub; [OpenTelemetry integration](https://github.com/novaframework/opentelemetry_nova) for tracing and metrics |
+| **Database** | [Kura](https://hex.pm/packages/kura), an Ecto-inspired database layer for Erlang |
 
 ## Request pipeline
 
 ```
-Request → Cowboy → Nova Router → Plugins (pre) → Security → Controller → Plugins (post) → Response
+Request → Cowboy → Nova Router → Plugins (pre_security) → Security → Plugins (pre_request) → Controller → Plugins (post_request) → Response
 ```
+
+The [request lifecycle guide](guides/request-lifecycle.md) describes each step.
 
 ## Ecosystem
 
@@ -106,15 +124,15 @@ Request → Cowboy → Nova Router → Plugins (pre) → Security → Controller
 | [nova](https://hex.pm/packages/nova) | Core framework |
 | [rebar3_nova](https://github.com/novaframework/rebar3_nova) | Project scaffolding and generators |
 | [nova_test](https://github.com/novaframework/nova_test) | Testing utilities and request builder |
-| [kura](https://hex.pm/packages/kura) | Database layer — schemas, migrations, changesets, queries |
-| [rebar3_kura](https://github.com/novaframework/rebar3_kura) | Migration generator for Kura |
+| [kura](https://hex.pm/packages/kura) | Database layer: schemas, migrations, changesets, queries |
+| [rebar3_kura](https://github.com/Taure/rebar3_kura) | Migration generator for Kura |
 | [opentelemetry_nova](https://github.com/novaframework/opentelemetry_nova) | Automatic OpenTelemetry instrumentation |
 
 ## Documentation
 
-- **[The Nova Book](https://novaframework.github.io/nova-book)** — step-by-step tutorial building a complete blog platform
-- **[API Reference](https://hexdocs.pm/nova/)** — module documentation on HexDocs
-- **[Quick Start Guide](https://hexdocs.pm/nova/quick-start.html)** — get up and running in 5 minutes
+- **[Quick Start Guide](https://hexdocs.pm/nova/quick-start.html)**: a running application and a first JSON endpoint
+- **[Guides and API Reference](https://hexdocs.pm/nova/)**: guides and module documentation on HexDocs
+- **[The Nova Book](https://novaframework.github.io/nova-book)**: step-by-step tutorial building a complete blog platform
 
 ## Requirements
 
@@ -123,13 +141,18 @@ Request → Cowboy → Nova Router → Plugins (pre) → Security → Controller
 
 ## Community
 
-- [Erlang Slack](https://erlef.org/slack-invite/erlanger) — `#erlanger` channel
-- [Nova Forum](https://erlangforums.com/c/erlang-frameworks/nova-forum/65) — questions and discussion
-- [Issue Tracker](https://github.com/novaframework/nova/issues) — bugs and feature requests
+- [Erlang Slack](https://erlef.org/slack-invite/erlanger): `#erlanger` channel
+- [Nova Forum](https://erlangforums.com/c/erlang-frameworks/nova-forum/65): questions and discussion
+- [Issue Tracker](https://github.com/novaframework/nova/issues): bugs and feature requests
+
+## Security
+
+Report a vulnerability privately, not in a public issue. See
+[SECURITY.md](SECURITY.md).
 
 ## Contributing
 
-Contributions are welcome! Check [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) and look for issues labeled `good first issue`.
+Contributions are welcome! [CONTRIBUTING.md](CONTRIBUTING.md) says how to build, test and open a pull request. Check [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) and look for issues labeled `good first issue`.
 
 ## License
 
