@@ -65,6 +65,31 @@ expiry_test_() ->
       fun update_does_not_extend_max_age/0
      ]}.
 
+cap_test_() ->
+    {foreach,
+     fun() -> nova_test_settings:set(max_sessions, 10), setup() end,
+     fun(Pid) ->
+             cleanup(Pid),
+             nova_test_settings:unset(max_sessions),
+             application:unset_env(nova, session_max_age)
+     end,
+     [
+      fun new_session_at_the_cap_replaces_the_one_nearest_its_expiry/0,
+      fun existing_session_is_written_at_the_cap/0,
+      fun deleted_session_makes_room/0,
+      fun expired_session_makes_room/0,
+      fun cap_can_be_turned_off/0,
+      fun provisional_session_goes_first/0,
+      fun provisional_session_replaces_the_provisional_one_nearest_its_expiry/0,
+      fun provisional_session_is_refused_when_every_session_is_kept/0,
+      fun written_provisional_session_is_kept/0,
+      fun provisional_write_leaves_a_session_kept/0,
+      fun replicated_session_does_not_grow_the_table_past_the_cap/0,
+      fun replicated_provisional_session_is_dropped_when_every_session_is_kept/0,
+      fun converted_session_is_not_dropped_for_a_provisional_one/0,
+      fun cap_is_the_one_nova_started_with/0
+     ]}.
+
 provisional_test_() ->
     {foreach,
      fun setup/0,
@@ -87,6 +112,140 @@ reads_test_() ->
 get_value_without_the_server_test() ->
     ?assertEqual(undefined, whereis(nova_session_ets)),
     ?assertEqual({error, not_found}, nova_session_ets:get_value(~"s", ~"k")).
+
+fill(Count) ->
+    [ok = nova_session_ets:set_value(integer_to_binary(N), ~"k", ~"v") || N <- lists:seq(1, Count)],
+    ok.
+
+%% The first session written is the one nearest its expiry.
+new_session_at_the_cap_replaces_the_one_nearest_its_expiry() ->
+    fill(10),
+    ?assertEqual(ok, nova_session_ets:set_value(~"eleventh", ~"k", ~"v")),
+    ?assert(nova_session_ets:session_exists(~"eleventh")),
+    ?assertNot(nova_session_ets:session_exists(~"1")),
+    ?assertEqual(10, ets:info(nova_session_ets_entries, size)).
+
+existing_session_is_written_at_the_cap() ->
+    fill(10),
+    ?assertEqual(ok, nova_session_ets:set_value(~"3", ~"other", ~"value")),
+    ?assertEqual({ok, ~"value"}, nova_session_ets:get_value(~"3", ~"other")).
+
+deleted_session_makes_room() ->
+    fill(10),
+    ok = nova_session_ets:delete_value(~"3"),
+    ?assertEqual(ok, nova_session_ets:set_value(~"eleventh", ~"k", ~"v")),
+    ?assert(nova_session_ets:session_exists(~"1")).
+
+%% An expired session goes before one that is in use. One is dropped for
+%% each new session, and the sweep drops the others.
+expired_session_makes_room() ->
+    application:set_env(nova, session_max_age, 1),
+    fill(9),
+    timer:sleep(1100),
+    application:set_env(nova, session_max_age, 3600),
+    ok = nova_session_ets:set_provisional_value(~"visitor", ~"k", ~"v"),
+    ?assertEqual(ok, nova_session_ets:set_value(~"eleventh", ~"k", ~"v")),
+    ?assert(nova_session_ets:session_exists(~"visitor")),
+    ?assertEqual(10, ets:info(nova_session_ets_entries, size)),
+    whereis(nova_session_ets) ! sweep,
+    sync(),
+    ?assertEqual(2, ets:info(nova_session_ets_entries, size)).
+
+cap_can_be_turned_off() ->
+    nova_test_settings:set(max_sessions, infinity),
+    ?assertEqual(ok, fill(25)).
+
+kept() ->
+    [integer_to_binary(N) || N <- lists:seq(1, 10), nova_session_ets:session_exists(integer_to_binary(N))].
+
+%% A session that only holds what every visitor gets makes room for one
+%% that is in use.
+provisional_session_goes_first() ->
+    fill(9),
+    ok = nova_session_ets:set_provisional_value(~"visitor", ~"k", ~"v"),
+    ?assertEqual(ok, nova_session_ets:set_value(~"10", ~"k", ~"v")),
+    ?assertNot(nova_session_ets:session_exists(~"visitor")),
+    ?assertEqual(10, length(kept())).
+
+provisional_session_replaces_the_provisional_one_nearest_its_expiry() ->
+    fill(8),
+    ok = nova_session_ets:set_provisional_value(~"first", ~"k", ~"v"),
+    timer:sleep(2),
+    ok = nova_session_ets:set_provisional_value(~"second", ~"k", ~"v"),
+    ?assertEqual(ok, nova_session_ets:set_provisional_value(~"third", ~"k", ~"v")),
+    ?assertEqual([false, true, true],
+                 [nova_session_ets:session_exists(Id) || Id <- [~"first", ~"second", ~"third"]]),
+    ?assertEqual(8, length(kept())).
+
+provisional_session_is_refused_when_every_session_is_kept() ->
+    fill(10),
+    ?assertEqual({error, session_store_full}, nova_session_ets:set_provisional_value(~"visitor", ~"k", ~"v")),
+    ?assertNot(nova_session_ets:session_exists(~"visitor")),
+    ?assertEqual(10, length(kept())).
+
+%% A write with set_value/3 is what tells a session that is in use from one
+%% that is not.
+written_provisional_session_is_kept() ->
+    ok = nova_session_ets:set_provisional_value(~"visitor", ~"token", ~"t"),
+    ok = nova_session_ets:set_value(~"visitor", ~"user", ~"alice"),
+    [ok = nova_session_ets:set_provisional_value(integer_to_binary(N), ~"k", ~"v") || N <- lists:seq(1, 30)],
+    ?assertEqual({ok, ~"alice"}, nova_session_ets:get_value(~"visitor", ~"user")),
+    ?assertEqual({ok, ~"t"}, nova_session_ets:get_value(~"visitor", ~"token")),
+    ?assertEqual(10, ets:info(nova_session_ets_entries, size)).
+
+provisional_write_leaves_a_session_kept() ->
+    ok = nova_session_ets:set_value(~"user", ~"user", ~"alice"),
+    ok = nova_session_ets:set_provisional_value(~"user", ~"token", ~"t"),
+    [ok = nova_session_ets:set_provisional_value(integer_to_binary(N), ~"k", ~"v") || N <- lists:seq(1, 30)],
+    ?assertEqual({ok, ~"alice"}, nova_session_ets:get_value(~"user", ~"user")),
+    ?assertEqual({ok, ~"t"}, nova_session_ets:get_value(~"user", ~"token")).
+
+%% Nothing tells the sessions of an older release apart, so a hot upgrade
+%% takes none of them for a provisional one: a request without a session
+%% does not get the place of somebody who is signed in.
+converted_session_is_not_dropped_for_a_provisional_one() ->
+    Pid = nova_session_ets,
+    Soon = erlang:system_time(millisecond) + 60000,
+    Tokens = [integer_to_binary(N) || N <- lists:seq(1, 8)],
+    sys:replace_state(Pid, fun(State) ->
+                                   ets:insert(nova_session_ets_entries,
+                                              [{~"alice", #{~"user" => ~"alice"}},
+                                               {~"bob", #{~"user" => ~"bob", ~"_csrf_token" => ~"t"}, Soon}
+                                               | [{Id, #{~"_csrf_token" => ~"t"}, Soon} || Id <- Tokens]]),
+                                   State
+                           end),
+    ok = sys:suspend(Pid),
+    ok = sys:change_code(Pid, nova_session_ets, "1.0", []),
+    ok = sys:resume(Pid),
+    ?assertEqual({error, session_store_full}, nova_session_ets:set_provisional_value(~"visitor", ~"k", ~"v")),
+    ?assertEqual([{Id, kept} || Id <- lists:sort([~"alice", ~"bob" | Tokens])],
+                 lists:sort([{Id, Class} || {Id, _Data, _ExpiresAt, Class} <- ets:tab2list(nova_session_ets_entries)])),
+    ?assertEqual({ok, ~"alice"}, nova_session_ets:get_value(~"alice", ~"user")).
+
+%% What another node stores arrives without the check the writing node made.
+replicated_session_does_not_grow_the_table_past_the_cap() ->
+    fill(10),
+    [whereis(nova_session_ets) ! #nova_pubsub{channel = '__sessions', sender = self(), topic = "set_value",
+                                              payload = {<<"replicated", N>>, ~"k", ~"v"}}
+     || N <- lists:seq(1, 5)],
+    sync(),
+    ?assertEqual(10, ets:info(nova_session_ets_entries, size)),
+    ?assert(nova_session_ets:session_exists(<<"replicated", 5>>)).
+
+replicated_provisional_session_is_dropped_when_every_session_is_kept() ->
+    fill(10),
+    whereis(nova_session_ets) ! #nova_pubsub{channel = '__sessions', sender = self(),
+                                             topic = "set_provisional_value", payload = {~"visitor", ~"k", ~"v"}},
+    sync(),
+    ?assertNot(nova_session_ets:session_exists(~"visitor")),
+    ?assertEqual(10, length(kept())).
+
+%% The setting is checked and kept when Nova starts. What is put in the
+%% environment later is not what the store goes by.
+cap_is_the_one_nova_started_with() ->
+    application:set_env(nova, max_sessions, 0),
+    fill(12),
+    ?assertEqual(10, ets:info(nova_session_ets_entries, size)).
 
 expires_in(SessionId) ->
     [Row] = ets:lookup(nova_session_ets_entries, SessionId),

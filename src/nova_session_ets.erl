@@ -13,6 +13,23 @@ was created, whatever happens to it in between. With
 or the node restarts. Expired sessions are swept once a minute; a session
 created while the setting was `infinity` never expires.
 
+The table holds at most `max_sessions` sessions, 1 000 000 by default. Once
+it is full, a write that starts a new session drops another one to make room:
+an expired session first, then a provisional one, then the session nearest its
+expiry. Sessions that exist are still written. Set
+`{nova, [{max_sessions, infinity}]}` to turn the limit off. Nova does not
+start with a value that is neither `infinity` nor an integer above 0. The
+setting is read from the `nova` environment when Nova starts.
+
+A provisional session is one that only holds what was written with
+`nova_session:set_provisional/3`, which is how `nova_csrf_plugin` stores the
+token of a visitor. It is dropped after a day, or after `session_max_age`
+when that is shorter, and it is the first to go when the table is full, so
+requests without a cookie cannot fill the table and keep clients from signing
+in or sign anybody out. The first `nova_session:set/3` makes it an ordinary
+session. A provisional write that would start a session when every session in
+a full table is an ordinary one returns `{error, session_store_full}`.
+
 Sessions do not survive a restart, and a node that starts or joins later only
 has the sessions written after it joined. During a rolling deploy or behind a
 load balancer without sticky sessions, a client whose id the serving node does
@@ -50,9 +67,10 @@ converts both on a hot upgrade, to ordinary sessions.
 -define(SWEEP_INTERVAL, 60000).
 -define(PROVISIONAL_MAX_AGE, 86400).
 
+-include_lib("kernel/include/logger.hrl").
 -include("../include/nova_pubsub.hrl").
 
--record(state, {}).
+-record(state, {warned_at :: integer() | undefined}).
 
 %%%===================================================================
 %%% API
@@ -83,14 +101,31 @@ get_value(SessionId, Key) ->
 
 -spec set_value(SessionId :: binary(), Key :: binary(), Value :: binary()) -> ok | {error, Reason :: term()}.
 set_value(SessionId, Key, Value) ->
-    nova_pubsub:broadcast(?CHANNEL, "set_value", {SessionId, Key, Value}),
-    sync().
+    write(kept, "set_value", SessionId, Key, Value).
 
 -spec set_provisional_value(SessionId :: binary(), Key :: binary(), Value :: term()) ->
           ok | {error, session_store_full | session_ended}.
 set_provisional_value(SessionId, Key, Value) ->
-    nova_pubsub:broadcast(?CHANNEL, "set_provisional_value", {SessionId, Key, Value}),
-    sync().
+    write(provisional, "set_provisional_value", SessionId, Key, Value).
+
+write(Class, Topic, SessionId, Key, Value) ->
+    case has_room(SessionId, Class) of
+        true ->
+            nova_pubsub:broadcast(?CHANNEL, Topic, {SessionId, Key, Value}),
+            sync(),
+            written(SessionId);
+        false ->
+            written(SessionId)
+    end.
+
+-spec written(SessionId :: binary()) -> ok | {error, session_store_full | session_ended}.
+written(SessionId) ->
+    case session_exists(SessionId) of
+        true ->
+            ok;
+        false ->
+            {error, session_store_full}
+    end.
 
 -doc "Deletes the session on every node.".
 -spec delete_value(SessionId :: binary()) -> ok.
@@ -116,6 +151,22 @@ session_exists(SessionId) ->
 
 sync() ->
     ok = gen_server:call(?SERVER, sync).
+
+has_room(SessionId, Class) ->
+    case max_sessions() of
+        infinity ->
+            true;
+        Max ->
+            session_exists(SessionId) orelse ets:info(?TABLE, size) < Max
+                orelse gen_server:call(?SERVER, {make_room, Class, Max})
+    end.
+
+-spec max_sessions() -> pos_integer() | infinity.
+max_sessions() ->
+    case nova_settings:value(max_sessions) of
+        Max when is_integer(Max), Max > 0 -> Max;
+        _Infinity -> infinity
+    end.
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -149,6 +200,9 @@ init([]) ->
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
                          {stop, Reason :: term(), NewState :: term()}.
+handle_call({make_room, Class, Max}, _From, State) ->
+    {Room, State1} = make_room(Class, Max, State),
+    {reply, Room, State1};
 handle_call(sync, _From, State) ->
     {reply, ok, State};
 handle_call(_Request, _From, State) ->
@@ -256,8 +310,12 @@ store_live(Class, SessionId, Key, Value, State) ->
             State;
         error ->
             drop(SessionId),
-            insert(SessionId, #{Key => Value}, expires_at(Class), Class),
-            State
+            {Room, State1} = case max_sessions() of
+                                 infinity -> {true, State};
+                                 Max -> make_room(Class, Max, State)
+                             end,
+            _ = Room andalso insert(SessionId, #{Key => Value}, expires_at(Class), Class),
+            State1
     end.
 
 insert(SessionId, Session, ExpiresAt, Class) ->
@@ -283,6 +341,31 @@ nearest_expiry(Class) ->
         _ -> none
     end.
 
+make_room(Class, Max, State) ->
+    Size = ets:info(?TABLE, size),
+    case Size < Max orelse session_to_drop(Class) of
+        true ->
+            {true, State};
+        none ->
+            {false, warn_when_full(Size, Max, State)};
+        {Dropped, SessionId} ->
+            drop(SessionId),
+            make_room(Class, Max, warn_when_full(Dropped, Size, Max, State))
+    end.
+
+session_to_drop(Class) ->
+    Nearest = [{Stored, nearest_expiry(Stored)} || Stored <- [provisional, kept]],
+    case [SessionId || {_Stored, {ExpiresAt, SessionId}} <- Nearest, expired(ExpiresAt)] of
+        [Expired | _] ->
+            {expired, Expired};
+        [] ->
+            case Nearest of
+                [{provisional, {_ExpiresAt, SessionId}}, _Kept] -> {provisional, SessionId};
+                [_Provisional, {kept, {_ExpiresAt, SessionId}}] when Class =:= kept -> {kept, SessionId};
+                _ -> none
+            end
+    end.
+
 sweep() ->
     sweep(provisional),
     sweep(kept).
@@ -299,6 +382,22 @@ sweep(Class) ->
             end;
         _ ->
             ok
+    end.
+
+warn_when_full(expired, _Size, _Max, State) ->
+    State;
+warn_when_full(_Dropped, Size, Max, State) ->
+    warn_when_full(Size, Max, State).
+
+warn_when_full(Size, Max, State = #state{warned_at = WarnedAt}) ->
+    Now = erlang:monotonic_time(millisecond),
+    case WarnedAt =:= undefined orelse Now - WarnedAt >= ?SWEEP_INTERVAL of
+        true ->
+            ?LOG_WARNING(#{msg => ~"Session store is full. Sessions are dropped to make room for new ones, provisional ones first, and a provisional one is refused when there is none to drop",
+                           sessions => Size, max_sessions => Max}),
+            State#state{warned_at = Now};
+        false ->
+            State
     end.
 
 expires_at(kept) ->
