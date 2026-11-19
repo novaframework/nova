@@ -112,6 +112,8 @@ nova_session_ets_test_() ->
       fun set_tells_stream_handler/0,
       fun renew_drops_old_session/0,
       fun renew_tells_stream_handler/0,
+      fun sign_in_stores_under_a_new_id/0,
+      fun sign_in_says_when_the_backend_stores_nothing/0,
       fun backend_is_asked_once_about_a_presented_id/0,
       fun deleted_session_is_asked_about_again/0,
       fun session_deleted_by_another_process_is_not_written_again/0,
@@ -343,6 +345,31 @@ unknown_presented_id_is_replaced() ->
     ?assertEqual({written, ~"pending"}, stream_event()),
     ?assertNot(nova_session_ets:session_exists(~"attacker-chosen")),
     ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")).
+
+%% Signing in is one call: the id changes and the value is stored under the
+%% new one, which the request that comes back carries.
+sign_in_stores_under_a_new_id() ->
+    ok = nova_session_ets:set_value(~"before-sign-in", ~"basket", ~"1"),
+    Req = presented_req(~"before-sign-in", ~"pending"),
+    {ok, SignedIn} = nova_session:sign_in(Req, ~"user", ~"alice"),
+    #{nova_session_id := <<NewId/binary>>} = SignedIn,
+    ?assertEqual({renewed, NewId}, stream_event()),
+    ?assertNot(lists:member(NewId, [~"before-sign-in", ~"pending"])),
+    ?assertEqual({ok, ~"alice"}, nova_session:get(SignedIn, ~"user")),
+    ?assertEqual({ok, ~"alice"}, nova_session_ets:get_value(NewId, ~"user")),
+    ?assertEqual({error, not_found}, nova_session:get(SignedIn, ~"basket")),
+    ?assertNot(nova_session_ets:session_exists(~"before-sign-in")),
+    ?assertEqual({error, not_found}, nova_session:get(Req, ~"user")).
+
+sign_in_says_when_the_backend_stores_nothing() ->
+    meck:new(nova_session_ets, [passthrough]),
+    try
+        meck:expect(nova_session_ets, set_value, fun(_SessionId, _Key, _Value) -> {error, session_store_full} end),
+        ?assertEqual({error, session_store_full},
+                     nova_session:sign_in(presented_req(~"refused", ~"pending"), ~"user", ~"alice"))
+    after
+        meck:unload(nova_session_ets)
+    end.
 
 backend_is_asked_once_about_a_presented_id() ->
     ok = nova_session_ets:set_value(~"asked-once", ~"k", ~"v"),

@@ -1,11 +1,24 @@
 %%% Author: Niclas Axelsson <niclas@burbas.se>
 -module(nova_session).
--moduledoc "All kind of operations on sessions is handled by the nova_session-module. The module also presents a behaviour that can be used to create customized backends for the session-data.".
+-moduledoc """
+All kind of operations on sessions is handled by the nova_session-module. The module also presents a behaviour that can be used to create customized backends for the session-data.
+
+Sign a user in with `sign_in/3` and out with `delete/1`. `sign_in/3` moves
+the client to a new session id, stores who signed in under it and returns the
+request that carries the new id. That is the defence against session
+fixation: a session id planted or observed before that point stops working,
+and so does everything stored under it. `renew/1` is the piece of it that
+changes the id, for any other change of what a client may do (a second
+factor, a password change, a higher role). As defence in depth, a presented
+id the backend does not know is ignored and replaced, so a client cannot
+simply choose its own session id.
+""".
 -export([
          get/2,
          set/3,
          delete/1,
          delete/2,
+         sign_in/3,
          renew/1,
          generate_session_id/0
         ]).
@@ -139,6 +152,39 @@ delete(Req) ->
         _ ->
             %% Session not found
             {ok, Req}
+    end.
+
+-doc """
+Signs a user in. The client is moved to a new session id as `renew/1` moves
+it, `Value` is stored under `Key` in the new session, and the request that
+comes back is the one that carries the new id. This is the call for the
+place where a user signs in, in an application or in a library that signs in
+for it:
+
+```erlang
+login(Req) ->
+    {ok, SignedIn} = nova_session:sign_in(Req, ~"user_id", UserId),
+    ok = nova_session:set(SignedIn, ~"signed_in_at", erlang:system_time(second)),
+    {redirect, "/"}.
+```
+
+The session the client had is deleted with all it held, so an id that
+somebody else knows, because they planted it in the browser or saw it, is not
+the id of the user who signed in. Go on with the returned request: the one
+that was passed in names the session that is gone. A token of
+`nova_csrf_plugin` that was made for the old id is refused from then on, and
+the next page the client loads carries one for the new id.
+
+`{error, Reason}` is what the session backend answered when it did not store
+the value. The id has changed by then and nobody is signed in.
+""".
+-spec sign_in(Req, Key :: binary(), Value :: term()) -> {ok, Req} | {error, Reason :: atom()} | no_return()
+              when Req :: cowboy_req:req().
+sign_in(Req, Key, Value) ->
+    {ok, SignedIn} = renew(Req),
+    case set(SignedIn, Key, Value) of
+        {error, _Reason} = Error -> Error;
+        _Stored -> {ok, SignedIn}
     end.
 
 -doc """
