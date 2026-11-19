@@ -217,7 +217,7 @@ check_opts() ->
         #{} = Configured ->
             refuse_dropped(dropped_opts(Configured));
         _ ->
-            ?LOG_ERROR(#{msg => ~"session_cookie_opts is not a map. It takes path and domain as binaries, secure and http_only as booleans, and same_site as default, none, strict or lax",
+            ?LOG_ERROR(#{msg => ~"session_cookie_opts is not a map",
                          setting => session_cookie_opts}),
             erlang:error({invalid_setting, session_cookie_opts, not_a_map})
     end.
@@ -230,7 +230,7 @@ dropped_opts(Configured) ->
 refuse_dropped([]) ->
     ok;
 refuse_dropped(Options) ->
-    ?LOG_ERROR(#{msg => ~"session_cookie_opts has options the session cookie does not take. It takes path and domain as binaries, secure and http_only as booleans, and same_site as default, none, strict or lax. There is no max_age: the cookie ends with the browser session. Correct the options or take them out",
+    ?LOG_ERROR(#{msg => ~"session_cookie_opts has options the session cookie does not take",
                  setting => session_cookie_opts, options => Options}),
     erlang:error({invalid_setting, session_cookie_opts, {not_taken, Options}}).
 
@@ -246,7 +246,7 @@ check_host_prefix() ->
 refuse_prefix_conflicts([]) ->
     ok;
 refuse_prefix_conflicts(Options) ->
-    ?LOG_ERROR(#{msg => ~"session_cookie_opts asks for what a cookie with the __Host- prefix cannot have. The session cookie is named __Host-session_id when session_cookie_name is not set, and is then always Secure, with Path=/ and no Domain. Set session_cookie_name, to session_id for the cookie as it was, or take the options out",
+    ?LOG_ERROR(#{msg => ~"session_cookie_opts conflicts with the __Host- cookie prefix: set session_cookie_name or drop the options",
                  setting => session_cookie_opts, options => Options, requires => session_cookie_name}),
     erlang:error({invalid_setting, session_cookie_opts, {requires, session_cookie_name}}).
 
@@ -264,11 +264,11 @@ prefix_conflict(secure, Configured) -> maps:get(secure, Configured, true) =:= fa
 
 -spec check_secure(term(), cow_cookie:cookie_opts()) -> ok.
 check_secure(<<"__Secure-", _/binary>>, #{secure := false}) ->
-    ?LOG_ERROR(#{msg => ~"session_cookie_name has the __Secure- prefix, and a browser only keeps such a cookie when it is Secure. Set secure to true in session_cookie_opts, or pick a name without the prefix",
+    ?LOG_ERROR(#{msg => ~"A __Secure- session_cookie_name needs secure => true in session_cookie_opts",
                  setting => session_cookie_name, requires => secure}),
     erlang:error({invalid_setting, session_cookie_name, {requires, secure}});
 check_secure(_Name, #{same_site := none, secure := false}) ->
-    ?LOG_ERROR(#{msg => ~"session_cookie_opts sets same_site to none, and a browser only keeps a SameSite=None cookie when it is Secure. Set secure to true in session_cookie_opts, or pick another same_site",
+    ?LOG_ERROR(#{msg => ~"same_site => none needs secure => true in session_cookie_opts",
                  setting => session_cookie_opts, option => same_site, requires => secure}),
     erlang:error({invalid_setting, session_cookie_opts, {requires, secure}});
 check_secure(_Name, _Opts) ->
@@ -355,7 +355,7 @@ set_cookie(Value, Opts, Req) ->
 warn_ambiguous_cookie(Name) ->
     case nova_once:first({?MODULE, ambiguous_cookie_warned}) of
         true ->
-            ?LOG_WARNING(#{msg => ~"Request carried more than one session cookie, treated as no session. A cookie with the same name is probably set for a parent domain or path; a __Host- session_cookie_name prevents that",
+            ?LOG_WARNING(#{msg => ~"Request carried more than one session cookie, treated as no session",
                            cookie => Name});
         false ->
             ok
