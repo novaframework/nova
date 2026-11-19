@@ -462,7 +462,7 @@ ambiguity(Key, _Rest, Comparator, Children, Prefix, Full, _Options) ->
     end.
 
 overshadowed_literal(Comparator, Children) ->
-    overshadowed(Comparator, [{K, C} || {K, C} <- maps:to_list(Children), is_binary(K)]).
+    overshadowed(Comparator, [{K, C} || K := C <- Children, is_binary(K)]).
 
 overshadowed_binding(Comparator, Children) ->
     overshadowed(Comparator, [{K, C} || K = {binding, _} := C <- Children]).
@@ -557,9 +557,9 @@ match([Segment | Rest], Node = #{children := Children}, Bindings) ->
     end.
 
 match_literal(Segment, Rest, Children, Bindings) ->
-    case maps:find(Segment, Children) of
-        {ok, Child} -> match(Rest, Child, Bindings);
-        error       -> error
+    case Children of
+        #{Segment := Child} -> match(Rest, Child, Bindings);
+        #{}                 -> error
     end.
 
 match_bindings(Segment, Rest, Children, Bindings) when is_binary(Segment) ->
@@ -580,13 +580,13 @@ try_bindings([Name | Tl], Segment, Rest, Children, Bindings) ->
     end.
 
 match_catch_all(Remaining, #{children := Children}, Bindings) ->
-    case maps:find('...', Children) of
-        {ok, Child} ->
+    case Children of
+        #{'...' := Child} ->
             case is_terminal(Child) of
                 true  -> {ok, Child, Bindings, Remaining};
                 false -> error
             end;
-        error ->
+        #{} ->
             error
     end.
 
@@ -596,14 +596,13 @@ is_terminal(#{terminal := Terminal}) ->
 %% An exact comparator wins, then the catch-all '_'. Anything else is a
 %% method-not-allowed, and the caller needs the list for the Allow header.
 resolve(Comparator, Terminal) ->
-    case maps:find(Comparator, Terminal) of
-        {ok, Payload} ->
+    case Terminal of
+        #{Comparator := Payload} ->
             {ok, Payload};
-        error ->
-            case maps:find('_', Terminal) of
-                {ok, Payload} -> {ok, Payload};
-                error         -> {error, comparator_not_found, lists:sort(maps:keys(Terminal))}
-            end
+        #{'_' := Payload} ->
+            {ok, Payload};
+        #{} ->
+            {error, comparator_not_found, lists:sort(maps:keys(Terminal))}
     end.
 
 %%====================================================================
