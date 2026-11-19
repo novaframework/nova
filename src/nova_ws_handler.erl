@@ -26,7 +26,8 @@ init(Req = #{method := _Method, plugins := Plugins}, State = #{module := Module}
     %% Call the http-handler in order to correctly handle potential plugins for the http-request
     ControllerData = maps:get(controller_data, State, #{}),
     State0 = State#{mod => Module,
-                    plugins => Plugins},
+                    plugins => Plugins,
+                    route => maps:get(nova_route, Req, undefined)},
     upgrade_ws(Module, Req, State0, with_auth_data(Req, ControllerData#{req => Req})).
 
 with_auth_data(#{auth_data := AuthData}, ControllerData) ->
@@ -49,7 +50,7 @@ upgrade_ws(Module, Req, State, ControllerData) ->
 websocket_init(State = #{mod := Mod}) ->
     %% Inject the websocket process into the state
     ControllerData = maps:get(controller_data, State, #{}),
-    NewState = State#{controller_data => ControllerData#{ws_handler_process => self()}},
+    NewState = start_connection(State#{controller_data => ControllerData#{ws_handler_process => self()}}),
 
     case erlang:function_exported(Mod, websocket_init, 1) of
         true ->
@@ -65,6 +66,7 @@ websocket_info(Msg, State = #{mod := Mod}) ->
     handle_ws(Mod, websocket_info, [Msg], State).
 
 terminate(Reason, PartialReq, State) ->
+    ok = stop_connection(Reason, State),
     terminate_controller(Reason, PartialReq, State).
 
 terminate_controller(Reason, PartialReq, State = #{controller_data := ControllerData, mod := Mod,
@@ -134,12 +136,28 @@ handle_ws(Mod, Func, Args, State) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 
+start_connection(State) ->
+    State#{nova_telemetry => nova_telemetry:start([nova, websocket, connection], connection_metadata(State))}.
+
+stop_connection(Reason, #{nova_telemetry := Span}) ->
+    nova_telemetry:stop(Span, #{reason => nova_telemetry:reason_tag(Reason)});
+stop_connection(_Reason, _State) ->
+    ok.
+
+connection_metadata(State) ->
+    #{module => maps:get(mod, State, undefined),
+      app => maps:get(app, State, undefined),
+      route => maps:get(route, State, undefined)}.
+
 invoke_controller(Mod, Func, Args, State = #{controller_data := ControllerData}) ->
+    Span = nova_telemetry:start([nova, websocket, handle], (connection_metadata(State))#{callback => Func}),
     try erlang:apply(Mod, Func, Args ++ [ControllerData]) of
         RetObj ->
+            nova_telemetry:stop(Span, #{}),
             handle_result(Mod, Func, RetObj, State)
     catch
         Class:Reason:Stacktrace ->
+            nova_telemetry:exception(Span, Class, Reason, Stacktrace),
             ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class,
                            reason => nova_redact:term(Reason),
                            stacktrace => nova_redact:stacktrace(Stacktrace)}),
