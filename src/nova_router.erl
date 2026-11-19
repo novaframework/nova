@@ -15,6 +15,8 @@
          compile/1,
          compile/2,
          compile_fresh/2,
+         overrides_in_force/1,
+         secures_in_force/1,
          lookup_url/1,
          lookup_url/2,
          lookup_url/3,
@@ -228,7 +230,7 @@ add_routes(App) ->
     add_routes(App, get_routes(router_module(App), Env)).
 
 %%--------------------------------------------------------------------
--doc "Add routes to the dispatch-table for the given app. The routes can be either a list of maps or a map. It use the same structure as the routes-callback in the router-module.".
+-doc "Add routes to the dispatch-table for the given app. The routes can be either a list of maps or a map. It use the same structure as the routes-callback in the router-module. Throws `{error, {misplaced_security, App, Key, Path}}` for routes with a security callback under a key that is not read: `secure` on a route group, or `security` or `secure` in the options of a route.".
 -spec add_routes(App :: atom(), Routes :: [map()] | map()) -> ok.
 add_routes(App, Routes) ->
     add_routes(App, Routes, ?NOVA_DISPATCH).
@@ -352,7 +354,10 @@ compile([], Dispatch, _Options) -> Dispatch;
 compile([{App, AppOptions}|Tl], Dispatch, GlobalOptions) ->
     %% Per-application options win over the global ones, and must not leak
     %% into the applications compiled after this one.
-    Dispatch0 = compile([App], Dispatch, maps:merge(GlobalOptions, AppOptions)),
+    ok = misplaced_security([{security, Value, mount_path(GlobalOptions, AppOptions)}
+                             || security := Value <- AppOptions],
+                            App, maps:get(router_file, GlobalOptions, undefined)),
+    Dispatch0 = compile([App], Dispatch, mount_options(GlobalOptions, AppOptions)),
     compile(Tl, Dispatch0, GlobalOptions);
 compile([App|Tl], Dispatch, Options) ->
     Router = router_module(App),
@@ -378,7 +383,33 @@ compile([App|Tl], Dispatch, Options) ->
 
     compile(Tl, Dispatch1, Options).
 
+mount_options(GlobalOptions, AppOptions) ->
+    Options = maps:merge(GlobalOptions, AppOptions),
+    Options#{secure => maps:get(secure, AppOptions, false),
+             inherited_secure => secures_in_force(GlobalOptions) ++ maps:get(inherited_secure, AppOptions, []),
+             override_secure => maps:get(override_secure, AppOptions, false),
+             inherited_override_secure => overrides_in_force(GlobalOptions) ++
+                 maps:get(inherited_override_secure, AppOptions, [])}.
+
+mount_path(GlobalOptions, AppOptions) ->
+    case concat_strings(maps:get(prefix, GlobalOptions, ""), maps:get(prefix, AppOptions, "")) of
+        "" -> "/";
+        Path -> Path
+    end.
+
 %%--------------------------------------------------------------------
+-doc false.
+-spec secures_in_force(Options :: map()) -> [term()].
+secures_in_force(Options) ->
+    maps:get(inherited_secure, Options, []) ++
+        [Secure || Secure <- [maps:get(secure, Options, false)], Secure =/= false].
+
+-doc false.
+-spec overrides_in_force(Options :: map()) -> [term()].
+overrides_in_force(Options) ->
+    maps:get(inherited_override_secure, Options, []) ++
+        [Override || Override <- [maps:get(override_secure, Options, false)], Override =/= false].
+
 -doc "The router module for an application. Either configured explicitly with the `router_module` application environment key, or derived from the application name using the convention for the language in use.".
 router_module(App) ->
     case application:get_env(App, router_module) of
@@ -406,15 +437,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
 
     Plugins = resolve_plugins(maps:get(plugin_strategy, Options, local_or_global), RouteInfo, RouterFile),
 
-    Secure =
-        case maps:get(override_secure, Options, false) of
-            false ->
-                normalize_secure(maps:get(secure, Options, maps:get(security, RouteInfo, false)), RouterFile);
-            %% The including application overrides the security callback the
-            %% sub-application declared for itself.
-            Override ->
-                normalize_secure(Override, RouterFile)
-        end,
+    Secure = resolve_secure(Options, RouteInfo, RouterFile),
 
     Order = #{before => plugins_before_security(RouteInfo, Plugins, Named), secured => Secure =/= false},
     ok = warn_about_order(RouteInfo, Secure, Plugins, Order, Named),
@@ -423,6 +446,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
 
     Host = maps:get(host, RouteInfo, '_'),
     SubApps = maps:get(apps, RouteInfo, []),
+    ok = misplaced_security(misplaced_in_group(Prefix, RouteInfo), App, RouterFile),
 
     %% We need to add this app info to nova-env
     NovaEnv = nova:get_env(apps, []),
@@ -435,7 +459,10 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
                                   insert_opts => maps:get(insert_opts, Options, #{})},
                                 Value, Dispatch),
 
-    Dispatch2 = compile(SubApps, Dispatch1, Options#{value => Value, prefix => Prefix}),
+    Dispatch2 = compile(SubApps, Dispatch1,
+                        Options#{value => Value, prefix => Prefix, secure => false,
+                                 inherited_secure => secures_in_force(Options) ++
+                                     [Security || security := Security <- RouteInfo, Security =/= false]}),
 
     compile_paths(Tl, Dispatch2, Options).
 
@@ -653,15 +680,38 @@ Work out which plugins apply to a route entry.
 """.
 normalize_secure(false, _RouterFile) ->
     false;
-normalize_secure(true, RouterFile) ->
-    ?LOG_ERROR(#{reason => <<"'secure' must be false, a fun/1 or {Mod, Fun}. Ignoring 'true'.">>,
-                 router_file => RouterFile}),
-    false;
 normalize_secure({SMod, SFun}, RouterFile) when is_atom(SMod), is_atom(SFun) ->
     ?LOG_DEPRECATED(<<"v0.9.24">>, <<"The {Mod,Fun} format have been deprecated for the 'secure'-section of a route table. Use the new format for routes.">>, RouterFile),
     fun SMod:SFun/1;
-normalize_secure(SCallback, _RouterFile) ->
-    SCallback.
+normalize_secure(SCallback, _RouterFile) when is_function(SCallback, 1) ->
+    SCallback;
+normalize_secure(Invalid, RouterFile) ->
+    ?LOG_ERROR(#{msg => ~"A security value must be false, a fun/1 or {Mod, Fun}.",
+                 value => Invalid, router_file => RouterFile}),
+    throw({error, {invalid_security, Invalid}}).
+
+resolve_secure(Options, RouteInfo, RouterFile) ->
+    Overrides = override_callbacks(Options, RouterFile),
+    Declared = [normalize_secure(Secure, RouterFile) || Secure <- secures_in_force(Options)] ++
+        [normalize_secure(maps:get(security, RouteInfo, false), RouterFile)],
+    Callbacks = case Overrides of
+                    [] -> without_repeats([Callback || Callback <- Declared, Callback =/= false]);
+                    _ -> Overrides
+                end,
+    case Callbacks of
+        [] -> false;
+        [Callback] -> Callback;
+        _Several -> Callbacks
+    end.
+
+override_callbacks(Options, RouterFile) ->
+    Callbacks = [normalize_secure(Override, RouterFile) || Override <- overrides_in_force(Options)],
+    without_repeats([Callback || Callback <- Callbacks, Callback =/= false]).
+
+without_repeats([Callback | Rest]) ->
+    [Callback | without_repeats([Other || Other <- Rest, Other =/= Callback])];
+without_repeats([]) ->
+    [].
 
 resolve_plugins(local_or_global, RouteInfo, _RouterFile) ->
     maps:get(plugins, RouteInfo, global_plugins());
@@ -679,6 +729,26 @@ resolve_plugins(Strategy, RouteInfo, RouterFile) ->
     ?LOG_ERROR(#{reason => <<"Unknown plugin_strategy, falling back to local_or_global">>,
                  plugin_strategy => Strategy, router_file => RouterFile}),
     resolve_plugins(local_or_global, RouteInfo, RouterFile).
+
+misplaced_in_group(Prefix, RouteInfo) ->
+    [{secure, Value, Prefix} || secure := Value <- RouteInfo] ++
+        [{Key, maps:get(Key, RouteOptions), concat_strings(Prefix, Path)}
+         || {Path, _Target, RouteOptions} <- maps:get(routes, RouteInfo, []), is_map(RouteOptions),
+            Key <- [security, secure], is_map_key(Key, RouteOptions)].
+
+misplaced_security(Misplaced, App, RouterFile) ->
+    _ = [?LOG_WARNING(#{msg => ~"This key is not read here, so it protects nothing. Declare a callback as security on the route group, or as secure on the nova_apps entry of the application",
+                        app => App, path => Path, key => Key, router_file => RouterFile})
+         || {Key, false, Path} <- Misplaced],
+    case [{Key, Path} || {Key, Value, Path} <- Misplaced, Value =/= false] of
+        [] ->
+            ok;
+        [{Key, Path} | _] = Refused ->
+            _ = [?LOG_ERROR(#{msg => ~"This key is not read here, so the callback would protect nothing. Declare it as security on the route group, or as secure on the nova_apps entry of the application",
+                              app => App, path => RefusedPath, key => RefusedKey, router_file => RouterFile})
+                 || {RefusedKey, RefusedPath} <- Refused],
+            throw({error, {misplaced_security, App, Key, Path}})
+    end.
 
 local_plugins(RouteInfo) ->
     maps:get(plugins, RouteInfo, []).

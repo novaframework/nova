@@ -22,6 +22,8 @@ returned_stands(_Returned, Result) ->
 
 check(false, Req, _Env) ->
     {allowed, none, Req};
+check([_ | _] = Callbacks, Req, Env) ->
+    all_allow(Callbacks, none, Req, Env);
 check(Callback, Req = #{host := Host}, Env) when is_function(Callback, 1) ->
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
     try Callback(Req) of
@@ -47,6 +49,15 @@ check(Callback, Req = #{host := Host}, Env) when is_function(Callback, 1) ->
     end;
 check(_Invalid, Req, Env) ->
     check(fun deny/1, Req, Env).
+
+all_allow([], Returned, Req, _Env) ->
+    {allowed, Returned, Req};
+all_allow([Callback | Rest], Returned, Req, Env) ->
+    case check(Callback, Req, Env) of
+        {allowed, none, Req1} -> all_allow(Rest, Returned, Req1, Env);
+        {allowed, Later, Req1} -> all_allow(Rest, Later, Req1, Env);
+        Answered -> Answered
+    end.
 
 -doc false.
 -spec deny(Req :: cowboy_req:req()) -> false.
