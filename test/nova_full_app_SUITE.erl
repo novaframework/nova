@@ -33,9 +33,6 @@
          static_directory_index/1,
          static_file_missing/1,
          static_dot_segments_stay_inside_the_root/1,
-         static_file_content_type/1,
-         static_file_is_nosniff/1,
-         static_document_types_are_octet_stream/1,
          secure_route_rejects_anonymous/1,
          secure_route_accepts_token/1,
          auth_data_reaches_controller/1,
@@ -50,6 +47,9 @@
          request_body_read_timeout/1,
          request_body_timeout_closes_connection/1,
          request_body_limit_closes_connection/1,
+         static_file_content_type/1,
+         static_file_is_nosniff/1,
+         static_document_types_are_octet_stream/1,
          custom_not_found/1,
          controller_crash_is_a_500/1,
          repeated_accept_headers_are_cheap/1,
@@ -117,12 +117,12 @@ groups() ->
      {static_files, [parallel], [
                                  static_file_from_priv,
                                  static_file_nested,
-                                static_file_content_type,
-                                static_file_is_nosniff,
-                                static_document_types_are_octet_stream,
+                                 static_file_content_type,
+                                 static_file_is_nosniff,
+                                 static_document_types_are_octet_stream,
                                  static_directory_index,
                                  static_file_missing,
-                                static_dot_segments_stay_inside_the_root
+                                 static_dot_segments_stay_inside_the_root
                                 ]},
      {security, [parallel], [
                              secure_route_rejects_anonymous,
@@ -180,7 +180,7 @@ groups() ->
 %%====================================================================
 
 init_per_suite(Config) ->
-    Port = free_port(),
+    Port = nova_test_listener:free_port(),
     application:load(nova),
     application:set_env(nova, bootstrap_application, nova_test_app),
     application:set_env(nova, cowboy_configuration, #{port => Port}),
@@ -819,14 +819,7 @@ header(Name, Headers) ->
     end.
 
 json(Body) ->
-    {ok, Decoded} = thoas:decode(Body),
-    Decoded.
-
-free_port() ->
-    {ok, Socket} = gen_tcp:listen(0, [{reuseaddr, true}]),
-    {ok, Port} = inet:port(Socket),
-    ok = gen_tcp:close(Socket),
-    Port.
+    json:decode(Body).
 
 %%====================================================================
 %% Minimal WebSocket client
