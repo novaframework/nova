@@ -13,6 +13,7 @@
          enabled/0,
          cookie_name/0,
          cookie_opts/1,
+         validate_cookie_config/0,
          presented_session_id/1
         ]).
 
@@ -136,7 +137,11 @@ default_cookie_name() ->
 -doc false.
 -spec cookie_opts(cowboy_req:req()) -> cow_cookie:cookie_opts().
 cookie_opts(Req) ->
-    Secure = not nova:is_dev_environment() orelse maps:get(scheme, Req, ~"http") =:= ~"https",
+    cookie_opts_for(maps:get(scheme, Req, ~"http")).
+
+-spec cookie_opts_for(binary()) -> cow_cookie:cookie_opts().
+cookie_opts_for(Scheme) ->
+    Secure = not nova:is_dev_environment() orelse Scheme =:= ~"https",
     Defaults = #{path => ~"/", http_only => true, same_site => lax, secure => Secure},
     Opts = case nova_config:get_env(session_cookie_opts, #{}) of
                Configured when is_map(Configured) -> merge_cookie_opts(maps:to_list(Configured), Defaults);
@@ -158,6 +163,113 @@ merge_cookie_opts([{same_site, Value} | Rest], Opts)
     merge_cookie_opts(Rest, Opts#{same_site => Value});
 merge_cookie_opts([_ | Rest], Opts) ->
     merge_cookie_opts(Rest, Opts).
+
+-doc false.
+-spec validate_cookie_config() -> ok.
+validate_cookie_config() ->
+    ok = check_opts(),
+    ok = check_host_prefix(),
+    Name = nova_config:get_env(session_cookie_name, default_cookie_name()),
+    Opts = cookie_opts_for(~"http"),
+    Valid = is_binary(Name) andalso valid_cookie(Name, Opts) andalso
+        try cow_cookie:setcookie(Name, ~"x", Opts) of
+            _ -> true
+        catch
+            error:_ -> false
+        end,
+    case Valid of
+        true -> check_secure(Name, Opts);
+        false -> erlang:error(invalid_cookie_config(Name, Opts))
+    end.
+
+-spec check_opts() -> ok.
+check_opts() ->
+    case nova_config:get_env(session_cookie_opts, #{}) of
+        #{} = Configured ->
+            refuse_dropped(dropped_opts(Configured));
+        _ ->
+            ?LOG_ERROR(#{msg => ~"session_cookie_opts is not a map. It takes path and domain as binaries, secure and http_only as booleans, and same_site as default, none, strict or lax",
+                         setting => session_cookie_opts}),
+            erlang:error({invalid_setting, session_cookie_opts, not_a_map})
+    end.
+
+-spec dropped_opts(map()) -> [term()].
+dropped_opts(Configured) ->
+    lists:sort([Key || Key := Value <- Configured, merge_cookie_opts([{Key, Value}], #{}) =:= #{}]).
+
+-spec refuse_dropped([term()]) -> ok.
+refuse_dropped([]) ->
+    ok;
+refuse_dropped(Options) ->
+    ?LOG_ERROR(#{msg => ~"session_cookie_opts has options the session cookie does not take. It takes path and domain as binaries, secure and http_only as booleans, and same_site as default, none, strict or lax. There is no max_age: the cookie ends with the browser session. Correct the options or take them out",
+                 setting => session_cookie_opts, options => Options}),
+    erlang:error({invalid_setting, session_cookie_opts, {not_taken, Options}}).
+
+-spec check_host_prefix() -> ok.
+check_host_prefix() ->
+    Named = nova_config:get_env(session_cookie_name, undefined) =/= undefined,
+    case Named orelse nova:is_dev_environment() of
+        true -> ok;
+        false -> refuse_prefix_conflicts(prefix_conflicts())
+    end.
+
+-spec refuse_prefix_conflicts([domain | path | secure]) -> ok.
+refuse_prefix_conflicts([]) ->
+    ok;
+refuse_prefix_conflicts(Options) ->
+    ?LOG_ERROR(#{msg => ~"session_cookie_opts asks for what a cookie with the __Host- prefix cannot have. The session cookie is named __Host-session_id when session_cookie_name is not set, and is then always Secure, with Path=/ and no Domain. Set session_cookie_name, to session_id for the cookie as it was, or take the options out",
+                 setting => session_cookie_opts, options => Options, requires => session_cookie_name}),
+    erlang:error({invalid_setting, session_cookie_opts, {requires, session_cookie_name}}).
+
+-spec prefix_conflicts() -> [domain | path | secure].
+prefix_conflicts() ->
+    case nova_config:get_env(session_cookie_opts, #{}) of
+        #{} = Configured -> [Key || Key <- [domain, path, secure], prefix_conflict(Key, Configured)];
+        _ -> []
+    end.
+
+-spec prefix_conflict(domain | path | secure, map()) -> boolean().
+prefix_conflict(domain, Configured) -> is_map_key(domain, Configured);
+prefix_conflict(path, Configured) -> maps:get(path, Configured, ~"/") =/= ~"/";
+prefix_conflict(secure, Configured) -> maps:get(secure, Configured, true) =:= false.
+
+-spec check_secure(term(), cow_cookie:cookie_opts()) -> ok.
+check_secure(<<"__Secure-", _/binary>>, #{secure := false}) ->
+    ?LOG_ERROR(#{msg => ~"session_cookie_name has the __Secure- prefix, and a browser only keeps such a cookie when it is Secure. Set secure to true in session_cookie_opts, or pick a name without the prefix",
+                 setting => session_cookie_name, requires => secure}),
+    erlang:error({invalid_setting, session_cookie_name, {requires, secure}});
+check_secure(_Name, #{same_site := none, secure := false}) ->
+    ?LOG_ERROR(#{msg => ~"session_cookie_opts sets same_site to none, and a browser only keeps a SameSite=None cookie when it is Secure. Set secure to true in session_cookie_opts, or pick another same_site",
+                 setting => session_cookie_opts, option => same_site, requires => secure}),
+    erlang:error({invalid_setting, session_cookie_opts, {requires, secure}});
+check_secure(_Name, _Opts) ->
+    ok.
+
+-spec valid_cookie(term(), cow_cookie:cookie_opts()) -> boolean().
+valid_cookie(Name, Opts) ->
+    Name =/= <<>> andalso is_token(Name) andalso
+        is_av_value(maps:get(path, Opts, <<>>)) andalso
+        is_av_value(maps:get(domain, Opts, <<>>)).
+
+invalid_cookie_config(Name, Opts) ->
+    {invalid_session_cookie_config,
+     #{name => Name, path => maps:get(path, Opts, undefined), domain => maps:get(domain, Opts, undefined)}}.
+
+is_token(<<C, Rest/binary>>) when C >= $a, C =< $z; C >= $A, C =< $Z; C >= $0, C =< $9 ->
+    is_token(Rest);
+is_token(<<C, Rest/binary>>) ->
+    lists:member(C, "!#$%&'*+-.^_`|~") andalso is_token(Rest);
+is_token(<<>>) ->
+    true;
+is_token(_) ->
+    false.
+
+is_av_value(<<C, Rest/binary>>) when C >= 16#20, C =< 16#7E, C =/= $; ->
+    is_av_value(Rest);
+is_av_value(<<>>) ->
+    true;
+is_av_value(_) ->
+    false.
 
 -doc false.
 -spec presented_session_id(cowboy_req:req()) -> binary() | undefined | unparsable.

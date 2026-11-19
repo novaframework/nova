@@ -139,6 +139,10 @@ init([]) ->
 
     %% try to ensure callback module is loaded first
     ExportedFuns = SessionManager:module_info(exports),
+    case nova_session:enabled() of
+        true -> nova_session:validate_cookie_config();
+        false -> ok
+    end,
 
     Children =
         case proplists:get_value(start_link, ExportedFuns) of

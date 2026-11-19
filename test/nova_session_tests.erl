@@ -345,3 +345,135 @@ repeated_cookie() ->
 
 cookie_req(Cookie) ->
     nova_test_helper:with_header(~"cookie", Cookie, nova_test_helper:mock_req(~"GET", ~"/")).
+
+%%--------------------------------------------------------------------
+%% validate_cookie_config/0
+%%--------------------------------------------------------------------
+
+validate_test_() ->
+    {foreach,
+     fun() ->
+             application:set_env(nova, bootstrap_application, nova),
+             application:unset_env(nova, environment),
+             application:unset_env(nova, session_cookie_name),
+             application:unset_env(nova, session_cookie_opts)
+     end,
+     fun(_) ->
+             application:unset_env(nova, environment),
+             application:unset_env(nova, session_cookie_name),
+             application:unset_env(nova, session_cookie_opts),
+             application:unset_env(nova, bootstrap_application)
+     end,
+     [
+      fun valid_defaults/0,
+      fun valid_name/0,
+      fun bad_names/0,
+      fun bad_values/0,
+      fun prefix_conflicts/0,
+      fun prefix_fits/0,
+      fun dropped_opts/0,
+      fun opts_not_a_map/0,
+      fun same_site_none/0,
+      fun secure_prefix/0
+     ]}.
+
+valid_defaults() ->
+    ?assertEqual(ok, nova_session:validate_cookie_config()),
+    application:set_env(nova, environment, dev),
+    ?assertEqual(ok, nova_session:validate_cookie_config()).
+
+valid_name() ->
+    application:set_env(nova, session_cookie_name, ~"a!#$%&'*+-.^_`|~9"),
+    application:set_env(nova, session_cookie_opts, #{path => ~"/app", domain => ~"example.com"}),
+    ?assertEqual(ok, nova_session:validate_cookie_config()).
+
+bad_names() ->
+    [begin
+         application:set_env(nova, session_cookie_name, Name),
+         ?assertError({invalid_session_cookie_config, #{name := Name, path := ~"/", domain := undefined}},
+                      nova_session:validate_cookie_config())
+     end || Name <- [<<>>, "session", session_id, ~"app:sid", ~"a/b", ~"a\"b", ~"a b", <<"s", 200>>]].
+
+%% A control character or a semicolon in Path or Domain would end the
+%% attribute and start another one, or another header.
+bad_values() ->
+    application:set_env(nova, session_cookie_name, ~"sid"),
+    [begin
+         application:set_env(nova, session_cookie_opts, Opts),
+         Path = maps:get(path, Opts, ~"/"),
+         Domain = maps:get(domain, Opts, undefined),
+         ?assertError({invalid_session_cookie_config, #{name := ~"sid", path := Path, domain := Domain}},
+                      nova_session:validate_cookie_config())
+     end || Opts <- [#{path => ~"/a\nb"},
+                     #{path => ~"/a;b"},
+                     #{domain => ~"a\r\nset-cookie: x=y"},
+                     #{domain => <<"ex", 200, ".com">>},
+                     #{domain => <<"a", 127>>, path => ~"/app"}]].
+
+%% The default name has the __Host- prefix outside dev, and what it cannot
+%% have would be dropped without a word.
+prefix_conflicts() ->
+    [begin
+         application:set_env(nova, session_cookie_opts, Opts),
+         ?assertError({invalid_setting, session_cookie_opts, {requires, session_cookie_name}},
+                      nova_session:validate_cookie_config())
+     end || Opts <- [#{domain => ~"example.com"}, #{path => ~"/app"}, #{secure => false}]].
+
+prefix_fits() ->
+    application:set_env(nova, session_cookie_opts, #{path => ~"/", secure => true, same_site => strict}),
+    ?assertEqual(ok, nova_session:validate_cookie_config()),
+    Opts = #{domain => ~"example.com", path => ~"/app", secure => false},
+    application:set_env(nova, session_cookie_opts, Opts),
+    application:set_env(nova, session_cookie_name, ~"session_id"),
+    ?assertEqual(ok, nova_session:validate_cookie_config()),
+    ?assertMatch(#{domain := ~"example.com", path := ~"/app", secure := false},
+                 nova_session:cookie_opts(#{scheme => ~"http"})),
+    application:unset_env(nova, session_cookie_name),
+    application:set_env(nova, environment, dev),
+    ?assertEqual(ok, nova_session:validate_cookie_config()).
+
+%% What cookie_opts/1 leaves out is refused when Nova starts.
+dropped_opts() ->
+    [begin
+         application:set_env(nova, session_cookie_opts, Opts),
+         ?assertError({invalid_setting, session_cookie_opts, {not_taken, Keys}},
+                      nova_session:validate_cookie_config())
+     end || {Opts, Keys} <- [{#{same_site => ~"strict"}, [same_site]},
+                             {#{same_site => sideways}, [same_site]},
+                             {#{path => "/app"}, [path]},
+                             {#{domain => 'example.com'}, [domain]},
+                             {#{secure => yes}, [secure]},
+                             {#{http_only => 0}, [http_only]},
+                             {#{max_age => 3600}, [max_age]},
+                             {#{~"path" => ~"/"}, [~"path"]},
+                             {#{unknown => 1, path => ~"/", max_age => infinity}, [max_age, unknown]}]].
+
+opts_not_a_map() ->
+    application:set_env(nova, session_cookie_opts, [{secure, true}]),
+    ?assertError({invalid_setting, session_cookie_opts, not_a_map}, nova_session:validate_cookie_config()).
+
+%% A browser drops a SameSite=None cookie that is not Secure.
+same_site_none() ->
+    ?assertEqual(ok, validate(#{same_site => none})),
+    application:set_env(nova, session_cookie_name, ~"sid"),
+    ?assertEqual(ok, validate(#{same_site => none})),
+    ?assertEqual(ok, validate(#{same_site => none, secure => true})),
+    ?assertError({invalid_setting, session_cookie_opts, {requires, secure}},
+                 validate(#{same_site => none, secure => false})),
+    application:set_env(nova, environment, dev),
+    ?assertEqual(ok, validate(#{same_site => none, secure => true})),
+    ?assertError({invalid_setting, session_cookie_opts, {requires, secure}}, validate(#{same_site => none})).
+
+%% And one with the __Secure- prefix that is not Secure.
+secure_prefix() ->
+    application:set_env(nova, session_cookie_name, ~"__Secure-sid"),
+    ?assertEqual(ok, validate(#{})),
+    ?assertEqual(ok, validate(#{secure => true, domain => ~"example.com"})),
+    ?assertError({invalid_setting, session_cookie_name, {requires, secure}}, validate(#{secure => false})),
+    application:set_env(nova, environment, dev),
+    ?assertEqual(ok, validate(#{secure => true})),
+    ?assertError({invalid_setting, session_cookie_name, {requires, secure}}, validate(#{})).
+
+validate(Opts) ->
+    application:set_env(nova, session_cookie_opts, Opts),
+    nova_session:validate_cookie_config().
