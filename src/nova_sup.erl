@@ -129,6 +129,8 @@ init([]) ->
 
     ?LOG_NOTICE(#{msg => <<"Starting nova">>, environment => Environment}),
 
+    ok = nova_settings:validate(),
+
     ensure_listener_table(),
 
     Configuration = application:get_env(nova, cowboy_configuration, #{}),
