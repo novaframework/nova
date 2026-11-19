@@ -239,7 +239,7 @@ start_cowboy(Configuration) ->
                 %% nova is compiled last so that its own 404/500 routes act as
                 %% defaults. Routes are first-wins, so compiling nova first
                 %% made an application's own status-code routes unreachable.
-                nova_router:compile(resolve_nova_apps([App | ExtraApps] ++ [nova]))
+                nova_router:compile_fresh(resolve_nova_apps([App | ExtraApps] ++ [nova]), nova_dispatch)
         end,
 
     Host = maps:get(ip, Configuration, {0, 0, 0, 0}),
@@ -284,7 +284,7 @@ start_listener(App, Host, Port, Configuration) ->
     Ref = {?NOVA_LISTENER, App, Port},
     DispatchKey = {nova_dispatch, App, Port},
     ExtraApps = application:get_env(App, nova_apps, []),
-    Dispatch = nova_router:compile(resolve_nova_apps([App | ExtraApps] ++ [nova]), DispatchKey),
+    Dispatch = nova_router:compile_fresh(resolve_nova_apps([App | ExtraApps] ++ [nova]), DispatchKey),
     CowboyOptions = cowboy_options(Configuration, DispatchKey, Dispatch),
     case bind(Ref, Host, Port, Configuration, CowboyOptions) of
         {ok, Tls} ->

@@ -14,6 +14,7 @@
 -export([
          compile/1,
          compile/2,
+         compile_fresh/2,
          lookup_url/1,
          lookup_url/2,
          lookup_url/3,
@@ -26,6 +27,7 @@
 
          %% Fetch information about the routing table
          plugins/0,
+         forget_plugins/0,
          compiled_apps/0,
          compiled_apps/1,
 
@@ -91,6 +93,13 @@ plugins() ->
     StorageBackend = storage_backend(),
     StorageBackend:get(?NOVA_PLUGINS, []).
 
+-doc false.
+-spec forget_plugins() -> ok.
+forget_plugins() ->
+    StorageBackend = storage_backend(),
+    StorageBackend:put(?NOVA_PLUGINS, []),
+    ok.
+
 -spec compile(Apps :: [atom() | {atom(), map()}]) -> nova_routing_trie:trie().
 compile(Apps) ->
     compile(Apps, ?NOVA_DISPATCH).
@@ -107,6 +116,18 @@ compile(Apps, DispatchKey) ->
                                         nova_routing_trie:new(#{strict => UseStrict})),
     Dispatch = compile(Apps, StoredDispatch, #{dispatch_key => DispatchKey}),
     %% Write the updated dispatch to storage
+    StorageBackend:put(DispatchKey, Dispatch),
+    Dispatch.
+
+-doc false.
+-spec compile_fresh(Apps :: [atom() | {atom(), map()}], DispatchKey :: dispatch_key()) ->
+          nova_routing_trie:trie().
+compile_fresh(Apps, DispatchKey) ->
+    UseStrict = application:get_env(nova, use_strict_routing, false),
+    StorageBackend = storage_backend(),
+    StorageBackend:put(apps_key(DispatchKey), []),
+    Dispatch = compile(Apps, nova_routing_trie:new(#{strict => UseStrict}),
+                       #{dispatch_key => DispatchKey}),
     StorageBackend:put(DispatchKey, Dispatch),
     Dispatch.
 
