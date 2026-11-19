@@ -114,6 +114,7 @@ the listener of the bootstrap application.
 
 -type plugin() :: {Type :: atom(), Module :: module(), Options :: term()}.
 -type callback() :: {Callback :: fun(), Options :: term()}.
+-type phased() :: [{Phase :: atom(), [callback()]}].
 -type order() :: #{before := all | [module()], secured := boolean()}.
 -type order_warning() :: body_behind_security | form_behind_security | pre_request_behind_security |
                          pre_request_not_for_preflight.
@@ -697,7 +698,7 @@ parse_url(Host,
                   app = App,
                   handler = nova_ws_handler,
                   arguments = websocket_arguments(Mod, App, Options, T),
-                  plugins = with_route(RealPath, Value#nova_handler_value.plugins),
+                  plugins = with_route(RealPath, with_origin_check(Value#nova_handler_value.plugins)),
                   secure = Secure},
 
     ?LOG_DEBUG(#{action => <<"Adding route">>, protocol => <<"ws">>, route => Path, app => App,
@@ -1012,6 +1013,19 @@ with_checked_origins({Type, Plugin, Options = #{trusted_origins := Value}}, Name
     end;
 with_checked_origins(Plugin, _Named) ->
     Plugin.
+
+-spec with_origin_check(phased()) -> phased().
+with_origin_check(Phased) ->
+    Check = fun nova_ws_origin_plugin:pre_security/4,
+    Options = case [Options || {_Phase, Callbacks} <- Phased, {Callback, Options} <- Callbacks, Callback =:= Check] of
+                  [OfTheGroup | _] -> OfTheGroup;
+                  [] -> #{}
+              end,
+    Others = [{Phase, [Entry || Entry = {Callback, _Options} <- Callbacks, Callback =/= Check]}
+              || {Phase, Callbacks} <- Phased],
+    add_plugin(nova_ws_origin_plugin),
+    Ahead = lists:append([Callbacks || {pre_request, Callbacks} <- Others]),
+    lists:keystore(pre_request, 1, Others, {pre_request, [{Check, Options} | Ahead]}).
 
 normalize_plugins(Plugins, Order) ->
     Phased = lists:append([phased(Plugin, Order) || Plugin <- Plugins]),
