@@ -32,6 +32,7 @@
          static_file_missing/1,
          static_dot_segments_stay_inside_the_root/1,
          static_file_content_type/1,
+         static_file_is_nosniff/1,
          static_document_types_are_octet_stream/1,
          secure_route_rejects_anonymous/1,
          secure_route_accepts_token/1,
@@ -87,6 +88,7 @@ groups() ->
                                  static_file_from_priv,
                                  static_file_nested,
                                 static_file_content_type,
+                                static_file_is_nosniff,
                                 static_document_types_are_octet_stream,
                                  static_directory_index,
                                  static_file_missing,
@@ -231,6 +233,14 @@ static_file_from_priv(Config) ->
 static_file_content_type(Config) ->
     {200, Headers, _Body} = get(Config, "/assets/hello.txt"),
     ?assertEqual(~"text/plain", header(~"content-type", Headers)).
+
+static_file_is_nosniff(Config) ->
+    {200, Headers, _} = get(Config, "/assets/hello.txt"),
+    ?assertEqual(~"nosniff", header(~"x-content-type-options", Headers)),
+    {206, RangeHeaders, ~"hello"} = get(Config, "/assets/hello.txt", [{"range", "bytes=0-4"}]),
+    ?assertEqual(~"nosniff", header(~"x-content-type-options", RangeHeaders)),
+    {200, WholeHeaders, _} = get(Config, "/assets/hello.txt", [{"range", "bytes=one-two"}]),
+    ?assertEqual(~"nosniff", header(~"x-content-type-options", WholeHeaders)).
 
 %% Served as a document these would run scripts on the application's origin.
 static_document_types_are_octet_stream(Config) ->
