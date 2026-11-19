@@ -61,6 +61,8 @@ stream_test_() ->
       fun invalid_cookie_opts_are_ignored/0,
       fun known_session_is_kept/0,
       fun unparsable_header/0,
+      fun unknown_session_is_replaced/0,
+      fun no_backend_lookup_in_connection_process/0,
       fun switch_protocol_carries_cookie/0,
       fun upgrade_without_cookie/0,
       fun upgrade_with_cookie/0,
@@ -191,6 +193,26 @@ unparsable_header() ->
     {#{nova_session_id := Id}, State} = start(req(~"__Host-session_id=abc; =x")),
     ?assertEqual([], set_cookies(respond(event({written, Id}, State)))),
     ?assertEqual([], set_cookies(upgrade(State))).
+
+%% A client must not be able to pick its own session id: nova_session falls
+%% back to the fresh id, and that is the cookie the client gets.
+unknown_session_is_replaced() ->
+    {Req, State} = start(req(~"__Host-session_id=attacker-chosen")),
+    #{nova_session_pending := Id} = Req,
+    ?assertNotEqual(~"attacker-chosen", Id),
+    [Cookie] = set_cookies(respond(event({written, Id}, State))),
+    ?assertEqual(Id, cookie_value(Cookie)).
+
+%% The connection process serves every stream on the connection, so it must
+%% not wait for the session backend.
+no_backend_lookup_in_connection_process() ->
+    meck:new(nova_session_ets, [passthrough]),
+    try
+        {_Req, _State} = start(req(~"__Host-session_id=whatever")),
+        ?assertEqual(0, meck:num_calls(nova_session_ets, session_exists, '_'))
+    after
+        meck:unload(nova_session_ets)
+    end.
 
 %% A session written in nova_websocket:init/1 gets its cookie on the 101.
 switch_protocol_carries_cookie() ->

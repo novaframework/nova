@@ -90,8 +90,8 @@ init_session(Req) ->
                 unparsable ->
                     {Req#{nova_session_id => Pending}, undefined};
                 Presented ->
-                    {Req#{nova_session_presented => Presented},
-                     #session{presented = Presented, current = Presented}}
+                    {Req#{nova_session_presented => Presented, nova_session_pending => Pending},
+                     #session{presented = Presented, current = Pending}}
             end;
         false ->
             {Req, undefined}

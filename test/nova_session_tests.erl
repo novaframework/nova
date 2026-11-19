@@ -67,6 +67,11 @@ stream_req(SessionId) ->
                       end),
     #{nova_session_id => SessionId, pid => Conn, streamid => 7, nova_session_owner => self()}.
 
+%% The request as nova_stream_h hands it over when the client sent a cookie.
+presented_req(Presented, Pending) ->
+    (maps:remove(nova_session_id, stream_req(Pending)))#{nova_session_presented => Presented,
+                                                         nova_session_pending => Pending}.
+
 no_stream_event() ->
     receive
         {stream_event, Event} -> error({unexpected_stream_event, Event})
@@ -105,7 +110,12 @@ nova_session_ets_test_() ->
       fun delete_moves_request_to_new_session/0,
       fun delete_tells_stream_handler/0,
       fun set_tells_stream_handler/0,
+      fun backend_is_asked_once_about_a_presented_id/0,
+      fun deleted_session_is_asked_about_again/0,
+      fun session_deleted_by_another_process_is_not_written_again/0,
       fun delete_expires_cookie_without_stream_handler/0,
+      fun known_presented_id_is_used/0,
+      fun unknown_presented_id_is_replaced/0,
       fun spawned_process_does_not_notify/0,
       fun request_without_owner_does_not_notify/0,
       fun non_error_set_results_notify/0,
@@ -244,6 +254,59 @@ delete_expires_cookie_without_stream_handler() ->
     {ok, Req1} = nova_session:delete(req_with_cookie(SId)),
     ?assertMatch(#{resp_cookie := #{name := ~"__Host-session_id", value := <<>>,
                                     opts := #{max_age := 0, path := ~"/", http_only := true}}}, Req1).
+
+known_presented_id_is_used() ->
+    ok = nova_session_ets:set_value(~"known", ~"k", ~"v"),
+    Req = presented_req(~"known", ~"pending"),
+    ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")),
+    ok = nova_session:set(Req, ~"k2", ~"v2"),
+    ?assertEqual({written, ~"known"}, stream_event()).
+
+%% A client must not be able to pick its own session id.
+unknown_presented_id_is_replaced() ->
+    Req = presented_req(~"attacker-chosen", ~"pending"),
+    ok = nova_session:set(Req, ~"k", ~"v"),
+    ?assertEqual({written, ~"pending"}, stream_event()),
+    ?assertNot(nova_session_ets:session_exists(~"attacker-chosen")),
+    ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")).
+
+backend_is_asked_once_about_a_presented_id() ->
+    ok = nova_session_ets:set_value(~"asked-once", ~"k", ~"v"),
+    Req = presented_req(~"asked-once", ~"pending"),
+    meck:new(nova_session_ets, [passthrough]),
+    try
+        ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")),
+        ?assertEqual({error, not_found}, nova_session:get(Req, ~"other")),
+        ?assertEqual(1, meck:num_calls(nova_session_ets, session_exists, [~"asked-once"]))
+    after
+        meck:unload(nova_session_ets)
+    end.
+
+%% The process of a websocket, or a request that takes its time, may have
+%% read the session before another request signed the client out.
+session_deleted_by_another_process_is_not_written_again() ->
+    ok = nova_session_ets:set_value(~"signed-out-elsewhere", ~"user", ~"alice"),
+    Req = presented_req(~"signed-out-elsewhere", ~"pending"),
+    ?assertEqual({ok, ~"alice"}, nova_session:get(Req, ~"user")),
+    {Pid, Ref} = spawn_monitor(fun() ->
+                                       {ok, _} = nova_session:delete(req_with_session(~"signed-out-elsewhere"))
+                               end),
+    receive {'DOWN', Ref, process, Pid, Reason} -> ?assertEqual(normal, Reason) after 1000 -> error(timeout) end,
+    ok = nova_session:set(Req, ~"k", ~"v"),
+    ?assertEqual({written, ~"pending"}, stream_event()),
+    ?assertNot(nova_session_ets:session_exists(~"signed-out-elsewhere")),
+    {ok, _Req} = nova_session:delete(Req, ~"k"),
+    ?assertNot(nova_session_ets:session_exists(~"signed-out-elsewhere")).
+
+%% A controller that goes on with the request it had before the delete must
+%% not bring the deleted session back under the id the client still holds.
+deleted_session_is_asked_about_again() ->
+    ok = nova_session_ets:set_value(~"signed-out", ~"k", ~"v"),
+    Req = presented_req(~"signed-out", ~"pending"),
+    ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")),
+    {ok, _Req} = nova_session:delete(Req),
+    ok = nova_session:set(Req, ~"k", ~"again"),
+    ?assertNot(nova_session_ets:session_exists(~"signed-out")).
 
 %% Only the request process tells the stream handler. A message from anywhere
 %% else would reach whatever owns the connection by then, a websocket handler

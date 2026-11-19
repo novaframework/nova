@@ -23,6 +23,8 @@
 -include_lib("kernel/include/logger.hrl").
 
 -define(DEFAULT_MAX_AGE, 1209600).
+-define(KNOWN, {?MODULE, known}).
+-define(KNOWN_FOR, 1000).
 
 %%%===================================================================
 %%% Callbacks
@@ -63,7 +65,17 @@
     {error, Error :: term()} |
     ignore.
 
--optional_callbacks([start_link/0]).
+-doc """
+Tells whether the backend holds a session with this id. Nova calls it for the
+id a client presents and replaces ids that return `false`. It runs in the
+process calling `nova_session`, which keeps the answer for a second for
+reads: a request that presented a cookie asks once however often it reads
+its session, and again for every write and after it deleted or renewed it.
+A backend without it accepts every presented id.
+""".
+-callback session_exists(SessionId :: binary()) -> boolean().
+
+-optional_callbacks([start_link/0, session_exists/1]).
 
 %%%===================================================================
 %%% Public functions
@@ -82,7 +94,7 @@ get(Req, Key) ->
 -spec set(Req :: cowboy_req:req(), Key :: binary(), Value :: binary()) ->
           ok | {error, Reason :: atom()} | no_return().
 set(Req, Key, Value) ->
-    case get_session_id(Req) of
+    case get_session_id(Req, write) of
         {ok, SessionId} ->
             Mod = get_session_module(),
             written(Mod:set_value(SessionId, Key, Value), SessionId, Req);
@@ -115,6 +127,7 @@ delete(Req) ->
         {ok, SessionId} ->
             Mod = get_session_module(),
             Mod:delete_value(SessionId),
+            ended(SessionId),
             {ok, NewSessionId} = generate_session_id(),
             notify(Req, {deleted, NewSessionId}),
             Req0 = case stream_handled(Req) of
@@ -130,7 +143,7 @@ delete(Req) ->
 -spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} |
           {error, Reason :: atom()} | no_return().
 delete(Req, Key) ->
-    case get_session_id(Req) of
+    case get_session_id(Req, write) of
         {ok, SessionId} ->
             Mod = get_session_module(),
             Mod:delete_value(SessionId, Key),
@@ -339,28 +352,69 @@ presented_session_id(Req) ->
 %%%===================================================================
 %%% Private functions
 %%%===================================================================
+known(SessionId, read) ->
+    Now = erlang:monotonic_time(millisecond),
+    case get(?KNOWN) of
+        {SessionId, Known, At} when Now - At < ?KNOWN_FOR ->
+            Known;
+        _ ->
+            known(SessionId, write)
+    end;
+known(SessionId, write) ->
+    Known = backend_knows(SessionId),
+    put(?KNOWN, {SessionId, Known, erlang:monotonic_time(millisecond)}),
+    Known.
+
+ended(_SessionId) ->
+    erase(?KNOWN),
+    ok.
+
+backend_knows(SessionId) ->
+    Mod = get_session_module(),
+    _ = code:ensure_loaded(Mod),
+    case erlang:function_exported(Mod, session_exists, 1) of
+        true ->
+            try Mod:session_exists(SessionId) =:= true
+            catch
+                Class:Reason ->
+                    ?LOG_WARNING(#{msg => ~"Session backend failed to look up a session",
+                                   backend => Mod, class => Class, reason => nova_redact:term(Reason)}),
+                    false
+            end;
+        false ->
+            true
+    end.
+
 get_session_module() ->
     application:get_env(nova, session_manager, nova_session_ets).
 
 get_session_id(Req) ->
+    get_session_id(Req, read).
+
+get_session_id(Req, Access) ->
     case enabled() of
         true ->
-            case maps:get(nova_session_id, Req, undefined) of
-                undefined ->
-                    case presented_session_id(Req) of
-                        SessionId when is_binary(SessionId) -> {ok, SessionId};
-                        _ -> {error, not_found}
-                    end;
-                SessionId ->
-                    {ok, SessionId}
-            end;
+            session_id(Req, Access);
         _ ->
             ?LOG_ERROR(#{msg => ~"Session called but the 'use_sessions' option is set to false"}),
             throw({nova_session, unsupported_session_used})
     end.
 
+session_id(#{nova_session_id := SessionId}, _Access) ->
+    {ok, SessionId};
+session_id(#{nova_session_presented := Presented, nova_session_pending := Pending}, Access) ->
+    case known(Presented, Access) of
+        true -> {ok, Presented};
+        false -> {ok, Pending}
+    end;
+session_id(Req, _Access) ->
+    case presented_session_id(Req) of
+        SessionId when is_binary(SessionId) -> {ok, SessionId};
+        _ -> {error, not_found}
+    end.
+
 with_session_id(SessionId, Req) ->
-    (maps:remove(nova_session_presented, Req))#{nova_session_id => SessionId}.
+    (maps:without([nova_session_presented, nova_session_pending], Req))#{nova_session_id => SessionId}.
 
 stream_handled(Req) ->
     is_map_key(nova_session_id, Req) orelse is_map_key(nova_session_presented, Req).

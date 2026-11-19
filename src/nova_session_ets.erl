@@ -13,6 +13,13 @@ was created, whatever happens to it in between. With
 or the node restarts. Expired sessions are swept once a minute; a session
 created while the setting was `infinity` never expires.
 
+Sessions do not survive a restart, and a node that starts or joins later only
+has the sessions written after it joined. During a rolling deploy or behind a
+load balancer without sticky sessions, a client whose id the serving node does
+not have gets a fresh session (Nova replaces ids the backend does not know),
+so it is signed out. Use a shared backend, such as a database, when sessions
+have to outlive a node.
+
 Rows are `{SessionId, Data, ExpiresAt, Class}`. Older releases stored
 `{SessionId, Data}` or `{SessionId, Data, ExpiresAt}`; `code_change/3`
 converts both on a hot upgrade, to ordinary sessions.
