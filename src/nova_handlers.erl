@@ -4,23 +4,27 @@
 %%%-------------------------------------------------------------------
 -module(nova_handlers).
 -moduledoc """
-This module is responsible for all the different return types a controller have. *Nova* is constructed in such way that it's really easy to extend it by using *handlers*. A handler is basically a module consisting of a function of arity 4. We will show an example of this.
+This module is responsible for all the different return types a controller have. *Nova* is constructed in such way that it's really easy to extend it by using *handlers*. A handler is a function of arity 3 that gets the controller's return value, the controller callback and the request. We will show an example of this.
 
 If you implement the following module:
 
-\-module(my_handler). -export(\[init/0, handle_console]).
+```erlang
+-module(my_handler).
+-export([init/0, handle_console/3]).
 
-init() -> nova_handlers:register_handler(console, \{my_handler, handle_console\}).
+init() ->
+    nova_handlers:register_handler(console, fun my_handler:handle_console/3).
 
-handle_console(\{console, Format, Args\}, \{Module, Function\}, State) -> io:format("~n=====================~n", []). io:format("~p:~p was called.~n", []), io:format("State: ~p~n", \[State]), io:format(Format, Args), io:format("~n=====================~n", []), \{ok, 200, #\{\}, EmptyBinary\}.
+handle_console({console, Format, Args}, _Callback, Req) ->
+    io:format(Format, Args),
+    {ok, Req#{resp_status_code => 204}}.
+```
 
-The init/0 should be invoked from your applications *supervisor* and will register the module my_handler as handler of the return type \{console, Format, Args\}. This means that you can return this tuple in a controller which invokes my_handler:handle_console/4.
+The init/0 should be invoked from your applications *supervisor* and will register handle_console/3 as handler of the return type `{console, Format, Args}`. This means that you can return this tuple in a controller which invokes `my_handler:handle_console/3`.
 
-__A handler can return two different types__
+Register a fun. The `{Module, Function}` form is deprecated like every other `{Module, Function}` in Nova and is removed in 1.0; until then it registers `fun Module:Function/3`.
 
-\{ok, StatusCode, Headers, Body\} - This will return a proper reply to the requester.
-
-\{error, Reason\} - This will render a 500 page to the user.
+A handler returns `{ok, Req}`; Nova replies with `resp_status_code` (200 if unset) and whatever body and headers the handler set on `Req`.
 """.
 
 -behaviour(gen_server).
@@ -50,14 +54,29 @@ __A handler can return two different types__
 
 -define(HANDLERS_TABLE, nova_handlers_table).
 
--type handler_return() :: {ok, State2 :: nova:state()} |
-                          {Module :: atom(), State :: nova:state()} |
-                          {error, Reason :: any()}.
+-doc """
+What a handler returns: `{ok, Req}`. Nova replies with the status, headers
+and body set on that `Req`. Any other return fails the match in the
+controller step and is handled as a crash of the controller.
+""".
+-type handler_return() :: {ok, Req :: cowboy_req:req()}.
 
 -export_type([handler_return/0]).
 
--type handler_callback() :: {Module :: atom(), Function :: atom()} |
-                            fun((...) -> handler_return()).
+-doc """
+A handler: a fun of arity 3 that gets the return value of the controller,
+the controller callback and the request.
+""".
+-type handler() :: fun((...) -> handler_return()).
+
+-doc """
+What `register_handler/2` takes: a handler, or the deprecated
+`{Module, Function}`, which stands for `fun Module:Function/3`.
+""".
+-type handler_callback() :: {Module :: atom(), Function :: atom()} | handler().
+-export_type([handler/0, handler_callback/0]).
+
+-define(REGISTERED, {?MODULE, registered}).
 
 -record(state, {
 
@@ -79,9 +98,14 @@ start_link() ->
 
 
 %%--------------------------------------------------------------------
--doc "Registers a new handler. This can then be used in a nova controller by returning a tuple where the first element is the name of the handler.".
--spec register_handler(Handle :: atom(), Callback :: handler_callback()) ->
-                              ok | {error, Reason :: atom()}.
+-doc """
+Registers a new handler. This can then be used in a nova controller by
+returning a tuple where the first element is the name of the handler.
+
+The handler is registered asynchronously. A name that already has a handler
+keeps it, and an error is logged.
+""".
+-spec register_handler(Handle :: atom(), Callback :: handler_callback()) -> ok.
 register_handler(Handle, Callback) ->
     gen_server:cast(?SERVER, {register_handler, Handle, Callback}).
 
@@ -93,13 +117,13 @@ unregister_handler(Handle) ->
 
 %%--------------------------------------------------------------------
 -doc "Fetches the handler identified with 'Handle' and returns the callback function for it.".
--spec get_handler(Handle :: atom()) -> {ok, Callback :: handler_callback()} |
+-spec get_handler(Handle :: atom()) -> {ok, Callback :: handler()} |
                                        {error, not_found}.
 get_handler(Handle) ->
     case ets:lookup(?HANDLERS_TABLE, Handle) of
         [] ->
             {error, not_found};
-        [{Handle, Callback}] ->
+        [{Handle, Callback}] when is_function(Callback) ->
             {ok, Callback}
     end.
 
@@ -129,6 +153,7 @@ init([]) ->
                                  {sendfile, fun nova_basic_handler:handle_sendfile/3},
                                  {ws, fun nova_basic_handler:handle_ws/2},
                                  {view, fun nova_basic_handler:handle_view/3}]),
+    ets:insert(?HANDLERS_TABLE, maps:to_list(registered_handlers())),
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------
@@ -145,6 +170,7 @@ init([]) ->
                          {stop, Reason :: term(), NewState :: term()}.
 handle_call({unregister_handler, Handle}, _From, State) ->
     ets:delete(?HANDLERS_TABLE, Handle),
+    forget(Handle),
     ?LOG_DEBUG(#{action => <<"Removed handler">>, handler => Handle}),
     {reply, ok, State};
 
@@ -164,12 +190,13 @@ handle_cast({register_handler, Handle, Callback}, State) ->
     Callback0 =
         case Callback of
             Callback when is_function(Callback) -> Callback;
-            {Module, Function} -> fun Module:Function/4
+            {Module, Function} when is_atom(Module), is_atom(Function) -> fun Module:Function/3
         end,
     case ets:lookup(?HANDLERS_TABLE, Handle) of
         [] ->
             ?LOG_DEBUG(#{action => <<"Registered handler">>, handler => Handle}),
             ets:insert(?HANDLERS_TABLE, {Handle, Callback0}),
+            remember(Handle, Callback0),
             {noreply, State};
         _ ->
             ?LOG_ERROR(#{msg => <<"Another handler is already registered on that name">>, handler => Handle}),
@@ -197,8 +224,29 @@ handle_info(_Info, State) ->
 -doc false.
 -spec terminate(Reason :: normal | shutdown | {shutdown, term()} | term(),
                 State :: term()) -> any().
-terminate(_Reason, _State) ->
+terminate(Reason, _State) ->
+    case Reason of
+        normal -> persistent_term:erase(?REGISTERED);
+        shutdown -> persistent_term:erase(?REGISTERED);
+        {shutdown, _} -> persistent_term:erase(?REGISTERED);
+        _Crash -> ok
+    end,
     ok.
+
+remember(Handle, Callback) ->
+    persistent_term:put(?REGISTERED, (registered_handlers())#{Handle => Callback}).
+
+-spec registered_handlers() -> map().
+registered_handlers() ->
+    case persistent_term:get(?REGISTERED, #{}) of
+        Registered when is_map(Registered) -> Registered
+    end.
+
+forget(Handle) ->
+    case persistent_term:get(?REGISTERED, #{}) of
+        #{Handle := _} = Registered -> persistent_term:put(?REGISTERED, maps:remove(Handle, Registered));
+        _ -> ok
+    end.
 
 %%--------------------------------------------------------------------
 %% Convert process state when code is changed

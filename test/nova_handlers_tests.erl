@@ -1,8 +1,8 @@
 -module(nova_handlers_tests).
 -include_lib("eunit/include/eunit.hrl").
 
--define(SETUP, fun() -> setup() end).
--define(CLEANUP, fun(S) -> cleanup(S) end).
+-define(SETUP, fun setup/0).
+-define(CLEANUP, fun cleanup/1).
 
 setup() ->
     {ok, Pid} = nova_handlers:start_link(),
@@ -106,6 +106,15 @@ register_mfa_handler_test_() ->
         ?assert(is_function(Handler))
     end}.
 
+%% Handlers are called with three arguments; {Mod, Fun} used to become /4.
+register_mfa_handler_arity_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        nova_handlers:register_handler(mfa_arity, {nova_basic_handler, handle_json}),
+        _ = sys:get_state(nova_handlers),
+        {ok, Handler} = nova_handlers:get_handler(mfa_arity),
+        ?assert(is_function(Handler, 3))
+    end}.
+
 %%====================================================================
 %% unregister_handler/1
 %%====================================================================
@@ -138,3 +147,41 @@ code_change_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         ?assertEqual({ok, my_state}, nova_handlers:code_change("1.0", my_state, []))
     end}.
+
+%%====================================================================
+%% Registered handlers and a restart of the server
+%%====================================================================
+
+%% A supervisor restart after a crash must not leave controllers that return
+%% a registered keyword without their handler.
+registered_handler_survives_a_crash_test() ->
+    {ok, Pid} = nova_handlers:start_link(),
+    ok = nova_handlers:register_handler(survivor, fun(_, _, Req) -> {ok, Req} end),
+    {error, not_found} = nova_handlers:get_handler(never_registered),
+    ok = nova_handlers:register_handler(dropped, fun(_, _, Req) -> {ok, Req} end),
+    ok = nova_handlers:unregister_handler(dropped),
+    unlink(Pid),
+    Monitor = monitor(process, Pid),
+    exit(Pid, kill),
+    receive {'DOWN', Monitor, process, Pid, killed} -> ok end,
+    {ok, Restarted} = nova_handlers:start_link(),
+    try
+        ?assertMatch({ok, Handler} when is_function(Handler, 3), nova_handlers:get_handler(survivor)),
+        ?assertEqual({error, not_found}, nova_handlers:get_handler(dropped)),
+        ?assertMatch({ok, _}, nova_handlers:get_handler(json))
+    after
+        gen_server:stop(Restarted)
+    end.
+
+registered_handler_is_gone_after_a_stop_test() ->
+    {ok, Pid} = nova_handlers:start_link(),
+    ok = nova_handlers:register_handler(short_lived, fun(_, _, Req) -> {ok, Req} end),
+    _ = sys:get_state(nova_handlers),
+    ?assertMatch({ok, _}, nova_handlers:get_handler(short_lived)),
+    ok = gen_server:stop(Pid),
+    {ok, Started} = nova_handlers:start_link(),
+    try
+        ?assertEqual({error, not_found}, nova_handlers:get_handler(short_lived))
+    after
+        gen_server:stop(Started)
+    end.
