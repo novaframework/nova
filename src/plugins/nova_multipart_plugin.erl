@@ -16,8 +16,9 @@ Multipart fields win over `params` set by an earlier plugin, and a repeated fiel
 -define(DEFAULT_MAX_FIELD_SIZE, 65536).
 -define(DEFAULT_MAX_TOTAL_SIZE, 64000000).
 -define(DEFAULT_READ_TIMEOUT, 60000).
+-define(DEFAULT_CHUNK_TIMEOUT, 15000).
 -define(CHUNK_LENGTH, 64000).
--define(CHUNK_PERIOD, 15000).
+-define(PERIOD_MARGIN, 1000).
 -define(LABEL_MAX_LEN, 64).
 
 -spec pre_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
@@ -69,7 +70,8 @@ plugin_info() ->
                   {max_part_size, <<"Reply 413 past this many bytes in one file part (default 8 000 000)">>},
                   {max_field_size, <<"Reply 413 past this many bytes in one non-file field (default 65 536)">>},
                   {max_total_size, <<"Reply 413 past this many bytes across all parts (default 64 000 000)">>},
-                  {read_timeout, <<"Reply 408 if the body is not fully read within this many ms (default 60 000). Checked between chunks, so a stalled read can overrun by up to 15 s">>}
+                  {read_timeout, ~"Reply 408 if the body is not fully read within this many ms (default 60 000)"},
+                  {chunk_timeout, ~"Reply 408 if the next 64 000 bytes of the body, or its end, do not arrive within this many ms (default 15 000)"}
                  ]
      }.
 
@@ -99,7 +101,13 @@ limits(Options) ->
       max_part_size => maps:get(max_part_size, Options, ?DEFAULT_MAX_PART_SIZE),
       max_field_size => maps:get(max_field_size, Options, ?DEFAULT_MAX_FIELD_SIZE),
       max_total_size => maps:get(max_total_size, Options, ?DEFAULT_MAX_TOTAL_SIZE),
-      read_timeout => maps:get(read_timeout, Options, ?DEFAULT_READ_TIMEOUT)}.
+      read_timeout => maps:get(read_timeout, Options, ?DEFAULT_READ_TIMEOUT),
+      chunk_timeout => maps:get(chunk_timeout, Options, ?DEFAULT_CHUNK_TIMEOUT)}.
+
+read_opts(Limits, Deadline) ->
+    Left = Deadline - erlang:monotonic_time(millisecond),
+    Wait = max(0, min(maps:get(chunk_timeout, Limits), Left)),
+    #{length => ?CHUNK_LENGTH, period => Wait + ?PERIOD_MARGIN, timeout => Wait}.
 
 deadline_expired(Deadline) ->
     erlang:monotonic_time(millisecond) > Deadline.
@@ -114,7 +122,7 @@ stream_parts(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params,
     end.
 
 read_next_part(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params, Files) ->
-    case safe_read_part(Req) of
+    case safe_read_part(Req, read_opts(Limits, Deadline)) of
         {done, Req0} ->
             {ok, Req0, Params, lists:reverse(Files)};
         {ok, _Headers, Req0} when PartCount >= map_get(max_parts, Limits) ->
@@ -139,7 +147,7 @@ read_next_part(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Param
 
 read_field(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params, Files, FieldName) ->
     MaxFieldSize = maps:get(max_field_size, Limits),
-    case read_bounded_body(Req, MaxFieldSize, Deadline, <<>>) of
+    case read_bounded_body(Req, MaxFieldSize, Limits, Deadline, <<>>) of
         {ok, Body, Req0} ->
             NewTotal = TotalSize + byte_size(Body),
             case NewTotal > maps:get(max_total_size, Limits) of
@@ -164,17 +172,17 @@ read_field(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Params, F
             {stop, reply(Status, Req0)}
     end.
 
-read_bounded_body(Req, MaxSize, Deadline, Acc) ->
+read_bounded_body(Req, MaxSize, Limits, Deadline, Acc) ->
     case deadline_expired(Deadline) of
         true ->
             {timeout, Req};
         false ->
-            case safe_read_part_body(Req, #{length => ?CHUNK_LENGTH, period => ?CHUNK_PERIOD}) of
+            case safe_read_part_body(Req, read_opts(Limits, Deadline)) of
                 {more, Data, Req0} ->
                     Body = <<Acc/binary, Data/binary>>,
                     case byte_size(Body) > MaxSize of
                         true -> {too_large, Req0};
-                        false -> read_bounded_body(Req0, MaxSize, Deadline, Body)
+                        false -> read_bounded_body(Req0, MaxSize, Limits, Deadline, Body)
                     end;
                 {ok, Data, Req0} ->
                     Body = <<Acc/binary, Data/binary>>,
@@ -211,7 +219,7 @@ stream_part_body(Req, Mod, HandlerState, Limits, Deadline, PartSize, TotalSize) 
             safe_abort(Mod, timeout, HandlerState),
             {aborted, 408, Req};
         false ->
-            case safe_read_part_body(Req, #{length => ?CHUNK_LENGTH, period => ?CHUNK_PERIOD}) of
+            case safe_read_part_body(Req, read_opts(Limits, Deadline)) of
                 {more, Data, Req0} ->
                     consume_chunk(Data, Req0, Mod, HandlerState, Limits, Deadline, PartSize, TotalSize, more);
                 {ok, Data, Req0} ->
@@ -258,8 +266,8 @@ finish_part(Req, Mod, HandlerState, TotalSize) ->
 %% cowboy_req:read_part/1 and read_part_body/2 exit on a stalled or malformed
 %% read, and raise error:badmatch on duplicate part headers. Both are turned
 %% into {error, Reason, Req} so every caller cleans up through one path.
-safe_read_part(Req) ->
-    try cowboy_req:read_part(Req)
+safe_read_part(Req, Opts) ->
+    try cowboy_req:read_part(Req, Opts)
     catch
         exit:Reason -> {error, Reason, Req};
         error:Reason -> {error, Reason, Req}
