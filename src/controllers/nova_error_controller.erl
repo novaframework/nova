@@ -6,6 +6,10 @@
 	 status_code/1
         ]).
 
+-ifdef(TEST).
+-export([format_arity/1, format_stacktrace/1]).
+-endif.
+
 
 status_code(Req) ->
     {status, maps:get(resp_status_code, Req, 200)}.
@@ -122,7 +126,3 @@ format_arity(Arity, _) when is_function(Arity)->
     <<"fun">>;
 format_arity(Arity, _) ->
     Arity.
-
--ifdef(TEST).
--compile(export_all).
--endif.
