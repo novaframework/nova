@@ -12,8 +12,7 @@ get_file(#{extra_state := #{static := File, options := Options}, headers := Head
     MimeType =
         case maps:get(mimetype, Options, undefined) of
             undefined ->
-                {T, V, _} = cow_mimetypes:web(erlang:list_to_binary(Filepath)),
-                <<T/binary, "/", V/binary>>;
+                mimetype(unicode:characters_to_binary(Filepath));
             MType ->
                 MType
         end,
@@ -142,3 +141,20 @@ file_info(Filepath, Filename) ->
         _ ->
             undefined
     end.
+
+mimetype(Path) ->
+    {T, V, _} = case cow_mimetypes:web(Path) of
+                    {~"application", ~"octet-stream", _} = Default -> fallback(cow_mimetypes:all(Path), Default);
+                    Type -> Type
+                end,
+    <<T/binary, "/", V/binary>>.
+
+fallback({_, SubType, _} = Type, Default) ->
+    case document_type(SubType) of
+        true -> Default;
+        false -> Type
+    end.
+
+document_type(~"xml") -> true;
+document_type(~"html") -> true;
+document_type(SubType) -> binary:longest_common_suffix([SubType, ~"+xml"]) =:= 4.
