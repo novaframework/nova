@@ -9,6 +9,7 @@
 
 -export([
          excluded_path_is_not_checked/1,
+         excluded_path_ends_at_a_segment/1,
          dot_segments_are_refused/1,
          empty_segments_are_refused/1,
          encoded_dot_segments_are_refused/1,
@@ -17,6 +18,8 @@
          refused_before_plugins_and_security/1,
          refusal_is_a_status_page/1,
          path_without_a_leading_slash_is_refused/1,
+         dot_segments_do_not_reach_an_exclusion/1,
+         canonical_spelling_of_an_excluded_path/1,
          plugin_sees_the_routed_path/1
         ]).
 
@@ -32,6 +35,7 @@ groups() ->
     [
      {refused, [], [
                     excluded_path_is_not_checked,
+                    excluded_path_ends_at_a_segment,
                     dot_segments_are_refused,
                     empty_segments_are_refused,
                     encoded_dot_segments_are_refused,
@@ -43,6 +47,9 @@ groups() ->
                    ]},
      {resolved, [], [
                      excluded_path_is_not_checked,
+                     excluded_path_ends_at_a_segment,
+                     dot_segments_do_not_reach_an_exclusion,
+                     canonical_spelling_of_an_excluded_path,
                      plugin_sees_the_routed_path,
                      path_without_a_leading_slash_is_refused
                     ]}
@@ -95,6 +102,9 @@ plugin_info() ->
 
 excluded_path_is_not_checked(Config) ->
     ?assertEqual({200, ~"page"}, post(Config, "/api/hook")).
+
+excluded_path_ends_at_a_segment(Config) ->
+    ?assertMatch({403, _}, post(Config, "/apikeys")).
 
 dot_segments_are_refused(Config) ->
     [?assertMatch({400, _}, post(Config, Path))
@@ -158,6 +168,15 @@ seen() ->
     after 100 ->
         []
     end.
+
+dot_segments_do_not_reach_an_exclusion(Config) ->
+    ?assertMatch({403, _}, post(Config, "/api/../admin/delete")),
+    ?assertMatch({403, _}, post(Config, "/api/hook/../../admin/delete")),
+    ?assertMatch({403, _}, post(Config, "/api//../admin/delete")).
+
+canonical_spelling_of_an_excluded_path(Config) ->
+    ?assertEqual({200, ~"page"}, post(Config, "//api/./hook")),
+    ?assertEqual({200, ~"page"}, post(Config, "/admin/../api/hook")).
 
 plugin_sees_the_routed_path(Config) ->
     Port = ?config(port, Config),

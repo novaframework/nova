@@ -375,6 +375,46 @@ normalize_plugins_single_test_() ->
         ?assert(lists:member(nova_request_plugin, Plugins))
     end}.
 
+normalize_plugins_keep_their_order_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Result = nova_router:normalize_plugins([
+            {pre_request, nova_request_plugin, #{}},
+            {pre_request, nova_cors_plugin, #{}},
+            {pre_request, nova_csrf_plugin, #{}}
+        ], order([])),
+        ?assertEqual([{after_security, [{fun nova_request_plugin:pre_request/4, #{}},
+                                        {fun nova_csrf_plugin:pre_request/4, #{}}]},
+                      {pre_request, [{fun nova_request_plugin:pre_security/4, #{}},
+                                     {fun nova_cors_plugin:pre_security/4, #{}},
+                                     {fun nova_csrf_plugin:pre_security/4, #{}}]}], Result)
+    end}.
+
+normalize_plugins_different_types_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Result = nova_router:normalize_plugins([
+            {pre_request, nova_csrf_plugin, #{}},
+            {post_request, nova_cors_plugin, #{}}
+        ], order([])),
+        ?assertEqual([{after_security, [{fun nova_csrf_plugin:pre_request/4, #{}}]},
+                      {post_request, [{fun nova_cors_plugin:post_request/4, #{}}]},
+                      {pre_request, [{fun nova_csrf_plugin:pre_security/4, #{}}]}], Result)
+    end}.
+
+normalize_plugins_before_security_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Plugins = [{pre_request, nova_request_plugin, #{}}, {pre_request, nova_csrf_plugin, #{}}],
+        ?assertEqual([{after_security, [{fun nova_csrf_plugin:pre_request/4, #{}}]},
+                      {pre_request, [{fun nova_request_plugin:pre_security/4, #{}},
+                                     {fun nova_request_plugin:pre_request/4, #{}},
+                                     {fun nova_csrf_plugin:pre_security/4, #{}}]}],
+                     nova_router:normalize_plugins(Plugins, order([nova_request_plugin]))),
+        ?assertEqual([{pre_request, [{fun nova_request_plugin:pre_security/4, #{}},
+                                     {fun nova_request_plugin:pre_request/4, #{}},
+                                     {fun nova_csrf_plugin:pre_security/4, #{}},
+                                     {fun nova_csrf_plugin:pre_request/4, #{}}]}],
+                     nova_router:normalize_plugins(Plugins, order(all)))
+    end}.
+
 %% What is logged as a warning about the plugins of a route group when its
 %% routes are compiled.
 order_warnings(Group) ->
