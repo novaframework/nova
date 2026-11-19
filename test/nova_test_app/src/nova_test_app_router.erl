@@ -10,6 +10,10 @@
 
 routes(_Environment) ->
     [
+     #{prefix => "/cors",
+       plugins => [{pre_request, nova_cors_plugin, #{allow_origins => [~"https://app.example.com"]}}],
+       routes => [{"/", fun nova_test_app_controller:method/1, #{methods => [options, post]}}]},
+
      %% Plain routes, bindings, methods, plugins and a catch-all static dir.
      #{prefix => "",
        security => false,
