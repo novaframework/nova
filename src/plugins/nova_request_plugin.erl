@@ -1,5 +1,31 @@
 -module(nova_request_plugin).
--moduledoc false.
+-moduledoc """
+Reads and decodes the body and the query string of a request. Use it as a
+`pre_request` plugin with the options for what it should do:
+
+- `decode_json_body => true` - decodes the body of a request whose content
+  type is `application/json` or ends in `+json`, and puts it in the request
+  under `json`. `GET` and `DELETE` requests are left alone. An empty body or
+  one that is not JSON is answered with a `400`, and with the default
+  `json_lib` so is an object that has a key twice and a body with anything
+  but whitespace after its value.
+- `read_urlencoded_body => true` - parses an
+  `application/x-www-form-urlencoded` body and puts its fields in the request
+  under `params`. A malformed body is answered with a `400`, one with too
+  many fields with a `413`.
+- `parse_qs => true | list` - parses the query string and puts it in the
+  request under `parsed_qs`, as a map or as a list of pairs. A malformed
+  query string is answered with a `400`.
+- `max_body_length` - a body longer than this many bytes is answered with a
+  `413`. Default `1000000`. Takes `infinity`.
+- `body_read_timeout` - a body that is not read within this many
+  milliseconds is answered with a `408`. Default `60000`. Takes `infinity`.
+
+The body is read only when `decode_json_body` or `read_urlencoded_body` is
+set, and is then also in the request under `body`. Otherwise `body` is
+`<<>>`. A `multipart/form-data` body is never read here, see
+`nova_multipart_plugin`.
+""".
 -behaviour(nova_plugin).
 
 -export([
@@ -7,6 +33,10 @@
          post_request/4,
          plugin_info/0
         ]).
+
+-ifdef(TEST).
+-export([modulate_state/3, should_read_body/1]).
+-endif.
 
 -include_lib("kernel/include/logger.hrl").
 
@@ -41,7 +71,7 @@ post_request(Req, _Env, _Options, State) ->
 
 
 %%--------------------------------------------------------------------
--doc "nova_plugin callback. Returns information about the plugin.".
+-doc "The title, version, description and options of the plugin.".
 -spec plugin_info() -> #{title := binary(),
                          version := binary(),
                          url := binary(),
@@ -55,8 +85,11 @@ plugin_info() ->
       authors => [<<"Nova team <info@novaframework.org">>],
       description => <<"This plugin modulates the body of a request.">>,
       options => [
-                  {decode_json_body, <<"Decodes the body as JSON and puts it under `json`">>},
-                  {read_urlencoded_body, <<"Used to parse body as query-string and put them in state under `qs` key">>}
+                  {decode_json_body, ~"Decodes a body sent as JSON and puts it in the request under `json`"},
+                  {read_urlencoded_body, ~"Parses an application/x-www-form-urlencoded body and puts its fields in the request under `params`"},
+                  {parse_qs, ~"Parses the query string and puts it in the request under `parsed_qs`: as a map with true, as a list of pairs with list"},
+                  {max_body_length, ~"Reply 413 when the body read for decode_json_body or read_urlencoded_body is longer than this many bytes, or infinity (default 1 000 000)"},
+                  {body_read_timeout, ~"Reply 408 when reading that body takes longer than this many milliseconds (at least 1), or infinity (default 60 000)"}
                  ]
      }.
 
@@ -205,7 +238,3 @@ should_read_body([]) -> false;
 should_read_body([{decode_json_body, true}|_Tl]) -> true;
 should_read_body([{read_urlencoded_body, true}|_Tl]) -> true;
 should_read_body([_|Tl]) -> should_read_body(Tl).
-
--ifdef(TEST).
--compile(export_all).
--endif.
