@@ -1,11 +1,25 @@
 %%% Author: Niclas Axelsson <niclas@burbas.se>
 -module(nova_session).
--moduledoc "All kind of operations on sessions is handled by the nova_session-module. The module also presents a behaviour that can be used to create customized backends for the session-data.".
+-moduledoc """
+All kind of operations on sessions is handled by the nova_session-module. The module also presents a behaviour that can be used to create customized backends for the session-data.
+
+Sign a user in with `sign_in/3` and out with `delete/1`. `sign_in/3` moves
+the client to a new session id, stores who signed in under it and returns the
+request that carries the new id. That is the defence against session
+fixation: a session id planted or observed before that point stops working,
+and so does everything stored under it. `renew/1` is the piece of it that
+changes the id, for any other change of what a client may do (a second
+factor, a password change, a higher role). As defence in depth, a presented
+id the backend does not know is ignored and replaced, so a client cannot
+simply choose its own session id.
+""".
 -export([
          get/2,
          set/3,
          delete/1,
          delete/2,
+         sign_in/3,
+         renew/1,
          generate_session_id/0
         ]).
 
@@ -16,10 +30,15 @@
          cookie_opts/1,
          validate_cookie_config/0,
          valid_cookie/2,
-         presented_session_id/1
+         presented_session_id/1,
+         max_age/0
         ]).
 
 -include_lib("kernel/include/logger.hrl").
+
+-define(DEFAULT_MAX_AGE, 1209600).
+-define(KNOWN, {?MODULE, known}).
+-define(KNOWN_FOR, 1000).
 
 %%%===================================================================
 %%% Callbacks
@@ -60,7 +79,17 @@
     {error, Error :: term()} |
     ignore.
 
--optional_callbacks([start_link/0]).
+-doc """
+Tells whether the backend holds a session with this id. Nova calls it for the
+id a client presents and replaces ids that return `false`. It runs in the
+process calling `nova_session`, which keeps the answer for a second for
+reads: a request that presented a cookie asks once however often it reads
+its session, and again for every write and after it deleted or renewed it.
+A backend without it accepts every presented id.
+""".
+-callback session_exists(SessionId :: binary()) -> boolean().
+
+-optional_callbacks([start_link/0, session_exists/1]).
 
 %%%===================================================================
 %%% Public functions
@@ -79,7 +108,7 @@ get(Req, Key) ->
 -spec set(Req :: cowboy_req:req(), Key :: binary(), Value :: binary()) ->
           ok | {error, Reason :: atom()} | no_return().
 set(Req, Key, Value) ->
-    case get_session_id(Req) of
+    case get_session_id(Req, write) of
         {ok, SessionId} ->
             Mod = get_session_module(),
             written(Mod:set_value(SessionId, Key, Value), SessionId, Req);
@@ -112,6 +141,7 @@ delete(Req) ->
         {ok, SessionId} ->
             Mod = get_session_module(),
             Mod:delete_value(SessionId),
+            ended(SessionId),
             {ok, NewSessionId} = generate_session_id(),
             notify(Req, {deleted, NewSessionId}),
             Req0 = case stream_handled(Req) of
@@ -124,10 +154,77 @@ delete(Req) ->
             {ok, Req}
     end.
 
+-doc """
+Signs a user in. The client is moved to a new session id as `renew/1` moves
+it, `Value` is stored under `Key` in the new session, and the request that
+comes back is the one that carries the new id. This is the call for the
+place where a user signs in, in an application or in a library that signs in
+for it:
+
+```erlang
+login(Req) ->
+    {ok, SignedIn} = nova_session:sign_in(Req, ~"user_id", UserId),
+    ok = nova_session:set(SignedIn, ~"signed_in_at", erlang:system_time(second)),
+    {redirect, "/"}.
+```
+
+The session the client had is deleted with all it held, so an id that
+somebody else knows, because they planted it in the browser or saw it, is not
+the id of the user who signed in. Go on with the returned request: the one
+that was passed in names the session that is gone. A token of
+`nova_csrf_plugin` that was made for the old id is refused from then on, and
+the next page the client loads carries one for the new id.
+
+`{error, Reason}` is what the session backend answered when it did not store
+the value. The id has changed by then and nobody is signed in.
+""".
+-spec sign_in(Req, Key :: binary(), Value :: term()) -> {ok, Req} | {error, Reason :: atom()} | no_return()
+              when Req :: cowboy_req:req().
+sign_in(Req, Key, Value) ->
+    {ok, SignedIn} = renew(Req),
+    case set(SignedIn, Key, Value) of
+        {error, _Reason} = Error -> Error;
+        _Stored -> {ok, SignedIn}
+    end.
+
+-doc """
+Moves the client to a new, empty session: the current session's data is
+deleted and the response carries a new session cookie. It is the lower-level
+piece of `sign_in/3`, which is what to call where a user signs in. Call
+`renew/1` itself for another change of what the client may do, such as a
+second factor or a new password, and use the returned request for the
+`set/3` calls that follow:
+
+```erlang
+second_factor_passed(Req, UserId) ->
+    {ok, Renewed} = nova_session:renew(Req),
+    ok = nova_session:set(Renewed, ~"user_id", UserId),
+    ok = nova_session:set(Renewed, ~"second_factor", true),
+    {redirect, "/"}.
+```
+""".
+-spec renew(Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()} | no_return().
+renew(Req) ->
+    case get_session_id(Req) of
+        {ok, SessionId} ->
+            Mod = get_session_module(),
+            Mod:delete_value(SessionId),
+            ended(SessionId);
+        _ ->
+            ok
+    end,
+    {ok, NewSessionId} = generate_session_id(),
+    notify(Req, {renewed, NewSessionId}),
+    Req0 = case stream_handled(Req) of
+               true -> Req;
+               false -> set_cookie(NewSessionId, cookie_opts(Req), Req)
+           end,
+    {ok, with_session_id(NewSessionId, Req0)}.
+
 -spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} |
           {error, Reason :: atom()} | no_return().
 delete(Req, Key) ->
-    case get_session_id(Req) of
+    case get_session_id(Req, write) of
         {ok, SessionId} ->
             Mod = get_session_module(),
             Mod:delete_value(SessionId, Key),
@@ -159,6 +256,15 @@ default_cookie_name() ->
     end.
 
 -doc false.
+-spec max_age() -> pos_integer() | infinity.
+max_age() ->
+    case nova_config:get_env(session_max_age, ?DEFAULT_MAX_AGE) of
+        MaxAge when is_integer(MaxAge), MaxAge > 0 -> MaxAge;
+        infinity -> infinity;
+        _ -> ?DEFAULT_MAX_AGE
+    end.
+
+-doc false.
 -spec needs_https() -> boolean().
 needs_https() ->
     enabled() andalso maps:get(secure, cookie_opts_for(~"http"), false).
@@ -172,9 +278,13 @@ cookie_opts(Req) ->
 cookie_opts_for(Scheme) ->
     Secure = not nova:is_dev_environment() orelse Scheme =:= ~"https",
     Defaults = #{path => ~"/", http_only => true, same_site => lax, secure => Secure},
+    Defaults0 = case max_age() of
+                    infinity -> Defaults;
+                    MaxAge -> Defaults#{max_age => MaxAge}
+                end,
     Opts = case nova_config:get_env(session_cookie_opts, #{}) of
-               Configured when is_map(Configured) -> merge_cookie_opts(maps:to_list(Configured), Defaults);
-               _ -> Defaults
+               Configured when is_map(Configured) -> merge_cookie_opts(maps:to_list(Configured), Defaults0);
+               _ -> Defaults0
            end,
     case cookie_name() of
         <<"__Host-", _/binary>> -> maps:remove(domain, Opts#{secure => true, path => ~"/"});
@@ -187,6 +297,8 @@ merge_cookie_opts([{Key, Value} | Rest], Opts) when (Key =:= path orelse Key =:=
     merge_cookie_opts(Rest, Opts#{Key => Value});
 merge_cookie_opts([{Key, Value} | Rest], Opts) when (Key =:= secure orelse Key =:= http_only), is_boolean(Value) ->
     merge_cookie_opts(Rest, Opts#{Key => Value});
+merge_cookie_opts([{max_age, Value} | Rest], Opts) when is_integer(Value), Value >= 0 ->
+    merge_cookie_opts(Rest, Opts#{max_age => Value});
 merge_cookie_opts([{same_site, Value} | Rest], Opts)
   when Value =:= default; Value =:= none; Value =:= strict; Value =:= lax ->
     merge_cookie_opts(Rest, Opts#{same_site => Value});
@@ -321,36 +433,80 @@ presented_session_id(Req) ->
 %%%===================================================================
 %%% Private functions
 %%%===================================================================
+known(SessionId, read) ->
+    Now = erlang:monotonic_time(millisecond),
+    case get(?KNOWN) of
+        {SessionId, Known, At} when Now - At < ?KNOWN_FOR ->
+            Known;
+        _ ->
+            known(SessionId, write)
+    end;
+known(SessionId, write) ->
+    Known = backend_knows(SessionId),
+    put(?KNOWN, {SessionId, Known, erlang:monotonic_time(millisecond)}),
+    Known.
+
+ended(_SessionId) ->
+    erase(?KNOWN),
+    ok.
+
+backend_knows(SessionId) ->
+    Mod = get_session_module(),
+    _ = code:ensure_loaded(Mod),
+    case erlang:function_exported(Mod, session_exists, 1) of
+        true ->
+            try Mod:session_exists(SessionId) =:= true
+            catch
+                Class:Reason ->
+                    ?LOG_WARNING(#{msg => ~"Session backend failed to look up a session",
+                                   backend => Mod, class => Class, reason => nova_redact:term(Reason)}),
+                    false
+            end;
+        false ->
+            true
+    end.
+
 get_session_module() ->
     application:get_env(nova, session_manager, nova_session_ets).
 
 get_session_id(Req) ->
+    get_session_id(Req, read).
+
+get_session_id(Req, Access) ->
     case enabled() of
         true ->
-            case maps:get(nova_session_id, Req, undefined) of
-                undefined ->
-                    case presented_session_id(Req) of
-                        SessionId when is_binary(SessionId) -> {ok, SessionId};
-                        _ -> {error, not_found}
-                    end;
-                SessionId ->
-                    {ok, SessionId}
-            end;
+            session_id(Req, Access);
         _ ->
             ?LOG_ERROR(#{msg => ~"Session called but the 'use_sessions' option is set to false"}),
             throw({nova_session, unsupported_session_used})
     end.
 
-with_session_id(SessionId, Req) ->
-    (maps:remove(nova_session_presented, Req))#{nova_session_id => SessionId}.
+session_id(#{nova_session_id := SessionId}, _Access) ->
+    {ok, SessionId};
+session_id(#{nova_session_presented := Presented, nova_session_pending := Pending}, Access) ->
+    case known(Presented, Access) of
+        true -> {ok, Presented};
+        false -> {ok, Pending}
+    end;
+session_id(Req, _Access) ->
+    case presented_session_id(Req) of
+        SessionId when is_binary(SessionId) -> {ok, SessionId};
+        _ -> {error, not_found}
+    end.
 
+with_session_id(SessionId, Req) ->
+    (maps:without([nova_session_presented, nova_session_pending], Req))#{nova_session_id => SessionId}.
+
+stream_handled(#{nova_session_direct := true}) ->
+    false;
 stream_handled(Req) ->
     is_map_key(nova_session_id, Req) orelse is_map_key(nova_session_presented, Req).
 
 set_cookie(Value, Opts, Req) ->
     Name = cookie_name(),
     valid_cookie(Name, Opts) orelse erlang:error(invalid_cookie_config(Name, Opts)),
-    cowboy_req:set_resp_cookie(Name, Value, Req, Opts).
+    Req0 = cowboy_req:set_resp_cookie(Name, Value, Req, Opts),
+    Req0#{nova_session_direct => true}.
 
 warn_ambiguous_cookie(Name) ->
     case nova_once:first({?MODULE, ambiguous_cookie_warned}) of

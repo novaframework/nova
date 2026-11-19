@@ -7,6 +7,7 @@
 -module(nova_multi_listener_SUITE).
 
 -export([all/0, init_per_suite/1, end_per_suite/1]).
+-export([log/2]).
 
 -export([
          bootstrap_listener_is_registered/1,
@@ -16,6 +17,9 @@
          an_explicit_host_is_part_of_the_listener_identity/1,
          an_explicit_host_does_not_match_the_wildcard_listener/1,
          a_failed_bind_leaves_no_routing_table/1,
+         tls_secrets/1,
+         tls_raise/1,
+         tls_list/1,
          adding_a_started_application_again_is_an_error/1,
          removing_an_application_stops_only_its_listener/1,
          removing_an_unknown_application_is_an_error/1
@@ -33,6 +37,9 @@ all() ->
      an_explicit_host_is_part_of_the_listener_identity,
      an_explicit_host_does_not_match_the_wildcard_listener,
      a_failed_bind_leaves_no_routing_table,
+     tls_secrets,
+     tls_raise,
+     tls_list,
      adding_a_started_application_again_is_an_error,
      removing_an_application_stops_only_its_listener,
      removing_an_unknown_application_is_an_error
@@ -169,6 +176,80 @@ a_failed_bind_leaves_no_routing_table(_Config) ->
                                A =:= nova_test_sub_app])
     after
         gen_tcp:close(Socket)
+    end.
+
+%% Cowboy says why a TLS listener did not start with the options it was
+%% given. Neither the answer nor a log event has the key or its password.
+tls_secrets(_Config) ->
+    {ok, Socket} = gen_tcp:listen(0, [{ip, {0, 0, 0, 0}}]),
+    {ok, Port} = inet:port(Socket),
+    ok = logger:add_handler(?FUNCTION_NAME, ?MODULE, #{config => #{to => self()}}),
+    try
+        Answer = nova_sup:add_application(nova_test_sub_app, tls_configuration(Port)),
+        Logged = logged(),
+        ?assertMatch({error, _}, Answer),
+        ?assertMatch([_ | _], Logged),
+        without_secrets([Answer | Logged])
+    after
+        logger:remove_handler(?FUNCTION_NAME),
+        gen_tcp:close(Socket)
+    end.
+
+%% Cowboy raises with the options as well, as when ranch is not there to
+%% start the listener.
+tls_raise(_Config) ->
+    Port = free_port(),
+    ok = meck:new(cowboy, [passthrough, no_link]),
+    try
+        ok = meck:expect(cowboy, start_tls,
+                         fun(Ref, TransportOpts, _ProtocolOpts) ->
+                                 exit({noproc, {gen_server, call, [ranch_sup, {start_child, {Ref, TransportOpts}}]}})
+                         end),
+        Raised = raised(tls_configuration(Port)),
+        ?assertMatch({exit, {noproc, _}, _}, Raised),
+        without_secrets(Raised)
+    after
+        meck:unload(cowboy),
+        nova_router:delete_dispatch({nova_dispatch, nova_test_sub_app, Port})
+    end.
+
+%% The options as a list, which the map they are read as does not take.
+tls_list(_Config) ->
+    Port = free_port(),
+    Configuration = #{ssl_options := Options} = tls_configuration(Port),
+    try
+        Raised = raised(Configuration#{ssl_options := maps:to_list(Options)}),
+        ?assertMatch({error, {badmap, _}, _}, Raised),
+        without_secrets(Raised)
+    after
+        nova_router:delete_dispatch({nova_dispatch, nova_test_sub_app, Port})
+    end.
+
+raised(Configuration) ->
+    try nova_sup:add_application(nova_test_sub_app, Configuration)
+    catch Class:Reason:Stacktrace -> {Class, Reason, Stacktrace}
+    end.
+
+tls_configuration(Port) ->
+    #{use_ssl => true, ssl_port => Port,
+      ssl_options => #{certfile => "/no/such/cert.pem",
+                       key => {'RSAPrivateKey', ~"a private key"},
+                       password => "a password"}}.
+
+without_secrets(Term) ->
+    Said = unicode:characters_to_binary(io_lib:format("~0p", [Term])),
+    ?assertEqual(nomatch, binary:match(Said, [~"a private key", ~"a password"])),
+    ?assertNotEqual(nomatch, binary:match(Said, ~"/no/such/cert.pem")).
+
+log(Event, #{config := #{to := To}}) ->
+    To ! {logged, Event},
+    ok.
+
+logged() ->
+    receive
+        {logged, Event} -> [Event | logged()]
+    after 300 ->
+        []
     end.
 
 adding_a_started_application_again_is_an_error(Config) ->

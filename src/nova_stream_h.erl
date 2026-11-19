@@ -90,8 +90,8 @@ init_session(Req) ->
                 unparsable ->
                     {Req#{nova_session_id => Pending}, undefined};
                 Presented ->
-                    {Req#{nova_session_presented => Presented},
-                     #session{presented = Presented, current = Presented}}
+                    {Req#{nova_session_presented => Presented, nova_session_pending => Pending},
+                     #session{presented = Presented, current = Pending}}
             end;
         false ->
             {Req, undefined}
@@ -101,6 +101,8 @@ session_event(_Event, undefined) ->
     undefined;
 session_event({written, SessionId}, Session = #session{presented = Presented}) ->
     Session#session{current = SessionId, issue = SessionId =/= Presented};
+session_event({renewed, SessionId}, Session) ->
+    Session#session{current = SessionId, issue = true};
 session_event({deleted, SessionId}, Session = #session{presented = Presented}) ->
     Session#session{current = SessionId, issue = false, expire = Presented =/= undefined};
 session_event(_Event, Session) ->

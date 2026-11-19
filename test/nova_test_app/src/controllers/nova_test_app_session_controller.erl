@@ -5,6 +5,7 @@
          set_with_status_text/1,
          set_and_stream/1,
          read/1,
+         renew/1,
          delete/1,
          untouched/1
         ]).
@@ -28,6 +29,11 @@ read(Req) ->
         {ok, Value} -> {json, #{value => Value}};
         {error, not_found} -> {json, #{value => null}}
     end.
+
+renew(Req) ->
+    {ok, Req1} = nova_session:renew(Req),
+    ok = nova_session:set(Req1, ~"value", ~"renewed"),
+    {json, 200, #{}, Req1, #{renewed => true}}.
 
 delete(Req) ->
     {ok, Req1} = nova_session:delete(Req),

@@ -23,6 +23,10 @@ Each listener owns its own routing table, so an application started on a second 
 %% Supervisor callbacks
 -export([init/1]).
 
+-ifdef(TEST).
+-export([warn_without_session_exists/2]).
+-endif.
+
 -include_lib("kernel/include/logger.hrl").
 -include("../include/nova.hrl").
 
@@ -139,6 +143,7 @@ init([]) ->
 
     %% try to ensure callback module is loaded first
     ExportedFuns = SessionManager:module_info(exports),
+    warn_without_session_exists(SessionManager, ExportedFuns),
     case nova_session:enabled() of
         true -> nova_session:validate_cookie_config();
         false -> ok
@@ -390,23 +395,28 @@ bind(Ref, Host, Port, Configuration, CowboyOptions) ->
     end.
 
 bind_tls(Ref, Host, Port, Configuration, CowboyOptions) ->
-    TransportOpts =
-        case maps:get(ca_cert, Configuration, undefined) of
-            undefined ->
-                SSLOptions = maps:get(ssl_options, Configuration, #{}),
-                maps:to_list(SSLOptions#{port => Port, ip => Host});
-            CACert ->
-                Cert = maps:get(cert, Configuration),
-                ?LOG_DEPRECATED(<<"0.10.3">>, <<"Use of ca_cert/cert is deprecated, use ssl_options instead">>),
-                [{port, Port}, {ip, Host}, {certfile, Cert}, {cacertfile, CACert}]
-        end,
-    case cowboy:start_tls(Ref, TransportOpts, CowboyOptions) of
+    try cowboy:start_tls(Ref, tls_transport(Host, Port, Configuration), CowboyOptions) of
         {ok, _Pid} ->
             ?LOG_NOTICE(#{msg => <<"Nova starting SSL">>, port => Port}),
             {ok, true};
-        {error, Reason} ->
+        {error, Reason0} ->
+            Reason = nova_redact:tls_options(Reason0),
             ?LOG_ERROR(#{msg => <<"Could not start cowboy with SSL">>, reason => Reason}),
             {error, Reason}
+    catch
+        Class:Raised:Stacktrace ->
+            erlang:raise(Class, nova_redact:tls_options(Raised), nova_redact:stacktrace(Stacktrace))
+    end.
+
+tls_transport(Host, Port, Configuration) ->
+    case maps:get(ca_cert, Configuration, undefined) of
+        undefined ->
+            SSLOptions = maps:get(ssl_options, Configuration, #{}),
+            maps:to_list(SSLOptions#{port => Port, ip => Host});
+        CACert ->
+            Cert = maps:get(cert, Configuration),
+            ?LOG_DEPRECATED(<<"0.10.3">>, <<"Use of ca_cert/cert is deprecated, use ssl_options instead">>),
+            [{port, Port}, {ip, Host}, {certfile, Cert}, {cacertfile, CACert}]
     end.
 
 %% The ip configuration key is an address tuple in practice, but ranch also
@@ -446,3 +456,12 @@ resolve_nova_apps([App | Rest], Acc, Seen) ->
 -spec nova_app_name(nova_app()) -> atom().
 nova_app_name({App, _Options}) -> App;
 nova_app_name(App)             -> App.
+
+warn_without_session_exists(SessionManager, ExportedFuns) ->
+    case nova_session:enabled() andalso not lists:member({session_exists, 1}, ExportedFuns) of
+        true ->
+            ?LOG_WARNING(#{msg => ~"Session manager does not implement session_exists/1, so presented session ids are accepted unchecked",
+                           session_manager => SessionManager});
+        false ->
+            ok
+    end.
