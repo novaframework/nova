@@ -17,7 +17,11 @@ watcher_test_() ->
              ok = file:del_dir_r(Dir)
      end,
      [fun runs_in_the_workdir_and_leaves_the_node_where_it_was/1,
-      fun workdir_is_relative_to_the_application/1]}.
+      fun workdir_is_relative_to_the_application/1,
+      fun command_alone_runs_without_a_bootstrap_application/1,
+      fun command_alone_runs_in_the_bootstrap_application/1,
+      fun command_with_arguments/1,
+      fun command_with_options/1]}.
 
 %% The number is unique in this node only, so a directory a run that was
 %% stopped half way left behind can have the same name.
@@ -40,6 +44,37 @@ workdir_is_relative_to_the_application({_Cwd, Dir}) ->
                ok = nova_watcher:async_cast(nova, "ls > " ++ Marker, #{workdir => "ebin"}),
                ?assert(appears(Marker)),
                ?assert(contains(Marker, ~"nova.app"))
+           end).
+
+command_alone_runs_without_a_bootstrap_application({Cwd, Dir}) ->
+    ?_test(begin
+               Marker = filename:join(Dir, "cwd"),
+               ok = nova_watcher:async_cast("pwd > " ++ Marker),
+               ?assert(appears(Marker)),
+               ?assert(contains(Marker, unicode:characters_to_binary(Cwd)))
+           end).
+
+command_alone_runs_in_the_bootstrap_application({_Cwd, Dir}) ->
+    ?_test(begin
+               application:set_env(nova, bootstrap_application, nova),
+               Marker = filename:join(Dir, "cwd"),
+               ok = nova_watcher:async_cast("pwd > " ++ Marker),
+               ?assert(appears(Marker)),
+               ?assert(contains(Marker, unicode:characters_to_binary(code:lib_dir(nova))))
+           end).
+
+command_with_arguments({_Cwd, Dir}) ->
+    ?_test(begin
+               ok = nova_watcher:async_cast("touch", [filename:join(Dir, "one"), filename:join(Dir, "two")]),
+               ?assert(appears(filename:join(Dir, "one"))),
+               ?assert(appears(filename:join(Dir, "two")))
+           end).
+
+command_with_options({_Cwd, Dir}) ->
+    ?_test(begin
+               application:set_env(nova, bootstrap_application, nova),
+               ok = nova_watcher:async_cast("touch ran", #{workdir => Dir}),
+               ?assert(appears(filename:join(Dir, "ran")))
            end).
 
 appears(File) ->

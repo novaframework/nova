@@ -55,8 +55,10 @@ async_cast(Application, Cmd, Args, Options) ->
 async_cast(Application, Cmd, Options) ->
     async_cast(Application, Cmd, [], Options).
 
+async_cast(Cmd, Args) when is_list(Args) ->
+    async_cast(main_app(), Cmd, Args, #{});
 async_cast(Cmd, Options) ->
-    async_cast(nova:get_main_app(), Cmd, Options).
+    async_cast(main_app(), Cmd, Options).
 
 async_cast(Cmd) ->
     async_cast(Cmd, #{}).
@@ -184,6 +186,12 @@ format_status(Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+main_app() ->
+    case nova:get_main_app() of
+        {ok, Application} -> Application;
+        undefined -> undefined
+    end.
 
 workdir(Application, Subdir) ->
     case code:lib_dir(Application) of
