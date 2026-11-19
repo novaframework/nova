@@ -254,8 +254,7 @@ terminate_calls_module_terminate_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         State = #{mod => test_ws_mod, controller_data => #{foo => bar},
                   plugins => []},
-        Result = nova_ws_handler:terminate(normal, #{}, State),
-        ?assertMatch({ok, _}, Result),
+        ?assertEqual(ok, nova_ws_handler:terminate(normal, #{}, State)),
         ?assert(meck:called(test_ws_mod, terminate, [normal, #{}, #{foo => bar}]))
     end}.
 
