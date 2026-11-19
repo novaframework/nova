@@ -14,6 +14,7 @@
 %%====================================================================
 
 start(_StartType, _StartArgs) ->
+    note_unset_environment(),
     nova_router:forget_plugins(),
     nova_sup:start_link().
 
@@ -27,6 +28,16 @@ stop(_State) ->
 %%====================================================================
 %% Internal functions
 %%====================================================================
+
+note_unset_environment() ->
+    case application:get_env(nova, environment) of
+        undefined ->
+            ?LOG_NOTICE(#{msg => ~"The environment key of the nova application is not set and is read as prod: routers are asked for routes(prod), and nothing meant for development is on. Set {nova, [{environment, dev}]} for development",
+                          key => environment,
+                          read_as => nova:get_environment()});
+        {ok, _Environment} ->
+            ok
+    end.
 
 graceful_shutdown() ->
     Delay = application:get_env(nova, shutdown_delay, 0),
