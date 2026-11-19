@@ -46,6 +46,18 @@ missing_static_path_is_logged_as_an_error_test_() ->
                                             <- nova_test_log:stop()])
     end}.
 
+static_directory_is_resolved_when_the_route_is_compiled_test_() ->
+    {setup, fun setup/0, fun cleanup/1, fun() ->
+        Directory = code:lib_dir(nova),
+        File = code:which(nova_router),
+        nova_router:add_routes(nova, [#{routes => [{"/files/[...]", Directory}, {"/file", File}]}]),
+        {ok, _, #nova_handler_value{extra_state = DirectoryState}} = nova_router:lookup_url('_', ~"/files", ~"GET"),
+        ?assertMatch(#{static := {priv_dir, nova, Directory}, static_root := {Directory, {[_ | _] = Root, Root}}},
+                     DirectoryState),
+        {ok, _, #nova_handler_value{extra_state = FileState}} = nova_router:lookup_url('_', ~"/file", ~"GET"),
+        ?assertEqual(#{static => {priv_file, nova, File}, options => #{}}, FileState)
+    end}.
+
 add_routes_registers_app_test_() ->
     {setup, fun setup/0, fun cleanup/1, fun() ->
         Callback = fun(_) -> {json, #{}} end,
