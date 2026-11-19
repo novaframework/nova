@@ -24,6 +24,7 @@
 %%%_* Macros ===========================================================
 %%%_* Options ----------------------------------------------------------
 -define(NEW_LINE, false).
+-define(PRINTED_CHARS_LIMIT, 4096).
 
 %%%_* Code =============================================================
 %%%_ * API -------------------------------------------------------------
@@ -61,19 +62,14 @@ system_time_to_iso8601(Epoch, Unit) ->
 
 %%%_* Private functions ================================================
 pre_encode(Data, Config) ->
-    maps:fold(
-        fun
-            (K, V, Acc) when is_map(V) ->
-                maps:put(jsonify(K), pre_encode(V, Config), Acc);
-            % assume list of maps
-            (K, Vs, Acc) when is_list(Vs), is_map(hd(Vs)) ->
-                maps:put(jsonify(K), [pre_encode(V, Config) || V <- Vs, is_map(V)], Acc);
-            (K, V, Acc) ->
-                maps:put(jsonify(K), jsonify(V), Acc)
-        end,
-        maps:new(),
-        Data
-    ).
+    #{jsonify(K) => pre_encode_value(V, Config) || K := V <- Data}.
+
+pre_encode_value(V, Config) when is_map(V) ->
+    pre_encode(V, Config);
+pre_encode_value([First | _] = Vs, Config) when is_map(First) ->
+    [pre_encode(V, Config) || V <- Vs, is_map(V)];
+pre_encode_value(V, _Config) ->
+    jsonify(V).
 
 merge_meta(Msg, Meta0, Config) ->
     Meta1 = meta_without(Meta0, Config),
@@ -88,7 +84,11 @@ encode(Data, Config) ->
     end.
 
 jsonify(A) when is_atom(A) -> A;
-jsonify(B) when is_binary(B) -> B;
+jsonify(B) when is_binary(B) ->
+    case unicode:characters_to_binary(B) of
+        B -> B;
+        _NotUtf8 -> printed(B)
+    end;
 jsonify(I) when is_integer(I) -> I;
 jsonify(F) when is_float(F) -> F;
 jsonify(B) when is_boolean(B) -> B;
@@ -96,16 +96,20 @@ jsonify(P) when is_pid(P) -> jsonify(pid_to_list(P));
 jsonify(P) when is_port(P) -> jsonify(port_to_list(P));
 jsonify(F) when is_function(F) -> jsonify(erlang:fun_to_list(F));
 jsonify(L) when is_list(L) ->
-    try list_to_binary(L) of
-        S -> S
+    try unicode:characters_to_binary(L) of
+        S when is_binary(S) -> S;
+        _NotUtf8 -> printed(L)
     catch
         error:badarg ->
-            unicode:characters_to_binary(io_lib:format("~0p", [L]))
+            printed(L)
     end;
 jsonify({M, F, A}) when is_atom(M), is_atom(F), is_integer(A) ->
     <<(atom_to_binary(M, utf8))/binary, $:, (atom_to_binary(F, utf8))/binary, $/, (integer_to_binary(A))/binary>>;
 jsonify(Any) ->
-    unicode:characters_to_binary(io_lib:format("~0p", [Any])).
+    printed(Any).
+
+printed(Term) ->
+    unicode:characters_to_binary(io_lib:format("~0p", [Term], [{chars_limit, ?PRINTED_CHARS_LIMIT}])).
 
 apply_format_funs(Data, #{format_funs := Callbacks}) ->
     maps:fold(
@@ -250,6 +254,33 @@ list_format_test() ->
         <<"{\"level\":\"error\",\"report\":\"[{hej,\\\"hopp\\\"}]\",\"time\":1}">>,
         format(ErrorReport, #{})
     ).
+
+invalid_utf8_test() ->
+    Report = #{
+        id => <<255, 0>>,
+        parts => [<<"ok ">>, <<255>>],
+        name => [114, 228, 107, 97]
+    },
+    #{<<"id">> := Id, <<"name">> := Name, <<"parts">> := Parts} =
+        decoded(format(#{level => info, msg => {report, Report}, meta => #{}}, #{})),
+    ?assertEqual(<<"<<255,0>>">>, Id),
+    ?assertEqual(<<"r", 195, 164, "ka">>, Name),
+    ?assert(is_binary(Parts)).
+
+printed_term_is_bounded_test() ->
+    Report = #{
+        id => binary:copy(<<255, 0>>, 512 * 1024),
+        parts => lists:duplicate(100000, <<255, 0>>),
+        term => {reason, lists:seq(1, 100000)},
+        short => {reason, <<255, 0>>}
+    },
+    Json = iolist_to_binary(format(#{level => info, msg => {report, Report}, meta => #{}}, #{})),
+    #{~"id" := Id, ~"parts" := Parts, ~"term" := Term, ~"short" := Short} = json:decode(Json),
+    ?assertMatch(<<"<<255,0,255,0,", _/binary>>, Id),
+    ?assertMatch(<<"[<<255,0>>,<<255,0>>,", _/binary>>, Parts),
+    ?assertMatch(<<"{reason,[1,2,3,", _/binary>>, Term),
+    [?assert(byte_size(Printed) < 2 * 4096) || Printed <- [Id, Parts, Term]],
+    ?assertEqual(~"{reason,<<255,0>>}", Short).
 
 meta_without_test() ->
     Error = #{
