@@ -27,6 +27,15 @@ Earlier releases ran `pre_request/4` ahead of the security callback. `plugins_be
 `auth_data` of the request is what the security callback returned as `{true, AuthData}`, and a plugin that writes the key, in either callback, does not change that. What a plugin writes there stays when the security callback returns a plain `true` and on a route without one. A websocket controller gets the `auth_data` of the upgrade request in its controller data.
 
 Within each of the two phases the plugins run in the order they are listed. What the security callback finds in the request is what `pre_security/4` put there. With the plugins of Nova that is the correlation id, the CORS headers and `parsed_qs`, and not `json`, `params`, `body` or `files`: a security callback that needs the decoded body lists `nova_request_plugin` under `plugins_before_security` for its route group.
+
+What this order changes without anything failing is said once for a route group, when its routes are compiled. Each is there until 1.0, and each report names the one it is under `notice`:
+
+- `body_behind_security`: `nova_request_plugin` decodes the body behind the security callback of the route group, which then finds no `json` or `params` in the request. `security_reads_body => false` in the route group says that the callback does not read them and ends the warning. `security_reads_body => true` says that it does, and the routes then do not compile (`{invalid_setting, security_reads_body, {requires, plugins_before_security}}`) until the plugin is listed under `plugins_before_security`. `false` is said about the callback the route group declares as its `security`. It does not end the warning for a callback the routes are behind because of where their application is mounted, the `secure` or `override_secure` of a `nova_apps` entry or the `security` of a route group that lists the application: the author of the mounted routes does not answer for a callback somebody else wrote.
+- `form_behind_security`: the same for a route group that lists `nova_csrf_plugin` and reads a form alone, with `read_urlencoded_body`, which is the setup the guides and the generators give. The form is read for the token, and nothing shows whether the security callback reads `params` as well, which it does not find. This one is logged as a notice and not as a warning, and `security_reads_body => false` ends it too.
+- `pre_request_behind_security`: a plugin from outside Nova only has `pre_request/4` and is not listed under `plugins_before_security`, in a route group that has a security callback. It does not run for a request that is refused.
+- `pre_request_not_for_preflight`: a plugin from outside Nova only has `pre_request/4`, in a route group with a route that does not take `OPTIONS`. It does not run for a CORS preflight to such a route, also when it is listed under `plugins_before_security`.
+
+A plugin that has `pre_security/4` is named by neither of the last two, and exporting it is what ends them for a plugin.
 """.
 
 -type request_type() :: pre_request | post_request.
