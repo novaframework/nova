@@ -55,12 +55,14 @@
 -include("../include/nova_router.hrl").
 -include("../include/nova.hrl").
 
--type bindings() :: #{binary() := binary()}.
+-type bindings() :: #{binary() => binary()}.
+
+-type routed_req() :: map().
 
 -type lookup_result() :: {ok, bindings(), Value :: term()} |
                          {ok, bindings(), Value :: term(), PathInfo :: [binary()]} |
                          {error, not_found} |
-                         {error, comparator_not_found, AllowedMethods :: [binary()]}.
+                         {error, comparator_not_found, AllowedMethods :: [nova_routing_trie:comparator()]}.
 
 -export_type([bindings/0, lookup_result/0]).
 
@@ -175,7 +177,8 @@ route(Req = #{host := Host, path := Path, method := Method}, Env, Dispatch) ->
             render_status_page('_', 404, #{error => "Not found in path"}, Req, Env);
         {error, comparator_not_found, AllowedMethods} ->
             logger:debug(<<"Method not allowed: ~p for ~p. Allowed methods: ~p">>, [Method, Path, AllowedMethods]),
-            AllowHeader = iolist_to_binary(lists:join(<<", ">>, AllowedMethods)),
+            Allowed = [AllowedMethod || AllowedMethod <- AllowedMethods, is_binary(AllowedMethod)],
+            AllowHeader = iolist_to_binary(lists:join(<<", ">>, Allowed)),
             %% Set the 'allow'-header
             Req1 = cowboy_req:set_resp_header(<<"allow">>, AllowHeader, Req),
             {ok, Req2, Env1} = render_status_page('_', 405, #{error => "Method not allowed"}, Req1, Env),
@@ -284,13 +287,13 @@ add_routes(App) ->
 
 %%--------------------------------------------------------------------
 -doc "Add routes to the dispatch-table for the given app. The routes can be either a list of maps or a map. It use the same structure as the routes-callback in the router-module. Throws `{error, {misplaced_security, App, Key, Path}}` for routes with a security callback under a key that is not read: `secure` on a route group, or `security` or `secure` in the options of a route.".
--spec add_routes(App :: atom(), Routes :: [map()] | map()) -> ok.
+-spec add_routes(App :: atom(), Routes :: [map() | [map()]] | map()) -> ok.
 add_routes(App, Routes) ->
     add_routes(App, Routes, ?NOVA_DISPATCH).
 
 %%--------------------------------------------------------------------
 -doc "As add_routes/2, but against the routing table addressed by `DispatchKey`.".
--spec add_routes(App :: atom(), Routes :: [map()] | map(), DispatchKey :: dispatch_key()) -> ok.
+-spec add_routes(App :: atom(), Routes :: [map() | [map()]] | map(), DispatchKey :: dispatch_key()) -> ok.
 add_routes(_App, [], _DispatchKey) ->
     ok;
 add_routes(App, Routes, DispatchKey) when is_map(Routes) ->
@@ -351,7 +354,7 @@ remove_application(Application, DispatchKey) when is_atom(Application) ->
     AppsKey = apps_key(DispatchKey),
     StorageBackend:put(DispatchKey, Dispatch0),
     StorageBackend:put(AppsKey, lists:keydelete(Application, 1, StorageBackend:get(AppsKey, []))),
-    nova:set_env(apps, lists:keydelete(Application, 1, nova:get_env(apps, []))),
+    nova:set_env(apps, lists:keydelete(Application, 1, mounted_apps())),
     ok.
 
 %% Both handler kinds carry the owning application, and dropping the cowboy
@@ -532,9 +535,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     ok = misplaced_security(misplaced_in_group(Prefix, RouteInfo), App, RouterFile),
 
     %% We need to add this app info to nova-env
-    NovaEnv = nova:get_env(apps, []),
-    NovaEnv0 = lists:keystore(App, 1, NovaEnv, {App, #{prefix => Prefix}}),
-    nova:set_env(apps, NovaEnv0),
+    nova:set_env(apps, lists:keystore(App, 1, mounted_apps(), {App, #{prefix => Prefix}})),
 
     Group = maps:with([extra_state], RouteInfo),
     {ok, Dispatch1} = parse_url(Host, maps:get(routes, RouteInfo, []),
@@ -655,12 +656,12 @@ parse_url(Host,
 
 
 -spec render_status_page(StatusCode :: integer(), Req :: cowboy_req:req()) ->
-                                {ok, Req0 :: cowboy_req:req(), Env :: map()}.
+                                {ok, Req0 :: routed_req(), Env :: map()}.
 render_status_page(StatusCode, Req) ->
     render_status_page(StatusCode, #{}, Req).
 
 -spec render_status_page(StatusCode :: integer(), Data :: map(), Req :: cowboy_req:req()) ->
-                                {ok, Req0 :: cowboy_req:req(), Env :: map()}.
+                                {ok, Req0 :: routed_req(), Env :: map()}.
 render_status_page(StatusCode, Data, Req) ->
     render_status_page('_', StatusCode, Data, Req, #{nova_dispatch_key => dispatch_key(Req)}).
 
@@ -668,7 +669,7 @@ render_status_page(StatusCode, Data, Req) ->
                          StatusCode :: integer(),
                          Data :: map(),
                          Req :: cowboy_req:req(),
-                         Env :: map()) -> {ok, Req0 :: cowboy_req:req(), Env :: map()}.
+                         Env :: map()) -> {ok, Req0 :: routed_req(), Env :: map()}.
 render_status_page(Host, StatusCode, Data, Req, Env) ->
     StorageBackend = storage_backend(),
     Dispatch = StorageBackend:get(dispatch_key(Env)),
@@ -699,6 +700,13 @@ render_status_page(Host, StatusCode, Data, Req, Env) ->
 
 insert_opts(T) ->
     maps:get(insert_opts, T, #{}).
+
+-spec mounted_apps() -> [{atom(), map()}].
+mounted_apps() ->
+    case nova:get_env(apps, []) of
+        Apps when is_list(Apps) ->
+            [{App, Info} || {App, Info} <- Apps, is_atom(App), is_map(Info)]
+    end.
 
 with_route(RealPath, Plugins) ->
     [{nova_route, unicode:characters_to_binary(RealPath)} | Plugins].
