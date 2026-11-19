@@ -13,6 +13,15 @@
 -define(MIN_DISTINCT_BYTES, 8).
 -define(DEFAULT_MAX_SESSIONS, 1000000).
 
+-doc """
+Checks every setting and keeps what `value/1` returns from then on. Raises
+`{invalid_setting, Key, Reason}` for the first one that cannot be used.
+`Reason` is the value that was refused, `redacted` where that is a secret
+(one that is too short, not a binary, or plainly not out of a random
+source), `not_set`, `{requires, Setting}` for one that cannot be used without another,
+or `{replaced_by, Replacement}` for a setting of `removed/0`. For
+`nova_sup`, which calls it before it starts anything.
+""".
 -spec validate() -> ok.
 validate() ->
     ok = no_removed_setting(removed()),
@@ -20,6 +29,13 @@ validate() ->
     ok = secret_to_sign_with(Settings),
     persistent_term:put(?MODULE, Settings).
 
+-doc """
+The checked value of a setting, or its default. `secret_key_base` is the keys
+made from each of its secrets (`nova_secret:derived/1`), empty when none is
+set, and never a secret itself. The origins of a `trusted_origins` list are
+binaries. On a node where Nova was not started, the settings are
+checked the first time one is read.
+""".
 -spec value(Key :: key()) -> term().
 value(Key) ->
     case persistent_term:get(?MODULE, undefined) of
@@ -69,6 +85,7 @@ checked(plugins_before_security, Value) ->
 checked(_Key, Value) ->
     {error, Value}.
 
+-doc "What a setting may be, in the words of the error that is logged for one that is not.".
 -spec expected(Key :: key()) -> binary().
 expected(non_canonical_paths) -> ~"non_canonical_paths must be reject or resolve";
 expected(trusted_origins) -> ~"trusted_origins must be same_host, same_origin, any or a list of origins";

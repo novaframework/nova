@@ -58,7 +58,10 @@ Each listener owns its own routing table, so an application started on a second 
 %%%===================================================================
 
 %%--------------------------------------------------------------------
--doc "Starts the supervisor".
+-doc """
+Starts the supervisor, which starts the listener of the bootstrap
+application as its last child. The `nova` application calls it.
+""".
 -spec start_link() -> {ok, Pid :: pid()} | ignore | {error, Error :: any()}.
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
@@ -107,7 +110,7 @@ get_started_applications() ->
         App <- Apps].
 
 %%--------------------------------------------------------------------
--doc "Every Cowboy listener Nova has started. Used by the graceful shutdown in nova_app, which has to drain all of them and not just the first.".
+-doc "The `ranch` reference of every Cowboy listener Nova has started.".
 -spec listeners() -> [ranch:ref()].
 listeners() ->
     [Ref || #nova_listener{ref = Ref} <- all_listeners()].
@@ -212,7 +215,6 @@ listener_child(Configuration) ->
       restart => temporary,
       type => worker}.
 
-%% The table survives a nova_sup restart, so creating it has to be idempotent.
 %% It is public because add_application/2 and remove_application/1 are called
 %% by whoever wants the application started, not by the supervisor process.
 ensure_listener_table() ->
