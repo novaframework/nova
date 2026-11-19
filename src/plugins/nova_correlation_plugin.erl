@@ -17,7 +17,7 @@ If the header name is not defined or the request lacks a correlation ID header, 
 
 ### Logger Metadata Key Override
 
-Use `logger_metadata_key` to customize the correlation ID key in OTP logger process metadata. By default it is set to `<<"correlation-id">>`.
+Use `logger_metadata_key` to customize the correlation ID key in OTP logger process metadata. By default it is the atom `'correlation-id'`. Logger metadata keys are atoms, so write the key as an atom. A binary is accepted when it names an atom the node already knows, such as `<<"correlation-id">>`, and is logged under that atom.
 
 ### Correlation ID in Request Object
 
@@ -43,6 +43,8 @@ The plugin defines a field called `correlation_id` in the request object for con
          plugin_info/0]).
 
 -include_lib("kernel/include/logger.hrl").
+
+-define(DEFAULT_LOGGER_KEY, 'correlation-id').
 
 %%--------------------------------------------------------------------
 -doc "Pre-request callback to either pick up correlation id from request headers or generate a new uuid correlation id.".
@@ -84,5 +86,29 @@ uuid() ->
     jhn_uuid:gen(v4, [binary]).
 
 update_logger_metadata(CorrId, Opts) ->
-    LoggerKey = maps:get(logger_metadata_key, Opts, <<"correlation-id">>),
-    logger:update_process_metadata(#{LoggerKey => CorrId}).
+    logger:update_process_metadata(#{logger_key(Opts) => CorrId}).
+
+logger_key(#{logger_metadata_key := Key}) when is_atom(Key) ->
+    Key;
+logger_key(#{logger_metadata_key := Key}) when is_binary(Key) ->
+    Term = {?MODULE, logger_metadata_key, Key},
+    case persistent_term:get(Term, undefined) of
+        undefined ->
+            Atom = known_atom(Key),
+            persistent_term:put(Term, Atom),
+            Atom;
+        Atom when is_atom(Atom) ->
+            Atom
+    end;
+logger_key(_Opts) ->
+    ?DEFAULT_LOGGER_KEY.
+
+known_atom(Key) ->
+    try
+        binary_to_existing_atom(Key)
+    catch
+        error:badarg ->
+            ?LOG_ERROR(#{msg => ~"logger_metadata_key of nova_correlation_plugin is a binary that names no atom this node knows. Write the key as an atom. Until then the correlation id is logged under 'correlation-id'.",
+                         logger_metadata_key => Key}),
+            ?DEFAULT_LOGGER_KEY
+    end.
