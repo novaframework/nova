@@ -1,6 +1,6 @@
 -module(nova_redact_tests).
-
 -include_lib("eunit/include/eunit.hrl").
+-include("../include/nova_router.hrl").
 
 %% Logger handler callback: forwards every event to the test process.
 -export([log/2]).
@@ -199,6 +199,43 @@ query_string_behind_a_badmatch_is_not_logged_test_() ->
              Text = iolist_to_binary(io_lib:format("~p", [{Logs, maps:get(crash_info, Req1)}])),
              ?assertEqual(nomatch, binary:match(Text, ~"SECRETPW"))
      end}.
+
+unformattable_frame_is_logged_without_request_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             capture_logs(),
+             ?assertEqual([], nova_error_controller:format_stacktrace([{not_a_frame, req()}])),
+             Logs = logged(),
+             ?assertMatch([{report, #{msg := ~"Could not format stacktrace line"}}], Logs),
+             assert_not_leaked(Logs)
+     end}.
+
+dev_crash_page_shows_frames_and_log_has_no_cookie_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     fun() ->
+             application:set_env(nova, render_error_pages, true),
+             ServerError = #nova_handler_value{app = nova, callback = fun nova_error_controller:server_error/1},
+             {ok, Dispatch} = nova_routing_trie:insert('_', 500, '_', ServerError, nova_routing_trie:new(#{})),
+             persistent_term:put(nova_dispatch, Dispatch),
+             capture_logs(),
+             Callback = fun(#{this_key_is_missing := _}) -> ok end,
+             Env = #{callback => Callback, app => test_app, secure => false, controller_data => #{}},
+             Req0 = nova_test_helper:with_header(~"accept", ~"application/json", req()),
+             {ok, Req1, _Env} = nova_handler:execute(Req0, Env),
+             ?assertEqual(500, maps:get(resp_status_code, Req1)),
+             {Body, Modules} = error_page(Req1),
+             ?assert(lists:member(~"nova_redact_tests", Modules)),
+             assert_not_leaked(Body),
+             assert_logged_without_request()
+     end}.
+
+%% The JSON error page and the module of each stacktrace frame on it.
+error_page(#{resp_body := Body}) when is_binary(Body); is_list(Body) ->
+    Page = iolist_to_binary(Body),
+    case json:decode(Page) of
+        #{~"stacktrace" := Frames} when is_list(Frames) ->
+            {Page, [Module || #{~"module" := Module} <- Frames]}
+    end.
 
 setup() ->
     Prev = nova_test_helper:setup_nova_env(),

@@ -12,6 +12,7 @@
          headers_option_without_a_content_type_keeps_the_default/1,
          request_from_the_controller_is_used/1,
          missing_template_is_a_500/1,
+         missing_template_is_named_in_dev_only/1,
          unknown_view_name_does_not_become_an_atom/1,
          template_output_is_escaped/1,
          url_tag_adds_the_prefix_of_a_mounted_application/1,
@@ -30,6 +31,7 @@ all() ->
      headers_option_without_a_content_type_keeps_the_default,
      request_from_the_controller_is_used,
      missing_template_is_a_500,
+     missing_template_is_named_in_dev_only,
      unknown_view_name_does_not_become_an_atom,
      template_output_is_escaped,
      url_tag_adds_the_prefix_of_a_mounted_application,
@@ -115,6 +117,17 @@ request_from_the_controller_is_used(Config) ->
 %% that is there.
 missing_template_is_a_500(Config) ->
     ?assertMatch({500, _, _}, response(Config, "/views/no-template")).
+
+missing_template_is_named_in_dev_only(Config) ->
+    {500, _, Plain} = response(Config, "/views/no-template"),
+    ?assertEqual(nomatch, binary:match(Plain, ~"could not be loaded")),
+    application:set_env(nova, environment, dev),
+    try
+        {500, _, Detailed} = response(Config, "/views/no-template"),
+        ?assertMatch({_, _}, binary:match(Detailed, ~"_dtl could not be loaded"))
+    after
+        application:set_env(nova, environment, test)
+    end.
 
 %% A controller that takes the view from the request must not let a client
 %% add an atom for every name it thinks of.

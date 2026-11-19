@@ -49,48 +49,8 @@ execute(Req, Env = #{cowboy_handler := Handler, arguments := Arguments}) when is
             ?LOG_ERROR(#{msg => <<"Controller crashed">>, class => Class, reason => Reason}),
             render_response(Req#{crash_info => Payload}, maps:remove(cowboy_handler, Env), 500)
     end;
-execute(Req, Env = #{callback := Callback}) ->
-    %% Ensure that the module exists and have the correct function exported
-    UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
-    try RetObj = Callback(Req),
-         call_handler(Callback, Req, RetObj, Env, false)
-    of
-        HandlerReturn ->
-            HandlerReturn
-    catch
-        exit:{request_error, Kind, _Message} ->
-            render_request_error(Kind, Req, Env);
-        Class:{Status, Reason} when is_integer(Status) ->
-            %% This makes it so that we don't need to fetch the stacktrace
-            ?LOG_ERROR(#{msg => <<"Controller threw an exception">>,
-                         class => Class,
-                         reason => nova_redact:term(Reason)}),
-            case answered(Req) of
-                false -> render_response(Req#{crash_info => nova_redact:term(Reason)}, Env, Status);
-                {true, Req0} -> without_error_page(Req0, Env)
-            end;
-        Class:Reason0:Stacktrace when UseStacktrace == true ->
-            Reason = nova_redact:term(Reason0),
-            FormattedStacktrace = nova:format_stacktrace(Stacktrace),
-            ?LOG_ERROR(#{msg => <<"Controller crashed">>,
-                         class => Class,
-                         reason => Reason,
-                         stacktrace => FormattedStacktrace}),
-            terminate(Reason0, Req, Callback),
-            %% Build the payload object
-            Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 500,
-                                                              stacktrace => FormattedStacktrace}),
-            render_crash(Req#{crash_info => Payload}, Env, false);
-        Class:Reason0 ->
-            Reason = nova_redact:term(Reason0),
-            ?LOG_ERROR(#{msg => <<"Controller crashed">>,
-                         class => Class,
-                         reason => Reason}),
-            terminate(Reason0, Req, Callback),
-            %% Build the payload object
-            Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 500}),
-            render_crash(Req#{crash_info => Payload}, Env, false)
-    end.
+execute(Req, Env = #{callback := _Callback}) ->
+    execute_controller(Req, Env, maps:get(status_page, Env, false)).
 
 -spec terminate(any(), Req :: cowboy_req:req() | undefined, function()) -> ok.
 terminate(Reason, Req, Callback) ->
@@ -111,10 +71,56 @@ call_terminate(Module, Reason, Req, State) ->
             ok
     end.
 
+
+execute_controller(Req, Env = #{callback := Callback}, StatusPage) ->
+    UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
+    try RetObj = Callback(Req),
+         call_handler(Callback, Req, RetObj, Env, false)
+    of
+        HandlerReturn ->
+            HandlerReturn
+    catch
+        exit:{request_error, Kind, _Message} when StatusPage =:= false ->
+            render_request_error(Kind, Req, Env);
+        Class:{Status, Reason} when is_integer(Status), StatusPage =:= false ->
+            %% This makes it so that we don't need to fetch the stacktrace
+            ?LOG_ERROR(#{msg => <<"Controller threw an exception">>,
+                         class => Class,
+                         reason => nova_redact:term(Reason)}),
+            case answered(Req) of
+                false -> render_response(Req#{crash_info => nova_redact:term(Reason)}, Env, Status);
+                {true, Req0} -> without_error_page(Req0, Env)
+            end;
+        Class:Reason0:Stacktrace when UseStacktrace == true ->
+            Reason = nova_redact:term(Reason0),
+            FormattedStacktrace = nova:format_stacktrace(Stacktrace),
+            ?LOG_ERROR((crash_report(StatusPage))#{class => Class,
+                                                   reason => Reason,
+                                                   stacktrace => FormattedStacktrace}),
+            terminate(Reason0, Req, Callback),
+            %% Build the payload object
+            Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 500,
+                                                              stacktrace => FormattedStacktrace}),
+            render_crash(Req#{crash_info => Payload}, Env, StatusPage);
+        Class:Reason0 ->
+            Reason = nova_redact:term(Reason0),
+            ?LOG_ERROR((crash_report(StatusPage))#{class => Class,
+                                                   reason => Reason}),
+            terminate(Reason0, Req, Callback),
+            %% Build the payload object
+            Payload = nova_redact:crash_info(Class, Reason0, #{status_code => 500}),
+            render_crash(Req#{crash_info => Payload}, Env, StatusPage)
+    end.
+
 render_request_error(Kind, Req, Env) ->
     Status = request_error_status(Kind),
     ?LOG_WARNING(#{msg => ~"Request error in controller", kind => nova_redact:term(Kind), status_code => Status}),
     render_response(Req, Env, Status).
+
+crash_report(false) ->
+    #{msg => <<"Controller crashed">>};
+crash_report(StatusPage) ->
+    #{msg => ~"Status page crashed", status_page => StatusPage}.
 
 render_crash(Req, Env, StatusPage) ->
     case answered(Req) of
@@ -122,6 +128,14 @@ render_crash(Req, Env, StatusPage) ->
         {true, Req0} -> without_error_page(Req0, Env)
     end.
 
+render_crash_page(Req, Env = #{callback := Callback}, 500) ->
+    case Callback =:= fun nova_error_controller:server_error/1 of
+        true ->
+            reply(500, maps:without([resp_body], Req), Env);
+        false ->
+            execute_controller(nova_router:status_page_request(500, #{}, Req),
+                               Env#{app => nova, callback => fun nova_error_controller:server_error/1}, 500)
+    end;
 render_crash_page(Req, Env, _StatusPage) ->
     render_response(Req, Env, 500).
 
@@ -233,20 +247,13 @@ without_refused_body(_StatusCode, Req) ->
     Req.
 
 render_response(Req, Env, StatusCode) ->
-    case application:get_env(nova, render_error_pages, true) of
-        true ->
-            case nova_router:lookup_url('_', StatusCode, '_', nova_router:dispatch_key(Env)) of
-                {error, _} ->
-                    %% Render the internal view of nova
-                    {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, fun erlang:date/0, Req),
-                    send_response(Req0, Env);
-                {ok, _Bindings, #nova_handler_value{callback = Callback}} ->
-                    %% Recurse to the execute function to render error page
-                    execute(Req, Env#{app => nova, callback => Callback})
-            end;
-        false ->
-            {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, fun(_) -> ok end, Req),
-            send_response(Req0, Env)
+    case nova_router:lookup_url('_', StatusCode, '_', nova_router:dispatch_key(Env)) of
+        {error, _} ->
+            {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, fun erlang:date/0, Req),
+            send_response(Req0, Env);
+        {ok, _Bindings, #nova_handler_value{callback = Callback}} ->
+            execute_controller(nova_router:status_page_request(StatusCode, #{}, Req),
+                               Env#{app => nova, callback => Callback}, StatusCode)
     end.
 
 
