@@ -142,8 +142,8 @@ safe_method_generates_token_when_missing_test() ->
     setup_meck([nova_session]),
     try
         meck:expect(nova_session, get, fun(_Req, <<"_csrf_token">>) -> {error, not_found} end),
-        meck:expect(nova_session, set, fun(_Req, <<"_csrf_token">>, _Token) -> ok end),
-        Req = #{method => <<"GET">>, path => <<"/">>},
+        meck:expect(nova_session, set_provisional, fun(_Req, <<"_csrf_token">>, _Token) -> ok end),
+        Req = nova_test_helper:mock_req(~"GET", ~"/"),
         {ok, Req1, _State} = nova_csrf_plugin:pre_request(Req, #{}, #{}, #{}),
         ?assert(maps:is_key(csrf_token, Req1)),
         ?assert(is_binary(maps:get(csrf_token, Req1)))
@@ -155,8 +155,8 @@ safe_method_no_session_proceeds_without_token_test() ->
     setup_meck([nova_session]),
     try
         meck:expect(nova_session, get, fun(_Req, <<"_csrf_token">>) -> {error, not_found} end),
-        meck:expect(nova_session, set, fun(_Req, <<"_csrf_token">>, _Token) -> {error, session_id_not_set} end),
-        Req = #{method => <<"GET">>, path => <<"/">>},
+        meck:expect(nova_session, set_provisional, fun(_Req, <<"_csrf_token">>, _Token) -> {error, session_id_not_set} end),
+        Req = nova_test_helper:mock_req(~"GET", ~"/"),
         {ok, Req1, _State} = nova_csrf_plugin:pre_request(Req, #{}, #{}, #{}),
         ?assertNot(maps:is_key(csrf_token, Req1))
     after
