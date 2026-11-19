@@ -19,7 +19,17 @@
                    {crash, error | exit | throw, any()}.
 -export_type([reason/0]).
 
--callback init(State :: map()) -> {ok, State0 :: map()} | any().
+-doc """
+The options of a connection, as `init/1` returns them in
+`{ok, State, Options}`: those of `cowboy_websocket`, such as `idle_timeout`
+and `max_frame_size`.
+""".
+-type opts() :: cowboy_websocket:opts().
+-export_type([opts/0]).
+
+-callback init(State :: map()) -> {ok, State0 :: map()} |
+                                  {ok, State0 :: map(), WebsocketOptions :: opts()} |
+                                  any().
 -callback websocket_init(State :: map()) -> Result :: call_result().
 -optional_callbacks([websocket_init/1]).
 

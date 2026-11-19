@@ -4,7 +4,9 @@
 
 -export([all/0, init_per_suite/1, end_per_suite/1]).
 
--export([other_origin_is_refused/1,
+-export([init_options_reach_the_connection/1,
+         connection_without_options_keeps_the_defaults/1,
+         other_origin_is_refused/1,
          same_host_origin_is_accepted/1,
          same_host_is_compared_without_case/1,
          missing_origin_is_accepted/1,
@@ -40,7 +42,9 @@
 -define(SMALL_FRAME, 16).
 
 all() ->
-    [other_origin_is_refused,
+    [init_options_reach_the_connection,
+     connection_without_options_keeps_the_defaults,
+     other_origin_is_refused,
      same_host_origin_is_accepted,
      same_host_is_compared_without_case,
      missing_origin_is_accepted,
@@ -106,6 +110,18 @@ init_per_suite(Config) ->
 
 end_per_suite(_Config) ->
     nova_test_listener:stop().
+
+init_options_reach_the_connection(Config) ->
+    Port = ?config(port, Config),
+    Fits = binary:copy(~"a", ?SMALL_FRAME),
+    ?assertEqual([Fits], nova_test_listener:websocket_texts(Port, "/small/ws", Fits, 1)),
+    ?assertEqual([closed],
+                 nova_test_listener:websocket_texts(Port, "/small/ws", binary:copy(~"a", ?SMALL_FRAME + 1), 1)).
+
+connection_without_options_keeps_the_defaults(Config) ->
+    TooBigForSmall = binary:copy(~"a", ?SMALL_FRAME + 1),
+    ?assertEqual([TooBigForSmall],
+                 nova_test_listener:websocket_texts(?config(port, Config), "/plain/ws", TooBigForSmall, 1)).
 
 other_origin_is_refused(Config) ->
     ?assertMatch(<<"HTTP/1.1 403", _/binary>>, handshake(Config, "/same-host/ws", "https://evil.example")).
