@@ -440,15 +440,14 @@ get_version(Application) ->
             not_found
     end.
 
--doc "Recursively resolve nested nova_apps. Each nova_app can declare its own nova_apps dependencies. Dependencies are resolved depth-first so child app routes are registered before the parent. An application already resolved is skipped, so a cycle terminates.".
 -spec resolve_nova_apps([nova_app()]) -> [nova_app()].
 resolve_nova_apps(Apps) ->
     {Resolved, _Seen} = resolve_nova_apps(Apps, [], []),
-    Resolved.
+    lists:reverse(Resolved).
 
 -spec resolve_nova_apps([nova_app()], [nova_app()], [atom()]) -> {[nova_app()], [atom()]}.
 resolve_nova_apps([], Acc, Seen) ->
-    {lists:reverse(Acc), Seen};
+    {Acc, Seen};
 resolve_nova_apps([App | Rest], Acc, Seen) ->
     Name = nova_app_name(App),
     case lists:member(Name, Seen) of
@@ -456,8 +455,8 @@ resolve_nova_apps([App | Rest], Acc, Seen) ->
             resolve_nova_apps(Rest, Acc, Seen);
         false ->
             Nested = application:get_env(Name, nova_apps, []),
-            {NestedApps, Seen0} = resolve_nova_apps(Nested, [], [Name | Seen]),
-            resolve_nova_apps(Rest, [App | lists:reverse(NestedApps)] ++ Acc, Seen0)
+            {Acc0, Seen0} = resolve_nova_apps(Nested, [App | Acc], [Name | Seen]),
+            resolve_nova_apps(Rest, Acc0, Seen0)
     end.
 
 %% A nova_app is either the application name or {Name, Options}.

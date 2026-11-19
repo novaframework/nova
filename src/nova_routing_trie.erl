@@ -114,7 +114,7 @@ new(Opts) when is_map(Opts) ->
 -doc """
 Insert a route. `Path` is a URL or an HTTP status code, `Comparator` is an HTTP method or \`_'' to match any method.
 
-Returns `{error, conflict, Conflict}` when the trie is in strict mode and the route clashes with an existing one. In non-strict mode a clash is logged and resolved according to the `on_duplicate` option.
+Returns `{error, conflict, Conflict}` when the trie is in strict mode and the route clashes with an existing one. In non-strict mode a clash is logged and resolved according to the `on_duplicate` option. The warning names the `app` given in the options of the insert as the owner of the route that came second.
 """.
 -spec insert(path(), comparator_in(), payload(), trie()) ->
           {ok, trie()} | {error, conflict, conflict()}.
@@ -349,10 +349,10 @@ do_insert([], Comparator, Payload, Node = #{terminal := Terminal}, Options, Pref
                 #{strict := true} ->
                     {error, conflict, Conflict};
                 #{on_duplicate := overwrite} ->
-                    warn_conflict(Conflict),
+                    warn_conflict(Conflict, replaced_existing, Options),
                     {ok, Node#{terminal := Terminal#{Comparator => Payload}}};
                 _ ->
-                    warn_conflict(Conflict),
+                    warn_conflict(Conflict, ignored, Options),
                     {ok, Node}
             end
     end;
@@ -458,12 +458,14 @@ conflict(Reason, At, Existing, Incoming, ConflictsWith, IncomingPath, Comparator
       existing_methods => Methods}.
 
 warn_conflict(#{reason := Reason, comparator := Comparator, incoming_path := IncomingPath,
-                conflicts_with := ConflictsWith}) ->
+                conflicts_with := ConflictsWith}, Outcome, Options) ->
     ?LOG_WARNING(#{msg => <<"Conflicting route">>,
                    reason => Reason,
                    method => Comparator,
                    route => IncomingPath,
-                   conflicts_with => ConflictsWith}).
+                   conflicts_with => ConflictsWith,
+                   outcome => Outcome,
+                   app => maps:get(app, Options, undefined)}).
 
 insert_routes([], Trie) ->
     {ok, Trie};
