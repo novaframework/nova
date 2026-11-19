@@ -1,6 +1,6 @@
 # Routing
 
-Each nova application have their own routes file. This file contains information about all the routes existing for this application.
+Each Nova application has a router module. Its `routes/1` callback returns the routes of the application as a list of *route groups*. The module is named after the application with `_router` appended, such as `my_app_router`; `router_module` in the application environment names another one. In an Elixir application the router is `MyApp.Router`, for an application named `:my_app` as well as for one named by its module. When `router_module` is not set and no module of that name is found, Nova does not start, with `{router_module_not_found, App}`.
 
 ## Basic components
 
@@ -21,7 +21,23 @@ routes(_Environment) ->
   }].
 ```
 
-This will create a path for `/admin` which, when a user enters will call `my_controller:main/1`. The `_Environment` variable that is consumed by the `routes` function will have the value that `nova:get_environment/0` returns. The *environment* variable is an important thing cause it enables the devlopers to define different routes for different environments. To change the running environment edit the `sys.config` file to include an `{environment, Env}` tuple under the `nova` application where `Env` can be any erlang-term.
+A `GET` request to `/admin` calls `my_controller:main/1`. The argument of `routes/1` is the value of `nova:get_environment/0`, which lets a router return different routes for different environments. Set it with `{environment, Env}` under the `nova` application in *sys.config*. When it is not set it is read as `prod`, so routes a router only returns for `dev` are not served.
+
+### Route groups
+
+A route group is a map. Its keys are all optional:
+
+| Key | Description |
+|---|---|
+| `prefix` | A path put in front of every route of the group |
+| `security` | The security callback of the group, `false` or a `fun/1`. A group without the key has none, see [Secure routing](#secure-routing) |
+| `plugins` | The plugins of the group, see [Using plugins local to a set of endpoints](#using-plugins-local-to-a-set-of-endpoints) |
+| `plugins_before_security` | Plugin modules whose `pre_request/4` runs ahead of the security callback, see [Plugins](plugins.md#running-a-plugin-ahead-of-the-security-callback) |
+| `security_reads_body` | Whether the security callback of the group reads the body that `nova_request_plugin` decodes. `false` says that it does not, and ends the warning and the notice about a body that is decoded behind the callback. It answers for the callback the group declares as its `security` only, not for one the application is mounted behind. `true` says that it does, and the routes then only compile with the plugin listed under `plugins_before_security`. See [Plugins](plugins.md#saying-whether-the-security-callback-reads-the-body) |
+| `routes` | The routes |
+| `host` | Serve the group only for requests to this host, a string or a binary. A host that has groups of its own is served by those alone: groups without `host` are not consulted for it |
+| `extra_state` | A term handed to the controllers of the routes of the group that set no `extra_state` themselves |
+| `apps` | Other Nova applications to mount under the prefix of the group, see [Multiple applications](multi-app.md) |
 
 You can also defer the routing information to the controllers, like this:
 ```erlang
@@ -64,23 +80,56 @@ If a controller is listed by name only, the options will be an empty map
 These methods are not exclusive - it is possible to specify routes both in
 the main router module and in the controllers.
 
-### The routing object
-
-The routing object consists of three or four fields.
-
-### HTTP(S) Routing ###
+### HTTP routes
 
 ```
-{Route :: list(), ControllerCallback :: function(), Options :: map()}
+{Path :: list(), ControllerCallback :: function(), Options :: map()}
 ```
 
-As you saw in the initial example in the [Basic components](#basic-components) section, we defined a route for the root path `/`.
+`Options` takes `methods`, the list of methods the route answers, and
+`extra_state`. A route without `methods` answers every method.
+`{Path, ControllerCallback}` is the same as an empty options map.
 
-### Websocket routing ###
+A segment that starts with `:` is a path parameter. It matches one segment
+and reaches the controller under `bindings`, with the name as a binary key:
+
+```erlang
+{"/items/:id", fun my_app_items_controller:show/1, #{methods => [get]}}
+```
+
+```erlang
+show(#{bindings := #{~"id" := Id}}) ->
+    {json, #{id => Id}}.
+```
+
+`extra_state` hands a term of your own to the controller, under
+`extra_state` in the request. A route without the option gets the
+`extra_state` of its route group, and `undefined` when the group has none:
+
+```erlang
+{"/reports", fun my_app_reports_controller:index/1, #{methods => [get], extra_state => #{role => admin}}}
+```
+
+```erlang
+index(#{extra_state := #{role := Role}}) ->
+    {json, #{role => Role}}.
+```
+
+A route ending in `[...]` matches any number of trailing segments. They reach the controller as a list of binaries under `pathinfo` in the `extra_state` of the `Req`. If the route declares an `extra_state` that is not a map it is passed on as it is, without `pathinfo`. A websocket controller finds the same under `req` in its controller data.
+
+### Websocket routes
 
 ```
-{Route :: list(), Controller :: atom(), Options :: map()}
+{Path :: list(), Controller :: module(), Options :: map()}
 ```
+
+A websocket route takes `extra_state` like an HTTP route does, and falls back to the `extra_state` of its route group. The controller finds it in the upgrade request, under `req` in its controller data.
+
+The `init/1` callback of a websocket controller returns `{ok, State}` to accept the connection. Any other return refuses the upgrade with a `500`. It can return `{ok, State, Options}` to also set the options of the connection, where `Options` is a `nova_websocket:opts()` map such as `#{max_frame_size => 65536, idle_timeout => 30000}`. It takes the options of [cowboy_websocket](https://ninenines.eu/docs/en/cowboy/2.21/manual/cowboy_websocket/).
+
+A browser sends the cookies of your site with a websocket upgrade started by any page. Nova therefore checks where every request to a websocket route comes from, by its `Origin` and `Sec-Fetch-Site` headers, against `trusted_origins`, and answers one from another origin with `403`. See [The origin check](websockets.md#the-origin-check).
+
+The [Websockets](websockets.md) guide describes the controller.
 
 > #### Important {: .tip}
 >
@@ -89,27 +138,36 @@ As you saw in the initial example in the [Basic components](#basic-components) s
 
 ### Static files
 
-One can also define static files to be served by nova. This is done by adding a tuple to the route entries. The value of this tuple should be of size 2 or  3  where the first element is the url and the second element is the path to the file on the filesystem related from the apps `priv` directory. An additional third element can be added to the tuple to define options for this particular static file or directory.
+A route whose second element is a string serves static files. The first element is the URL path and the second the path of a file or a directory, relative to the `priv` directory of the application. A third element takes options. End the URL path with `[...]` to serve a directory:
 
-*Note*! The notation `[...]` can be used as a wildcard (Zero or many occurences) in the url-section.
-Valid options is;
+```
+{Path :: list(), LocalPath :: list()}
+{Path :: list(), LocalPath :: list(), Options :: map()}
+```
 
-- `mimetype` - which mimetype the file should be served as. If not defined nova will try to guess the mimetype based on the file extension.
-- `index_files` - a list of filenames that can be used as an index. This is relevant if a directory is served.
-- `list_dir` - Set to true if allowing the requester to list the content of a directory (if such is served)
+The options are:
+
+- `mimetype` - which mimetype the file should be served as. If not defined nova will try to guess the mimetype based on the file extension. XML, XHTML, compressed SVG (`.svgz`) and other `+xml` types are served as `application/octet-stream` unless set here, since a browser would run scripts in them on your origin. Static files are sent with `x-content-type-options: nosniff`.
+- `index_files` - a list of filenames that are served for a request to a directory. The default is `["index.html"]`.
+- `list_dir` - set to `true` to answer a request to a directory that has no index file with a listing of it. Without it such a request gets a `403`.
 
 Example:
 ```erlang
-{"/my/static/directory/[...]", "assets/a-local-dir", #{list_dir => true}},
-{"/with-index/[...]", "assets/another-dir", #{index_files => ["index.html"]}}
+{"/assets/[...]", "static"},
+{"/downloads/[...]", "downloads", #{list_dir => true}},
+{"/robots.txt", "static/robots.txt"}
 ```
+
+A directory route only serves what is inside that directory. A request whose trailing segments are empty, `.` or `..`, or contain `/`, `\` or a NUL byte, is answered with `404`, whatever the router in front of it let through. Symbolic links are resolved first: a link that points inside the directory is served, one that points out of it is a `404`. Set `follow_external_symlinks => true` in the options of the route to serve links that leave the directory. The directory itself is resolved once, when the routes are compiled, and files are checked against and served from where it was then. A relative path means the directory it named in the working directory the node had at that time, also after the working directory has changed. If a symbolic link on the way to the directory is changed while Nova runs, files are still served from where it pointed before, so restart Nova after such a change. With `follow_external_symlinks` no link is resolved, and such a change takes effect at once. A route to a single file given as a relative path also serves the file that path named when the routes were compiled. A request under a directory that has been removed since, or cannot be resolved, is answered with `404`, and the first one is logged as the error `Static directory cannot be served`. A file that is missing from a directory that is there is a `404` without a log entry. A route to a single file whose file is gone or cannot be read is answered with `404` and logged once as the error `Static file cannot be served`.
+
+A `Range` request for one byte range is answered with `206` and that part of the file, a suffix range such as `bytes=-500` included. A range that starts past the end of the file, or a suffix of no bytes, gets `416`. A range that is not valid, such as `bytes= 0-1` or `bytes=5-2`, a range unit other than `bytes`, and a request for several ranges are ignored, so the whole file is sent with `200`. A range sent with `If-Range` is ignored too: static files carry no `ETag` or `Last-Modified` for it to match. The local path of a static route may be relative to the working directory of the node.
 
 ## How to create routes
 
 A route consists of three different components:
 
 * `Path` - This is the actual path to the endpoint. Eg `"/admin"`
-* `Method` - What method you want to support for this endpoint (get, post, update, delete). If you want to support all methods you can use the `'_'`-atom.
+* `Method` - What method you want to support for this endpoint: `get`, `post`, `put`, `delete`, `options`, `head`, `connect`, `trace` or `patch`, as an atom in either case. Any other method, such as `PURGE` or `PROPFIND`, is written as a binary or a string. Those are matched as they are written, since a method is case-sensitive: write `<<"PURGE">>`, not `<<"purge">>`. If you want to support all methods you can use the `'_'`-atom. Any other atom, a misspelling included, or a binary or string that is not a method token ([RFC 9110](https://www.rfc-editor.org/rfc/rfc9110#section-9.1)), stops the application from starting with `{invalid_method, Method}`. Earlier releases silently treated it as `'_'`, so the route answered every method.
 * `ControllerCallback` - What erlang callback should be called on when the path gets called. This is defined as a function reference, eg `fun my_controller:main/1`.
 
 ## Using prefix
@@ -120,11 +178,28 @@ Prefix is defined at top level of a route-entry which can be seen in the [Basic 
 
 ## Secure routing
 
-When building web applications, ensuring the security of your routing layer is critical. Nova Framework’s routing system is designed with flexibility and security in mind, but developers must implement best practices to protect their applications from common vulnerabilities. This section outlines key considerations and features of Nova's routing system to help you achieve secure routing.
+A route is protected by the security callback of its route group. Where the callback is declared matters:
+
+| Where | Key | Effect |
+|---|---|---|
+| Route group map | `security` | The callback runs for every route of the group |
+| `nova_apps` entry of an application | `secure` | The callback runs in front of every route group of that application |
+| `nova_apps` entry of an application | `override_secure` | The callback replaces the ones the application declares |
+
+Nothing else is read:
+
+* A route group without a `security` key has no callback. Its routes are public, unless a `nova_apps` entry the application is mounted through has `secure` or `override_secure`, or the application is listed under the `apps` key of a route group with `security`.
+* A `security` or `secure` key in the options map of a single route is not read. Put routes that need another callback in a route group of their own.
+* A `secure` key in a route group is not read. The key of a route group is `security`.
+* A `security` key in a `nova_apps` entry is not read. The key of an entry is `secure`.
+
+A callback written in one of those places would protect nothing, so Nova refuses the routes: with any value but `false` it logs the error `This key is not read here, so the callback would protect nothing ...` for each such key, with the application, the path and the key, and the application does not start, with `{misplaced_security, App, Key, Path}`. `nova_router:add_routes/2,3` throw `{error, {misplaced_security, App, Key, Path}}` for the same routes. With `false` as the value the key is logged as a warning and the routes are compiled.
+
+`rebar3 nova audit` lists the routes that change state and have no callback, see [Rebar3 Nova](rebar3_nova.md). The [Security](security.md) guide has complete examples.
 
 ### Invoking security functions for a set of endpoints
 
-You can define a security function that will be called before the actual controller is called. This is useful if you want to check if the user is allowed to access the endpoint. The security function should return a boolean value (Or a special one - more about that later in this section). If the function returns `false` the request will be stopped and a `401` status code will be returned.
+A security function is called before the controller, to decide if the request is allowed. It returns `true` to let the request through and `false` to answer it with `401`; the other return values are listed below.
 
 The following code will invoke `security_controller:do_security/1` before calling the actual controller to do the security check.
 
@@ -143,9 +218,15 @@ routes(_Environment) ->
     }].
 ```
 
+The callback runs after `pre_security/4` of the `pre_request` plugins of the route, and before their `pre_request/4` and the controller. The [request pipeline](plugins.md#request-pipeline) section of the plugins guide has the whole order.
+
+`security` takes `false`, a `fun/1` or the deprecated `{Module, Function}`. Any other value, `true` included, is logged as an error and stops the application from starting with `{invalid_security, Value}`. The same goes for `secure` and `override_secure` in `nova_apps`.
+
+The security function runs before a plugin reads the body, so `json`, `params` and `files` are not in the request it gets. `plugins_before_security => [Module]` in the route group runs `pre_request/4` of the listed plugins ahead of the security function; see [Running a plugin ahead of the security callback](plugins.md#running-a-plugin-ahead-of-the-security-callback). A route group whose callback does not read them says so with `security_reads_body => false`, see [Saying whether the security callback reads the body](plugins.md#saying-whether-the-security-callback-reads-the-body).
+
 ### The security-function callback
 
-The most simple way to implement a security function is to return a boolean value. If the function returns `false` the request will be stopped and a `401` status code will be returned. There's also an additional return value that can be used to store data that will be available to the controller. This is particularly useful if you want to pass data like user information, roles, etc. to the controller.
+A security function takes the request and returns one of the values below. With `{true, Data}` it hands data to the controller, such as the user and its roles.
 
 #### Return values for the secure function
 
@@ -153,13 +234,16 @@ The most simple way to implement a security function is to return a boolean valu
 | ---------------- | --------------- |
 | `true` | The request will continue to the controller. |
 | `{true, Data :: term()}` | The request will continue to the controller and the data will be available in the `Req` object under the `auth_data` key. |
-| `{redirect, Url :: binary()}` | The request will be redirected to the specified URL with HTTP status 302. |
+| `{redirect, Url :: binary() \| string()}` | The request will be redirected to the specified URL with HTTP status 302. The URL can name another site. |
+| `{redirect_local, Path :: binary() \| string()}` | As above, but only to a path on the site the request was made to, such as `/login`. Anything else, `https://example.com/` and `//example.com/` included, is answered with `400` and logged as a warning. Use it when the target comes from the request. |
 | `false` | The request will be stopped and a `401` status code will be returned. |
 | `{false, Headers :: map()}` | Same as above but also adds additional headers to the response. |
 | `{false, StatusCode :: integer(), Headers :: map()}` | Same as above but uses a custom status code. |
 | `{false, StatusCode :: integer(), Headers :: map(), Body :: iodata()}` | Same as above but also adds a custom body to the response. |
 
-*Note* If `false` is returned in any form the request will be stopped from executing the controller.
+Any other return value is answered with `401`, and a function that crashes with `500`.
+
+*Note* If `false` is returned in any form the request will be stopped from executing the controller. The reply has an empty body unless you return one with `{false, StatusCode, Headers, Body}`: status-code routes (below) are not rendered for a refused request, and the `post_request` plugins do not run for it.
 
 
 ```erlang
@@ -175,19 +259,22 @@ do_security(Req) ->
     end.
 
 get_user(Req) ->
-    ## Do some validatation and return the user
-    {ok, #{name => "John Doe", role => "Admin"}}.
+    case nova_session:get(Req, ~"user_id") of
+        {ok, UserId} -> {ok, #{id => UserId}};
+        {error, _} -> not_found
+    end.
 ```
 
-Once the security function has been called, the data will be available in the `Req` object under the `auth_data` key.
+Once the security function has been called, the data will be available in the `Req` object under the `auth_data` key. A websocket controller gets it under `auth_data` in its controller data, and in the upgrade request under `req` there. A [plugin](plugins.md#before-and-after-the-security-callback) cannot put something else in its place. What a plugin writes under `auth_data` stays only when the callback returns a plain `true`, and on a route without a callback.
+
+A route group of an [included application](multi-app.md#security-of-a-mounted-application) can have several callbacks: the `secure` of every `nova_apps` entry its application is mounted through, and its own `security`. They run in that order and all have to allow the request. The controller gets the data of the last callback that returned some.
 
 ```erlang
 -module(my_controller).
 -export([main/1]).
 
-main(Req = #{auth_data := User}) ->
-    io:format("User: ~p~n", [User]),
-    {ok, Req, <<"Hello world!">>}.
+main(#{auth_data := #{user := #{id := UserId}}}) ->
+    {json, #{user_id => UserId}}.
 ```
 
 ## Using plugins local to a set of endpoints
@@ -209,8 +296,20 @@ In the example above we have enabled the *pre-request*-plugin `nova_json_schemas
 You can also include *post-request*-plugins in the same way.
 
 By default a route entry that declares `plugins` uses exactly those, and one
-that does not uses the plugins configured globally. Set `plugin_strategy` on
-the entry to combine them instead:
+that does not uses the plugins configured globally. Set `plugin_strategy` in
+the application's `nova_apps` options to combine them instead (available since
+0.17.0):
+
+```erlang
+{nova_apps, [{my_app, #{plugin_strategy => global_first}}]}
+```
+
+`plugin_strategy` is an option of a `nova_apps` entry and applies to every
+route entry of the application the entry names. The application that starts
+the listener sets it for its own routes with an entry for itself in its own
+`nova_apps`, as above, and for an application it includes in the entry of
+that application. A `plugin_strategy` key on a single route entry is
+ignored, and a warning is logged once per application.
 
 | Value | Plugins used |
 |---|---|
@@ -238,6 +337,23 @@ itself. Set `override_secure` in the options for that application:
 It takes the same values as `secure`: `false` for no override, a `fun/1`, or
 the deprecated `{Module, Function}`.
 
+It also covers the applications that the included application includes
+itself, as `secure` does. One of those can have an `override_secure` of its
+own, and then both callbacks have to allow a request. The
+[multi-app guide](multi-app.md#applications-included-by-an-included-application)
+has the details.
+
+`override_secure` is the only option that replaces a callback a route group
+declares. `secure` in the same place adds one: its callback runs in front of
+every route group of the included application. A group that declares
+`security` keeps its callback, which runs second, and a request has to be
+allowed by both. The first of the two that does not allow it answers the
+request, with the redirect, status, headers and body it returns, and the
+other one is not run. The controller gets the `auth_data` of the group's
+callback when that returns `{true, Data}`, and otherwise the data of the
+`secure` callback. To open up a group that declares a callback, override it
+with a callback that returns `true`.
+
 
 ## Route precedence
 
@@ -254,8 +370,13 @@ Matching backtracks, so a route is only skipped if nothing below it can match.
 serves the literal path and `/users/:id` serves everything else.
 
 Once a path matches, the method is resolved. An exact method wins over a route
-declared with `'_'`. If the path matches but the method does not, Nova answers
-`405` with an `allow` header listing the methods that path does accept.
+declared with `'_'` for the same path when it is declared first. Declared
+after the `'_'` route, it is a duplicate, see below. If the path matches but the method does not, Nova answers
+`405` with an `allow` header listing the methods that path does accept. No
+plugin runs for such a request, with one exception: a CORS preflight runs
+`pre_security/4` of the plugins of the route for the method it asks about
+before the `405`, so that `nova_cors_plugin` can answer it. When none
+answers, the `post_request` plugins of that route run after the `405`.
 
 If two routes declare the same path *and* the same method, the first one
 registered wins and the second is logged and ignored. Set
@@ -263,13 +384,107 @@ registered wins and the second is logged and ignored. Set
 Nova refuse to start on a conflict instead, which also reports overlapping
 literal and binding routes.
 
+## Paths that are not canonical
+
+A request whose path is not written the way it is routed is answered with
+`400` before a route is looked up. No plugin and no security callback runs
+for it. The answer is the `400` status-code route of the application when it
+has one, and a `400` without a body otherwise.
+
+| Path | Answer |
+|---|---|
+| `//a`, `/a//b`, `/a//` | `400`: an empty segment ahead of the last one |
+| `/a/./b`, `/a/../b`, `/a/..` | `400`: a `.` or `..` segment |
+| `/a/%2e%2e/b`, `/a/%2E/b` | `400`: the same, percent-encoded |
+| `/a/` | Routed as `/a`. One trailing slash is not refused |
+| `/a/...`, `/.well-known/a`, `/a%2fb`, `/a%5cb` | Routed as written |
+| `a`, a path without a leading slash, which HTTP/2 lets a client send | `400`, whatever the setting is |
+
+A proxy, a cache or a filter in front of Nova may read such a path another
+way than Nova does. Refusing it leaves nothing to disagree about.
+
+`non_canonical_paths` in the `nova` environment takes `reject`, the default,
+and `resolve`:
+
+```erlang
+{nova, [{non_canonical_paths, resolve}]}
+```
+
+With `resolve` a path is routed after empty segments are dropped and `.` and
+`..` are resolved, as in earlier releases: `/public/../admin//users` is
+routed as `/admin/users`. Any other value stops the boot with
+`{invalid_setting, non_canonical_paths, Value}`.
+
+The `path` in the request map is what the client sent, in both modes. With
+`reject` it still differs from the routed path by a trailing slash. A plugin
+or security callback that decides by path must use
+`nova_router:canonical_path/1`, and compare whole segments: `/api` is not a
+prefix of `/apikeys`.
+
+```erlang
+is_admin_path(Req) ->
+    case binary:split(nova_router:canonical_path(Req), ~"/", [global, trim_all]) of
+        [~"admin" | _] -> true;
+        _ -> false
+    end.
+```
+
+The `excluded_paths` of `nova_csrf_plugin` are matched this way.
+
+## Status-code routes
+
+A route whose path is an integer handles that status code:
+
+```erlang
+#{routes => [{404, fun my_error_controller:not_found/1, #{}},
+             {500, fun my_error_controller:server_error/1, #{}}]}
+```
+
+Nova registers its own 404 and 500 handlers; an application's routes for the same codes replace them. A status-code route is rendered when a path is not canonical (400), when no route matches (404), when the method is not allowed (405), when a controller, a plugin or the security function crashes or a plugin returns `{error, Reason}` (500), when a controller throws `{Status, Reason}`, and when a controller returns something no handler understands. It is *not* rendered for a `{status, Code}` returned by a controller, nor for a request the security function refuses or a plugin stops.
+
+A status-code route that crashes, or throws `{Status, Reason}` itself, is not rendered a second time. The request gets the 500 page; when it was the application's 500 page that failed, Nova's own; and a `500` without a body should that fail as well.
+
+## The matched route
+
+When a request matches a route, Nova stores the route's template in the
+request map under `nova_route`. Controllers, plugins, Cowboy handlers and
+websocket controllers (through `req` in their controller data) can all read
+it:
+
+```erlang
+show(#{nova_route := Route}) ->
+    %% Route is <<"/api/users/:id">> for a request to /api/users/42
+    {json, #{route => Route}}.
+```
+
+The template is:
+
+- A binary, in Nova's own route syntax: `:name` for bindings and `[...]` for
+  a catch-all, for example `<<"/users/:id">>` or `<<"/assets/[...]">>`.
+- The declared path joined with every prefix above it: the route group's
+  `prefix` and, for an included application, the prefix it is mounted under.
+  An application mounted under `/sub` with a route `/hello` gives
+  `<<"/sub/hello">>`.
+- Set for controller routes, static file routes and websocket routes.
+- Not set when nothing matched, so it is absent on `404` and `405` responses
+  rendered by the router.
+- Kept when a plugin or controller crashes and Nova renders a status page, so
+  an error page or a `post_request` plugin still sees the route that failed.
+
+The host is not part of the template. Two route groups on different hosts, or
+two applications mounted under prefixes that produce the same path, share a
+template, so pair it with `app` when you need to tell them apart.
+
+The template has low cardinality, which makes it the right label for metrics
+and trace span names. Use it instead of the raw path, which carries IDs.
+
 ## Adding routes programatically
 
 You can also add routes programatically by calling `nova_router:add_routes/2`. This is useful if you want to add routes dynamically. The spec for it is:
 
 ```erlang
 %% nova_router:add_routes/2 specification
--spec add_routes(App :: atom(), Routes :: map() | [map()]) -> ok.
+-spec add_routes(App :: atom(), Routes :: [map() | [map()]] | map()) -> ok.
 ```
 
 First argument is the application you want to add the route to. The second argument is the route or a list of routes you want to add - it uses the same structure as in the regular routers.
@@ -280,8 +495,15 @@ nova_router:add_routes(my_app, #{prefix => "/admin", routes => [{"/", fun my_con
 
 This will add the routes defined in the second argument to the `my_app` application.
 
-**Note**: If a route already exists it will be overwritten. This is the one
+**Note**: If a route already exists it will be overwritten, unless
+`use_strict_routing` is `true`: then `add_routes` throws
+`{error, {route_conflict, Conflict}}`. This is the one
 place where a later route wins; routes compiled at startup keep the first.
+
+Routes added this way live in the routing table of the running listener. When
+Nova starts, each listener compiles its table from the routers again, so
+routes added at runtime, and routes a router no longer returns, are gone
+after a restart.
 
 If the application has a router module you can leave the routes out and let
 Nova call it for you:
