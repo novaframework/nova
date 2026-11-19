@@ -209,8 +209,9 @@ read_file_part(Req, Mod, InitArgs, Limits, Deadline, PartCount, TotalSize, Param
             warn(400, <<"Handler rejected part.">>, #{error => safe_label(Reason)}),
             {stop, reply(400, Req)};
         {error, Reason} ->
-            warn(500, <<"Handler failed to init.">>, #{error => safe_label(Reason)}),
-            {stop, reply(500, Req)}
+            Status = handler_error_status(Reason),
+            warn(Status, <<"Handler failed to init.">>, #{error => safe_label(Reason)}),
+            {stop, reply(Status, Req)}
     end.
 
 stream_part_body(Req, Mod, HandlerState, Limits, Deadline, PartSize, TotalSize) ->
@@ -247,9 +248,10 @@ consume_chunk(Data, Req, Mod, HandlerState, Limits, Deadline, PartSize0, TotalSi
                 {ok, HandlerState0} ->
                     finish_part(Req, Mod, HandlerState0, TotalSize);
                 {error, Reason} ->
-                    warn(500, <<"Multipart handler rejected a chunk.">>, #{error => safe_label(Reason)}),
+                    Status = handler_error_status(Reason),
+                    warn(Status, <<"Multipart handler rejected a chunk.">>, #{error => safe_label(Reason)}),
                     safe_abort(Mod, Reason, HandlerState),
-                    {aborted, 500, Req}
+                    {aborted, Status, Req}
             end
     end.
 
@@ -291,6 +293,9 @@ error_status({request_error, payload_too_large, _}) -> 413;
 error_status({request_error, {multipart, _}, _}) -> 400;
 error_status({badmatch, _}) -> 400;
 error_status(_) -> 500.
+
+handler_error_status(spool_full) -> 503;
+handler_error_status(_Reason) -> 500.
 
 %% A handler that raises or returns something other than {ok, _} | {error, _}
 %% must not unwind past the abort path. The exception stays in the log; the
