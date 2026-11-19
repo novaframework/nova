@@ -255,3 +255,119 @@ callback_crash_stacktrace_test_() ->
         CrashInfo = maps:get(crash_info, Req1),
         ?assert(is_list(maps:get(stacktrace, CrashInfo)))
     end}.
+
+%%====================================================================
+%% Several callbacks on one route -> each has to allow, in order
+%%====================================================================
+
+%% A callback that tells the test it ran and then answers with Result.
+answering(Name, Result) ->
+    fun(_Req) ->
+            self() ! {called, Name},
+            case Result of
+                raise -> error({raised_by, Name});
+                _ -> Result
+            end
+    end.
+
+called() ->
+    receive
+        {called, Name} -> [Name | called()]
+    after 0 ->
+        []
+    end.
+
+execute_all(Callbacks) ->
+    execute_all(Callbacks, env()).
+
+execute_all(Callbacks, Env) ->
+    Result = nova_security_handler:execute(req(), Env#{secure => Callbacks}),
+    {Result, called()}.
+
+several_callbacks_allow_test_() ->
+    {setup, fun setup/0, fun cleanup/1,
+     [{"every callback runs, in order, and the request goes on as it came",
+       fun() ->
+               Callbacks = [answering(first, true), answering(second, true), answering(third, true)],
+               ?assertEqual({{ok, req(), (env())#{secure => Callbacks}}, [first, second, third]},
+                            execute_all(Callbacks))
+       end},
+      {"a list of one callback is that callback",
+       fun() ->
+               Callbacks = [answering(only, {true, only_data})],
+               {{ok, Req, Env}, Called} = execute_all(Callbacks),
+               ?assertEqual({only_data, Callbacks, [only]}, {maps:get(auth_data, Req), maps:get(secure, Env), Called})
+       end},
+      {"the data of the last callback that returns some is what the controller gets",
+       [fun() ->
+                {{ok, Req, _Env}, _Called} = execute_all([answering(first, First), answering(second, Second)]),
+                ?assertEqual(Expected, maps:get(auth_data, Req, none))
+        end || {First, Second, Expected} <- [{{true, first_data}, {true, second_data}, second_data},
+                                             {{true, first_data}, true, first_data},
+                                             {true, {true, second_data}, second_data},
+                                             {true, true, none}]]},
+      {"false among them is no callback, as it is on its own",
+       ?_assertMatch({{ok, _Req, _Env}, [second]}, execute_all([false, answering(second, true)]))},
+      {"a later callback finds the data of an earlier one in the request",
+       fun() ->
+               Second = fun(Req) -> {true, {seen, maps:get(auth_data, Req)}} end,
+               {{ok, Req, _Env}, _Called} = execute_all([answering(first, {true, first_data}), Second]),
+               ?assertEqual({seen, first_data}, maps:get(auth_data, Req))
+       end},
+      {"the data of a websocket route follows the same rule, and is in the request alone",
+       [fun() ->
+                Env = (env())#{cowboy_handler => nova_ws_handler, arguments => #{module => a_controller}},
+                {{ok, Req, Env1}, _Called} = execute_all([answering(first, First), answering(second, Second)], Env),
+                ?assertEqual({Expected, #{module => a_controller}},
+                             {maps:get(auth_data, Req, none), maps:get(arguments, Env1)})
+        end || {First, Second, Expected} <- [{{true, first_data}, {true, second_data}, second_data},
+                                             {{true, first_data}, true, first_data},
+                                             {true, true, none}]]}]}.
+
+several_callbacks_refuse_test_() ->
+    Refused = fun(Callbacks) ->
+                      {{stop, Req}, Called} = execute_all(Callbacks),
+                      {maps:get(resp_status_code, Req), maps:get(resp_headers, Req), Called}
+              end,
+    Crashed = fun(Callbacks) ->
+                      {{ok, Req, Env}, Called} = execute_all(Callbacks),
+                      {maps:get(resp_status_code, Req), maps:get(callback, Env), Called}
+              end,
+    Allowing = [true, {true, some_data}],
+    {setup, fun setup/0, fun cleanup/1,
+     [{"the first refusal is the response, and no later callback runs",
+       [?_assertMatch({401, _Headers, [first]},
+                      Refused([answering(first, false), answering(second, true)])),
+        ?_assertMatch({401, #{~"x-by" := ~"first"}, [first]},
+                      Refused([answering(first, {false, #{~"x-by" => ~"first"}}),
+                               answering(second, {false, 403, #{~"x-by" => ~"second"}})])),
+        ?_assertMatch({403, #{~"x-by" := ~"first"}, [first]},
+                      Refused([answering(first, {false, 403, #{~"x-by" => ~"first"}}), answering(second, true)])),
+        ?_assertMatch({403, #{~"x-by" := ~"first"}, [first]},
+                      Refused([answering(first, {false, 403, #{~"x-by" => ~"first"}, ~"no"}),
+                               answering(second, true)])),
+        ?_assertMatch({302, #{~"location" := ~"/login"}, [first]},
+                      Refused([answering(first, {redirect, "/login"}), answering(second, true)])),
+        ?_assertMatch({401, _Headers, [first]},
+                      Refused([answering(first, {ok, allowed}), answering(second, true)]))]},
+      {"a refusal by a later callback is the response, whatever the earlier ones allowed",
+       [[?_assertMatch({401, _Headers, [first, second]},
+                       Refused([answering(first, Allow), answering(second, false)])),
+         ?_assertMatch({403, #{~"x-by" := ~"second"}, [first, second]},
+                       Refused([answering(first, Allow), answering(second, {false, 403, #{~"x-by" => ~"second"}})])),
+         ?_assertMatch({302, #{~"location" := ~"/login"}, [first, second]},
+                       Refused([answering(first, Allow), answering(second, {redirect, "/login"})])),
+         ?_assertMatch({401, _Headers, [first, second, third]},
+                       Refused([answering(first, Allow), answering(second, Allow), answering(third, false)]))]
+        || Allow <- Allowing]},
+      {"a callback that crashes ends the checks, and the 500 page takes the place of the route",
+       [?_assertEqual({500, fun nova_error_controller:status_code/1, Called}, Crashed(Callbacks))
+        || {Callbacks, Called} <- [{[answering(first, raise), answering(second, true)], [first]},
+                                   {[answering(first, true), answering(second, raise)], [first, second]},
+                                   {[answering(first, {true, some_data}), answering(second, raise),
+                                     answering(third, false)], [first, second]}]]},
+      {"a value among them that is not a callback refuses",
+       [?_assertMatch({401, _Headers, [first]}, Refused([answering(first, true), true])),
+        ?_assertMatch({401, _Headers, []}, Refused([enabled, answering(second, true)])),
+        ?_assertMatch({401, _Headers, [second]}, Refused([false, answering(second, false)])),
+        ?_assertMatch({401, _Headers, []}, Refused([]))]}]}.
