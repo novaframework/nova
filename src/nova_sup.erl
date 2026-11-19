@@ -372,23 +372,28 @@ bind(Ref, Host, Port, Configuration, CowboyOptions) ->
     end.
 
 bind_tls(Ref, Host, Port, Configuration, CowboyOptions) ->
-    TransportOpts =
-        case maps:get(ca_cert, Configuration, undefined) of
-            undefined ->
-                SSLOptions = maps:get(ssl_options, Configuration, #{}),
-                maps:to_list(SSLOptions#{port => Port, ip => Host});
-            CACert ->
-                Cert = maps:get(cert, Configuration),
-                ?LOG_DEPRECATED(<<"0.10.3">>, <<"Use of ca_cert/cert is deprecated, use ssl_options instead">>),
-                [{port, Port}, {ip, Host}, {certfile, Cert}, {cacertfile, CACert}]
-        end,
-    case cowboy:start_tls(Ref, TransportOpts, CowboyOptions) of
+    try cowboy:start_tls(Ref, tls_transport(Host, Port, Configuration), CowboyOptions) of
         {ok, _Pid} ->
             ?LOG_NOTICE(#{msg => <<"Nova starting SSL">>, port => Port}),
             {ok, true};
-        {error, Reason} ->
+        {error, Reason0} ->
+            Reason = nova_redact:tls_options(Reason0),
             ?LOG_ERROR(#{msg => <<"Could not start cowboy with SSL">>, reason => Reason}),
             {error, Reason}
+    catch
+        Class:Raised:Stacktrace ->
+            erlang:raise(Class, nova_redact:tls_options(Raised), nova_redact:stacktrace(Stacktrace))
+    end.
+
+tls_transport(Host, Port, Configuration) ->
+    case maps:get(ca_cert, Configuration, undefined) of
+        undefined ->
+            SSLOptions = maps:get(ssl_options, Configuration, #{}),
+            maps:to_list(SSLOptions#{port => Port, ip => Host});
+        CACert ->
+            Cert = maps:get(cert, Configuration),
+            ?LOG_DEPRECATED(<<"0.10.3">>, <<"Use of ca_cert/cert is deprecated, use ssl_options instead">>),
+            [{port, Port}, {ip, Host}, {certfile, Cert}, {cacertfile, CACert}]
     end.
 
 %% The ip configuration key is an address tuple in practice, but ranch also
