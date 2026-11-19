@@ -19,7 +19,8 @@
          crashing_plugin_renders_the_500_page/1,
          crashing_page_of_a_refused_request_runs_once/1,
          page_gets_the_same_request_on_every_path/1,
-         page_after_a_failed_page_gets_its_own_status/1]).
+         page_after_a_failed_page_gets_its_own_status/1,
+         pages_of_the_application_run_with_error_pages_off/1]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
@@ -43,7 +44,8 @@ all() ->
      crashing_plugin_renders_the_500_page,
      crashing_page_of_a_refused_request_runs_once,
      page_gets_the_same_request_on_every_path,
-     page_after_a_failed_page_gets_its_own_status].
+     page_after_a_failed_page_gets_its_own_status,
+     pages_of_the_application_run_with_error_pages_off].
 
 init_per_suite(Config) ->
     Routes = [#{prefix => "",
@@ -70,6 +72,10 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
     nova_test_listener:stop().
 
+init_per_testcase(pages_of_the_application_run_with_error_pages_off, Config) ->
+    application:set_env(nova, render_error_pages, false),
+    register(?OBSERVER, self()),
+    Config;
 init_per_testcase(_Case, Config) ->
     register(?OBSERVER, self()),
     Config.
@@ -176,6 +182,15 @@ shape_of(Config, Path) ->
 
 shape(Status, Data, Crashed) ->
     iolist_to_binary(io_lib:format("~0p", [{Status, #{status => Status, data => Data}, Crashed}])).
+
+%% render_error_pages is about the pages of Nova. The application declared
+%% these, so they answer.
+pages_of_the_application_run_with_error_pages_off(Config) ->
+    [?assertEqual({Path, {Status, iolist_to_binary([~"page ", integer_to_binary(Status)])}},
+                  {Path, nova_test_listener:get(?config(port, Config), Path)})
+     || {Path, Status} <- [{"/nowhere", 404}, {"/gone", 404}, {"/crash", 500}, {"/throw", 500},
+                           {"/guarded/page", 500}, {"/failing-plugin/page", 500}]],
+    ?assertEqual([{page, 404}, {page, 404}, {page, 500}, {page, 500}, {page, 500}, {page, 500}], observations()).
 
 observations() ->
     receive

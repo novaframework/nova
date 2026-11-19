@@ -247,21 +247,15 @@ without_refused_body(_StatusCode, Req) ->
     Req.
 
 render_response(Req, Env, StatusCode) ->
-    case application:get_env(nova, render_error_pages, true) of
-        true ->
-            case nova_router:lookup_url('_', StatusCode, '_', nova_router:dispatch_key(Env)) of
-                {error, _} ->
-                    %% Render the internal view of nova
-                    {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, fun erlang:date/0, Req),
-                    send_response(Req0, Env);
-                {ok, _Bindings, #nova_handler_value{callback = Callback}} ->
-                    execute_controller(nova_router:status_page_request(StatusCode, #{}, Req),
-                                       Env#{app => nova, callback => Callback}, StatusCode)
-            end;
-        false ->
-            {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, fun(_) -> ok end, Req),
-            send_response(Req0, Env)
+    case nova_router:lookup_url('_', StatusCode, '_', nova_router:dispatch_key(Env)) of
+        {error, _} ->
+            {ok, Req0} = nova_basic_handler:handle_status({status, StatusCode}, fun erlang:date/0, Req),
+            send_response(Req0, Env);
+        {ok, _Bindings, #nova_handler_value{callback = Callback}} ->
+            execute_controller(nova_router:status_page_request(StatusCode, #{}, Req),
+                               Env#{app => nova, callback => Callback}, StatusCode)
     end.
+
 
 function_exported(Module, Function, Arity) ->
     Exports = Module:module_info(exports),
