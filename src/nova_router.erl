@@ -578,6 +578,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
 
     Secure = resolve_secure(Options, RouteInfo, RouterFile),
 
+    ok = removed_keys(RouteInfo, Named),
     Order = #{before => plugins_before_security(RouteInfo, Plugins, Named), secured => Secure =/= false},
     ok = warn_about_order(RouteInfo, Secure, Plugins, Order, Named),
     Value = #nova_handler_value{secure = Secure, app = App, plugins = normalize_plugins(Plugins, Order),
@@ -1214,6 +1215,15 @@ invalid_plugins_before_security(Value, Group) ->
     ?LOG_ERROR(Group#{msg => ~"plugins_before_security of a route group must be all or a list of its pre_request plugins that have pre_request/4",
                       setting => plugins_before_security, value => Value}),
     throw({error, {invalid_setting, plugins_before_security, Value}}).
+
+-spec removed_keys(RouteInfo :: map(), Named :: map()) -> ok.
+removed_keys(#{plugins_after_security := _}, Named) ->
+    {plugins_after_security, Replacement} = lists:keyfind(plugins_after_security, 1, nova_settings:removed()),
+    ?LOG_ERROR(Named#{msg => nova_settings:removed_notice(plugins_after_security),
+                      setting => plugins_after_security, replaced_by => Replacement}),
+    throw({error, {invalid_setting, plugins_after_security, {replaced_by, Replacement}}});
+removed_keys(_RouteInfo, _Named) ->
+    ok.
 
 method_to_binary('_') ->
     '_';

@@ -26,6 +26,7 @@
          plugins_before_security_that_names_no_plugin_fails_the_boot/1,
          plugins_before_security_of_a_route_group_that_names_none_of_its_plugins_fails_the_boot/1,
          setting_that_is_gone_fails_the_boot/1,
+         plugins_after_security_of_a_route_group_fails_the_boot/1,
          csrf_settings_nothing_can_go_by_fail_the_boot/1,
          secret_that_fails_the_boot_is_not_told/1,
          secret_is_not_told_by_a_boot/1,
@@ -66,6 +67,7 @@ all() ->
      plugins_before_security_that_names_no_plugin_fails_the_boot,
      plugins_before_security_of_a_route_group_that_names_none_of_its_plugins_fails_the_boot,
      setting_that_is_gone_fails_the_boot,
+     plugins_after_security_of_a_route_group_fails_the_boot,
      csrf_settings_nothing_can_go_by_fail_the_boot,
      secret_that_fails_the_boot_is_not_told,
      secret_is_not_told_by_a_boot,
@@ -313,6 +315,20 @@ setting_that_is_gone_fails_the_boot(_Config) ->
      || {Key, Value, Replacement} <- [{plugins_after_security, [nova_request_plugin], plugins_before_security},
                                       {allowed_origins, any, trusted_origins},
                                       {csrf_secret, binary:copy(~"s", 32), secret_key_base}]].
+
+plugins_after_security_of_a_route_group_fails_the_boot(_Config) ->
+    Group = #{prefix => "/admin", plugins => [{pre_request, nova_request_plugin, #{}}],
+              plugins_after_security => [nova_request_plugin],
+              routes => [{"/", fun nova_boot_pages:page/1, #{methods => [get]}}]},
+    {Result, Events} = nova_test_log:collect(fun() -> nova_test_listener:try_start(#{host => [Group]}) end),
+    ?assertMatch({error, {nova, {{shutdown, {failed_to_start_child, nova_listener,
+                                             {invalid_setting, plugins_after_security,
+                                              {replaced_by, plugins_before_security}}}}, _}}},
+                 Result),
+    ?assertMatch([#{setting := plugins_after_security, replaced_by := plugins_before_security,
+                    app := nova_test_app, prefix := "/admin"} | _],
+                 nova_test_log:errors(Events)),
+    ?assertEqual(undefined, whereis(nova_sup)).
 
 csrf_settings_nothing_can_go_by_fail_the_boot(_Config) ->
     [?assertEqual({Settings, Reason}, {Settings, stopped_by(Settings)})
