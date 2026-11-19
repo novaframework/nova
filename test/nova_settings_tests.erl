@@ -3,7 +3,6 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(SECRET, ~"a secret of thirty-two bytes or more, for the tests").
-
 -define(KEYS, [trusted_origins, secret_key_base, csrf_token, max_sessions, non_canonical_paths,
                plugins_before_security]).
 
@@ -177,6 +176,60 @@ secret_that_is_plainly_not_random_stops_the_boot_test_() ->
                            {one_of_two, [?SECRET, binary:copy(~"changeme", 4)]},
                            {other_of_two, [binary:copy(~"s", 64), ?SECRET]}]].
 
+%% What `base64:encode(crypto:strong_rand_bytes(48))`, `openssl rand -base64 48`
+%% and `openssl rand -hex 32` give, and 32 bytes as they come.
+secret_of_a_random_source_is_taken_test_() ->
+    [{lists:flatten(io_lib:format("~0p", [Shape])),
+      ?_assertMatch(#{secret_key_base := [_ | _]}, booted_with([{secret_key_base, Value}]))}
+     || {Shape, Value} <- [{base64, ~"pT4mQ0fYxk8Hn2cWv7sJ1dLrA9uEoZb3KiG5yNqXwC6tRhVlMeSaUjOgBfDzIP+/"},
+                           {hex, ~"9f2c41d7a0b3e85c6d1f7a924be03c58d6a1f09e7b34c2d85a60f1e39c7b4d20"},
+                           {bytes, binary:decode_hex(~"9f2c41d7a0b3e85c6d1f7a924be03c58d6a1f09e7b34c2d85a60f1e39c7b4d20")},
+                           {eight_bytes, ~"abcdefghabcdefghhgfedcbahgfedcba"},
+                           {two, [?SECRET, ~"9f2c41d7a0b3e85c6d1f7a924be03c58"]}]].
+
+%% A setting that was in no release and is gone stops the boot, and what is
+%% raised and logged names the one that took its place and not the value.
+removed_settings_stop_the_boot_test_() ->
+    [{atom_to_list(Key),
+      fun() ->
+              application:set_env(nova, Key, Value),
+              try
+                  {Raised, Events} = nova_test_log:collect(fun() ->
+                                                                   try nova_settings:validate()
+                                                                   catch error:Reason -> {stopped, Reason}
+                                                                   end
+                                                           end),
+                  ?assertEqual({stopped, {invalid_setting, Key, {replaced_by, Replacement}}}, Raised),
+                  ?assertMatch([#{setting := Key, replaced_by := Replacement, msg := _}],
+                               nova_test_log:errors(Events)),
+                  [#{msg := Notice} = Report] = nova_test_log:errors(Events),
+                  ?assertNotEqual(nomatch, binary:match(Notice, atom_to_binary(Replacement))),
+                  ?assertNot(is_map_key(value, Report)),
+                  ?assertEqual(nomatch, binary:match(iolist_to_binary(io_lib:format("~0p", [{Raised, Events}])),
+                                                     ?SECRET))
+              after
+                  application:unset_env(nova, Key),
+                  nova_settings:validate()
+              end
+      end}
+     || {Key, Value, Replacement} <- removed()].
+
+removed() ->
+    [{plugins_after_security, [nova_request_plugin], plugins_before_security},
+     {allowed_origins, [~"https://example.com"], trusted_origins},
+     {csrf_secret, ?SECRET, secret_key_base}].
+
+invalid_setting_is_logged_with_what_it_may_be_test() ->
+    application:set_env(nova, non_canonical_paths, allow),
+    try
+        {_, Events} = nova_test_log:collect(fun() -> ?assertError(_, nova_settings:validate()) end),
+        ?assertEqual([#{msg => nova_settings:expected(non_canonical_paths), setting => non_canonical_paths,
+                        value => allow}],
+                     nova_test_log:errors(Events))
+    after
+        nova_test_settings:unset(non_canonical_paths)
+    end.
+
 %% What is kept of a secret is the keys made from it, and not the secret.
 secret_is_not_kept_test() ->
     ok = nova_test_settings:set(secret_key_base, ?SECRET),
@@ -199,4 +252,17 @@ value_is_the_one_of_the_boot_test() ->
         ?assertEqual(5, nova_settings:value(max_sessions))
     after
         nova_test_settings:unset(max_sessions)
+    end.
+
+%% The bootstrap application has no say in these.
+settings_are_read_from_nova_alone_test() ->
+    application:set_env(nova, bootstrap_application, nova_settings_tests_app),
+    [application:set_env(nova_settings_tests_app, Key, Value)
+     || {Key, Value} <- [{max_sessions, 7}, {csrf_token, session}, {secret_key_base, ?SECRET},
+                         {trusted_origins, any}, {non_canonical_paths, resolve}, {plugins_before_security, all}]],
+    try
+        ?assertEqual(booted_with([]), booted_with([{max_sessions, 1000000}]))
+    after
+        application:unset_env(nova, bootstrap_application),
+        [application:unset_env(nova_settings_tests_app, Key) || Key <- ?KEYS]
     end.

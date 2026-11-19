@@ -39,6 +39,10 @@ Each listener owns its own routing table, so an application started on a second 
 
 -type nova_app() :: atom() | {atom(), map()}.
 
+-export([start_listener_child/1]).
+
+-export([start_pubsub_scope/0]).
+
 %% Keyed on bind: one listener per {Host, Port} is the invariant
 %% add_application/2 relies on, so that pair is the table key.
 -record(nova_listener, {
@@ -54,7 +58,10 @@ Each listener owns its own routing table, so an application started on a second 
 %%%===================================================================
 
 %%--------------------------------------------------------------------
--doc "Starts the supervisor".
+-doc """
+Starts the supervisor, which starts the listener of the bootstrap
+application as its last child. The `nova` application calls it.
+""".
 -spec start_link() -> {ok, Pid :: pid()} | ignore | {error, Error :: any()}.
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
@@ -103,7 +110,7 @@ get_started_applications() ->
         App <- Apps].
 
 %%--------------------------------------------------------------------
--doc "Every Cowboy listener Nova has started. Used by the graceful shutdown in nova_app, which has to drain all of them and not just the first.".
+-doc "The `ranch` reference of every Cowboy listener Nova has started.".
 -spec listeners() -> [ranch:ref()].
 listeners() ->
     [Ref || #nova_listener{ref = Ref} <- all_listeners()].
@@ -130,8 +137,6 @@ init([]) ->
                  period => 5},
 
     Environment = nova:get_environment(),
-
-    nova_pubsub:start(),
 
     ?LOG_NOTICE(#{msg => <<"Starting nova">>, environment => Environment}),
 
@@ -164,10 +169,20 @@ init([]) ->
             _ -> Children0
         end,
 
-    setup_cowboy(Configuration),
+    {ok, {SupFlags, [pubsub_scope_child() | Children] ++ [listener_child(Configuration)]}}.
 
+-doc false.
+-spec start_listener_child(Configuration :: map()) -> ignore | {error, Reason :: any()}.
+start_listener_child(Configuration) ->
+    setup_cowboy(Configuration).
 
-    {ok, {SupFlags, Children}}.
+-doc false.
+-spec start_pubsub_scope() -> {ok, pid()} | ignore.
+start_pubsub_scope() ->
+    case pg:start_link(nova_scope) of
+        {ok, Pid} -> {ok, Pid};
+        {error, {already_started, _Pid}} -> ignore
+    end.
 
 %%%===================================================================
 %%% Internal functions
@@ -186,7 +201,20 @@ child(Id, Type, Mod) ->
 child(Id, Mod) ->
     child(Id, worker, Mod).
 
-%% The table survives a nova_sup restart, so creating it has to be idempotent.
+pubsub_scope_child() ->
+    #{id => nova_pubsub_scope,
+      start => {?MODULE, start_pubsub_scope, []},
+      restart => permanent,
+      shutdown => 5000,
+      type => worker,
+      modules => [pg]}.
+
+listener_child(Configuration) ->
+    #{id => ?NOVA_LISTENER,
+      start => {?MODULE, start_listener_child, [Configuration]},
+      restart => temporary,
+      type => worker}.
+
 %% It is public because add_application/2 and remove_application/1 are called
 %% by whoever wants the application started, not by the supervisor process.
 ensure_listener_table() ->
@@ -225,9 +253,11 @@ setup_cowboy(Configuration) ->
             persistent_term:put(nova_use_stacktrace, UseStacktrace),
             ?LOG_NOTICE(#{msg => <<"Nova is running">>,
                           url => unicode:characters_to_binary(io_lib:format("http://~s:~B", [Host0, Port])),
-                          cowboy_version => CowboyVersion, nova_version => NovaVersion, app => App});
+                          cowboy_version => CowboyVersion, nova_version => NovaVersion, app => App}),
+            ignore;
         {error, Error} ->
-            ?LOG_ERROR(#{msg => <<"Cowboy could not start">>, reason => Error})
+            ?LOG_ERROR(#{msg => <<"Cowboy could not start">>, reason => Error}),
+            {error, {listener_not_started, Error}}
     end.
 
 -spec start_cowboy(Configuration :: map()) ->
@@ -387,6 +417,28 @@ cowboy_options(Configuration, DispatchKey, Dispatch) ->
 
 %% Returns {ok, IsTls} so the caller can record how the listener was bound.
 bind(Ref, Host, Port, Configuration, CowboyOptions) ->
+    case bind_listener(Ref, Host, Port, Configuration, CowboyOptions) of
+        {error, {already_started, _Pid}} = AlreadyStarted ->
+            case stop_nova_listener(Ref) of
+                ok -> bind_listener(Ref, Host, Port, Configuration, CowboyOptions);
+                {error, _Reason} -> AlreadyStarted
+            end;
+        Result ->
+            Result
+    end.
+
+stop_nova_listener(Ref) ->
+    try ranch:get_protocol_options(Ref) of
+        #{env := #{nova_dispatch_key := _DispatchKey}} ->
+            ?LOG_NOTICE(#{msg => <<"Replacing the listener of an earlier nova_sup">>, listener => Ref}),
+            cowboy:stop_listener(Ref);
+        _OtherOwner ->
+            {error, not_nova}
+    catch
+        error:badarg -> {error, not_found}
+    end.
+
+bind_listener(Ref, Host, Port, Configuration, CowboyOptions) ->
     case maps:get(use_ssl, Configuration, false) of
         false ->
             case cowboy:start_clear(Ref, [{port, Port}, {ip, Host}], CowboyOptions) of
