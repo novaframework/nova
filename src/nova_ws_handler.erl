@@ -1,7 +1,7 @@
 %%% Author: Niclas Axelsson <niclas@burbas.se>
 
 -module(nova_ws_handler).
--moduledoc "Callback controller for handling websockets".
+-moduledoc false.
 
 -export([
          init/2,
@@ -15,7 +15,7 @@
 
 -type nova_ws_state() :: #{controller_data := map(),
                            mod := atom(),
-                           _ := _}.
+                           _ => _}.
 
 -export_type([nova_ws_state/0]).
 
