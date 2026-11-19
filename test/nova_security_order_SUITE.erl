@@ -7,6 +7,7 @@
          body_is_decoded_for_an_allowed_request/1,
          upload_is_not_read_for_a_refused_request/1,
          refused_request_has_its_correlation_id_and_cors_headers/1,
+         preflight_nothing_answers_runs_pre_security_alone/1,
          options_that_is_no_preflight_runs_no_plugin/1,
          preflight_to_a_route_that_takes_options_meets_its_security/1,
          query_string_is_parsed_ahead_of_security/1,
@@ -35,6 +36,7 @@ groups() ->
                                body_is_decoded_for_an_allowed_request,
                                upload_is_not_read_for_a_refused_request,
                                refused_request_has_its_correlation_id_and_cors_headers,
+                               preflight_nothing_answers_runs_pre_security_alone,
                                options_that_is_no_preflight_runs_no_plugin,
                                preflight_to_a_route_that_takes_options_meets_its_security,
                                query_string_is_parsed_ahead_of_security,
@@ -111,6 +113,17 @@ refused_request_has_its_correlation_id_and_cors_headers(Config) ->
     {401, Headers, _Body} = post(Config, "/default/echo", [{"origin", "https://app.example"}], <<>>),
     ?assert(is_map_key(~"x-correlation-id", Headers)),
     ?assertEqual(~"https://app.example", maps:get(~"access-control-allow-origin", Headers)).
+
+%% The route does not take OPTIONS, so there is no security callback to wait
+%% for. What a route group lists to run ahead of its callback is not
+%% something to run where there is none: the body would be read for anybody.
+preflight_nothing_answers_runs_pre_security_alone(Config) ->
+    {Status, Headers, _Body} = preflight(Config, "/all-without-cors/echo", ~"{"),
+    ?assertEqual(405, Status),
+    ?assertEqual(~"ran", maps:get(~"x-early", Headers)),
+    ?assertNot(is_map_key(~"x-late", Headers)),
+    ?assertMatch({401, #{~"body" := true, ~"late" := true}},
+                 refused(Config, "/all-without-cors/echo", [?JSON], ~"{\"a\":1}")).
 
 options_that_is_no_preflight_runs_no_plugin(Config) ->
     [begin
