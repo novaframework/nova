@@ -27,7 +27,7 @@ init(StreamID, Req, Opts) ->
                     present -> Req;
                     absent ->
                         {ok, SessionId} = nova_session:generate_session_id(),
-                        ReqWithCookie = cowboy_req:set_resp_cookie(~"session_id", SessionId, Req,
+                        ReqWithCookie = cowboy_req:set_resp_cookie(nova_session:cookie_name(), SessionId, Req,
                                                                    nova_session:cookie_opts(Req)),
                         ReqWithCookie#{nova_session_id => SessionId};
                     unparsable ->
@@ -47,7 +47,7 @@ init(StreamID, Req, Opts) ->
 %% id but no cookie: the client may hold a valid session cookie Nova cannot
 %% read, and a new one would overwrite it on every request.
 session_cookie(Req) ->
-    try lists:keymember(~"session_id", 1, cowboy_req:parse_cookies(Req)) of
+    try lists:keymember(nova_session:cookie_name(), 1, cowboy_req:parse_cookies(Req)) of
         true -> present;
         false -> absent
     catch

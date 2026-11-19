@@ -11,7 +11,9 @@
 
 -export([
          enabled/0,
-         cookie_opts/1
+         cookie_name/0,
+         cookie_opts/1,
+         presented_session_id/1
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -89,7 +91,7 @@ delete(Req) ->
         {ok, SessionId} ->
             Mod = get_session_module(),
             Mod:delete_value(SessionId),
-            Req1 = cowboy_req:set_resp_cookie(<<"session_id">>, SessionId, Req,
+            Req1 = cowboy_req:set_resp_cookie(cookie_name(), SessionId, Req,
                                               (cookie_opts(Req))#{max_age => 0}),
             {ok, Req1};
         _ ->
@@ -117,13 +119,32 @@ enabled() ->
     nova_config:get_env(use_sessions, true) =:= true.
 
 -doc false.
+-spec cookie_name() -> binary().
+cookie_name() ->
+    case nova_config:get_env(session_cookie_name, undefined) of
+        Name when is_binary(Name), Name =/= <<>> -> Name;
+        _ -> default_cookie_name()
+    end.
+
+-spec default_cookie_name() -> binary().
+default_cookie_name() ->
+    case nova:is_dev_environment() of
+        true -> ~"session_id";
+        false -> ~"__Host-session_id"
+    end.
+
+-doc false.
 -spec cookie_opts(cowboy_req:req()) -> cow_cookie:cookie_opts().
 cookie_opts(Req) ->
     Secure = not nova:is_dev_environment() orelse maps:get(scheme, Req, ~"http") =:= ~"https",
     Defaults = #{path => ~"/", http_only => true, same_site => lax, secure => Secure},
-    case nova_config:get_env(session_cookie_opts, #{}) of
-        Configured when is_map(Configured) -> merge_cookie_opts(maps:to_list(Configured), Defaults);
-        _ -> Defaults
+    Opts = case nova_config:get_env(session_cookie_opts, #{}) of
+               Configured when is_map(Configured) -> merge_cookie_opts(maps:to_list(Configured), Defaults);
+               _ -> Defaults
+           end,
+    case cookie_name() of
+        <<"__Host-", _/binary>> -> maps:remove(domain, Opts#{secure => true, path => ~"/"});
+        _ -> Opts
     end.
 
 merge_cookie_opts([], Opts) ->
@@ -138,6 +159,23 @@ merge_cookie_opts([{same_site, Value} | Rest], Opts)
 merge_cookie_opts([_ | Rest], Opts) ->
     merge_cookie_opts(Rest, Opts).
 
+-doc false.
+-spec presented_session_id(cowboy_req:req()) -> binary() | undefined | unparsable.
+presented_session_id(Req) ->
+    Name = cookie_name(),
+    try lists:usort([Value || {Key, Value} <- cowboy_req:parse_cookies(Req), Key =:= Name]) of
+        [SessionId] when is_binary(SessionId), SessionId =/= <<>> ->
+            SessionId;
+        [_, _ | _] ->
+            warn_ambiguous_cookie(Name),
+            undefined;
+        _ ->
+            undefined
+    catch
+        exit:{request_error, _, _} ->
+            unparsable
+    end.
+
 %%%===================================================================
 %%% Private functions
 %%%===================================================================
@@ -149,12 +187,9 @@ get_session_id(Req) ->
         true ->
             case maps:get(nova_session_id, Req, undefined) of
                 undefined ->
-                    #{session_id := SessionId} = cowboy_req:match_cookies([{session_id, [], undefined}], Req),
-                    case SessionId of
-                        undefined ->
-                            {error, not_found};
-                        _ ->
-                            {ok, SessionId}
+                    case presented_session_id(Req) of
+                        SessionId when is_binary(SessionId) -> {ok, SessionId};
+                        _ -> {error, not_found}
                     end;
                 SessionId ->
                     {ok, SessionId}
@@ -162,6 +197,15 @@ get_session_id(Req) ->
         _ ->
             ?LOG_ERROR(#{msg => ~"Session called but the 'use_sessions' option is set to false"}),
             throw({nova_session, unsupported_session_used})
+    end.
+
+warn_ambiguous_cookie(Name) ->
+    case nova_once:first({?MODULE, ambiguous_cookie_warned}) of
+        true ->
+            ?LOG_WARNING(#{msg => ~"Request carried more than one session cookie, treated as no session. A cookie with the same name is probably set for a parent domain or path; a __Host- session_cookie_name prevents that",
+                           cookie => Name});
+        false ->
+            ok
     end.
 
 -spec generate_session_id() -> {ok, binary()}.
