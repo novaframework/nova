@@ -25,6 +25,8 @@ Matching is deterministic: at each depth a literal segment is tried first, then 
          insert/6,
 
          find/4,
+         canonical_segments/1,
+         is_canonical/1,
 
          member/3,
          member/4,
@@ -178,6 +180,36 @@ find(HostIn, Path, ComparatorIn, Trie) ->
                     end
             end
     end.
+
+-doc false.
+-spec canonical_segments(binary()) -> [binary()].
+canonical_segments(Path) when is_binary(Path) ->
+    canonicalise(split(Path), []).
+
+-doc false.
+-spec is_canonical(binary()) -> boolean().
+is_canonical(~"*") ->
+    true;
+is_canonical(<<"/", Segments/binary>>) ->
+    canonical_written(binary:split(Segments, ~"/", [global]));
+is_canonical(Path) when is_binary(Path) ->
+    false.
+
+canonical_written([Last]) ->
+    not is_dot_segment(Last, 0);
+canonical_written([~"" | _Tl]) ->
+    false;
+canonical_written([Segment | Tl]) ->
+    not is_dot_segment(Segment, 0) andalso canonical_written(Tl).
+
+is_dot_segment(<<>>, Dots) ->
+    Dots > 0;
+is_dot_segment(<<".", Rest/binary>>, Dots) when Dots < 2 ->
+    is_dot_segment(Rest, Dots + 1);
+is_dot_segment(<<"%2", E, Rest/binary>>, Dots) when Dots < 2, E =:= $e orelse E =:= $E ->
+    is_dot_segment(Rest, Dots + 1);
+is_dot_segment(_Segment, _Dots) ->
+    false.
 
 -spec member(host_in(), path(), trie()) -> boolean().
 member(HostIn, Path, Trie) ->

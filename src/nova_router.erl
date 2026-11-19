@@ -22,6 +22,7 @@
          lookup_url/3,
          lookup_url/4,
          dispatch_key/1,
+         canonical_path/1,
          render_status_page/2,
          render_status_page/3,
          render_status_page/5,
@@ -144,11 +145,25 @@ compile_fresh(Apps, DispatchKey) ->
 -spec execute(Req, Env :: cowboy_middleware:env()) -> {ok, Req, Env0} | {stop, Req}
                                                           when Req::cowboy_req:req(),
                                                                Env0::cowboy_middleware:env().
-execute(Req0 = #{host := Host, path := Path, method := Method}, Env) ->
+execute(Req0 = #{path := Path}, Env) ->
     StorageBackend = storage_backend(),
     DispatchKey = dispatch_key(Env),
     Req = Req0#{nova_dispatch_key => DispatchKey, nova_session_owner => self()},
-    Dispatch = StorageBackend:get(DispatchKey),
+    case is_origin_form(Path) andalso
+        (nova_settings:value(non_canonical_paths) =:= resolve orelse nova_routing_trie:is_canonical(Path)) of
+        true ->
+            route(Req, Env, StorageBackend:get(DispatchKey));
+        false ->
+            ?LOG_DEBUG(#{msg => ~"Request path is not canonical", path => Path}),
+            render_status_page('_', 400, #{error => "Path is not canonical"}, Req, Env)
+    end.
+
+-spec is_origin_form(Path :: binary()) -> boolean().
+is_origin_form(~"*") -> true;
+is_origin_form(<<"/", _/binary>>) -> true;
+is_origin_form(_Path) -> false.
+
+route(Req = #{host := Host, path := Path, method := Method}, Env, Dispatch) ->
     case nova_routing_trie:find(Host, Path, Method, Dispatch) of
         {error, not_found} ->
             logger:debug(<<"Path ~p not found for ~p in ~p">>, [Path, Method, Host]),
@@ -234,6 +249,21 @@ lookup_url(Host, Path, Method, DispatchKey) ->
     StorageBackend = storage_backend(),
     nova_routing_trie:find(Host, Path, Method, StorageBackend:get(DispatchKey)).
 
+-doc """
+The path a request is routed on, as opposed to the `path` of the request, which is what the client sent. Empty segments are dropped and `.` and `..` are resolved, so `/public/../admin//users` gives `/admin/users`.
+
+A plugin or security callback that decides by path must look at this one. Compare whole segments, not bytes: `/api` is not a prefix of `/apikeys`.
+
+A request whose path is written another way is answered `400` before a route is looked up, so before any plugin and before the security callback, unless the `nova` environment sets `non_canonical_paths` to `resolve`. What is refused is a path with an empty segment ahead of its last one (`//a`, `/a//b`), or with a `.` or `..` segment, the dots written out or percent-encoded (`/a/../b`, `/a/%2e%2e/b`). One trailing slash is not refused, so `path` and this function still differ by it: `/users/` gives `/users`. A path that does not start with a slash, which HTTP/2 lets a client send, is refused whatever `non_canonical_paths` is. The answer is the `400` status route of the application when it has one.
+""".
+-spec canonical_path(Req :: cowboy_req:req() | binary()) -> binary().
+canonical_path(#{path := Path}) ->
+    canonical_path(Path);
+canonical_path(Path) when is_binary(Path) ->
+    case nova_routing_trie:canonical_segments(Path) of
+        [] -> <<"/">>;
+        Segments -> iolist_to_binary([[$/, Segment] || Segment <- Segments])
+    end.
 
 %%--------------------------------------------------------------------
 -doc "Works the same way as add_routes/2 but with the exception that you don't need to provide the routes explicitly. When using this it's expected that there's a routing-module associated with the application. Eg. for the application 'test' the corresponding router would then be 'test_router'. Read more about routers in the official documentation.".
