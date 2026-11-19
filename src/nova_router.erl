@@ -233,7 +233,7 @@ route(Req = #{host := Host, path := Path, method := Method}, Env, Dispatch) ->
                  }
             };
         Error ->
-            ?LOG_ERROR(#{reason => <<"Unexpected return from nova_routing_trie:find/4">>,
+            ?LOG_ERROR(#{msg => ~"Unexpected return from nova_routing_trie:find/4",
                          return_object => Error}),
             render_status_page(Host, 404, #{error => Error}, Req, Env)
     end.
@@ -303,7 +303,7 @@ add_routes(App, [Routes|Tl], DispatchKey) when is_list(Routes) ->
 add_routes(App, [RouteInfo|_Tl] = Routes, DispatchKey) when is_map(RouteInfo) ->
     insert_route_maps(App, Routes, DispatchKey);
 add_routes(App, Routes, _DispatchKey) ->
-    ?LOG_ERROR(#{reason => <<"Invalid routes structure">>, app => App, routes => Routes}),
+    ?LOG_ERROR(#{msg => ~"Invalid routes structure", app => App, routes => Routes}),
     throw({error, {invalid_routes, App, Routes}}).
 
 insert_route_maps(App, Routes, DispatchKey) ->
@@ -632,7 +632,7 @@ parse_url(Host, [{Path, Callback, Options}|Tl], T = #{prefix := Prefix}, Value =
                                            fun method_to_binary/1),
             parse_url(Host, Tl, T, Value, CompiledPaths);
         OtherProtocol ->
-            ?LOG_ERROR(#{reason => <<"Unknown protocol">>, protocol => OtherProtocol,
+            ?LOG_ERROR(#{msg => ~"Unknown protocol", protocol => OtherProtocol,
                         router_file => maps:get(router_file, Options, undefined)}),
             parse_url(Host, Tl, T, Value, Tree)
     end;
@@ -766,7 +766,7 @@ storage_backend() ->
     case application:get_env(nova, dispatch_backend, persistent_term) of
         Backend when is_atom(Backend) -> Backend;
         Other ->
-            ?LOG_ERROR(#{reason => <<"dispatch_backend must be a module">>, value => Other}),
+            ?LOG_ERROR(#{msg => ~"dispatch_backend must be a module", value => Other}),
             persistent_term
     end.
 
@@ -801,15 +801,15 @@ insert(Host, Path, Combinator, Value, Tree, Options) ->
         {ok, Tree0} ->
             Tree0;
         {error, conflict, Conflict} ->
-            ?LOG_ERROR(#{reason => <<"Conflicting route">>, route => Path, combinator => Combinator,
+            ?LOG_ERROR(#{msg => ~"Conflicting route", route => Path, combinator => Combinator,
                          conflict => Conflict}),
             throw({error, {route_conflict, Conflict}})
     catch
         throw:Exception ->
-            ?LOG_ERROR(#{reason => <<"Error when inserting route">>, route => Path, combinator => Combinator}),
+            ?LOG_ERROR(#{msg => ~"Error when inserting route", route => Path, combinator => Combinator}),
             throw(Exception);
         Type:Exception ->
-            ?LOG_ERROR(#{reason => <<"Unexpected exit">>, type => Type, exception => Exception}),
+            ?LOG_ERROR(#{msg => ~"Unexpected exit", type => Type, exception => Exception}),
             throw(Exception)
     end.
 
@@ -880,7 +880,7 @@ resolve_plugins(global_only, _RouteInfo, _RouterFile) ->
 resolve_plugins({override, PluginList}, _RouteInfo, _RouterFile) when is_list(PluginList) ->
     PluginList;
 resolve_plugins(Strategy, RouteInfo, RouterFile) ->
-    ?LOG_ERROR(#{reason => <<"Unknown plugin_strategy, falling back to local_or_global">>,
+    ?LOG_ERROR(#{msg => ~"Unknown plugin_strategy, falling back to local_or_global",
                  plugin_strategy => Strategy, router_file => RouterFile}),
     resolve_plugins(local_or_global, RouteInfo, RouterFile).
 
