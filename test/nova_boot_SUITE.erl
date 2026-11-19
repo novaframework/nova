@@ -14,6 +14,9 @@
          invalid_security_replaced_by_an_override_fails_the_boot/1,
          misplaced_security_callback_fails_the_boot/1,
          misplaced_security_that_is_false_is_warned_about/1,
+         pubsub_scope_is_restarted/1,
+         restarted_pubsub_scope_has_no_members/1,
+         pubsub_scope_started_elsewhere_is_left_alone/1,
          unknown_non_canonical_paths_fails_the_boot/1,
          unknown_trusted_origins_fails_the_boot/1,
          unknown_trusted_origins_of_a_plugin_fails_the_boot/1,
@@ -47,6 +50,9 @@ all() ->
      invalid_security_replaced_by_an_override_fails_the_boot,
      misplaced_security_callback_fails_the_boot,
      misplaced_security_that_is_false_is_warned_about,
+     pubsub_scope_is_restarted,
+     restarted_pubsub_scope_has_no_members,
+     pubsub_scope_started_elsewhere_is_left_alone,
      unknown_non_canonical_paths_fails_the_boot,
      unknown_trusted_origins_fails_the_boot,
      unknown_trusted_origins_of_a_plugin_fails_the_boot,
@@ -184,6 +190,40 @@ misplaced_security_that_is_false_is_warned_about(_Config) ->
                              || {warning, {report, #{app := App, key := Key, path := Path}}} <- Events])),
     ?assertMatch({200, _}, nova_test_listener:get(Port, "/admin/")),
     ?assertMatch({200, _}, nova_test_listener:get(Port, "/mounted/")).
+
+pubsub_scope_is_restarted(_Config) ->
+    _Port = nova_test_listener:start(#{}),
+    Scope = pubsub_scope(),
+    ?assert(is_pid(Scope)),
+    Monitor = monitor(process, Scope),
+    exit(Scope, kill),
+    receive {'DOWN', Monitor, process, Scope, killed} -> ok end,
+    ?assert(restarted(Scope, 50)),
+    ok = nova_pubsub:join(restarted_channel),
+    ?assertEqual([self()], nova_pubsub:get_members(restarted_channel)).
+
+restarted_pubsub_scope_has_no_members(_Config) ->
+    _Port = nova_test_listener:start(#{}),
+    ok = nova_pubsub:join(emptied_channel),
+    Scope = pubsub_scope(),
+    Monitor = monitor(process, nova_scope),
+    exit(Scope, kill),
+    receive {'DOWN', Monitor, process, {nova_scope, _Node}, killed} -> ok end,
+    ?assert(restarted(Scope, 50)),
+    ?assertEqual([], nova_pubsub:get_members(emptied_channel)),
+    ok = nova_pubsub:join(emptied_channel),
+    ?assertEqual([self()], nova_pubsub:get_members(emptied_channel)).
+
+pubsub_scope_started_elsewhere_is_left_alone(_Config) ->
+    {ok, Scope} = pg:start(nova_scope),
+    try
+        _Port = nova_test_listener:start(#{}),
+        ?assertEqual(undefined, pubsub_scope()),
+        ok = nova_test_listener:stop(),
+        ?assert(is_process_alive(Scope))
+    after
+        exit(Scope, kill)
+    end.
 
 unknown_non_canonical_paths_fails_the_boot(_Config) ->
     ?assertEqual({invalid_setting, non_canonical_paths, allow}, stopped_by([{non_canonical_paths, allow}])).
@@ -479,6 +519,10 @@ running(Name) ->
         Pid when is_pid(Pid) -> Pid
     end.
 
+pubsub_scope() ->
+    {nova_pubsub_scope, Pid, worker, [pg]} = lists:keyfind(nova_pubsub_scope, 1, supervisor:which_children(nova_sup)),
+    Pid.
+
 stopped(_Application, 0) ->
     false;
 stopped(Application, Attempts) ->
@@ -490,3 +534,13 @@ stopped(Application, Attempts) ->
             stopped(Application, Attempts - 1)
     end.
 
+restarted(_Old, 0) ->
+    false;
+restarted(Old, Attempts) ->
+    case whereis(nova_sup) =/= undefined andalso pubsub_scope() of
+        New when is_pid(New), New =/= Old ->
+            true;
+        _NotYet ->
+            timer:sleep(100),
+            restarted(Old, Attempts - 1)
+    end.

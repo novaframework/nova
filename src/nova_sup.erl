@@ -41,6 +41,8 @@ Each listener owns its own routing table, so an application started on a second 
 
 -export([start_listener_child/1]).
 
+-export([start_pubsub_scope/0]).
+
 %% Keyed on bind: one listener per {Host, Port} is the invariant
 %% add_application/2 relies on, so that pair is the table key.
 -record(nova_listener, {
@@ -133,8 +135,6 @@ init([]) ->
 
     Environment = nova:get_environment(),
 
-    nova_pubsub:start(),
-
     ?LOG_NOTICE(#{msg => <<"Starting nova">>, environment => Environment}),
 
     ok = nova_settings:validate(),
@@ -166,12 +166,20 @@ init([]) ->
             _ -> Children0
         end,
 
-    {ok, {SupFlags, Children ++ [listener_child(Configuration)]}}.
+    {ok, {SupFlags, [pubsub_scope_child() | Children] ++ [listener_child(Configuration)]}}.
 
 -doc false.
 -spec start_listener_child(Configuration :: map()) -> ignore | {error, Reason :: any()}.
 start_listener_child(Configuration) ->
     setup_cowboy(Configuration).
+
+-doc false.
+-spec start_pubsub_scope() -> {ok, pid()} | ignore.
+start_pubsub_scope() ->
+    case pg:start_link(nova_scope) of
+        {ok, Pid} -> {ok, Pid};
+        {error, {already_started, _Pid}} -> ignore
+    end.
 
 %%%===================================================================
 %%% Internal functions
@@ -189,6 +197,14 @@ child(Id, Type, Mod) ->
 
 child(Id, Mod) ->
     child(Id, worker, Mod).
+
+pubsub_scope_child() ->
+    #{id => nova_pubsub_scope,
+      start => {?MODULE, start_pubsub_scope, []},
+      restart => permanent,
+      shutdown => 5000,
+      type => worker,
+      modules => [pg]}.
 
 listener_child(Configuration) ->
     #{id => ?NOVA_LISTENER,
