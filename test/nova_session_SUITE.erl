@@ -85,8 +85,7 @@ lazy_cookie(Config) ->
     {200, Written, _} = request(Config, "/session/set/a", undefined),
     ?assertMatch([_], session_cookies(Written)).
 
-%% Secure unless the environment is dev, and this suite runs in test. No
-%% Max-Age: the cookie ends with the browser session.
+%% Secure unless the environment is dev, and this suite runs in test.
 attributes(Config) ->
     {200, Headers, _} = request(Config, "/session/set/a", undefined),
     [Cookie] = session_cookies(Headers),
@@ -95,7 +94,7 @@ attributes(Config) ->
     ?assert(lists:member("HttpOnly", Attributes)),
     ?assert(lists:member("SameSite=Lax", Attributes)),
     ?assert(lists:member("Secure", Attributes)),
-    ?assertEqual([], [A || "Max-Age" ++ _ = A <- Attributes]).
+    ?assert(lists:member("Max-Age=1209600", Attributes)).
 
 %% The listener of this suite has no TLS, as one behind a proxy that
 %% terminates it has none: the cookie is the one a browser keeps over https.

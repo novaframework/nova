@@ -320,19 +320,20 @@ cookie_opts_test_() ->
      fun() -> application:set_env(nova, bootstrap_application, nova) end,
      fun(_) ->
              [application:unset_env(nova, Key)
-              || Key <- [environment, session_cookie_name, session_cookie_opts, bootstrap_application]]
+              || Key <- [environment, session_cookie_name, session_cookie_opts, session_max_age,
+                         bootstrap_application]]
      end,
      [
       fun opts_prod/0,
       fun opts_dev/0,
       fun opts_configured/0,
       fun opts_host_prefix/0,
-      fun opts_no_max_age/0
+      fun opts_max_age/0
      ]}.
 
 opts_prod() ->
     application:set_env(nova, environment, prod),
-    ?assertEqual(#{path => ~"/", http_only => true, same_site => lax, secure => true},
+    ?assertEqual(#{path => ~"/", http_only => true, same_site => lax, secure => true, max_age => 1209600},
                  nova_session:cookie_opts(#{scheme => ~"http"})).
 
 opts_dev() ->
@@ -354,16 +355,23 @@ opts_host_prefix() ->
     application:set_env(nova, session_cookie_opts,
                         #{domain => ~"example.com", path => ~"/app", secure => false, same_site => strict}),
     Opts = nova_session:cookie_opts(#{scheme => ~"http"}),
-    ?assertEqual(#{path => ~"/", http_only => true, same_site => strict, secure => true}, Opts),
+    ?assertEqual(#{path => ~"/", http_only => true, same_site => strict, secure => true, max_age => 1209600},
+                 Opts),
     application:set_env(nova, environment, dev),
     application:set_env(nova, session_cookie_name, ~"__Host-sid"),
     ?assertEqual(Opts, nova_session:cookie_opts(#{scheme => ~"http"})).
 
-%% The cookie ends with the browser session, also when the options ask for
-%% a Max-Age.
-opts_no_max_age() ->
+%% The cookie lasts as long as the server keeps the session.
+opts_max_age() ->
+    ?assertMatch(#{max_age := 1209600}, nova_session:cookie_opts(#{scheme => ~"https"})),
+    application:set_env(nova, session_max_age, 60),
+    ?assertMatch(#{max_age := 60}, nova_session:cookie_opts(#{scheme => ~"https"})),
+    application:set_env(nova, session_max_age, 0),
+    ?assertMatch(#{max_age := 1209600}, nova_session:cookie_opts(#{scheme => ~"https"})),
+    application:set_env(nova, session_max_age, infinity),
+    ?assertNot(is_map_key(max_age, nova_session:cookie_opts(#{scheme => ~"https"}))),
     application:set_env(nova, session_cookie_opts, #{max_age => 3600}),
-    ?assertNot(is_map_key(max_age, nova_session:cookie_opts(#{scheme => ~"https"}))).
+    ?assertMatch(#{max_age := 3600}, nova_session:cookie_opts(#{scheme => ~"https"})).
 
 %%--------------------------------------------------------------------
 %% The name of the cookie and the session id a request presents
@@ -532,7 +540,8 @@ prefix_conflicts() ->
      end || Opts <- [#{domain => ~"example.com"}, #{path => ~"/app"}, #{secure => false}]].
 
 prefix_fits() ->
-    application:set_env(nova, session_cookie_opts, #{path => ~"/", secure => true, same_site => strict}),
+    application:set_env(nova, session_cookie_opts,
+                        #{path => ~"/", secure => true, same_site => strict, max_age => 60}),
     ?assertEqual(ok, nova_session:validate_cookie_config()),
     Opts = #{domain => ~"example.com", path => ~"/app", secure => false},
     application:set_env(nova, session_cookie_opts, Opts),
@@ -556,7 +565,7 @@ dropped_opts() ->
                              {#{domain => 'example.com'}, [domain]},
                              {#{secure => yes}, [secure]},
                              {#{http_only => 0}, [http_only]},
-                             {#{max_age => 3600}, [max_age]},
+                             {#{max_age => -1}, [max_age]},
                              {#{~"path" => ~"/"}, [~"path"]},
                              {#{unknown => 1, path => ~"/", max_age => infinity}, [max_age, unknown]}]].
 

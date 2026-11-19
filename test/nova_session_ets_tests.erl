@@ -23,7 +23,7 @@ cleanup(Pid) ->
     ok.
 
 sync() ->
-    nova_session_ets:get_value(<<"__sync__">>, <<"__sync__">>).
+    gen_server:call(nova_session_ets, sync).
 
 %%====================================================================
 %% Test generators
@@ -49,9 +49,79 @@ nova_session_ets_test_() ->
       fun unknown_cast_is_noreply/0,
       fun unknown_info_is_noreply/0,
       fun format_status_passthrough/0,
-      fun code_change_passthrough/0,
-      fun terminate_returns_ok/0
+      fun code_change_converts_old_rows/0,
+      fun terminate_returns_ok/0,
+      fun write_is_visible_without_sync/0,
+      fun session_exists_after_write/0,
+      fun session_exists_false_after_delete/0
      ]}.
+
+expiry_test_() ->
+    {foreach,
+     fun() -> application:set_env(nova, session_max_age, 1), setup() end,
+     fun(Pid) -> cleanup(Pid), application:unset_env(nova, session_max_age) end,
+     [
+      fun session_expires_after_max_age/0,
+      fun update_does_not_extend_max_age/0
+     ]}.
+
+reads_test_() ->
+    {foreach,
+     fun setup/0,
+     fun cleanup/1,
+     [
+      fun get_value_does_not_wait_for_the_server/0
+     ]}.
+
+get_value_without_the_server_test() ->
+    ?assertEqual(undefined, whereis(nova_session_ets)),
+    ?assertEqual({error, not_found}, nova_session_ets:get_value(~"s", ~"k")).
+
+%% Reads go to the table, so they do not queue behind the writes.
+get_value_does_not_wait_for_the_server() ->
+    ok = nova_session_ets:set_value(~"s", ~"k", ~"v"),
+    ok = sys:suspend(nova_session_ets),
+    try
+        ?assertEqual({ok, ~"v"}, nova_session_ets:get_value(~"s", ~"k")),
+        ?assertEqual({error, not_found}, nova_session_ets:get_value(~"s", ~"missing")),
+        ?assertEqual({error, not_found}, nova_session_ets:get_value(~"nobody", ~"k"))
+    after
+        sys:resume(nova_session_ets)
+    end.
+
+%% A request that follows the response must find what it stored.
+write_is_visible_without_sync() ->
+    ok = nova_session_ets:set_value(~"s", ~"k", ~"v"),
+    ?assertEqual({ok, ~"v"}, nova_session_ets:get_value(~"s", ~"k")),
+    ?assert(nova_session_ets:session_exists(~"s")).
+
+session_exists_after_write() ->
+    ?assertNot(nova_session_ets:session_exists(~"never-issued")),
+    ok = nova_session_ets:set_value(~"issued", ~"k", ~"v"),
+    ?assert(nova_session_ets:session_exists(~"issued")).
+
+session_exists_false_after_delete() ->
+    ok = nova_session_ets:set_value(~"gone", ~"k", ~"v"),
+    ok = nova_session_ets:delete_value(~"gone"),
+    ?assertNot(nova_session_ets:session_exists(~"gone")).
+
+session_expires_after_max_age() ->
+    ok = nova_session_ets:set_value(~"old", ~"k", ~"v"),
+    ?assert(nova_session_ets:session_exists(~"old")),
+    timer:sleep(1100),
+    ?assertNot(nova_session_ets:session_exists(~"old")),
+    ?assertEqual({error, not_found}, nova_session_ets:get_value(~"old", ~"k")),
+    Pid = whereis(nova_session_ets),
+    Pid ! sweep,
+    sync(),
+    ?assertEqual([], ets:lookup(nova_session_ets_entries, ~"old")).
+
+update_does_not_extend_max_age() ->
+    ok = nova_session_ets:set_value(~"abs", ~"k", ~"v"),
+    timer:sleep(400),
+    ok = nova_session_ets:set_value(~"abs", ~"k2", ~"v2"),
+    timer:sleep(800),
+    ?assertNot(nova_session_ets:session_exists(~"abs")).
 
 %%====================================================================
 %% Tests
@@ -141,8 +211,39 @@ format_status_passthrough() ->
     Status = #{state => test, log => [], message => undefined, reason => undefined},
     ?assertEqual(Status, nova_session_ets:format_status(Status)).
 
-code_change_passthrough() ->
-    ?assertEqual({ok, mystate}, nova_session_ets:code_change("1.0", mystate, [])).
+%% Older releases stored {SessionId, Data} and then {SessionId, Data,
+%% ExpiresAt}; a hot upgrade converts the rows of both and leaves the ones it
+%% already converted alone.
+code_change_converts_old_rows() ->
+    Pid = nova_session_ets,
+    Started = whereis(Pid),
+    Soon = erlang:system_time(millisecond) + 60000,
+    Past = erlang:system_time(millisecond) - 1,
+    ok = nova_session_ets:set_value(~"current", ~"k", ~"v"),
+    sys:replace_state(Pid, fun(State) ->
+                                   ets:insert(nova_session_ets_entries,
+                                              [{~"two", #{~"k" => ~"v"}},
+                                               {~"three", #{~"k" => ~"v"}, Soon},
+                                               {~"three-forever", #{~"k" => ~"v"}, infinity},
+                                               {~"three-expired", #{~"k" => ~"v"}, Past}]),
+                                   State
+                           end),
+    ok = sys:suspend(Pid),
+    ok = sys:change_code(Pid, nova_session_ets, "1.0", []),
+    ok = sys:change_code(Pid, nova_session_ets, "1.0", []),
+    ok = sys:resume(Pid),
+    Live = [~"two", ~"three", ~"three-forever", ~"current"],
+    [?assertEqual({Id, {ok, ~"v"}}, {Id, nova_session_ets:get_value(Id, ~"k")}) || Id <- Live],
+    [?assertEqual({Id, ok}, {Id, nova_session_ets:set_value(Id, ~"k2", ~"v2")}) || Id <- Live],
+    [?assertEqual({Id, {ok, ~"v2"}}, {Id, nova_session_ets:get_value(Id, ~"k2")}) || Id <- Live],
+    ?assertEqual({error, not_found}, nova_session_ets:get_value(~"three-expired", ~"k")),
+    ?assertMatch([{~"three", _, Soon, kept}], ets:lookup(nova_session_ets_entries, ~"three")),
+    Started ! sweep,
+    ok = gen_server:call(Pid, sync),
+    ?assertEqual([], ets:lookup(nova_session_ets_entries, ~"three-expired")),
+    ?assertEqual(4, ets:info(nova_session_ets_entries, size)),
+    ?assertEqual(4, ets:info(nova_session_ets_expiry, size)),
+    ?assertEqual(Started, whereis(Pid)).
 
 terminate_returns_ok() ->
     ?assertEqual(ok, nova_session_ets:terminate(normal, #{})).

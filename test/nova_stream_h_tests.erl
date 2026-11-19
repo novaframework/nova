@@ -38,6 +38,7 @@ cleanup(Pid) ->
     application:unset_env(nova, session_manager),
     application:unset_env(nova, session_cookie_opts),
     application:unset_env(nova, session_cookie_name),
+    application:unset_env(nova, session_max_age),
     application:unset_env(nova, environment),
     application:unset_env(nova_stream_h_tests_app, session_cookie_name),
     nova_once:forget({nova_session, ambiguous_cookie_warned}),
@@ -51,6 +52,7 @@ stream_test_() ->
       fun default_cookie_attributes/0,
       fun dev_cookie_attributes/0,
       fun secure_over_https/0,
+      fun max_age_infinity/0,
       fun settings_are_read_from_bootstrap_app/0,
       fun host_prefixed_cookie_name/0,
       fun two_session_cookies_mean_no_session/0,
@@ -95,7 +97,7 @@ default_cookie_attributes() ->
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; HttpOnly")),
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; SameSite=Lax")),
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Secure")),
-    ?assertEqual(nomatch, binary:match(Cookie, ~"Max-Age")).
+    ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Max-Age=1209600")).
 
 dev_cookie_attributes() ->
     application:set_env(nova, environment, dev),
@@ -151,22 +153,30 @@ configured_cookie_attributes() ->
     application:set_env(nova, session_cookie_name, ~"session_id"),
     application:set_env(nova, session_cookie_opts, #{secure => true, same_site => strict,
                                                      domain => ~"example.com"}),
+    application:set_env(nova, session_max_age, 3600),
     {#{nova_session_id := Id}, State} = start(req()),
     [Cookie] = set_cookies(respond(event({written, Id}, State))),
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Secure")),
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; SameSite=Strict")),
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Domain=example.com")),
+    ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Max-Age=3600")),
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; HttpOnly")).
 
 invalid_cookie_opts_are_ignored() ->
     application:set_env(nova, session_cookie_opts, #{path => "/not-a-binary", same_site => sideways,
-                                                     unknown => 1, max_age => 60, http_only => false}),
+                                                     unknown => 1, max_age => -1, http_only => false}),
     {#{nova_session_id := Id}, State} = start(req()),
     [Cookie] = set_cookies(respond(event({written, Id}, State))),
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Path=/;")),
     ?assertNotEqual(nomatch, binary:match(Cookie, ~"; SameSite=Lax")),
-    ?assertEqual(nomatch, binary:match(Cookie, ~"Max-Age")),
+    ?assertNotEqual(nomatch, binary:match(Cookie, ~"; Max-Age=1209600")),
     ?assertEqual(nomatch, binary:match(Cookie, ~"HttpOnly")).
+
+max_age_infinity() ->
+    application:set_env(nova, session_max_age, infinity),
+    {#{nova_session_id := Id}, State} = start(req()),
+    [Cookie] = set_cookies(respond(event({written, Id}, State))),
+    ?assertEqual(nomatch, binary:match(Cookie, ~"Max-Age")).
 
 known_session_is_kept() ->
     ok = nova_session_ets:set_value(~"known", ~"k", ~"v"),

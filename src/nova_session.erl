@@ -16,10 +16,13 @@
          cookie_opts/1,
          validate_cookie_config/0,
          valid_cookie/2,
-         presented_session_id/1
+         presented_session_id/1,
+         max_age/0
         ]).
 
 -include_lib("kernel/include/logger.hrl").
+
+-define(DEFAULT_MAX_AGE, 1209600).
 
 %%%===================================================================
 %%% Callbacks
@@ -159,6 +162,15 @@ default_cookie_name() ->
     end.
 
 -doc false.
+-spec max_age() -> pos_integer() | infinity.
+max_age() ->
+    case nova_config:get_env(session_max_age, ?DEFAULT_MAX_AGE) of
+        MaxAge when is_integer(MaxAge), MaxAge > 0 -> MaxAge;
+        infinity -> infinity;
+        _ -> ?DEFAULT_MAX_AGE
+    end.
+
+-doc false.
 -spec needs_https() -> boolean().
 needs_https() ->
     enabled() andalso maps:get(secure, cookie_opts_for(~"http"), false).
@@ -172,9 +184,13 @@ cookie_opts(Req) ->
 cookie_opts_for(Scheme) ->
     Secure = not nova:is_dev_environment() orelse Scheme =:= ~"https",
     Defaults = #{path => ~"/", http_only => true, same_site => lax, secure => Secure},
+    Defaults0 = case max_age() of
+                    infinity -> Defaults;
+                    MaxAge -> Defaults#{max_age => MaxAge}
+                end,
     Opts = case nova_config:get_env(session_cookie_opts, #{}) of
-               Configured when is_map(Configured) -> merge_cookie_opts(maps:to_list(Configured), Defaults);
-               _ -> Defaults
+               Configured when is_map(Configured) -> merge_cookie_opts(maps:to_list(Configured), Defaults0);
+               _ -> Defaults0
            end,
     case cookie_name() of
         <<"__Host-", _/binary>> -> maps:remove(domain, Opts#{secure => true, path => ~"/"});
@@ -187,6 +203,8 @@ merge_cookie_opts([{Key, Value} | Rest], Opts) when (Key =:= path orelse Key =:=
     merge_cookie_opts(Rest, Opts#{Key => Value});
 merge_cookie_opts([{Key, Value} | Rest], Opts) when (Key =:= secure orelse Key =:= http_only), is_boolean(Value) ->
     merge_cookie_opts(Rest, Opts#{Key => Value});
+merge_cookie_opts([{max_age, Value} | Rest], Opts) when is_integer(Value), Value >= 0 ->
+    merge_cookie_opts(Rest, Opts#{max_age => Value});
 merge_cookie_opts([{same_site, Value} | Rest], Opts)
   when Value =:= default; Value =:= none; Value =:= strict; Value =:= lax ->
     merge_cookie_opts(Rest, Opts#{same_site => Value});
