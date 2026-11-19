@@ -125,6 +125,9 @@ nova_session_ets_test_() ->
       fun invalid_cookie_domain_raises_without_stream_handler/0,
       fun renew_with_stream_handler_sets_no_cookie/0,
       fun known_presented_id_is_used/0,
+      fun client_id_is_the_presented_one_known_or_not/0,
+      fun client_id_of_a_request_without_a_cookie_is_handed_out/0,
+      fun client_id_without_stream_handler_is_the_cookie/0,
       fun unknown_presented_id_is_replaced/0,
       fun id_that_was_handed_out_is_kept_by_the_first_write/0,
       fun id_that_was_handed_out_without_a_secret_is_replaced/0,
@@ -352,6 +355,26 @@ known_presented_id_is_used() ->
     ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")),
     ok = nova_session:set(Req, ~"k2", ~"v2"),
     ?assertEqual({written, ~"known"}, stream_event()).
+
+%% What is tied to the browser goes by the cookie it holds. No session is
+%% started for it, and the id is not one a write would use.
+client_id_is_the_presented_one_known_or_not() ->
+    ok = nova_session_ets:set_value(~"known", ~"k", ~"v"),
+    ?assertEqual({ok, ~"known"}, nova_session:client_id(presented_req(~"known", ~"pending"))),
+    ?assertEqual({ok, ~"never-stored"}, nova_session:client_id(presented_req(~"never-stored", ~"pending"))),
+    ok = no_stream_event(),
+    ?assertNot(nova_session_ets:session_exists(~"never-stored")),
+    ?assertNot(nova_session_ets:session_exists(~"pending")).
+
+client_id_of_a_request_without_a_cookie_is_handed_out() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    ?assertEqual({ok, SId}, nova_session:client_id(stream_req(SId))),
+    ?assertEqual({issued, SId}, stream_event()),
+    ?assertNot(nova_session_ets:session_exists(SId)).
+
+client_id_without_stream_handler_is_the_cookie() ->
+    ?assertEqual({ok, ~"held"}, nova_session:client_id(req_with_cookie(~"held"))),
+    ?assertEqual({error, not_found}, nova_session:client_id(nova_test_helper:mock_req(~"GET", ~"/"))).
 
 %% A client must not be able to pick its own session id.
 unknown_presented_id_is_replaced() ->

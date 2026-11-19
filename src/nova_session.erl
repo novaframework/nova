@@ -43,6 +43,7 @@ minutes after a session was deleted, and a backend of your own does with
          delete/2,
          sign_in/3,
          renew/1,
+         client_id/1,
          generate_session_id/0
         ]).
 
@@ -309,6 +310,28 @@ renew(Req) ->
                false -> set_cookie(NewSessionId, cookie_opts(Req), Req)
            end,
     {ok, with_session_id(NewSessionId, Req0)}.
+
+-doc false.
+-spec client_id(Req :: cowboy_req:req()) -> {ok, SessionId :: binary()} | {error, not_found} | no_return().
+client_id(Req) ->
+    case enabled() of
+        true ->
+            held_id(Req);
+        _ ->
+            ?LOG_ERROR(#{msg => ~"Session called but the 'use_sessions' option is set to false"}),
+            throw({nova_session, unsupported_session_used})
+    end.
+
+held_id(#{nova_session_presented := Presented}) ->
+    {ok, Presented};
+held_id(#{nova_session_id := SessionId} = Req) ->
+    notify(Req, {issued, SessionId}),
+    {ok, SessionId};
+held_id(Req) ->
+    case presented_session_id(Req) of
+        SessionId when is_binary(SessionId) -> {ok, SessionId};
+        _ -> {error, not_found}
+    end.
 
 -spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} |
           {error, Reason :: atom()} | no_return().

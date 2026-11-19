@@ -49,6 +49,9 @@ stream_test_() ->
      [
       fun no_cookie_when_session_is_not_written/0,
       fun cookie_issued_when_session_is_written/0,
+      fun cookie_issued_for_an_id_that_is_handed_out/0,
+      fun handed_out_id_is_not_issued_over_a_presented_cookie/0,
+      fun handed_out_id_follows_what_the_session_does_next/0,
       fun default_cookie_attributes/0,
       fun dev_cookie_attributes/0,
       fun secure_over_https/0,
@@ -57,6 +60,7 @@ stream_test_() ->
       fun host_prefixed_cookie_name/0,
       fun two_session_cookies_mean_no_session/0,
       fun repeated_identical_cookie_is_one_session/0,
+      fun unparsable_cookie_header_never_sets_cookie/0,
       fun configured_cookie_attributes/0,
       fun invalid_cookie_opts_are_ignored/0,
       fun known_session_is_kept/0,
@@ -90,6 +94,27 @@ cookie_issued_when_session_is_written() ->
     [Cookie] = set_cookies(respond(State1)),
     ?assertMatch(<<"__Host-session_id=", _/binary>>, Cookie),
     ?assertEqual(Id, cookie_value(Cookie)).
+
+%% nova_session:client_id/1 hands the id of the request to a client that
+%% sent no cookie. Nothing is stored for it.
+cookie_issued_for_an_id_that_is_handed_out() ->
+    {#{nova_session_id := Id}, State} = start(req()),
+    [Cookie] = set_cookies(respond(event({issued, Id}, State))),
+    ?assertEqual(Id, cookie_value(Cookie)),
+    ?assertNot(nova_session_ets:session_exists(Id)).
+
+handed_out_id_is_not_issued_over_a_presented_cookie() ->
+    {_Req, State} = start(req(~"__Host-session_id=held")),
+    ?assertEqual([], set_cookies(respond(event({issued, ~"other"}, State)))).
+
+handed_out_id_follows_what_the_session_does_next() ->
+    {#{nova_session_id := Id}, State} = start(req()),
+    Issued = event({issued, Id}, State),
+    [Written] = set_cookies(respond(event({written, Id}, Issued))),
+    ?assertEqual(Id, cookie_value(Written)),
+    [Renewed] = set_cookies(respond(event({renewed, ~"renewed"}, Issued))),
+    ?assertEqual(~"renewed", cookie_value(Renewed)),
+    ?assertEqual([], set_cookies(respond(event({deleted, ~"fresh"}, Issued)))).
 
 %% Behind a proxy that terminates TLS the request is plain http, so the cookie
 %% is Secure unless the environment is explicitly dev.
@@ -146,6 +171,18 @@ two_session_cookies_mean_no_session() ->
 repeated_identical_cookie_is_one_session() ->
     {Req, _} = start(req(~"__Host-session_id=same; __Host-session_id=same")),
     ?assertEqual(~"same", maps:get(nova_session_presented, Req)).
+
+%% The client may hold a valid session cookie Nova cannot read past the rest
+%% of the header, so a write, renew or delete leaves it alone.
+unparsable_cookie_header_never_sets_cookie() ->
+    {Req, State} = start(req(~"__Host-session_id=abc; =x")),
+    #{nova_session_id := Id} = Req,
+    ?assertNot(maps:is_key(nova_session_presented, Req)),
+    ?assertEqual({ok, Id}, nova_session:client_id(Req)),
+    ?assertEqual([], set_cookies(respond(event({issued, Id}, State)))),
+    ?assertEqual([], set_cookies(respond(event({written, Id}, State)))),
+    ?assertEqual([], set_cookies(respond(event({renewed, ~"renewed"}, State)))),
+    ?assertEqual([], set_cookies(respond(event({deleted, ~"fresh"}, State)))).
 
 secure_over_https() ->
     {#{nova_session_id := Id}, State} = start((req())#{scheme => ~"https"}),

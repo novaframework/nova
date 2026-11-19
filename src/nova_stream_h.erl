@@ -101,6 +101,8 @@ session_event(_Event, undefined) ->
     undefined;
 session_event({written, SessionId}, Session = #session{presented = Presented}) ->
     Session#session{current = SessionId, issue = SessionId =/= Presented};
+session_event({issued, SessionId}, Session = #session{presented = undefined, current = SessionId}) ->
+    Session#session{issue = true};
 session_event({renewed, SessionId}, Session) ->
     Session#session{current = SessionId, issue = true};
 session_event({deleted, SessionId}, Session = #session{presented = Presented}) ->
