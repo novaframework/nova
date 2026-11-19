@@ -1,5 +1,23 @@
 -module(nova_cors_plugin).
--moduledoc false.
+-moduledoc """
+Sets the CORS response headers and answers preflight requests. Use it as a
+`pre_request` plugin.
+
+`allow_origins` is required: `~"*"`, one origin or a list of origins. With
+`~"*"` every response gets `access-control-allow-origin: *`. With origins,
+the response gets `vary: origin`, and `access-control-allow-origin` with the
+origin of the request when that origin is listed. A request from another
+origin gets no CORS headers.
+
+Together with `access-control-allow-origin` the response gets
+`access-control-allow-headers` (`allow_headers`, by default what the
+preflight asks for), `access-control-allow-methods` (`allow_methods`, by
+default `*`) and, when `max_age` is an integer, `access-control-max-age`.
+
+A preflight, an `OPTIONS` request with the `origin` and
+`access-control-request-method` headers, is answered with a `204` and goes
+no further. Any other `OPTIONS` request goes on to the application.
+""".
 -behaviour(nova_plugin).
 
 -export([
@@ -9,7 +27,14 @@
         ]).
 
 %%--------------------------------------------------------------------
--doc "Pre-request callback".
+-doc """
+Sets the CORS headers on the response. Returns `{stop, Req, State}` after
+answering a preflight with a `204`, and `{ok, Req, State}` for every other
+request. `Options` without `allow_origins` matches no clause.
+
+Runs ahead of the security callback: a preflight carries no credentials, and
+a browser only shows a refusal to the page when it has the headers.
+""".
 -spec pre_security(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
                           {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
                           {stop, Req0 :: cowboy_req:req(), NewState :: any()}.
@@ -18,14 +43,14 @@ pre_security(Req, _Env, #{allow_origins := Origins} = Options, State) ->
     continue(ReqWithOptions, State).
 
 %%--------------------------------------------------------------------
--doc "Post-request callback".
+-doc "Does nothing: the plugin works in `pre_security/4`.".
 -spec post_request(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
                                {ok, Req0 :: cowboy_req:req(), NewState :: any()}.
 post_request(Req, _Env, _Opts, State) ->
     {ok, Req, State}.
 
 %%--------------------------------------------------------------------
--doc "nova_plugin callback. Returns information about the plugin.".
+-doc "The title, version, description and options of the plugin.".
 -spec plugin_info() -> #{title := binary(),
                          version := binary(),
                          url := binary(),
