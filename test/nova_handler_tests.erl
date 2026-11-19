@@ -1,14 +1,14 @@
 -module(nova_handler_tests).
 -include_lib("eunit/include/eunit.hrl").
+
 -include("../include/nova_router.hrl").
 
--define(SETUP, fun() -> setup() end).
--define(CLEANUP, fun(S) -> cleanup(S) end).
+-define(SETUP, fun setup/0).
+-define(CLEANUP, fun cleanup/1).
 
 setup() ->
     Prev = nova_test_helper:setup_nova_env(),
     application:set_env(nova, dispatch_backend, persistent_term),
-    application:set_env(nova, render_error_pages, false),
     %% Set up dispatch table for render_response/3
     Tree = nova_routing_trie:new(#{use_strict => false, convert_to_binary => true}),
     persistent_term:put(nova_dispatch, Tree),
@@ -17,9 +17,7 @@ setup() ->
     {ok, Pid} = nova_handlers:start_link(),
     %% Need meck for cowboy_req:reply
     meck:new(cowboy_req, [passthrough, no_link]),
-    meck:expect(cowboy_req, reply, fun(Status, Req) ->
-        Req#{resp_status_code => Status}
-    end),
+    meck:expect(cowboy_req, reply, fun nova_test_helper:reply/2),
     meck:expect(cowboy_req, reply, fun(Status, Headers, Body, Req) ->
         Req#{resp_status_code => Status, resp_headers => Headers, resp_body => Body}
     end),
@@ -60,6 +58,18 @@ execute_status_return_test_() ->
         ?assertEqual(404, maps:get(resp_status_code, Req1))
     end}.
 
+%% Cowboy refuses a body with these two, which made the response a 500.
+execute_status_without_content_drops_the_body_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        [begin
+             Callback = fun(_Req) -> {status, Status, #{}, ~"body"} end,
+             Req = nova_test_helper:mock_req(~"GET", ~"/"),
+             Env = #{callback => Callback, app => test_app, secure => false, controller_data => #{}},
+             {ok, Req1, _Env1} = nova_handler:execute(Req, Env),
+             ?assertEqual({Status, false}, {maps:get(resp_status_code, Req1), is_map_key(resp_body, Req1)})
+         end || Status <- [204, 304]]
+    end}.
+
 execute_redirect_return_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         Callback = fun(_Req) -> {redirect, <<"/login">>} end,
@@ -80,6 +90,17 @@ execute_controller_crash_test_() ->
         ?assertEqual(500, maps:get(resp_status_code, Req1))
     end}.
 
+execute_controller_crash_keeps_route_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Callback = fun(_Req) -> error(intentional_crash) end,
+        Req = (nova_test_helper:mock_req(<<"GET">>, <<"/users/1">>))#{nova_route => ~"/users/:id"},
+        Env = #{callback => Callback, app => test_app, secure => false,
+                controller_data => #{}},
+        {ok, Req1, _Env1} = nova_handler:execute(Req, Env),
+        ?assertEqual(500, maps:get(resp_status_code, Req1)),
+        ?assertEqual(~"/users/:id", maps:get(nova_route, Req1))
+    end}.
+
 execute_controller_throw_status_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
         Callback = fun(_Req) -> throw({403, forbidden}) end,
@@ -88,6 +109,16 @@ execute_controller_throw_status_test_() ->
                 controller_data => #{}},
         {ok, Req1, _Env1} = nova_handler:execute(Req, Env),
         ?assertEqual(403, maps:get(resp_status_code, Req1))
+    end}.
+
+execute_redirect_to_invalid_location_is_a_500_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Callback = fun(_Req) -> {redirect, ~"/a\r\nset-cookie: x=1"} end,
+        Req = nova_test_helper:mock_req(~"GET", ~"/"),
+        Env = #{callback => Callback, app => test_app, secure => false, controller_data => #{}},
+        {ok, Req1, _Env1} = nova_handler:execute(Req, Env),
+        ?assertEqual(500, maps:get(resp_status_code, Req1)),
+        ?assertNot(maps:is_key(~"location", maps:get(resp_headers, Req1, #{})))
     end}.
 
 execute_controller_crash_with_stacktrace_test_() ->
@@ -99,8 +130,7 @@ execute_controller_crash_with_stacktrace_test_() ->
                 controller_data => #{}},
         {ok, Req1, _Env1} = nova_handler:execute(Req, Env),
         ?assertEqual(500, maps:get(resp_status_code, Req1)),
-        CrashInfo = maps:get(crash_info, Req1),
-        ?assert(maps:is_key(stacktrace, CrashInfo))
+        ?assertMatch(#{crash_info := #{stacktrace := _}}, Req1)
     end}.
 
 %%====================================================================
@@ -125,8 +155,10 @@ execute_cowboy_handler_crash_test_() ->
         meck:expect(test_cowboy_handler2, init, fun(_Req, _Args) -> error(crash) end),
         Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
         Env = #{cowboy_handler => test_cowboy_handler2, arguments => #{}, app => test_app},
-        {ok, Req1, _Env1} = nova_handler:execute(Req, Env),
-        ?assertEqual(404, maps:get(resp_status_code, Req1)),
+        {ok, Req1, Env1} = nova_handler:execute(Req, Env),
+        ?assertEqual(500, maps:get(resp_status_code, Req1)),
+        ?assertMatch(#{crash_info := #{status_code := 500}}, Req1),
+        ?assertNot(maps:is_key(cowboy_handler, Env1)),
         meck:unload(test_cowboy_handler2)
     end}.
 
@@ -137,10 +169,10 @@ execute_cowboy_handler_crash_with_stacktrace_test_() ->
         meck:expect(test_cowboy_handler3, init, fun(_Req, _Args) -> error(boom) end),
         Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
         Env = #{cowboy_handler => test_cowboy_handler3, arguments => #{}, app => test_app},
-        {ok, Req1, _Env1} = nova_handler:execute(Req, Env),
-        ?assertEqual(404, maps:get(resp_status_code, Req1)),
-        CrashInfo = maps:get(crash_info, Req1),
-        ?assert(maps:is_key(stacktrace, CrashInfo)),
+        {ok, Req1, Env1} = nova_handler:execute(Req, Env),
+        ?assertNot(maps:is_key(cowboy_handler, Env1)),
+        ?assertEqual(500, maps:get(resp_status_code, Req1)),
+        ?assertMatch(#{crash_info := #{stacktrace := _, status_code := 500}}, Req1),
         meck:unload(test_cowboy_handler3)
     end}.
 
@@ -186,6 +218,40 @@ execute_cowboy_handler_upgrade_with_opts_test_() ->
 
 terminate_with_callback_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->
-        ?assertEqual(ok, nova_handler:terminate(normal, #{}, fun erlang:date/0))
+        Req = nova_test_helper:mock_req(~"GET", ~"/"),
+        ?assertEqual(ok, nova_handler:terminate(normal, Req, fun erlang:date/0))
     end}.
 
+
+%% terminate/3 is checked for and called with three arguments.
+terminate_called_with_three_arguments_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Env = #{callback => fun nova_handler_test_controller:crash/1, app => test_app,
+                secure => false, controller_data => #{}},
+        {ok, Req1, _Env1} = nova_handler:execute(nova_test_helper:mock_req(~"GET", ~"/"), Env),
+        ?assertEqual(500, maps:get(resp_status_code, Req1)),
+        ?assertEqual({terminated, boom, #{}}, receive {terminated, _, _} = M -> M after 0 -> none end)
+    end}.
+
+cowboy_handler_terminate_gets_its_state_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        meck:new(test_cowboy_terminate, [non_strict, no_link]),
+        Self = self(),
+        meck:expect(test_cowboy_terminate, init, fun(Req, _Args) -> {ok, Req, handler_state} end),
+        meck:expect(test_cowboy_terminate, terminate,
+                    fun(Reason, _Req, State) -> Self ! {terminated, Reason, State}, ok end),
+        Env = #{cowboy_handler => test_cowboy_terminate, arguments => #{}, app => test_app},
+        {ok, _Req1, _Env1} = nova_handler:execute(nova_test_helper:mock_req(~"GET", ~"/"), Env),
+        ?assertEqual({terminated, normal, handler_state}, receive {terminated, _, _} = M -> M after 1000 -> none end),
+        meck:unload(test_cowboy_terminate)
+    end}.
+
+%% A non-tuple return used to raise badarg in element/2 and never reach the
+%% fallback controller.
+non_tuple_return_reaches_fallback_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Env = #{callback => fun nova_handler_test_controller:atom_return/1, app => test_app,
+                secure => false, controller_data => #{}},
+        {ok, Req1, _Env1} = nova_handler:execute(nova_test_helper:mock_req(~"GET", ~"/"), Env),
+        ?assertEqual(409, maps:get(resp_status_code, Req1))
+    end}.

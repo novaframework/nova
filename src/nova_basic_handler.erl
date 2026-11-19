@@ -1,5 +1,13 @@
 -module(nova_basic_handler).
--moduledoc false.
+-moduledoc """
+The handlers of the return values Nova knows: `json`, `ok`, `view`, `status`,
+`redirect`, `redirect_local` and `sendfile` for controllers, and `ws` for the
+callbacks of a websocket controller. Nova registers them with `nova_handlers`
+when it starts.
+
+Applications do not call these functions. They are documented for what each
+return value does, and as examples of a handler.
+""".
 -export([
          handle_json/3,
          handle_ok/3,
@@ -11,16 +19,23 @@
          handle_ws/2,
          location/1,
          local_location/1,
-         loggable_location/1
+         loggable_location/1,
+         render_dtl/3
         ]).
 
 -include_lib("kernel/include/logger.hrl").
 
+-deprecated([{handle_websocket, 3,
+              "nothing in Nova calls it: a websocket route is one with protocol => ws, upgraded by nova_ws_handler"}]).
+
 -ifdef(TEST).
--export([maybe_inject_csrf_token/2]).
+-export([maybe_inject_csrf_token/2, get_view_name/1, websocket_upgrade/3]).
 -endif.
 
+-doc "The variables a template is rendered with, as a map or a list of pairs.".
 -type erlydtl_vars() :: map() | [{Key :: atom() | binary() | string(), Value :: any()}].
+
+-define(IS_REQ(Term), (is_map(Term) andalso is_map_key(streamid, Term) andalso is_map_key(pid, Term))).
 
 
 
@@ -32,12 +47,16 @@ Handler for JSON. It can take one of three different return objects:
 
 \{json, StatusCode :: integer(), Headers :: map(), JSON :: map()\} Same operation as the above except you can set custom status code and custom headers.
 
-\{json, StatusCode :: integer(), Headers :: map(), Req0 :: cowboy_req:req(), JSON :: map()\} This is the same as the above but you can also return the request object. This is particularly useful if you want to set cookies or other headers that are not supported by the handler.
+\{json, StatusCode :: integer(), Headers :: map(), JSON :: map(), Req0 :: cowboy_req:req()\} This is the same as the above but you can also return the request object. This is particularly useful if you want to set cookies or other headers that are not supported by the handler. Older releases only accepted the request before the JSON, \{json, StatusCode, Headers, Req0, JSON\}; that order still works but is deprecated and logs a warning once per controller module.
 """.
 -spec handle_json({json, JSON :: map()} | {json, StatusCode :: integer(), Headers :: map(), JSON :: map()} |
-                  {json, StatusCode :: integer(), Headers :: map(), JSON :: map(), Req0 :: cowboy_req:req()},
+                  {json, StatusCode :: integer(), Headers :: map(), JSON :: map(), Req0 :: cowboy_req:req()} |
+                  {json, StatusCode :: integer(), Headers :: map(), Req0 :: cowboy_req:req(), JSON :: map()},
                   Callback :: function(), Req :: cowboy_req:req()) -> {ok, State :: cowboy_req:req()}.
-handle_json({json, StatusCode, Headers, Req0, JSON}, Callback, _Req) ->
+handle_json({json, StatusCode, Headers, Req0, JSON}, Callback, _Req) when ?IS_REQ(Req0), not ?IS_REQ(JSON) ->
+    deprecated_json_order(Callback),
+    handle_json({json, StatusCode, Headers, JSON}, Callback, Req0);
+handle_json({json, StatusCode, Headers, JSON, Req0}, Callback, _Req) ->
     handle_json({json, StatusCode, Headers, JSON}, Callback, Req0);
 handle_json({json, StatusCode, Headers, JSON}, _Callback, Req) ->
     EncodedJSON = nova_json:encode(JSON),
@@ -54,17 +73,32 @@ handle_json({json, JSON}, Callback, Req = #{method := Method}) ->
             handle_json({json, 200, #{}, JSON}, Callback, Req)
     end.
 
+deprecated_json_order(Callback) ->
+    {module, Module} = erlang:fun_info(Callback, module),
+    Key = {?MODULE, json_order_warned, Module},
+    case nova_once:first(Key) of
+        true ->
+            ?LOG_WARNING(#{msg => ~"{json, Status, Headers, Req, JSON} is deprecated, return {json, Status, Headers, JSON, Req}",
+                           controller => Module});
+        false ->
+            ok
+    end.
+
 
 
 %%--------------------------------------------------------------------
 -doc """
 Handler for regular views. This will render a template with given variables. If not another view is specified in options a view that corresponds to the controller will be rendered. The first element of the returned tuple could be either ok or view - they are identical in their functionality.
 
-\-module(my_first_controller). -compile(export_all).
+```erlang
+-module(my_first_controller).
+-export([my_function/1]).
 
-my_function(_Req) -> \{ok, []\}.
+my_function(_Req) ->
+    {ok, []}.
+```
 
-The example above will then render the view named 'app_main.dtl'
+The example above will then render the view named 'my_first.dtl'
 
 The tuple can have three different forms:
 
@@ -78,7 +112,8 @@ The tuple can have three different forms:
 
 \{ok, Variables, Options, Req0\} - This will render the default view with the given variables and options but also takes a request object. This is useful if you want to set cookies or other headers that are not supported by the handler.
 """.
--spec handle_ok({ok, Variables :: erlydtl_vars()} | {ok, Variables :: erlydtl_vars(), Options :: map()},
+-spec handle_ok({ok, Variables :: erlydtl_vars()} | {ok, Variables :: erlydtl_vars(), Options :: map()} |
+                {ok, Variables :: erlydtl_vars(), Options :: map(), Req0 :: cowboy_req:req()},
                 Callback :: function(), Req :: cowboy_req:req()) -> {ok, cowboy_req:req()}.
 handle_ok({ok, Variables}, Callback, Req) ->
     %% Derive the view from module
@@ -92,10 +127,9 @@ handle_ok({ok, Variables, Options}, Callback, Req) ->
             undefined ->
                 get_view_name(Module);
             CustomView when is_atom(CustomView) ->
-                ViewName = atom_to_list(CustomView) ++ "_dtl",
-                list_to_atom(ViewName);
+                view_module(atom_to_list(CustomView) ++ "_dtl");
             CustomView ->
-                list_to_atom(CustomView ++ "_dtl")
+                view_module(CustomView ++ "_dtl")
         end,
     handle_view(View, Variables, Options, Req);
 handle_ok({ok, Variables, Options, Req0}, Callback, _Req) ->
@@ -124,7 +158,9 @@ And if you want to modulate the request object you can send it in as the fifth a
 """.
 -spec handle_status({status, StatusCode :: integer()} |
                     {status, StatusCode :: integer(), ExtraHeaders :: map()} |
-                    {status, StatusCode :: integer(), ExtraHeaders :: map(), Body :: binary() | map()},
+                    {status, StatusCode :: integer(), ExtraHeaders :: map(), Body :: binary() | map()} |
+                    {status, StatusCode :: integer(), ExtraHeaders :: map(), Body :: binary() | map(),
+                     Req0 :: cowboy_req:req()},
                     Callback :: function(), Req :: cowboy_req:req()) -> {ok, Req :: cowboy_req:req()}.
 handle_status({status, Status, ExtraHeaders, JSON, Req0}, Callback, _Req) ->
     handle_status({status, Status, ExtraHeaders, JSON}, Callback, Req0);
@@ -144,9 +180,7 @@ handle_status({status, Status, ExtraHeaders, Body}, _Callback, Req) ->
     {ok, Req2};
 handle_status({status, Status, ExtraHeaders}, _Callback, Req) ->
     Req0 = cowboy_req:set_resp_headers(ExtraHeaders, Req),
-    Req1 = Req0#{resp_status_code => Status},
-    {ok, Req2, _Env} =  nova_router:render_status_page(Status, #{}, Req1),
-    {ok, Req2};
+    {ok, Req0#{resp_status_code => Status}};
 handle_status({status, Status}, Callback, State) when is_integer(Status) ->
     handle_status({status, Status, #{}}, Callback, State).
 
@@ -256,7 +290,11 @@ Optionally a sixth element can be added to the tuple. This is the request object
 """.
 -spec handle_sendfile({sendfile, StatusCode :: integer(), Headers :: map(), {Offset :: integer(),
                                                                              Length :: integer(),
-                                                                             Path :: list()}, Mime :: binary()},
+                                                                             Path :: list()}, Mime :: binary()} |
+                      {sendfile, StatusCode :: integer(), Headers :: map(), {Offset :: integer(),
+                                                                             Length :: integer(),
+                                                                             Path :: list()}, Mime :: binary(),
+                       Req0 :: cowboy_req:req()},
                   Callback :: function(), Req) -> {ok, Req} when Req :: cowboy_req:req().
 handle_sendfile({sendfile, StatusCode, Headers, FileInfo, Mime, Req0}, Callback, _Req) ->
     handle_sendfile({sendfile, StatusCode, Headers, FileInfo, Mime}, Callback, Req0);
@@ -269,12 +307,19 @@ handle_sendfile({sendfile, StatusCode, Headers, {Offset, Length, Path}, Mime}, _
 
 
 %%--------------------------------------------------------------------
--doc "Handles upgrading to websocket. This is a special handler in regards to arguments. The tuple-object for websocket only takes two arguments; What the initial state of the websocket handler should be and the request object.".
--spec handle_websocket({websocket, ControllerData :: any()}, Callback :: function(), Req :: cowboy_req:req()) ->
-                              {ok, Req :: cowboy_req:req()}.
+-doc false.
+-spec handle_websocket({websocket, ControllerData :: any()} |
+                       {websocket, ControllerData :: any(), Req0 :: cowboy_req:req()},
+                       Callback :: function(), Req :: cowboy_req:req()) ->
+                              {ok, Req :: cowboy_req:req()} |
+                              {cowboy_websocket, Req :: cowboy_req:req(), Options :: map()} |
+                              nova_handlers:handler_return().
 handle_websocket({websocket, ControllerData, Req0}, Callback, _Req) ->
-    handle_websocket({websocket, ControllerData}, Callback, Req0);
+    websocket_upgrade(ControllerData, Callback, Req0);
 handle_websocket({websocket, ControllerData}, Callback, Req) ->
+    websocket_upgrade(ControllerData, Callback, Req).
+
+websocket_upgrade(ControllerData, Callback, Req) ->
     {module, Module} = erlang:fun_info(Callback, module),
     case Module:init(ControllerData) of
         {ok, NewControllerData} ->
@@ -284,7 +329,8 @@ handle_websocket({websocket, ControllerData}, Callback, Req) ->
             {ok, HandlerMod} = nova_handlers:get_handler(status),
             HandlerMod(StatusTuple, Callback, Req);
         Error ->
-            ?LOG_ERROR(#{msg => <<"Handler returned unsupported result">>, handler => Module, return_obj => Error}),
+            ?LOG_ERROR(#{msg => ~"Handler returned unsupported result", handler => Module,
+                         return_obj => nova_redact:term(Error)}),
             %% Render 500
             {ok, Req}
     end.
@@ -292,11 +338,17 @@ handle_websocket({websocket, ControllerData}, Callback, Req) ->
 
 %%--------------------------------------------------------------------
 -doc """
-Handles basic websocket operations. This is a special handler in regards to arguments. Handlers for websocket only takes two arguments; What the controller returned and the state. And the handler should return what cowboy expects.
+Handles what a callback of a websocket controller returns, see
+`t:nova_websocket:call_result/0`. Unlike the other handlers it takes two
+arguments: the return value and the state of the connection.
 
-Example of a valid return value is \{reply, Frame, State\}
-
-The reply payload may be a single frame or a list of them, per nova_websocket:call_result/0.
+It returns the state with the new controller data. The frames of a `reply`,
+one frame or a list of them, are queued for sending, and `hibernate` is
+noted. `{stop, ControllerData}` gives `{stop, State}`, which closes the
+connection. A bare `ok` leaves the state as it is. Any other return value
+matches no clause: Nova logs
+`Websocket handler failed on what the controller returned` and closes the
+connection.
 """.
 handle_ws({reply, Frames, NewControllerData}, State = #{commands := Commands}) ->
     State#{controller_data => NewControllerData,
@@ -336,27 +388,20 @@ prepend_frames(Frame, Commands) ->
 handle_view(View, Variables, Options, Req) ->
     Variables1 = maybe_inject_csrf_token(Variables, Req),
     {ok, HTML} = render_dtl(View, Variables1, []),
-    Headers =
-        case maps:get(headers, Options, undefined) of
-            undefined ->
-                #{<<"content-type">> => <<"text/html">>};
-            UserHeaders ->
-                UserHeaders
-        end,
     StatusCode = maps:get(status_code, Options, 200),
-    Req0 = cowboy_req:set_resp_headers(Headers, Req),
+    Req0 = cowboy_req:set_resp_headers(maps:get(headers, Options, #{}),
+                                       cowboy_req:set_resp_headers(#{~"content-type" => ~"text/html"}, Req)),
     Req1 = cowboy_req:set_resp_body(HTML, Req0),
     Req2 = Req1#{resp_status_code => StatusCode},
     {ok, Req2}.
 
+-doc false.
 render_dtl(View, Variables, Options) ->
     case code:is_loaded(View) of
         false ->
             case code:load_file(View) of
                 {error, Reason} ->
-                    %% Cast a warning since the module could not be found
-                    ?LOG_ERROR(#{msg => <<"Nova could not render template">>, template => View, reason => Reason}),
-                    throw({404, {template_not_found, View}});
+                    template_not_found(View, Reason);
                 _ ->
                     View:render(Variables, Options)
             end;
@@ -374,15 +419,25 @@ maybe_inject_csrf_token(Variables, _Req) ->
 
 get_view_name({Mod, _Opts}) -> get_view_name(Mod);
 get_view_name(Mod) when is_atom(Mod) ->
-    StrName = get_view_name(erlang:atom_to_list(Mod)),
-    erlang:list_to_atom(StrName);
-get_view_name([$_, $c, $o, $n, $t, $r, $o, $l, $l, $e, $r]) ->
-    "_dtl";
-get_view_name([]) ->
-    "_dtl";
-get_view_name([H|T]) ->
-    [H|get_view_name(T)].
+    view_module(view_name(atom_to_list(Mod))).
 
--ifdef(TEST).
--compile(export_all).
--endif.
+view_name([$_, $c, $o, $n, $t, $r, $o, $l, $l, $e, $r]) ->
+    "_dtl";
+view_name([]) ->
+    "_dtl";
+view_name([H|T]) ->
+    [H|view_name(T)].
+
+view_module(Name) ->
+    case nova_code:module_named(Name) of
+        {ok, View} ->
+            View;
+        error ->
+            template_not_found(Name, nofile)
+    end.
+
+-spec template_not_found(atom() | string(), term()) -> no_return().
+template_not_found(Template, Reason) ->
+    ?LOG_ERROR(#{msg => ~"Nova could not render template", template => Template, reason => Reason}),
+    throw({500, #{status_code => 500,
+                  extra_msg => unicode:characters_to_binary(io_lib:format("Template ~ts could not be loaded", [Template]))}}).
