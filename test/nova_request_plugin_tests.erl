@@ -1,6 +1,9 @@
 -module(nova_request_plugin_tests).
 -include_lib("eunit/include/eunit.hrl").
 
+%% Logger handler callback: forwards reports to the process that added it.
+-export([log/2]).
+
 -define(SETUP, fun() -> nova_test_helper:setup_nova_env() end).
 -define(CLEANUP, fun(Prev) -> nova_test_helper:cleanup_nova_env(Prev) end).
 
@@ -137,7 +140,7 @@ multipart_body_not_drained_test_() ->
          meck:new(cowboy_req, [passthrough]),
          meck:expect(cowboy_req, has_body, fun(_Req) -> true end),
          meck:expect(cowboy_req, read_body,
-                     fun(_Req) -> erlang:error(body_should_not_be_read) end)
+                     fun(_Req, _Opts) -> erlang:error(body_should_not_be_read) end)
      end,
      fun(_) -> meck:unload(cowboy_req) end,
      [fun() ->
@@ -152,3 +155,173 @@ multipart_body_not_drained_test_() ->
           {ok, Req, state} = nova_request_plugin:pre_request(Req0, env, #{decode_json_body => true}, state),
           ?assertEqual(<<>>, maps:get(body, Req))
       end]}.
+
+%%====================================================================
+%% max_body_length
+%%====================================================================
+
+-define(CHUNK, binary:copy(~" ", 64000)).
+
+%% A JSON body sent in Chunks chunks of 64000 bytes: an object padded with
+%% spaces. BodyLength is what Cowboy knows from Content-Length.
+body_req(Chunks, BodyLength) ->
+    Req = nova_test_helper:with_content_type(~"application/json",
+                                             nova_test_helper:mock_req(~"POST", ~"/")),
+    Req#{has_body => true, body_length => BodyLength, chunks_left => Chunks}.
+
+body_setup() ->
+    meck:new(cowboy_req, [passthrough, no_link]),
+    meck:expect(cowboy_req, read_body,
+                fun(#{chunks_left := 1} = Req, #{length := Length}) when Length =< 64000 ->
+                        {ok, <<"{}", (binary:part(?CHUNK, 0, 63998))/binary>>, Req#{chunks_left => 0}};
+                   (#{chunks_left := N} = Req, #{length := Length}) when Length =< 64000 ->
+                        {more, ?CHUNK, Req#{chunks_left => N - 1}}
+                end).
+
+body_reads() ->
+    meck:num_calls(cowboy_req, read_body, '_').
+
+body_length_test_() ->
+    {foreach, fun body_setup/0, fun(_) -> meck:unload(cowboy_req) end,
+     [{"a body as long as the limit is decoded",
+       fun() ->
+           {ok, Req, state} = nova_request_plugin:pre_request(
+                                body_req(3, undefined), env,
+                                #{decode_json_body => true, max_body_length => 3 * 64000}, state),
+           ?assertEqual(#{}, maps:get(json, Req)),
+           ?assertEqual(3, body_reads())
+       end},
+      {"a declared length over the limit is refused before reading",
+       fun() ->
+           ?assertMatch({stop, {status, 413, #{~"connection" := ~"close"}}, _, state},
+                        nova_request_plugin:pre_request(
+                          body_req(3, 3 * 64000), env,
+                          #{decode_json_body => true, max_body_length => 3 * 64000 - 1}, state)),
+           ?assertEqual(0, body_reads())
+       end},
+      {"a chunked body stops being read once it passes the limit",
+       fun() ->
+           ?assertMatch({stop, {status, 413, #{~"connection" := ~"close"}}, _, state},
+                        nova_request_plugin:pre_request(
+                          body_req(1000, undefined), env,
+                          #{read_urlencoded_body => true, max_body_length => 100000}, state)),
+           ?assertEqual(2, body_reads())
+       end},
+      {"the default limit is 1000000 bytes",
+       fun() ->
+           ?assertMatch({stop, {status, 413, #{~"connection" := ~"close"}}, _, state},
+                        nova_request_plugin:pre_request(body_req(1000, 1000001), env,
+                                                        #{decode_json_body => true}, state)),
+           ?assertEqual(0, body_reads()),
+           ?assertMatch({stop, {status, 413, #{~"connection" := ~"close"}}, _, state},
+                        nova_request_plugin:pre_request(body_req(1000, undefined), env,
+                                                        #{decode_json_body => true}, state)),
+           ?assertEqual(1000000 div 64000 + 1, body_reads())
+       end},
+      {"an invalid limit is warned about once and the default used",
+       fun() ->
+           nova_once:forget({nova_request_plugin, invalid_limit, max_body_length, -1}),
+           ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
+           try
+               [?assertMatch({stop, {status, 413, #{~"connection" := ~"close"}}, _, state},
+                             nova_request_plugin:pre_request(body_req(1000, 1000001), env,
+                                                             #{decode_json_body => true, max_body_length => -1},
+                                                             state))
+                || _ <- [1, 2]],
+               ?assertMatch([#{option := max_body_length, value := -1}], logged())
+           after
+               logger:remove_handler(?MODULE),
+               nova_once:forget({nova_request_plugin, invalid_limit, max_body_length, -1})
+           end
+       end},
+      {"infinity reads the whole body",
+       fun() ->
+           {ok, Req, state} = nova_request_plugin:pre_request(
+                                body_req(200, 200 * 64000), env,
+                                #{decode_json_body => true, max_body_length => infinity}, state),
+           ?assertEqual(#{}, maps:get(json, Req)),
+           ?assertEqual(200, body_reads())
+       end}]}.
+
+%%====================================================================
+%% body_read_timeout
+%%====================================================================
+
+%% A chunked body that sends one byte per 50 ms: Cowboy hands over what it
+%% has when the period passes.
+trickle_setup() ->
+    meck:new(cowboy_req, [passthrough, no_link]),
+    meck:expect(cowboy_req, read_body,
+                fun(#{chunks_left := 1} = Req, #{period := _}) ->
+                        timer:sleep(50),
+                        {ok, ~"{}", Req#{chunks_left => 0}};
+                   (#{chunks_left := N} = Req, #{period := _}) ->
+                        timer:sleep(50),
+                        {more, ~" ", Req#{chunks_left => N - 1}}
+                end).
+
+read_periods() ->
+    [Period || {_, {_, read_body, [_, #{period := Period}]}, _} <- meck:history(cowboy_req)].
+
+strictly_decreasing([A, B | Rest]) -> A > B andalso strictly_decreasing([B | Rest]);
+strictly_decreasing(_) -> true.
+
+body_read_timeout_test_() ->
+    {foreach, fun trickle_setup/0, fun(_) -> meck:unload(cowboy_req) end,
+     [{"a body still arriving at the deadline gets a 408",
+       fun() ->
+           T0 = erlang:monotonic_time(millisecond),
+           ?assertMatch({stop, {status, 408, #{~"connection" := ~"close"}}, _, state},
+                        nova_request_plugin:pre_request(body_req(1000, undefined), env,
+                                                        #{decode_json_body => true, body_read_timeout => 300},
+                                                        state)),
+           Elapsed = erlang:monotonic_time(millisecond) - T0,
+           ?assert(Elapsed >= 300 andalso Elapsed < 1000),
+           ?assert(lists:all(fun(Period) -> Period =< 300 end, read_periods()))
+       end},
+      {"each read waits no longer than the time left",
+       fun() ->
+           {stop, {status, 408, #{~"connection" := ~"close"}}, _, state} =
+               nova_request_plugin:pre_request(body_req(1000, undefined), env,
+                                               #{decode_json_body => true, body_read_timeout => 120}, state),
+           Periods = read_periods(),
+           ?assert(length(Periods) > 1),
+           ?assert(hd(Periods) =< 120),
+           ?assert(strictly_decreasing(Periods))
+       end},
+      {"infinity has no deadline",
+       fun() ->
+           {ok, Req, state} = nova_request_plugin:pre_request(
+                                body_req(5, undefined), env,
+                                #{decode_json_body => true, body_read_timeout => infinity}, state),
+           ?assertEqual(#{}, maps:get(json, Req)),
+           ?assertEqual([15000, 15000, 15000, 15000, 15000], read_periods())
+       end},
+      {"a body_read_timeout of 0 is warned about and the default used",
+       fun() ->
+           nova_once:forget({nova_request_plugin, invalid_limit, body_read_timeout, 0}),
+           ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
+           try
+               {ok, _, state} = nova_request_plugin:pre_request(
+                                  body_req(2, undefined), env,
+                                  #{decode_json_body => true, body_read_timeout => 0}, state),
+               ?assertMatch([#{option := body_read_timeout, value := 0, default := 60000}], logged()),
+               ?assert(lists:all(fun(Period) -> Period > 0 end, read_periods()))
+           after
+               logger:remove_handler(?MODULE),
+               nova_once:forget({nova_request_plugin, invalid_limit, body_read_timeout, 0})
+           end
+       end}]}.
+
+log(#{msg := {report, Report}}, #{config := #{test_pid := Pid}}) ->
+    Pid ! {logged, Report},
+    ok;
+log(_Event, _Config) ->
+    ok.
+
+logged() ->
+    receive
+        {logged, Report} -> [Report | logged()]
+    after 50 ->
+            []
+    end.
