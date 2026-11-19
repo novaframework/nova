@@ -1,64 +1,119 @@
 # Views
 
-Nova uses the [erlydtl](https://github.com/erlydtl/erlydtl) template engine to power its view layer. erlydtl is an Erlang implementation of the Django template language, which makes templates both expressive and familiar to developers with experience in Django or similar frameworks.
+Nova renders views with [ErlyDTL](https://github.com/erlydtl/erlydtl), an
+Erlang implementation of the Django template language. Templates are compiled
+to Erlang modules at build time.
 
-## How Views Work in Nova
+## Build setup
 
-Views are responsible for rendering the final output sent to the client, typically HTML, but you can also use them for other formats. Nova compiles your templates to efficient Erlang code at build time, ensuring fast rendering.
+A project created with `rebar3 new nova` has this in place. In `rebar.config`
+the `rebar3_erlydtl_plugin` compiles the templates before the Erlang sources:
 
-### Creating a View
+```erlang
+{erlydtl_opts, [
+    {doc_root, "src/views"},
+    {recursive, true},
+    {libraries, [
+        {nova_erlydtl_inventory, nova_erlydtl_inventory}
+    ]},
+    {default_libraries, [nova_erlydtl_inventory]}
+]}.
 
-To create a view, place your template files (with the `.dtl` extension) in your application's `src/views` directory. For example:
-
+{provider_hooks, [
+    {pre, [{compile, {erlydtl, compile}}]}
+]}.
 ```
-src/views/
-  └── user_profile.dtl
-```
 
-A sample template might look like this:
+A template `src/views/profile.dtl` is compiled to the module `profile_dtl`.
+
+## Creating a view
+
+Put the template in `src/views`:
 
 ```html+django
 <h1>Welcome, {{ name }}!</h1>
-<p>Email: {{ email }}</p>
 ```
 
-### Rendering a View from a Controller
+## Rendering a view from a controller
 
-In your controller, you can render a view using Nova’s built-in helpers:
+`{ok, Variables}` and `{view, Variables}` render a view. The two atoms mean
+the same.
 
 ```erlang
-Vars = #{name => "Alice", email => "alice@example.com"},
-{ok, Vars, #{view => user_profile}}.
+-module(my_app_main_controller).
+-export([index/1, profile/1]).
+
+index(_Req) ->
+    {ok, #{name => ~"Alice"}}.
+
+profile(_Req) ->
+    {ok, #{name => ~"Alice"}, #{view => profile}}.
 ```
 
-The example above will then render the *user_profile.dtl* template.
+Without a `view` option the view is named after the controller: the module
+name with a trailing `_controller` removed. `index/1` above renders
+`src/views/my_app_main.dtl`. `profile/1` renders `src/views/profile.dtl`.
 
-### Passing Data to Templates
+`Variables` is a map or a property list. Its keys are the variables of the
+template.
 
-You pass variables to the template as a map. All keys in the map become available in the template as variables.
+The options map takes:
 
-### Template Features
+| Key | Description |
+|---|---|
+| `view` | The template to render, as an atom or a string, without the `.dtl` extension |
+| `status_code` | The status code of the response, `200` by default |
+| `headers` | Headers of the response. They are added to the default `content-type: text/html`, which stays unless they name a `content-type` |
 
-erlydtl supports:
+When the template does not exist the response is the `500` page, and Nova
+logs `Nova could not render template` with the name of the template. In
+`dev` the page names the template as well.
 
-- **Template inheritance** (`{% extends %}`)
-- **Includes** (`{% include %}`)
-- **Control structures** (`{% if %}`, `{% for %}`)
-- **Filters** (`{{ value|escape }}`)
-- **Custom tags and filters** (advanced usage)
+## Escaping
 
-For details on syntax and features, see the [erlydtl wiki](https://github.com/erlydtl/erlydtl/wiki).
+ErlyDTL escapes the value of a variable for HTML by default.
+`{{ comment }}` with the value `<script>alert(1)</script>` renders as
+`&lt;script&gt;alert(1)&lt;/script&gt;`. The `safe` filter turns that off for
+one value:
 
-### Error Handling
+```html+django
+<p>{{ comment }}</p>
+<p>{{ trusted_html|safe }}</p>
+```
 
-If a template is missing or a rendering error occurs, Nova will log the error and, depending on configuration, may return a generic error page or propagate the details in development mode.
+Use `safe` only on values your application produced. The `auto_escape`
+option in `erlydtl_opts` turns escaping off for every template; leave it on.
 
-### Best Practices
+## The csrf_token variable
 
-- Organize templates in subfolders for maintainability.
-- Use template inheritance to avoid duplication.
-- Validate your data before passing it to the template.
+When `nova_csrf_plugin` runs for the route, Nova adds a token to the
+variables as `csrf_token`. Every response gets another one:
 
----
+```html+django
+<form method="post">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+  <button>Save</button>
+</form>
+```
 
-For more about advanced template syntax, custom filters, and extending views, read the [erlydtl documentation](https://github.com/erlydtl/erlydtl/wiki).
+See [Nova CSRF](plugins.md#nova-csrf) for the plugin.
+
+## The url tag
+
+`nova_erlydtl_inventory` adds a `url` tag that puts the prefix an application
+is mounted under in front of a path:
+
+```html+django
+<a href="{% url "/items" application="my_app" %}">Items</a>
+```
+
+For an application included with `{admin_app, #{prefix => "/admin"}}` the tag
+renders `/admin/items`. For an application Nova has not compiled, and for a
+tag without `application`, it renders `#` and logs a warning.
+
+## Template features
+
+ErlyDTL supports template inheritance (`{% extends %}`), includes
+(`{% include %}`), control structures (`{% if %}`, `{% for %}`), filters and
+custom tags. See the [ErlyDTL wiki](https://github.com/erlydtl/erlydtl/wiki)
+for the syntax.
