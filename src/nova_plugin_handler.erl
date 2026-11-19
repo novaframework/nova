@@ -45,16 +45,24 @@ run_plugins([{Callback, Options}|Tl], CallbackType, Req, Env) when is_function(C
                 undefined
         end,
 
+    Span = nova_telemetry:start([nova, plugin],
+                                #{plugin => plugin_module(Callback),
+                                  callback => callback_name(Callback, CallbackType),
+                                  app => maps:get(app, Env, undefined),
+                                  route => maps:get(nova_route, Req, undefined)}),
     try Callback(Req, Env, Options, State) of
         Result ->
+            nova_telemetry:stop(Span, #{result => plugin_result(Result)}),
             handle_result(Result, Callback, State, Tl, CallbackType, Req, Env)
     catch
         exit:{request_error, Kind, _Message} when CallbackType =:= pre_request ->
             Status = nova_handler:request_error_status(Kind),
+            nova_telemetry:stop(Span, #{result => stop}),
             ?LOG_WARNING(#{msg => ~"Request error in plugin", plugin => plugin_module(Callback),
                            kind => nova_redact:term(Kind), status_code => Status}),
             {stop, cowboy_req:reply(Status, Req)};
         Class:Reason0:Stacktrace0 ->
+            nova_telemetry:exception(Span, Class, Reason0, Stacktrace0),
             Reason = nova_redact:term(Reason0),
             Stacktrace = nova_redact:stacktrace(Stacktrace0),
             ?LOG_ERROR(#{msg => <<"Plugin crashed">>, class => Class, reason => Reason, stacktrace => Stacktrace}),
@@ -188,6 +196,22 @@ warn_once(Callback, Tag, Msg) ->
 plugin_module(Callback) ->
     {module, Module} = erlang:fun_info(Callback, module),
     Module.
+
+callback_name(Callback, CallbackType) ->
+    case erlang:fun_info(Callback, name) of
+        {name, pre_security} -> pre_security;
+        _ -> CallbackType
+    end.
+
+plugin_result({ok, _Req, _State})                                         -> ok;
+plugin_result({ok, Reply, _Req, _State}) when element(1, Reply) =:= reply -> ok;
+plugin_result({break, _Req, _State})                                      -> break;
+plugin_result({break, _Reply, _Req, _State})                              -> break;
+plugin_result({stop, _Req, _State})                                       -> stop;
+plugin_result({stop, _Reply, _Req, _State})                               -> stop;
+plugin_result({stop, Req}) when is_map(Req)                               -> stop;
+plugin_result({error, _Reason})                                           -> error;
+plugin_result(_Return)                                                    -> invalid.
 
 set_state(_Callback, State, State) ->
     ok;
