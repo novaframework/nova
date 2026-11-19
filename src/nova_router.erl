@@ -653,15 +653,15 @@ Work out which plugins apply to a route entry.
 """.
 normalize_secure(false, _RouterFile) ->
     false;
-normalize_secure(true, RouterFile) ->
-    ?LOG_ERROR(#{reason => <<"'secure' must be false, a fun/1 or {Mod, Fun}. Ignoring 'true'.">>,
-                 router_file => RouterFile}),
-    false;
 normalize_secure({SMod, SFun}, RouterFile) when is_atom(SMod), is_atom(SFun) ->
     ?LOG_DEPRECATED(<<"v0.9.24">>, <<"The {Mod,Fun} format have been deprecated for the 'secure'-section of a route table. Use the new format for routes.">>, RouterFile),
     fun SMod:SFun/1;
-normalize_secure(SCallback, _RouterFile) ->
-    SCallback.
+normalize_secure(SCallback, _RouterFile) when is_function(SCallback, 1) ->
+    SCallback;
+normalize_secure(Invalid, RouterFile) ->
+    ?LOG_ERROR(#{msg => ~"A security value must be false, a fun/1 or {Mod, Fun}.",
+                 value => Invalid, router_file => RouterFile}),
+    throw({error, {invalid_security, Invalid}}).
 
 resolve_plugins(local_or_global, RouteInfo, _RouterFile) ->
     maps:get(plugins, RouteInfo, global_plugins());
