@@ -101,6 +101,21 @@ provisional_test_() ->
       fun every_session_is_in_the_expiry_index_once/0
      ]}.
 
+ended_test_() ->
+    {foreach,
+     fun() -> nova_test_settings:set(max_sessions, 10), setup() end,
+     fun(Pid) -> cleanup(Pid), nova_test_settings:unset(max_sessions) end,
+     [
+      fun deleted_session_is_not_written_again/0,
+      fun session_that_was_not_deleted_has_not_ended/0,
+      fun deleted_id_that_held_no_session_has_ended/0,
+      fun ended_id_is_forgotten_after_five_minutes/0,
+      fun ended_ids_are_no_more_than_the_sessions_the_table_may_hold/0,
+      fun write_to_an_ended_id_drops_no_other_session/0,
+      fun session_deleted_on_another_node_has_ended/0,
+      fun release_without_ended_ids_gets_them_by_a_hot_upgrade/0
+     ]}.
+
 reads_test_() ->
     {foreach,
      fun setup/0,
@@ -112,6 +127,97 @@ reads_test_() ->
 get_value_without_the_server_test() ->
     ?assertEqual(undefined, whereis(nova_session_ets)),
     ?assertEqual({error, not_found}, nova_session_ets:get_value(~"s", ~"k")).
+
+%% A request that was on its way when its session was deleted writes after
+%% that. The id is one somebody gave up, and may be held by somebody else.
+deleted_session_is_not_written_again() ->
+    ok = nova_session_ets:set_value(~"signed-out", ~"user", ~"alice"),
+    ?assertNot(nova_session_ets:session_ended(~"signed-out")),
+    ok = nova_session_ets:delete_value(~"signed-out"),
+    ?assert(nova_session_ets:session_ended(~"signed-out")),
+    ?assertEqual({error, session_ended}, nova_session_ets:set_value(~"signed-out", ~"note", ~"late")),
+    ?assertEqual({error, session_ended}, nova_session_ets:set_provisional_value(~"signed-out", ~"note", ~"late")),
+    ?assertNot(nova_session_ets:session_exists(~"signed-out")),
+    ?assertEqual([], ets:lookup(nova_session_ets_entries, ~"signed-out")).
+
+session_that_was_not_deleted_has_not_ended() ->
+    ok = nova_session_ets:set_value(~"in-use", ~"k", ~"v"),
+    ok = nova_session_ets:delete_value(~"in-use", ~"k"),
+    ?assertNot(nova_session_ets:session_ended(~"in-use")),
+    ?assertNot(nova_session_ets:session_ended(~"never-seen")),
+    ?assertEqual(ok, nova_session_ets:set_value(~"in-use", ~"k", ~"again")).
+
+%% The id a visitor was handed with a page, and was moved off by signing in.
+deleted_id_that_held_no_session_has_ended() ->
+    ok = nova_session_ets:delete_value(~"handed-out"),
+    ?assert(nova_session_ets:session_ended(~"handed-out")),
+    ?assertEqual({error, session_ended}, nova_session_ets:set_value(~"handed-out", ~"k", ~"v")).
+
+%% Longer than a request is on its way. The row is put back in time by the
+%% server, which owns the tables, so the test does not wait.
+ended_id_is_forgotten_after_five_minutes() ->
+    ok = nova_session_ets:delete_value(~"long-ago"),
+    ok = nova_session_ets:delete_value(~"just-now"),
+    [{~"long-ago", Until, Order}] = ets:lookup(nova_session_ets_ended, ~"long-ago"),
+    Left = Until - erlang:monotonic_time(millisecond),
+    ?assert(Left > 299000 andalso Left =< 300000),
+    Past = Until - 300001,
+    sys:replace_state(nova_session_ets,
+                      fun(State) ->
+                              ets:insert(nova_session_ets_ended_order, {Order, ~"long-ago", Past}),
+                              ets:insert(nova_session_ets_ended, {~"long-ago", Past, Order}),
+                              State
+                      end),
+    ?assertNot(nova_session_ets:session_ended(~"long-ago")),
+    ?assertEqual(ok, nova_session_ets:set_value(~"long-ago", ~"k", ~"v")),
+    whereis(nova_session_ets) ! sweep,
+    sync(),
+    ?assertMatch([{~"just-now", _Until, _Later}], ets:tab2list(nova_session_ets_ended)),
+    ?assertMatch([{_Later, ~"just-now", _Until}], ets:tab2list(nova_session_ets_ended_order)),
+    ?assert(nova_session_ets:session_ended(~"just-now")),
+    ?assert(nova_session_ets:session_exists(~"long-ago")).
+
+%% Every sign-out adds an id, so they are counted as the sessions are, and
+%% the one that ended first is the one that goes.
+ended_ids_are_no_more_than_the_sessions_the_table_may_hold() ->
+    Ids = [integer_to_binary(N) || N <- lists:seq(1, 12)],
+    [ok = nova_session_ets:delete_value(Id) || Id <- Ids ++ [~"12", ~"11"]],
+    ?assertEqual(10, ets:info(nova_session_ets_ended, size)),
+    ?assertEqual(10, ets:info(nova_session_ets_ended_order, size)),
+    ?assertEqual([~"1", ~"2"], [Id || Id <- Ids, not nova_session_ets:session_ended(Id)]).
+
+write_to_an_ended_id_drops_no_other_session() ->
+    fill(10),
+    ok = nova_session_ets:delete_value(~"ended"),
+    ?assertEqual({error, session_ended}, nova_session_ets:set_value(~"ended", ~"k", ~"v")),
+    ?assertEqual(10, ets:info(nova_session_ets_entries, size)).
+
+%% What another node sends is all this one knows of a session there. A
+%% write that was sent before the delete and arrives behind it stores nothing.
+session_deleted_on_another_node_has_ended() ->
+    ok = nova_session_ets:set_value(~"elsewhere", ~"user", ~"alice"),
+    whereis(nova_session_ets) ! #nova_pubsub{channel = '__sessions', sender = self(), topic = "delete_value",
+                                               payload = ~"elsewhere"},
+    whereis(nova_session_ets) ! #nova_pubsub{channel = '__sessions', sender = self(), topic = "set_value",
+                                               payload = {~"elsewhere", ~"note", ~"late"}},
+    sync(),
+    ?assert(nova_session_ets:session_ended(~"elsewhere")),
+    ?assertNot(nova_session_ets:session_exists(~"elsewhere")).
+
+release_without_ended_ids_gets_them_by_a_hot_upgrade() ->
+    Pid = nova_session_ets,
+    sys:replace_state(Pid, fun(State) ->
+                                   ets:delete(nova_session_ets_ended),
+                                   ets:delete(nova_session_ets_ended_order),
+                                   State
+                           end),
+    ?assertNot(nova_session_ets:session_ended(~"before-the-upgrade")),
+    ok = sys:suspend(Pid),
+    ok = sys:change_code(Pid, nova_session_ets, "1.0", []),
+    ok = sys:change_code(Pid, nova_session_ets, "1.0", []),
+    ok = sys:resume(Pid),
+    ok = nova_session_ets:delete_value(~"after-the-upgrade"),
+    ?assert(nova_session_ets:session_ended(~"after-the-upgrade")).
 
 fill(Count) ->
     [ok = nova_session_ets:set_value(integer_to_binary(N), ~"k", ~"v") || N <- lists:seq(1, Count)],

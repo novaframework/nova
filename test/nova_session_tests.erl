@@ -125,6 +125,7 @@ nova_session_ets_test_() ->
       fun renew_with_stream_handler_sets_no_cookie/0,
       fun known_presented_id_is_used/0,
       fun unknown_presented_id_is_replaced/0,
+      fun write_that_arrives_behind_the_delete_starts_another_session/0,
       fun renew_drops_presented_id/0,
       fun spawned_process_does_not_notify/0,
       fun request_without_owner_does_not_notify/0,
@@ -372,6 +373,27 @@ sign_in_says_when_the_backend_stores_nothing() ->
     after
         meck:unload(nova_session_ets)
     end.
+
+%% The backend said the session was there, and it is deleted before the
+%% write gets to it. What the backend refuses for an id that has ended is
+%% stored as it would have been a moment later: in a session of its own.
+write_that_arrives_behind_the_delete_starts_another_session() ->
+    ok = nova_session_ets:set_value(~"ends-meanwhile", ~"user", ~"alice"),
+    Req = presented_req(~"ends-meanwhile", ~"pending"),
+    meck:new(nova_session_ets, [passthrough]),
+    try
+        meck:expect(nova_session_ets, session_exists,
+                    fun(~"ends-meanwhile") -> ok =:= nova_session_ets:delete_value(~"ends-meanwhile");
+                       (SessionId) -> meck:passthrough([SessionId])
+                    end),
+        ?assertEqual(ok, nova_session:set(Req, ~"note", ~"late")),
+        ?assertEqual({written, ~"pending"}, stream_event())
+    after
+        meck:unload(nova_session_ets)
+    end,
+    ?assertNot(nova_session_ets:session_exists(~"ends-meanwhile")),
+    ?assertEqual({ok, ~"late"}, nova_session_ets:get_value(~"pending", ~"note")),
+    ?assertEqual({ok, ~"late"}, nova_session:get(Req, ~"note")).
 
 backend_is_asked_once_about_a_presented_id() ->
     ok = nova_session_ets:set_value(~"asked-once", ~"k", ~"v"),

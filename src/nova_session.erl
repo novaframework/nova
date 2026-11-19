@@ -12,6 +12,13 @@ changes the id, for any other change of what a client may do (a second
 factor, a password change, a higher role). As defence in depth, a presented
 id the backend does not know is ignored and replaced, so a client cannot
 simply choose its own session id.
+
+A session that was deleted, by `delete/1`, `renew/1` or `sign_in/3`, does
+not come back. A request that was on its way when another one ended its
+session writes to a session of its own, under another id, and never under
+the one the client was moved off. `nova_session_ets` sees to that for five
+minutes after a session was deleted, and a backend of your own does with
+`c:session_ended/1`.
 """.
 -export([
          get/2,
@@ -147,7 +154,13 @@ write(Function, Req, Key, Value) ->
     case get_session_id(Req, write) of
         {ok, SessionId} ->
             Mod = get_session_module(),
-            written(Mod:Function(SessionId, Key, Value), SessionId, Req);
+            case {Mod:Function(SessionId, Key, Value), Req} of
+                {{error, session_ended}, #{nova_session_pending := Pending}} when Pending =/= SessionId ->
+                    ended(SessionId),
+                    written(Mod:Function(Pending, Key, Value), Pending, Req);
+                {Result, _Req} ->
+                    written(Result, SessionId, Req)
+            end;
         _ ->
             {error, session_id_not_set}
     end.

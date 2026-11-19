@@ -30,6 +30,17 @@ in or sign anybody out. The first `nova_session:set/3` makes it an ordinary
 session. A provisional write that would start a session when every session in
 a full table is an ordinary one returns `{error, session_store_full}`.
 
+A session that was deleted, which is what signing out and
+`nova_session:renew/1` do, stays deleted: the id is remembered for five
+minutes, on every node, and a write to it in that time stores nothing and
+returns `{error, session_ended}`. A request that was on its way when its
+client signed out so cannot bring the session back under an id that somebody
+else may hold. `nova_session` stores what such a request writes in a session
+of its own. At most as many ended ids are remembered as the table may hold
+sessions (1 000 000 when `max_sessions` is `infinity`), and the one that
+ended first is forgotten first. A request that takes longer than five
+minutes is not covered.
+
 Sessions do not survive a restart, and a node that starts or joins later only
 has the sessions written after it joined. During a rolling deploy or behind a
 load balancer without sticky sessions, a client whose id the serving node does
@@ -53,7 +64,8 @@ converts both on a hot upgrade, to ordinary sessions.
          set_provisional_value/3,
          delete_value/1,
          delete_value/2,
-         session_exists/1
+         session_exists/1,
+         session_ended/1
         ]).
 
 %% gen_server callbacks
@@ -63,6 +75,10 @@ converts both on a hot upgrade, to ordinary sessions.
 -define(SERVER, ?MODULE).
 -define(TABLE, nova_session_ets_entries).
 -define(EXPIRY, nova_session_ets_expiry).
+-define(ENDED, nova_session_ets_ended).
+-define(ENDED_ORDER, nova_session_ets_ended_order).
+-define(ENDED_FOR, 300000).
+-define(MAX_ENDED, 1000000).
 -define(CHANNEL, '__sessions').
 -define(SWEEP_INTERVAL, 60000).
 -define(PROVISIONAL_MAX_AGE, 86400).
@@ -99,17 +115,35 @@ get_value(SessionId, Key) ->
         error:badarg -> {error, not_found}
     end.
 
--spec set_value(SessionId :: binary(), Key :: binary(), Value :: binary()) -> ok | {error, Reason :: term()}.
+-doc """
+Stores `Value` under `Key` in the session, on every node, and creates the
+session when it does not exist. A provisional session becomes an ordinary
+one. In a full table a new session takes the place of another one, as the
+module documentation describes. Returns `{error, session_store_full}` when
+the session is not in the table of this node after the write, and
+`{error, session_ended}`, storing nothing, when the session was deleted in
+the last five minutes.
+""".
+-spec set_value(SessionId :: binary(), Key :: binary(), Value :: term()) ->
+          ok | {error, session_store_full | session_ended}.
 set_value(SessionId, Key, Value) ->
     write(kept, "set_value", SessionId, Key, Value).
 
+-doc """
+Stores `Value` under `Key` like `set_value/3`, and creates a provisional
+session when the session does not exist. A session that exists keeps its
+kind. In a full table a new provisional session takes the place of an
+expired or another provisional one. Returns `{error, session_store_full}`
+when there is none of those to drop, and `{error, session_ended}`, storing
+nothing, when the session was deleted in the last five minutes.
+""".
 -spec set_provisional_value(SessionId :: binary(), Key :: binary(), Value :: term()) ->
           ok | {error, session_store_full | session_ended}.
 set_provisional_value(SessionId, Key, Value) ->
     write(provisional, "set_provisional_value", SessionId, Key, Value).
 
 write(Class, Topic, SessionId, Key, Value) ->
-    case has_room(SessionId, Class) of
+    case not session_ended(SessionId) andalso has_room(SessionId, Class) of
         true ->
             nova_pubsub:broadcast(?CHANNEL, Topic, {SessionId, Key, Value}),
             sync(),
@@ -124,7 +158,10 @@ written(SessionId) ->
         true ->
             ok;
         false ->
-            {error, session_store_full}
+            case session_ended(SessionId) of
+                true -> {error, session_ended};
+                false -> {error, session_store_full}
+            end
     end.
 
 -doc "Deletes the session on every node.".
@@ -145,6 +182,15 @@ session_exists(SessionId) ->
     try ets:lookup(?TABLE, SessionId) of
         [{SessionId, _Session, ExpiresAt, _Class}] -> not expired(ExpiresAt);
         _ -> false
+    catch
+        error:badarg -> false
+    end.
+
+-spec session_ended(SessionId :: binary()) -> boolean().
+session_ended(SessionId) ->
+    try ets:lookup(?ENDED, SessionId) of
+        [{SessionId, Until, _Order}] -> Until > erlang:monotonic_time(millisecond);
+        [] -> false
     catch
         error:badarg -> false
     end.
@@ -184,6 +230,8 @@ init([]) ->
     process_flag(trap_exit, true),
     ets:new(?TABLE, [set, named_table, {read_concurrency, true}]),
     ets:new(?EXPIRY, [ordered_set, named_table]),
+    ets:new(?ENDED, [set, named_table, {read_concurrency, true}]),
+    ets:new(?ENDED_ORDER, [ordered_set, named_table]),
     nova_pubsub:join(?CHANNEL),
     schedule_sweep(),
     {ok, #state{}}.
@@ -229,9 +277,9 @@ handle_cast(_Request, State) ->
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: normal | term(), NewState :: term()}.
 handle_info(#nova_pubsub{topic = "set_value", payload = {SessionId, Key, Value}}, State) ->
-    {noreply, store_live(kept, SessionId, Key, Value, State)};
+    {noreply, store(kept, SessionId, Key, Value, State)};
 handle_info(#nova_pubsub{topic = "set_provisional_value", payload = {SessionId, Key, Value}}, State) ->
-    {noreply, store_live(provisional, SessionId, Key, Value, State)};
+    {noreply, store(provisional, SessionId, Key, Value, State)};
 handle_info(#nova_pubsub{topic = "delete_value", payload = {SessionId, Key}}, State) ->
     case live_session(SessionId) of
         {ok, Session, ExpiresAt, Class} ->
@@ -242,9 +290,11 @@ handle_info(#nova_pubsub{topic = "delete_value", payload = {SessionId, Key}}, St
     {noreply, State};
 handle_info(#nova_pubsub{topic = "delete_value", payload = SessionId}, State) ->
     drop(SessionId),
+    ended(SessionId),
     {noreply, State};
 handle_info(sweep, State) ->
     sweep(),
+    sweep_ended(erlang:monotonic_time(millisecond)),
     schedule_sweep(),
     {noreply, State};
 handle_info(_Info, State) ->
@@ -270,6 +320,8 @@ terminate(_Reason, _State) ->
                                       {error, Reason :: term()}.
 code_change(_OldVsn, _State, _Extra) ->
     _ = ets:whereis(?EXPIRY) =:= undefined andalso ets:new(?EXPIRY, [ordered_set, named_table]),
+    _ = ets:whereis(?ENDED) =:= undefined andalso ets:new(?ENDED, [set, named_table, {read_concurrency, true}]),
+    _ = ets:whereis(?ENDED_ORDER) =:= undefined andalso ets:new(?ENDED_ORDER, [ordered_set, named_table]),
     Old = ets:select(?TABLE, [{{'$1', '$2'}, [], [{{'$1', '$2', infinity}}]},
                               {{'$1', '$2', '$3'}, [], ['$_']}]),
     _ = [insert(SessionId, Session, ExpiresAt, kept) || {SessionId, Session, ExpiresAt} <- Old],
@@ -297,6 +349,12 @@ live_session(SessionId) ->
             end;
         [] ->
             error
+    end.
+
+store(Class, SessionId, Key, Value, State) ->
+    case session_ended(SessionId) of
+        true -> State;
+        false -> store_live(Class, SessionId, Key, Value, State)
     end.
 
 store_live(Class, SessionId, Key, Value, State) ->
@@ -333,6 +391,48 @@ drop(SessionId) ->
 
 rank(provisional) -> 0;
 rank(kept)        -> 1.
+
+ended(SessionId) ->
+    forget_ended(SessionId),
+    Until = erlang:monotonic_time(millisecond) + ?ENDED_FOR,
+    Order = erlang:unique_integer([monotonic]),
+    ets:insert(?ENDED_ORDER, {Order, SessionId, Until}),
+    ets:insert(?ENDED, {SessionId, Until, Order}),
+    forget_first_ended(max_ended()).
+
+forget_ended(SessionId) ->
+    case ets:lookup(?ENDED, SessionId) of
+        [{SessionId, _Until, Order}] ->
+            ets:delete(?ENDED_ORDER, Order),
+            ets:delete(?ENDED, SessionId);
+        [] ->
+            true
+    end.
+
+forget_first_ended(Max) ->
+    case ets:info(?ENDED, size) > Max andalso ets:first_lookup(?ENDED_ORDER) of
+        {_Order, [{_, SessionId, _Until}]} ->
+            forget_ended(SessionId),
+            forget_first_ended(Max);
+        _Room ->
+            ok
+    end.
+
+sweep_ended(Now) ->
+    case ets:first_lookup(?ENDED_ORDER) of
+        {_Order, [{_, SessionId, Until}]} when Until =< Now ->
+            forget_ended(SessionId),
+            sweep_ended(Now);
+        _NoneDue ->
+            ok
+    end.
+
+-spec max_ended() -> pos_integer().
+max_ended() ->
+    case max_sessions() of
+        infinity -> ?MAX_ENDED;
+        Max -> Max
+    end.
 
 nearest_expiry(Class) ->
     Rank = rank(Class),
