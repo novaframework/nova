@@ -1028,6 +1028,11 @@ with_checked_options(Plugin, Named) ->
     with_checked_origins(Plugin, Named).
 
 -spec with_checked_origins(Plugin :: plugin(), Named :: map()) -> plugin().
+with_checked_origins({_Type, Plugin, #{allowed_origins := _}}, Named)
+  when Plugin =:= nova_csrf_plugin; Plugin =:= nova_ws_origin_plugin ->
+    ?LOG_ERROR(Named#{msg => nova_settings:removed_notice(allowed_origins), setting => allowed_origins,
+                      replaced_by => trusted_origins, plugin => Plugin}),
+    throw({error, {invalid_setting, allowed_origins, {replaced_by, trusted_origins}}});
 with_checked_origins({Type, Plugin, Options = #{trusted_origins := Value}}, Named)
   when Plugin =:= nova_csrf_plugin; Plugin =:= nova_ws_origin_plugin ->
     case nova_settings:checked(trusted_origins, Value) of
