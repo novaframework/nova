@@ -76,6 +76,10 @@ stream_test_() ->
       fun stale_write_after_delete/0,
       fun stream_reply_carries_cookie/0,
       fun status_with_a_reason_phrase_carries_cookie/0,
+      fun request_is_marked_for_nova_handler/0,
+      fun tells_whether_the_response_has_begun/0,
+      fun refused_headers_leave_room_for_the_answer_of_cowboy/0,
+      fun headers_cowboy_is_told_to_ignore_are_an_answer/0,
       fun sessions_disabled/0
      ]}.
 
@@ -317,6 +321,50 @@ status_with_a_reason_phrase_carries_cookie() ->
     ?assertEqual([Id], [cookie_value(Cookie) || Cookie <- set_cookies(Replied)]),
     ?assertEqual([Id], [cookie_value(Cookie) || Cookie <- set_cookies(Streamed)]).
 
+request_is_marked_for_nova_handler() ->
+    {Req, _State} = start(req()),
+    ?assertEqual(true, maps:get(nova_stream, Req)).
+
+tells_whether_the_response_has_begun() ->
+    {_Req, State} = start(req()),
+    ?assertEqual(false, response_begun(State)),
+    {[{headers, 200, _}], Streaming} = nova_stream_h:info(1, {headers, 200, #{}}, State),
+    ?assertEqual(headers, response_begun(Streaming)),
+    {[{data, fin, ~"chunk"}], Streamed} = nova_stream_h:info(1, {data, fin, ~"chunk"}, Streaming),
+    ?assertEqual(headers, response_begun(Streamed)),
+    {[{response, <<"200 OK">>, _, ~"whole"}], Answered} =
+        nova_stream_h:info(1, {response, <<"200 OK">>, #{}, ~"whole"}, State),
+    ?assertEqual(true, response_begun(Answered)).
+
+%% Cowboy sends nothing when it refuses the headers of a response and answers
+%% 500 itself, through here.
+refused_headers_leave_room_for_the_answer_of_cowboy() ->
+    {_Req, State} = start(req()),
+    Refused = #{~"location" => ~"/next\r\nset-cookie: a=b"},
+    [begin
+         {[_Forwarded], State1} = nova_stream_h:info(1, Response, State),
+         ?assertEqual(false, response_begun(State1)),
+         ?assertMatch({[{response, 500, #{~"content-length" := ~"0"}, <<>>}], _},
+                      nova_stream_h:info(1, {response, 500, #{~"content-length" => ~"0"}, <<>>}, State1))
+     end || Response <- [{response, 302, Refused, <<>>}, {headers, 302, Refused}]].
+
+%% With invalid_response_headers set to ignore Cowboy sends them as they are.
+headers_cowboy_is_told_to_ignore_are_an_answer() ->
+    {[{next_req, _Req}], State} =
+        nova_stream_h:init(1, req(), #{stream_handlers => [?MODULE], invalid_response_headers => ignore}),
+    {[_Forwarded], Answered} =
+        nova_stream_h:info(1, {response, 302, #{~"location" => ~"/next\r\nset-cookie: a=b"}, <<>>}, State),
+    ?assertEqual(true, response_begun(Answered)).
+
+response_begun(State) ->
+    Ref = make_ref(),
+    {[], State} = nova_stream_h:info(1, {nova_response_begun, self(), Ref}, State),
+    receive
+        {Ref, Sent} -> Sent
+    after 0 ->
+            error(no_answer)
+    end.
+
 sessions_disabled() ->
     application:set_env(nova, use_sessions, false),
     {Req, State} = start(req()),
@@ -358,3 +406,8 @@ set_cookies(Headers) ->
 cookie_value(Cookie) ->
     [<<"__Host-session_id=", Value/binary>> | _] = binary:split(Cookie, ~";"),
     Value.
+
+%% Not a documented function of Cowboy, so a new Cowboy is checked for it here.
+cowboy_validates_response_headers_test() ->
+    {module, cowboy_http} = code:ensure_loaded(cowboy_http),
+    ?assert(erlang:function_exported(cowboy_http, validate_response_headers, 2)).

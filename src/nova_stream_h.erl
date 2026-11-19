@@ -21,7 +21,9 @@
 -record(state, {
                 next :: any(),
                 req,
-                session :: #session{} | undefined
+                session :: #session{} | undefined,
+                sent = false :: false | headers | true,
+                invalid_headers = error_terminate :: error_terminate | ignore
                }).
 
 -type state() :: #state{}.
@@ -30,10 +32,13 @@
           -> {cowboy_stream:commands(), state()}.
 init(StreamID, Req, Opts) ->
     {Req0, Session} = init_session(Req),
-    %% Set the correct server-header information
-    Req1 = cowboy_req:set_resp_header(<<"server">>, <<"Cowboy/Nova">>, Req0),
+    Req1 = cowboy_req:set_resp_header(<<"server">>, <<"Cowboy/Nova">>, Req0#{nova_stream => true}),
     {Commands, Next} = cowboy_stream:init(StreamID, Req1, Opts),
-    {Commands, #state{req = Req0, next = Next, session = Session}}.
+    {Commands, #state{req = Req0, next = Next, session = Session,
+                      invalid_headers = invalid_headers(Opts)}}.
+
+invalid_headers(#{invalid_response_headers := ignore}) -> ignore;
+invalid_headers(_Opts)                                 -> error_terminate.
 
 -spec data(cowboy_stream:streamid(), cowboy_stream:fin(), cowboy_req:resp_body(), State)
           -> {cowboy_stream:commands(), State} when State::state().
@@ -45,15 +50,18 @@ data(StreamID, IsFin, Data, State = #state{next = Next}) ->
           -> {cowboy_stream:commands(), State} when State::state().
 info(_StreamID, {nova_session, Event}, State = #state{session = Session}) ->
     {[], State#state{session = session_event(Event, Session)}};
+info(_StreamID, {nova_response_begun, From, Ref}, State = #state{sent = Sent}) when is_pid(From) ->
+    From ! {Ref, Sent},
+    {[], State};
 info(StreamID, Info, State) ->
     respond(StreamID, Info, State).
 
 respond(StreamID, {response, Code, Headers, Body}, State) when is_integer(Code); is_binary(Code) ->
     {Headers0, State0} = session_cookie(Headers, State),
-    forward(StreamID, {response, Code, Headers0, Body}, State0);
+    forward(StreamID, {response, Code, Headers0, Body}, begun(true, Headers0, State0));
 respond(StreamID, {headers, Code, Headers}, State) when is_integer(Code); is_binary(Code) ->
     {Headers0, State0} = session_cookie(Headers, State),
-    forward(StreamID, {headers, Code, Headers0}, State0);
+    forward(StreamID, {headers, Code, Headers0}, begun(headers, Headers0, State0));
 respond(StreamID, {switch_protocol, Headers, Module, ModState}, State) when is_map(Headers) ->
     {Headers0, State0} = session_cookie(Headers, upgrading(State)),
     forward(StreamID, {switch_protocol, Headers0, Module, ModState}, State0);
@@ -64,6 +72,12 @@ upgrading(State = #state{session = #session{presented = undefined} = Session}) -
     State#state{session = Session#session{issue = true}};
 upgrading(State) ->
     State.
+
+begun(Sent, Headers, State = #state{invalid_headers = Mode}) ->
+    case cowboy_http:validate_response_headers(Headers, #{invalid_response_headers => Mode}) of
+        ok -> State#state{sent = Sent};
+        error_terminate -> State
+    end.
 
 forward(StreamID, Info, State = #state{next = Next}) ->
     {Commands, Next0} = cowboy_stream:info(StreamID, Info, Next),
