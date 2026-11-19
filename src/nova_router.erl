@@ -15,6 +15,8 @@
          compile/1,
          compile/2,
          compile_fresh/2,
+         overrides_in_force/1,
+         secures_in_force/1,
          lookup_url/1,
          lookup_url/2,
          lookup_url/3,
@@ -355,7 +357,7 @@ compile([{App, AppOptions}|Tl], Dispatch, GlobalOptions) ->
     ok = misplaced_security([{security, Value, mount_path(GlobalOptions, AppOptions)}
                              || security := Value <- AppOptions],
                             App, maps:get(router_file, GlobalOptions, undefined)),
-    Dispatch0 = compile([App], Dispatch, maps:merge(GlobalOptions, AppOptions)),
+    Dispatch0 = compile([App], Dispatch, mount_options(GlobalOptions, AppOptions)),
     compile(Tl, Dispatch0, GlobalOptions);
 compile([App|Tl], Dispatch, Options) ->
     Router = router_module(App),
@@ -381,6 +383,14 @@ compile([App|Tl], Dispatch, Options) ->
 
     compile(Tl, Dispatch1, Options).
 
+mount_options(GlobalOptions, AppOptions) ->
+    Options = maps:merge(GlobalOptions, AppOptions),
+    Options#{secure => maps:get(secure, AppOptions, false),
+             inherited_secure => secures_in_force(GlobalOptions) ++ maps:get(inherited_secure, AppOptions, []),
+             override_secure => maps:get(override_secure, AppOptions, false),
+             inherited_override_secure => overrides_in_force(GlobalOptions) ++
+                 maps:get(inherited_override_secure, AppOptions, [])}.
+
 mount_path(GlobalOptions, AppOptions) ->
     case concat_strings(maps:get(prefix, GlobalOptions, ""), maps:get(prefix, AppOptions, "")) of
         "" -> "/";
@@ -388,6 +398,18 @@ mount_path(GlobalOptions, AppOptions) ->
     end.
 
 %%--------------------------------------------------------------------
+-doc false.
+-spec secures_in_force(Options :: map()) -> [term()].
+secures_in_force(Options) ->
+    maps:get(inherited_secure, Options, []) ++
+        [Secure || Secure <- [maps:get(secure, Options, false)], Secure =/= false].
+
+-doc false.
+-spec overrides_in_force(Options :: map()) -> [term()].
+overrides_in_force(Options) ->
+    maps:get(inherited_override_secure, Options, []) ++
+        [Override || Override <- [maps:get(override_secure, Options, false)], Override =/= false].
+
 -doc "The router module for an application. Either configured explicitly with the `router_module` application environment key, or derived from the application name using the convention for the language in use.".
 router_module(App) ->
     case application:get_env(App, router_module) of
@@ -415,15 +437,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
 
     Plugins = resolve_plugins(maps:get(plugin_strategy, Options, local_or_global), RouteInfo, RouterFile),
 
-    Secure =
-        case maps:get(override_secure, Options, false) of
-            false ->
-                normalize_secure(maps:get(secure, Options, maps:get(security, RouteInfo, false)), RouterFile);
-            %% The including application overrides the security callback the
-            %% sub-application declared for itself.
-            Override ->
-                normalize_secure(Override, RouterFile)
-        end,
+    Secure = resolve_secure(Options, RouteInfo, RouterFile),
 
     Order = #{before => plugins_before_security(RouteInfo, Plugins, Named), secured => Secure =/= false},
     ok = warn_about_order(RouteInfo, Secure, Plugins, Order, Named),
@@ -445,7 +459,10 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
                                   insert_opts => maps:get(insert_opts, Options, #{})},
                                 Value, Dispatch),
 
-    Dispatch2 = compile(SubApps, Dispatch1, Options#{value => Value, prefix => Prefix}),
+    Dispatch2 = compile(SubApps, Dispatch1,
+                        Options#{value => Value, prefix => Prefix, secure => false,
+                                 inherited_secure => secures_in_force(Options) ++
+                                     [Security || security := Security <- RouteInfo, Security =/= false]}),
 
     compile_paths(Tl, Dispatch2, Options).
 
@@ -672,6 +689,29 @@ normalize_secure(Invalid, RouterFile) ->
     ?LOG_ERROR(#{msg => ~"A security value must be false, a fun/1 or {Mod, Fun}.",
                  value => Invalid, router_file => RouterFile}),
     throw({error, {invalid_security, Invalid}}).
+
+resolve_secure(Options, RouteInfo, RouterFile) ->
+    Overrides = override_callbacks(Options, RouterFile),
+    Declared = [normalize_secure(Secure, RouterFile) || Secure <- secures_in_force(Options)] ++
+        [normalize_secure(maps:get(security, RouteInfo, false), RouterFile)],
+    Callbacks = case Overrides of
+                    [] -> without_repeats([Callback || Callback <- Declared, Callback =/= false]);
+                    _ -> Overrides
+                end,
+    case Callbacks of
+        [] -> false;
+        [Callback] -> Callback;
+        _Several -> Callbacks
+    end.
+
+override_callbacks(Options, RouterFile) ->
+    Callbacks = [normalize_secure(Override, RouterFile) || Override <- overrides_in_force(Options)],
+    without_repeats([Callback || Callback <- Callbacks, Callback =/= false]).
+
+without_repeats([Callback | Rest]) ->
+    [Callback | without_repeats([Other || Other <- Rest, Other =/= Callback])];
+without_repeats([]) ->
+    [].
 
 resolve_plugins(local_or_global, RouteInfo, _RouterFile) ->
     maps:get(plugins, RouteInfo, global_plugins());
