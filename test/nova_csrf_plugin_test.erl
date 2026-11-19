@@ -131,9 +131,9 @@ safe_method_with_existing_session_token_test() ->
     try
         Token = <<"existing-token">>,
         meck:expect(nova_session, get, fun(_Req, <<"_csrf_token">>) -> {ok, Token} end),
-        Req = #{method => <<"GET">>, path => <<"/">>},
+        Req = nova_test_helper:mock_req(~"GET", ~"/"),
         {ok, Req1, _State} = nova_csrf_plugin:pre_request(Req, #{}, #{}, #{}),
-        ?assertEqual(Token, maps:get(csrf_token, Req1))
+        ?assertEqual(Token, unmasked(maps:get(csrf_token, Req1)))
     after
         cleanup_meck([nova_session])
     end.
@@ -169,10 +169,9 @@ unsafe_method_valid_token_from_header_test() ->
         Token = <<"valid-token">>,
         meck:expect(nova_session, get, fun(_Req, <<"_csrf_token">>) -> {ok, Token} end),
         meck:expect(cowboy_req, header, fun(<<"x-csrf-token">>, _Req) -> Token end),
-        Req = #{method => <<"POST">>, path => <<"/submit">>,
-                headers => #{<<"x-csrf-token">> => Token}},
+        Req = nova_test_helper:with_header(~"x-csrf-token", Token, nova_test_helper:mock_req(~"POST", ~"/submit")),
         {ok, Req1, _State} = nova_csrf_plugin:pre_request(Req, #{}, #{}, #{}),
-        ?assertEqual(Token, maps:get(csrf_token, Req1))
+        ?assertEqual(Token, unmasked(maps:get(csrf_token, Req1)))
     after
         cleanup_meck([cowboy_req, nova_session])
     end.
@@ -183,10 +182,9 @@ unsafe_method_valid_token_from_params_test() ->
         Token = <<"valid-token">>,
         meck:expect(nova_session, get, fun(_Req, <<"_csrf_token">>) -> {ok, Token} end),
         meck:expect(cowboy_req, header, fun(<<"x-csrf-token">>, _Req) -> undefined end),
-        Req = #{method => <<"POST">>, path => <<"/submit">>,
-                params => #{<<"_csrf_token">> => Token}},
+        Req = (nova_test_helper:mock_req(~"POST", ~"/submit"))#{params => #{~"_csrf_token" => Token}},
         {ok, Req1, _State} = nova_csrf_plugin:pre_request(Req, #{}, #{}, #{}),
-        ?assertEqual(Token, maps:get(csrf_token, Req1))
+        ?assertEqual(Token, unmasked(maps:get(csrf_token, Req1)))
     after
         cleanup_meck([cowboy_req, nova_session])
     end.
@@ -196,8 +194,8 @@ unsafe_method_invalid_token_test() ->
     try
         meck:expect(nova_session, get, fun(_Req, <<"_csrf_token">>) -> {ok, <<"real-token0">>} end),
         meck:expect(cowboy_req, header, fun(<<"x-csrf-token">>, _Req) -> <<"wrong-token">> end),
-        Req = #{method => <<"POST">>, path => <<"/submit">>,
-                headers => #{<<"x-csrf-token">> => <<"wrong-token">>}},
+        Req = nova_test_helper:with_header(~"x-csrf-token", ~"wrong-token",
+                                           nova_test_helper:mock_req(~"POST", ~"/submit")),
         {stop, {reply, 403, _, _}, _Req1, _State} = nova_csrf_plugin:pre_request(Req, #{}, #{}, #{})
     after
         cleanup_meck([cowboy_req, nova_session])
@@ -207,7 +205,7 @@ unsafe_method_no_session_test() ->
     setup_meck([nova_session]),
     try
         meck:expect(nova_session, get, fun(_Req, <<"_csrf_token">>) -> {error, not_found} end),
-        Req = #{method => <<"POST">>, path => <<"/submit">>},
+        Req = nova_test_helper:mock_req(~"POST", ~"/submit"),
         {stop, {reply, 403, _, _}, _Req1, _State} = nova_csrf_plugin:pre_request(Req, #{}, #{}, #{})
     after
         cleanup_meck([nova_session])
@@ -218,7 +216,7 @@ unsafe_method_missing_submitted_token_test() ->
     try
         meck:expect(nova_session, get, fun(_Req, <<"_csrf_token">>) -> {ok, <<"real-token">>} end),
         meck:expect(cowboy_req, header, fun(<<"x-csrf-token">>, _Req) -> undefined end),
-        Req = #{method => <<"DELETE">>, path => <<"/resource/1">>},
+        Req = nova_test_helper:mock_req(~"DELETE", ~"/resource/1"),
         {stop, {reply, 403, _, _}, _Req1, _State} = nova_csrf_plugin:pre_request(Req, #{}, #{}, #{})
     after
         cleanup_meck([cowboy_req, nova_session])
@@ -228,10 +226,10 @@ excluded_path_skips_validation_test() ->
     setup_meck([nova_session]),
     try
         meck:expect(nova_session, get, fun(_Req, <<"_csrf_token">>) -> {ok, <<"token">>} end),
-        Req = #{method => <<"POST">>, path => <<"/api/webhooks/stripe">>},
+        Req = nova_test_helper:mock_req(~"POST", ~"/api/webhooks/stripe"),
         Options = #{excluded_paths => [<<"/api/webhooks">>]},
         {ok, Req1, _State} = nova_csrf_plugin:pre_request(Req, #{}, Options, #{}),
-        ?assertEqual(<<"token">>, maps:get(csrf_token, Req1))
+        ?assertEqual(~"token", unmasked(maps:get(csrf_token, Req1)))
     after
         cleanup_meck([nova_session])
     end.
@@ -242,13 +240,12 @@ custom_field_name_test() ->
         Token = <<"custom-token">>,
         meck:expect(nova_session, get, fun(_Req, <<"csrf">>) -> {ok, Token} end),
         meck:expect(cowboy_req, header, fun(<<"x-my-csrf">>, _Req) -> undefined end),
-        Req = #{method => <<"POST">>, path => <<"/submit">>,
-                params => #{<<"my_csrf">> => Token}},
+        Req = (nova_test_helper:mock_req(~"POST", ~"/submit"))#{params => #{~"my_csrf" => Token}},
         Options = #{field_name => <<"my_csrf">>,
                     header_name => <<"x-my-csrf">>,
                     session_key => <<"csrf">>},
         {ok, Req1, _State} = nova_csrf_plugin:pre_request(Req, #{}, Options, #{}),
-        ?assertEqual(Token, maps:get(csrf_token, Req1))
+        ?assertEqual(Token, unmasked(maps:get(csrf_token, Req1)))
     after
         cleanup_meck([cowboy_req, nova_session])
     end.
@@ -262,3 +259,36 @@ setup_meck(Modules) ->
 
 cleanup_meck(Modules) ->
     [meck:unload(M) || M <- Modules].
+
+unmasked(Masked) ->
+    Decoded = base64:decode(Masked, #{mode => urlsafe, padding => false}),
+    Size = byte_size(Decoded) div 2,
+    <<Mask:Size/binary, Token:Size/binary>> = Decoded,
+    crypto:exor(Mask, Token).
+
+masked_token_is_accepted_test() ->
+    setup_meck([nova_session, cowboy_req]),
+    try
+        Token = ~"the-token-of-the-session",
+        meck:expect(nova_session, get, fun(_Req, ~"_csrf_token") -> {ok, Token} end),
+        Get = nova_test_helper:mock_req(~"GET", ~"/"),
+        {ok, #{csrf_token := <<Masked/binary>>}, _} = nova_csrf_plugin:pre_request(Get, #{}, #{}, #{}),
+        {ok, #{csrf_token := <<Again/binary>>}, _} = nova_csrf_plugin:pre_request(Get, #{}, #{}, #{}),
+        ?assertNotEqual(Masked, Again),
+        ?assertEqual(nomatch, binary:match(Masked, Token)),
+        Post = nova_test_helper:mock_req(~"POST", ~"/submit"),
+        [begin
+             meck:expect(cowboy_req, header, fun(~"x-csrf-token", _Req) -> Submitted end),
+             ?assertMatch({Submitted, {ok, _, _}}, {Submitted, nova_csrf_plugin:pre_request(Post, #{}, #{}, #{})})
+         end || Submitted <- [Masked, Again, Token]],
+        [begin
+             meck:expect(cowboy_req, header, fun(~"x-csrf-token", _Req) -> Submitted end),
+             ?assertMatch({Submitted, {stop, {reply, 403, _, _}, _, _}},
+                          {Submitted, nova_csrf_plugin:pre_request(Post, #{}, #{}, #{})})
+         end || Submitted <- [binary:part(Masked, 0, byte_size(Masked) - 1), <<Masked/binary, "A">>,
+                              base64:encode(binary:copy(<<0>>, 2 * byte_size(Token)),
+                                            #{mode => urlsafe, padding => false}),
+                              ~"", undefined]]
+    after
+        cleanup_meck([cowboy_req, nova_session])
+    end.

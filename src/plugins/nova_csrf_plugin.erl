@@ -83,12 +83,12 @@ plugin_info() ->
 handle_safe_request(Req, SessionKey, State) ->
     case nova_session:get(Req, SessionKey) of
         {ok, Token} ->
-            {ok, Req#{csrf_token => Token}, State};
+            {ok, Req#{csrf_token => masked(Token)}, State};
         {error, _} ->
             Token = generate_token(),
             case nova_session:set_provisional(Req, SessionKey, Token) of
                 ok ->
-                    {ok, Req#{csrf_token => Token}, State};
+                    {ok, Req#{csrf_token => masked(Token)}, State};
                 {error, _} ->
                     %% Session not established yet (no cookie), proceed without token
                     {ok, Req, State}
@@ -98,16 +98,52 @@ handle_safe_request(Req, SessionKey, State) ->
 handle_unsafe_request(Req, SessionKey, FieldName, HeaderName, State) ->
     case nova_session:get(Req, SessionKey) of
         {ok, SessionToken} ->
-            SubmittedToken = get_submitted_token(Req, FieldName, HeaderName),
-            case constant_time_compare(SessionToken, SubmittedToken) of
+            case is_token(SessionToken, get_submitted_token(Req, FieldName, HeaderName)) of
                 true ->
-                    {ok, Req#{csrf_token => SessionToken}, State};
+                    {ok, Req#{csrf_token => masked(SessionToken)}, State};
                 false ->
                     reject(Req, State)
             end;
         {error, _} ->
             reject(Req, State)
     end.
+
+-spec masked(Token :: term()) -> term().
+masked(Token) when is_binary(Token) ->
+    Pad = crypto:strong_rand_bytes(byte_size(Token)),
+    base64:encode(<<Pad/binary, (crypto:exor(Pad, Token))/binary>>, #{mode => urlsafe, padding => false});
+masked(Token) ->
+    Token.
+
+-spec is_token(SessionToken :: term(), Submitted :: term()) -> boolean().
+is_token(SessionToken, Submitted) ->
+    constant_time_compare(SessionToken, Submitted) orelse constant_time_compare(SessionToken, unmasked(Submitted)).
+
+-spec unmasked(Submitted :: term()) -> binary() | undefined.
+unmasked(Submitted) ->
+    case decoded(Submitted) of
+        Decoded when is_binary(Decoded), byte_size(Decoded) rem 2 =:= 0 ->
+            Size = byte_size(Decoded) div 2,
+            <<Pad:Size/binary, Masked:Size/binary>> = Decoded,
+            crypto:exor(Pad, Masked);
+        _NotMasked ->
+            undefined
+    end.
+
+-spec decoded(Submitted :: term()) -> binary() | undefined.
+decoded(Submitted) when is_binary(Submitted) ->
+    Encoding = #{mode => urlsafe, padding => false},
+    try base64:decode(Submitted, Encoding) of
+        Decoded ->
+            case constant_time_compare(base64:encode(Decoded, Encoding), Submitted) of
+                true -> Decoded;
+                false -> undefined
+            end
+    catch
+        error:_NotBase64 -> undefined
+    end;
+decoded(_Submitted) ->
+    undefined.
 
 reject(Req, State) ->
     {stop, {reply, 403, [{<<"content-type">>, <<"text/plain">>}], <<"Forbidden - CSRF token invalid">>}, Req, State}.
