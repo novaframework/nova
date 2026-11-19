@@ -109,18 +109,9 @@ handle_call(Request, From, State) ->
                          {noreply, NewState :: term(), hibernate} |
                          {stop, Reason :: term(), NewState :: term()}.
 handle_cast({async, Application, Cmd, Args, Options}, State = #state{process_refs = ProcessRefs}) ->
-    LibDir = code:lib_dir(Application),
-    Workdir =
-        case maps:get(workdir, Options, undefined) of
-            undefined ->
-                LibDir;
-            Subdir ->
-                filename:join([LibDir, Subdir])
-        end,
-    %% Set working directory
-    file:set_cwd(Workdir),
     ArgList = string:join(Args, " "),
-    Port = erlang:open_port({spawn, Cmd ++ " " ++ ArgList}, [use_stdio, {line, 1024}, stderr_to_stdout]),
+    Port = erlang:open_port({spawn, Cmd ++ " " ++ ArgList},
+                            port_options(workdir(Application, maps:get(workdir, Options, undefined)))),
     ?LOG_NOTICE(#{action => <<"Started async command">>, command => Cmd, arguments => ArgList}),
     {noreply, State#state{process_refs = [Port|ProcessRefs]}};
 handle_cast(_Request, State) ->
@@ -193,6 +184,19 @@ format_status(Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+workdir(Application, Subdir) ->
+    case code:lib_dir(Application) of
+        {error, bad_name} when Subdir =:= undefined -> undefined;
+        {error, bad_name} -> error({unknown_application, Application});
+        LibDir when Subdir =:= undefined -> LibDir;
+        LibDir -> filename:join(LibDir, Subdir)
+    end.
+
+port_options(undefined) ->
+    [use_stdio, {line, 1024}, stderr_to_stdout];
+port_options(Workdir) ->
+    [{cd, Workdir} | port_options(undefined)].
 
 
 
