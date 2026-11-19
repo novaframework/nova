@@ -1,8 +1,8 @@
 -module(nova_basic_handler_tests).
 -include_lib("eunit/include/eunit.hrl").
 
--define(SETUP, fun() -> nova_test_helper:setup_nova_env() end).
--define(CLEANUP, fun(Prev) -> nova_test_helper:cleanup_nova_env(Prev) end).
+-define(SETUP, fun nova_test_helper:setup_nova_env/0).
+-define(CLEANUP, fun nova_test_helper:cleanup_nova_env/1).
 -define(CALLBACK, fun dummy_mod:dummy_fun/1).
 
 %% Logger handler callback: forwards reports to the process that added it.
@@ -18,6 +18,16 @@ all_logged() ->
     receive
         {logged, Report} -> [{report, Report} | all_logged()]
     after 50 ->
+            []
+    end.
+
+json_order_warnings() ->
+    receive
+        {logged, #{msg := <<"{json, Status, Headers, Req, JSON}", _/binary>>} = Report} ->
+            [Report | json_order_warnings()];
+        {logged, _} ->
+            json_order_warnings()
+    after 0 ->
             []
     end.
 
@@ -58,6 +68,46 @@ handle_json_req_passthrough_test_() ->
             {json, 200, #{}, CustomReq, #{data => 1}}, ?CALLBACK, Req),
         ?assertEqual(true, maps:get(custom_field, Req1))
     end}.
+
+%% The order the -doc and -spec give: JSON first, then the request.
+handle_json_documented_order_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Req = nova_test_helper:mock_req(~"GET", ~"/"),
+        CustomReq = Req#{custom_field => true},
+        {ok, Req1} = nova_basic_handler:handle_json({json, 201, #{}, #{data => 1}, CustomReq}, ?CALLBACK, Req),
+        ?assertEqual(true, maps:get(custom_field, Req1)),
+        ?assertEqual(201, maps:get(resp_status_code, Req1)),
+        ?assertEqual(#{~"data" => 1}, decoded_body(Req1))
+    end}.
+
+%% A request built in a test may lack pid; the documented order is the default.
+handle_json_documented_order_without_pid_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Req = maps:remove(pid, nova_test_helper:mock_req(~"GET", ~"/")),
+        {ok, Req1} = nova_basic_handler:handle_json({json, 200, #{}, #{data => 1}, Req#{custom_field => true}},
+                                                    ?CALLBACK, Req),
+        ?assertEqual(true, maps:get(custom_field, Req1)),
+        ?assertEqual(#{~"data" => 1}, decoded_body(Req1))
+    end}.
+
+handle_json_old_order_warns_once_test_() ->
+    {setup,
+     fun() ->
+         nova_once:forget({nova_basic_handler, json_order_warned, dummy_mod}),
+         nova_test_helper:setup_nova_env()
+     end,
+     fun(Prev) ->
+         logger:remove_handler(?MODULE),
+         nova_once:forget({nova_basic_handler, json_order_warned, dummy_mod}),
+         nova_test_helper:cleanup_nova_env(Prev)
+     end,
+     fun() ->
+         ok = logger:add_handler(?MODULE, ?MODULE, #{config => #{test_pid => self()}}),
+         Req = nova_test_helper:mock_req(~"GET", ~"/"),
+         [{ok, _} = nova_basic_handler:handle_json({json, 200, #{}, Req, #{data => N}}, ?CALLBACK, Req)
+          || N <- [1, 2, 3]],
+         ?assertMatch([#{controller := dummy_mod}], json_order_warnings())
+     end}.
 
 location_test() ->
     ?assertEqual(~"/login", nova_basic_handler:location(~"/login")),
@@ -318,7 +368,7 @@ csrf_token_map_no_token_test() ->
     ?assertEqual(#{key => value}, Result).
 
 %%====================================================================
-%% handle_websocket/3
+%% handle_websocket/3, which is deprecated, through what it calls
 %%====================================================================
 
 handle_websocket_success_test_() ->
@@ -327,10 +377,26 @@ handle_websocket_success_test_() ->
         meck:expect(test_ws_ctrl, init, fun(CD) -> {ok, CD#{initialized => true}} end),
         Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
         Callback = fun test_ws_ctrl:handle/1,
-        {cowboy_websocket, Req1, _State} = nova_basic_handler:handle_websocket(
-            {websocket, #{data => test}}, Callback, Req),
+        {cowboy_websocket, Req1, _State} = nova_basic_handler:websocket_upgrade(#{data => test}, Callback, Req),
         ?assertEqual(#{data => test, initialized => true}, maps:get(controller_data, Req1)),
         meck:unload(test_ws_ctrl)
+    end}.
+
+%% The request a controller hands back with {websocket, ControllerData, Req}
+%% is the one that is upgraded. Called by name, since a call to a deprecated
+%% function is a lint finding.
+handle_websocket_req_passthrough_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        meck:new(test_ws_ctrl3, [non_strict, no_link]),
+        meck:expect(test_ws_ctrl3, init, fun(CD) -> {ok, CD} end),
+        Req = nova_test_helper:mock_req(~"GET", ~"/ws"),
+        Own = Req#{custom => true},
+        Return = {websocket, #{data => test}, Own},
+        {cowboy_websocket, Req1, _State} =
+            apply(nova_basic_handler, handle_websocket, [Return, fun test_ws_ctrl3:handle/1, Req]),
+        ?assertEqual(true, maps:get(custom, Req1)),
+        ?assertEqual(#{data => test}, maps:get(controller_data, Req1)),
+        meck:unload(test_ws_ctrl3)
     end}.
 
 handle_websocket_error_test_() ->
@@ -339,22 +405,8 @@ handle_websocket_error_test_() ->
         meck:expect(test_ws_ctrl2, init, fun(_CD) -> {error, bad_init} end),
         Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
         Callback = fun test_ws_ctrl2:handle/1,
-        {ok, _Req1} = nova_basic_handler:handle_websocket(
-            {websocket, #{}}, Callback, Req),
+        {ok, _Req1} = nova_basic_handler:websocket_upgrade(#{}, Callback, Req),
         meck:unload(test_ws_ctrl2)
-    end}.
-
-handle_websocket_req_passthrough_test_() ->
-    {setup, ?SETUP, ?CLEANUP, fun() ->
-        meck:new(test_ws_ctrl3, [non_strict, no_link]),
-        meck:expect(test_ws_ctrl3, init, fun(CD) -> {ok, CD} end),
-        Req = nova_test_helper:mock_req(<<"GET">>, <<"/ws">>),
-        CustomReq = Req#{custom => yes},
-        Callback = fun test_ws_ctrl3:handle/1,
-        {cowboy_websocket, Req1, _State} = nova_basic_handler:handle_websocket(
-            {websocket, #{}, CustomReq}, Callback, Req),
-        ?assertEqual(yes, maps:get(custom, Req1)),
-        meck:unload(test_ws_ctrl3)
     end}.
 
 %%====================================================================
@@ -397,6 +449,9 @@ handle_status_with_headers_test_() ->
             {status, 301, #{<<"location">> => <<"/new">>}}, ?CALLBACK, Req),
         ?assertEqual(301, maps:get(resp_status_code, Req1))
     end}.
+
+decoded_body(#{resp_body := Body}) ->
+    json:decode(iolist_to_binary(Body)).
 
 %% io_lib:format/2 prints a binary with a control byte as a list of integers,
 %% so a text search of its output would miss a leak.
