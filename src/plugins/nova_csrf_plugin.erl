@@ -1,17 +1,61 @@
 -module(nova_csrf_plugin).
 -moduledoc """
-CSRF protection plugin for Nova using the synchronizer token pattern.
+CSRF protection plugin for Nova.
 
-Generates a random token per session, stores it server-side, and validates it on state-changing requests (POST, PUT, PATCH, DELETE).
+A page gets a token in `csrf_token` of the request, which a view receives as the variable `csrf_token`. A state-changing request (POST, PUT, PATCH, DELETE) has to send it back, in the form field or the header, and is answered `403` when it does not.
 
-__Important:__`nova_request_plugin` must run before this plugin so that form params are parsed into the `params` key of the request map.
+__Important:__ `nova_request_plugin` must run before this plugin so that form params are parsed into the `params` key of the request map.
+
+The plugin needs sessions: the token is kept in the session of a client or signed for its session cookie. A route group that lists it while `use_sessions` is `false` stops the boot with `{invalid_setting, use_sessions, {required_by, nova_csrf_plugin}}`, and so does `{csrf_token, stateless}`, with `{invalid_setting, csrf_token, {requires, use_sessions}}`.
+
+## Where the token comes from
+
+With `secret_key_base` set in the `nova` environment the token is signed and nothing is stored for it. It is an HMAC-SHA256 over the id in the session cookie of the client and 16 random bytes, under a key made from the secret for this plugin alone, so every response carries another token and each of them is good for as long as the client holds that cookie and the secret is in use. A visitor without a session cookie is handed one by the response; no session is started, and what the visitor first writes to the session is stored under the id of that cookie, so the tokens of the pages that are open stay good. A request that changes state is refused when it does not send the cookie the token was signed for. A token is the characters a page was given: the same bytes written another way, with whitespace in them or other bits to spare in the last character, are refused, with either kind of token. `nova_session:sign_in/3`, which is how a user is signed in, moves a visitor to another session id, as `nova_session:renew/1` does. A token made for the id before is refused from then on, the one in `csrf_token` of the request that signs in included, and the pages the client loads after that carry tokens for the new id: answer a sign-in with a redirect, not with a page that holds a form.
+
+```erlang
+{nova, [
+    {secret_key_base, ~"${SECRET_KEY_BASE}"}
+]}
+```
+
+The secret has to come from a random source, since everything signed with it lets whoever sees it try secrets at home: a word or a sentence, however long, does not do. Make one in an Erlang shell or with `openssl`, which both give 64 characters:
+
+```erlang
+base64:encode(crypto:strong_rand_bytes(48)).
+```
+
+```sh
+openssl rand -base64 48
+```
+
+It is a binary of at least 32 bytes. One that is shorter stops the boot with `{invalid_setting, secret_key_base, redacted}`, and so does one that plainly is not random: fewer than 8 different bytes, such as a letter or a word repeated, an example out of this documentation, or a `${VARIABLE}` that the release did not fill in. Nova cannot tell a sentence from a random value, so passing this check says little.
+
+The secret has to be the same on every node and across restarts, and belongs in what the release reads when it starts, such as an environment variable in `sys.config.src`, not in a file that is committed. Use it for Nova alone: an application that signs things of its own has a secret of its own. A list of secrets signs with the first and accepts all of them: put the new secret in front of the old one to change it, and take the old one out once the pages that were open have been sent. Nova never logs the secret, and what it keeps of it once it has started is the keys made from it.
+
+Without `secret_key_base` the token is a random value kept in the session, as in earlier releases: a visitor without a session gets one that holds the token. A page gets it under a mask that is new for every response, so the same token never looks the same twice in a compressed response. The token without a mask, which is what a page rendered by an earlier release holds, is accepted as well. The boot says so once. Set `{csrf_token, session}` to say that this is intended, or `{csrf_token, stateless}` to have a boot without a secret fail instead.
+
+After a secret is set, a form that was rendered before still sends the token of its session. It is accepted for as long as that session is there.
+
+## Where the request comes from
+
+A token is asked for whatever else the request says. On top of that, a request that changes state is answered `403` ahead of the security callback, and before anything of its body is read, when the browser says that a page of another site sent it:
+
+- `Sec-Fetch-Site` is `cross-site` or `same-site`, unless its `Origin` is one of a list of trusted origins. `same-origin` and `none`, which is what a request the user made by hand has, are let through.
+- Without `Sec-Fetch-Site`, which browsers send to `https` and `localhost` only, the `Origin` is not a trusted one.
+
+A request with neither header is let through: it is not from a browser, or from one too old to say. The trusted origins are `trusted_origins` of the `nova` environment, the setting websocket upgrades go by, unless the plugin is given its own: `same_host` (the default), `same_origin`, or a list such as `[~"https://app.example.com"]` for pages elsewhere that may post here. `same_host` takes an origin with the host and port the request was sent to, and on a request that came in over TLS only an `https` one. A list takes the place of `same_host`: a request that has an `Origin` and no `Sec-Fetch-Site` is let through only when that origin is in the list, also when a page of the site itself sent it, so put the origin of the site in the list.
+
+`any` in the `nova` environment opens websocket upgrades to every origin and nothing else: this plugin then checks by `same_host`. To turn the check off and leave a request to its token alone, give the plugin the option itself, `#{trusted_origins => any}`, in the route groups that are meant to be posted to from anywhere.
+
+This is not `allow_origins` of `nova_cors_plugin`, which says which pages may read a response. An origin that is to post here from a browser has to be in both.
 
 ### Options
 
-* `field_name` — form field name (default `<<"_csrf_token">>`)
-* `header_name` — header name (default `<<"x-csrf-token">>`)
-* `session_key` — session storage key (default `<<"_csrf_token">>`)
-* `excluded_paths` — list of path prefixes to skip (default `[]`)
+* `field_name` - form field name (default `<<"_csrf_token">>`)
+* `header_name` - header name (default `<<"x-csrf-token">>`)
+* `session_key` - session storage key (default `<<"_csrf_token">>`)
+* `trusted_origins` - the origins a request that changes state may come from, when not those of the `nova` environment: `same_host`, `same_origin`, a list of origins, or `any`, which turns the check off. Any other value stops the boot with `{invalid_setting, trusted_origins, Value}`
+* `excluded_paths` - list of path prefixes to skip (default `[]`). A prefix covers whole segments of the path the request is routed on: `<<"/api">>` skips `/api` and `/api/hooks`, not `/apikeys`, and `/api/../admin` is checked as `/admin`
 """.
 -behaviour(nova_plugin).
 
