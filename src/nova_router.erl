@@ -228,7 +228,7 @@ add_routes(App) ->
     add_routes(App, get_routes(router_module(App), Env)).
 
 %%--------------------------------------------------------------------
--doc "Add routes to the dispatch-table for the given app. The routes can be either a list of maps or a map. It use the same structure as the routes-callback in the router-module.".
+-doc "Add routes to the dispatch-table for the given app. The routes can be either a list of maps or a map. It use the same structure as the routes-callback in the router-module. Throws `{error, {misplaced_security, App, Key, Path}}` for routes with a security callback under a key that is not read: `secure` on a route group, or `security` or `secure` in the options of a route.".
 -spec add_routes(App :: atom(), Routes :: [map()] | map()) -> ok.
 add_routes(App, Routes) ->
     add_routes(App, Routes, ?NOVA_DISPATCH).
@@ -352,6 +352,9 @@ compile([], Dispatch, _Options) -> Dispatch;
 compile([{App, AppOptions}|Tl], Dispatch, GlobalOptions) ->
     %% Per-application options win over the global ones, and must not leak
     %% into the applications compiled after this one.
+    ok = misplaced_security([{security, Value, mount_path(GlobalOptions, AppOptions)}
+                             || security := Value <- AppOptions],
+                            App, maps:get(router_file, GlobalOptions, undefined)),
     Dispatch0 = compile([App], Dispatch, maps:merge(GlobalOptions, AppOptions)),
     compile(Tl, Dispatch0, GlobalOptions);
 compile([App|Tl], Dispatch, Options) ->
@@ -377,6 +380,12 @@ compile([App|Tl], Dispatch, Options) ->
     StorageBackend:put(apps_key(maps:get(dispatch_key, Options, ?NOVA_DISPATCH)), CompiledApps0),
 
     compile(Tl, Dispatch1, Options).
+
+mount_path(GlobalOptions, AppOptions) ->
+    case concat_strings(maps:get(prefix, GlobalOptions, ""), maps:get(prefix, AppOptions, "")) of
+        "" -> "/";
+        Path -> Path
+    end.
 
 %%--------------------------------------------------------------------
 -doc "The router module for an application. Either configured explicitly with the `router_module` application environment key, or derived from the application name using the convention for the language in use.".
@@ -423,6 +432,7 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
 
     Host = maps:get(host, RouteInfo, '_'),
     SubApps = maps:get(apps, RouteInfo, []),
+    ok = misplaced_security(misplaced_in_group(Prefix, RouteInfo), App, RouterFile),
 
     %% We need to add this app info to nova-env
     NovaEnv = nova:get_env(apps, []),
@@ -679,6 +689,26 @@ resolve_plugins(Strategy, RouteInfo, RouterFile) ->
     ?LOG_ERROR(#{reason => <<"Unknown plugin_strategy, falling back to local_or_global">>,
                  plugin_strategy => Strategy, router_file => RouterFile}),
     resolve_plugins(local_or_global, RouteInfo, RouterFile).
+
+misplaced_in_group(Prefix, RouteInfo) ->
+    [{secure, Value, Prefix} || secure := Value <- RouteInfo] ++
+        [{Key, maps:get(Key, RouteOptions), concat_strings(Prefix, Path)}
+         || {Path, _Target, RouteOptions} <- maps:get(routes, RouteInfo, []), is_map(RouteOptions),
+            Key <- [security, secure], is_map_key(Key, RouteOptions)].
+
+misplaced_security(Misplaced, App, RouterFile) ->
+    _ = [?LOG_WARNING(#{msg => ~"This key is not read here, so it protects nothing. Declare a callback as security on the route group, or as secure on the nova_apps entry of the application",
+                        app => App, path => Path, key => Key, router_file => RouterFile})
+         || {Key, false, Path} <- Misplaced],
+    case [{Key, Path} || {Key, Value, Path} <- Misplaced, Value =/= false] of
+        [] ->
+            ok;
+        [{Key, Path} | _] = Refused ->
+            _ = [?LOG_ERROR(#{msg => ~"This key is not read here, so the callback would protect nothing. Declare it as security on the route group, or as secure on the nova_apps entry of the application",
+                              app => App, path => RefusedPath, key => RefusedKey, router_file => RouterFile})
+                 || {RefusedKey, RefusedPath} <- Refused],
+            throw({error, {misplaced_security, App, Key, Path}})
+    end.
 
 local_plugins(RouteInfo) ->
     maps:get(plugins, RouteInfo, []).
