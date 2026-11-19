@@ -9,6 +9,8 @@
          redirect/1,
          teapot/1,
          crash/1,
+         forbidden/1,
+         gone/1,
          extra/1,
          secret/1,
          auth_data/1,
@@ -37,8 +39,14 @@ redirect(_Req) ->
 teapot(_Req) ->
     {status, 418, #{}, <<"short and stout">>}.
 
-crash(_Req) ->
-    erlang:error(deliberate_crash).
+crash(Req) ->
+    erlang:error(deliberate_crash, [Req]).
+
+forbidden(_Req) ->
+    throw({403, not_allowed}).
+
+gone(_Req) ->
+    erlang:error({410, gone}).
 
 extra(#{extra_state := ExtraState}) ->
     {json, #{answer => maps:get(answer, ExtraState, undefined)}}.
