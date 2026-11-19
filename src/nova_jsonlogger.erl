@@ -31,8 +31,8 @@
 -spec format(logger:log_event(), config()) -> unicode:chardata().
 format(
     #{msg := {report, #{format := Format, args := Args, label := {error_logger, _}}}} = Map, Config
-) ->
-    Report = #{text => io_lib:format(Format, Args)},
+) when is_list(Args) ->
+    Report = #{text => rendered(Format, Args, Config)},
     format(Map#{msg := {report, Report}}, Config);
 format(#{level := Level, msg := {report, Msg}, meta := Meta}, Config) when is_map(Msg) ->
     Data0 = merge_meta(Msg, Meta#{level => Level}, Config),
@@ -40,12 +40,11 @@ format(#{level := Level, msg := {report, Msg}, meta := Meta}, Config) when is_ma
     Data2 = apply_format_funs(Data1, Config),
     encode(pre_encode(Data2, Config), Config);
 format(Map = #{msg := {report, KeyVal}}, Config) when is_list(KeyVal) ->
-    format(Map#{msg := {report, maps:from_list(KeyVal)}}, Config);
+    format(Map#{msg := {report, maps:from_list([Pair || {_Key, _Value} = Pair <- KeyVal])}}, Config);
 format(Map = #{msg := {string, String}}, Config) ->
-    Report = #{text => unicode:characters_to_binary(String)},
-    format(Map#{msg := {report, Report}}, Config);
+    format(Map#{msg := {report, #{text => String}}}, Config);
 format(Map = #{msg := {Format, Terms}}, Config) ->
-    format(Map#{msg := {string, io_lib:format(Format, Terms)}}, Config).
+    format(Map#{msg := {string, rendered(Format, Terms, Config)}}, Config).
 
 %%% Useful for converting logger:timestamp() to a readable timestamp.
 -spec system_time_to_iso8601(integer()) -> binary().
@@ -61,6 +60,15 @@ system_time_to_iso8601(Epoch, Unit) ->
     binary:list_to_bin(calendar:system_time_to_rfc3339(Epoch, [{unit, Unit}, {offset, "Z"}])).
 
 %%%_* Private functions ================================================
+-spec rendered(io:format(), [term()], config()) -> io_lib:chars().
+rendered(Format, Args, _Config) ->
+    try
+        io_lib:format(Format, Args)
+    catch
+        error:_ ->
+            io_lib:format("~0tp ~0tp", [Format, Args], [{chars_limit, ?PRINTED_CHARS_LIMIT}])
+    end.
+
 pre_encode(Data, Config) ->
     #{jsonify(K) => pre_encode_value(V, Config) || K := V <- Data}.
 
