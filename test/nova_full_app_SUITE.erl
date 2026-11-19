@@ -46,6 +46,10 @@
          plugin_stop_two_tuple_replies/1,
          plugin_error_is_a_500/1,
          cors_preflight_on_a_route_that_accepts_options/1,
+         request_body_limit/1,
+         request_body_read_timeout/1,
+         request_body_timeout_closes_connection/1,
+         request_body_limit_closes_connection/1,
          custom_not_found/1,
          controller_crash_is_a_500/1,
          repeated_accept_headers_are_cheap/1,
@@ -132,7 +136,11 @@ groups() ->
                     plugin_break_unknown_reply_is_a_500,
                     plugin_stop_two_tuple_replies,
                     plugin_error_is_a_500,
-                    cors_preflight_on_a_route_that_accepts_options
+                    cors_preflight_on_a_route_that_accepts_options,
+                    request_body_limit,
+                    request_body_read_timeout,
+                    request_body_timeout_closes_connection,
+                    request_body_limit_closes_connection
                    ]},
      {errors, [parallel], [
                            custom_not_found,
@@ -430,6 +438,101 @@ plugin_counters() ->
 -spec stored(atom()) -> dynamic().
 stored(Key) ->
     persistent_term:get(Key).
+
+%% The route allows 64 bytes. A longer body gets a 413 without the rest
+%% being waited for: the chunked request never sends its last chunk.
+request_body_limit(Config) ->
+    Body = <<"{\"a\":\"", (binary:copy(~"x", 56))/binary, "\"}">>,
+    ?assertEqual(64, byte_size(Body)),
+    Created = raw_post(Config, "/body-limit/", Body),
+    ?assertMatch(<<"HTTP/1.1 201", _/binary>>, Created),
+    ?assertMatch({_, 64}, binary:match(Created, Body)),
+    ?assertMatch(<<"HTTP/1.1 413", _/binary>>, raw_post(Config, "/body-limit/", <<Body/binary, " ">>)),
+    Port = ?config(port, Config),
+    {ok, Socket} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, raw}]),
+    ok = gen_tcp:send(Socket, ["POST /body-limit/ HTTP/1.1\r\n",
+                               "Host: localhost:", integer_to_list(Port), "\r\n",
+                               "Content-Type: application/json\r\n",
+                               "Transfer-Encoding: chunked\r\n\r\n",
+                               "41\r\n", Body, " \r\n"]),
+    {ok, Response} = gen_tcp:recv(Socket, 0, 5000),
+    gen_tcp:close(Socket),
+    ?assertMatch(<<"HTTP/1.1 413", _/binary>>, Response).
+
+%% The route allows 300 ms for the body. A chunked body that trickles in one
+%% byte at a time gets a 408 at the deadline.
+request_body_read_timeout(Config) ->
+    Port = ?config(port, Config),
+    {ok, Socket} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, raw}]),
+    ok = gen_tcp:send(Socket, [~"POST /body-timeout/ HTTP/1.1\r\n",
+                               ~"Host: localhost:", integer_to_binary(Port), ~"\r\n",
+                               ~"Content-Type: application/json\r\n",
+                               ~"Transfer-Encoding: chunked\r\n\r\n"]),
+    Trickle = spawn_link(fun() -> trickle(Socket, 40) end),
+    T0 = erlang:monotonic_time(millisecond),
+    {ok, Response} = gen_tcp:recv(Socket, 0, 3000),
+    Elapsed = erlang:monotonic_time(millisecond) - T0,
+    unlink(Trickle),
+    exit(Trickle, kill),
+    gen_tcp:close(Socket),
+    ?assertMatch(<<"HTTP/1.1 408", _/binary>>, Response),
+    ?assert(Elapsed < 2000).
+
+%% The unread rest of a Content-Length body would be the start of the next
+%% request, so the 408 and the 413 close the connection.
+request_body_timeout_closes_connection(Config) ->
+    Socket = send_post_headers(Config, ~"/body-timeout/", ~"Content-Length: 1000\r\n"),
+    Trickle = spawn_link(fun() -> trickle_bytes(Socket, 40) end),
+    {ok, Response} = gen_tcp:recv(Socket, 0, 3000),
+    Next = gen_tcp:recv(Socket, 0, 2000),
+    unlink(Trickle),
+    exit(Trickle, kill),
+    gen_tcp:close(Socket),
+    ?assertMatch(<<"HTTP/1.1 408", _/binary>>, Response),
+    ?assertEqual({error, closed}, Next).
+
+request_body_limit_closes_connection(Config) ->
+    Socket = send_post_headers(Config, ~"/body-limit/", ~"Content-Length: 1000\r\n"),
+    {ok, Response} = gen_tcp:recv(Socket, 0, 3000),
+    Next = gen_tcp:recv(Socket, 0, 2000),
+    gen_tcp:close(Socket),
+    ?assertMatch(<<"HTTP/1.1 413", _/binary>>, Response),
+    ?assertEqual({error, closed}, Next).
+
+send_post_headers(Config, Path, Header) ->
+    Port = ?config(port, Config),
+    {ok, Socket} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, raw}]),
+    ok = gen_tcp:send(Socket, [~"POST ", Path, ~" HTTP/1.1\r\n",
+                               ~"Host: localhost:", integer_to_binary(Port), ~"\r\n",
+                               ~"Content-Type: application/json\r\n",
+                               Header, ~"\r\n"]),
+    Socket.
+
+trickle_bytes(_Socket, 0) ->
+    ok;
+trickle_bytes(Socket, N) ->
+    _ = gen_tcp:send(Socket, ~" "),
+    timer:sleep(50),
+    trickle_bytes(Socket, N - 1).
+
+trickle(_Socket, 0) ->
+    ok;
+trickle(Socket, N) ->
+    _ = gen_tcp:send(Socket, ~"1\r\n \r\n"),
+    timer:sleep(50),
+    trickle(Socket, N - 1).
+
+raw_post(Config, Path, Body) ->
+    Port = ?config(port, Config),
+    {ok, Socket} = gen_tcp:connect("localhost", Port, [binary, {active, false}, {packet, raw}]),
+    ok = gen_tcp:send(Socket, ["POST ", Path, " HTTP/1.1\r\n",
+                               "Host: localhost:", integer_to_list(Port), "\r\n",
+                               "Content-Type: application/json\r\n",
+                               "Content-Length: ", integer_to_list(byte_size(Body)), "\r\n",
+                               "Connection: close\r\n\r\n", Body]),
+    Response = recv_all(Socket, []),
+    gen_tcp:close(Socket),
+    Response.
 
 %%====================================================================
 %% Errors

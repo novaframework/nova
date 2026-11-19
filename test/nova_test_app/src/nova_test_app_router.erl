@@ -31,6 +31,12 @@ routes(_Environment) ->
      #{prefix => "/cors",
        plugins => [{pre_request, nova_cors_plugin, #{allow_origins => [~"https://app.example.com"]}}],
        routes => [{"/", fun nova_test_app_controller:method/1, #{methods => [options, post]}}]},
+     #{prefix => "/body-limit",
+       plugins => [{pre_request, nova_request_plugin, #{decode_json_body => true, max_body_length => 64}}],
+       routes => [{"/", fun nova_test_app_controller:body/1, #{methods => [post]}}]},
+     #{prefix => "/body-timeout",
+       plugins => [{pre_request, nova_request_plugin, #{decode_json_body => true, body_read_timeout => 300}}],
+       routes => [{"/", fun nova_test_app_controller:body/1, #{methods => [post]}}]},
 
      %% Plain routes, bindings, methods, plugins and a catch-all static dir.
      #{prefix => "",
