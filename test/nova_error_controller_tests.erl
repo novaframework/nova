@@ -180,6 +180,16 @@ browser_req() ->
 json_req() ->
     nova_test_helper:with_header(~"accept", ~"application/json", nova_test_helper:mock_req(~"GET", ~"/")).
 
+extra_msg_is_escaped_in_dev_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Req = (browser_req())#{crash_info => unsupported_return_crash_info()},
+         {status, 500, _Headers, Body0} = nova_error_controller:server_error(Req),
+         Body = iolist_to_binary(Body0),
+         ?assertEqual(nomatch, binary:match(Body, ~"<script>x")),
+         ?assertNotEqual(nomatch, binary:match(Body, ~"&lt;script&gt;x"))
+     end}.
+
 extra_msg_is_hidden_outside_dev_test_() ->
     {setup, ?SETUP, ?CLEANUP,
      fun() ->
