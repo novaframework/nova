@@ -80,3 +80,19 @@ not_found_no_accept_test_() ->
          {status, 404, Headers, _Body} = nova_error_controller:not_found(Req),
          ?assertEqual(<<"application/json">>, maps:get(<<"content-type">>, Headers))
      end}.
+
+server_error_test_() ->
+    Req = (nova_test_helper:mock_req(~"GET", ~"/crash"))#{crash_info => #{class => error, reason => badarg}},
+    {foreach,
+     fun() -> application:get_env(nova, environment) end,
+     fun({ok, Environment}) -> application:set_env(nova, environment, Environment);
+        (undefined) -> application:unset_env(nova, environment)
+     end,
+     [fun() ->
+              application:unset_env(nova, environment),
+              ?assertEqual({status, 500}, nova_error_controller:server_error(Req))
+      end,
+      fun() ->
+              application:set_env(nova, environment, dev),
+              ?assertMatch({status, 500, #{}, _Body}, nova_error_controller:server_error(Req))
+      end]}.

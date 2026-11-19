@@ -68,8 +68,8 @@ server_error(#{crash_info := #{class := Class, reason := Reason}} = Req) ->
                   extra_msg => io_lib:format("Class: ~p<br /> Reason: ~p", [Class, Reason]),
                   stacktrace => format_stacktrace(Stacktrace)},
 
-    case nova:get_environment() of
-        dev ->
+    case nova:is_dev_environment() of
+        true ->
             %% We do show a proper error response
             case cowboy_req:header(<<"accept">>, Req) of
                 <<"application/json">> ->
@@ -82,7 +82,7 @@ server_error(#{crash_info := #{class := Class, reason := Reason}} = Req) ->
                 _ ->
                     {status, 500, #{<<"content-type">> => <<"text/html">>}, <<>>}
             end;
-        _ ->
+        false ->
             {status, 500}
     end.
 
