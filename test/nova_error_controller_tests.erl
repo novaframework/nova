@@ -45,7 +45,12 @@ format_stacktrace_multiple_entries_test() ->
     ?assertEqual(2, length(Result)).
 
 format_stacktrace_not_enabled_test() ->
-    ?assertEqual([], nova_error_controller:format_stacktrace(not_enabled)).
+    nova_once:forget({nova_error_controller, stacktrace_hint}),
+    {Frames, Events} = nova_test_log:collect(fun() -> nova_error_controller:format_stacktrace(not_enabled) end),
+    ?assertEqual([], Frames),
+    [{warning, {report, #{msg := <<Message/binary>>}}}] = Events,
+    ?assertNotEqual(nomatch, binary:match(Message, ~"nova:use_stacktrace(true)")),
+    ?assertNotEqual(nomatch, binary:match(Message, ~"{use_stacktrace, true}")).
 
 %%====================================================================
 %% format_arity/1
@@ -299,6 +304,33 @@ no_page_without_error_pages_test_() ->
          after
              application:unset_env(nova, render_error_pages)
          end
+     end}.
+
+%% nova_handler takes the stacktrace of a crash only when stacktraces are
+%% on. In dev the page of a crash without one says how to turn them on, the
+%% first time.
+crash_without_a_stacktrace_names_the_setting_in_dev_test_() ->
+    {setup, ?SETUP, ?CLEANUP,
+     fun() ->
+         Warnings = fun(CrashInfo) ->
+                            {_Page, Events} =
+                                nova_test_log:collect(
+                                  fun() -> nova_error_controller:server_error((json_req())#{crash_info => CrashInfo}) end),
+                            [Message || {warning, {report, #{msg := Message}}} <- Events]
+                    end,
+         Crash = #{status_code => 500, class => error, reason => boom},
+         nova_once:forget({nova_error_controller, stacktrace_hint}),
+         ?assertEqual([], Warnings(Crash#{stacktrace => []})),
+         ?assertEqual([], Warnings(#{status_code => 500})),
+         application:set_env(nova, environment, prod),
+         try
+             ?assertEqual([], Warnings(Crash))
+         after
+             application:set_env(nova, environment, dev)
+         end,
+         [<<Message/binary>>] = Warnings(Crash),
+         ?assertNotEqual(nomatch, binary:match(Message, ~"nova:use_stacktrace(true)")),
+         ?assertEqual([], Warnings(Crash))
      end}.
 
 %% The pages are negotiated as RFC 9110 12.5.1 has it: the most specific

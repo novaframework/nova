@@ -110,7 +110,13 @@ stacktrace(_CrashInfo) ->
     [].
 
 format_stacktrace(not_enabled) ->
-    logger:warning(<<"Stacktrace disabled. If you want to enable stacktraces call nova:stracktrace(true) or update your sys.config - Read more in the docs">>),
+    Key = {?MODULE, stacktrace_hint},
+    case nova_once:first(Key) of
+        true ->
+            ?LOG_WARNING(#{msg => ~"Stacktraces are disabled. Call nova:use_stacktrace(true) or set {use_stacktrace, true} for nova in sys.config to have them"});
+        false ->
+            ok
+    end,
     [];
 format_stacktrace([]) -> [];
 format_stacktrace([{Mod, Func, Arity, TraceOpts}|Tl]) ->
