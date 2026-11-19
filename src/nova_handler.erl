@@ -74,9 +74,7 @@ call_terminate(Module, Reason, Req, State) ->
 
 execute_controller(Req, Env = #{callback := Callback}, StatusPage) ->
     UseStacktrace = persistent_term:get(nova_use_stacktrace, false),
-    try RetObj = Callback(Req),
-         call_handler(Callback, Req, RetObj, Env, false)
-    of
+    try run_controller(Callback, Req, Env, StatusPage =/= false) of
         HandlerReturn ->
             HandlerReturn
     catch
@@ -162,6 +160,43 @@ response_begun(_Req) ->
 without_error_page(Req, Env) ->
     ?LOG_WARNING(#{msg => ~"The response had begun when the controller failed, so no error page is sent"}),
     {ok, Req, Env}.
+
+run_controller(Callback, Req, Env, StatusPage) ->
+    {module, Module} = erlang:fun_info(Callback, module),
+    {name, Action} = erlang:fun_info(Callback, name),
+    Metadata = request_metadata(Req),
+    Span = nova_telemetry:start([nova, controller],
+                                Metadata#{app => maps:get(app, Env, undefined),
+                                          controller => Module,
+                                          action => Action,
+                                          route => maps:get(nova_route, Req, undefined),
+                                          status_page => StatusPage}),
+    try
+        RetObj = Callback(Req),
+        {ok, Req0, _Env0} = HandlerReturn = call_handler(Callback, Req, RetObj, Env, false),
+        nova_telemetry:stop(Span, #{status => maps:get(resp_status_code, Req0, 200)}),
+        HandlerReturn
+    catch
+        exit:{request_error, Kind, _} = Reason:Stacktrace when not StatusPage ->
+            nova_telemetry:stop(Span, #{status => request_error_status(Kind)}),
+            erlang:raise(exit, Reason, Stacktrace);
+        Class:{Status, _} = Reason:Stacktrace when is_integer(Status), not StatusPage ->
+            nova_telemetry:stop(Span, #{status => Status}),
+            erlang:raise(Class, Reason, Stacktrace);
+        Class:Reason:Stacktrace ->
+            nova_telemetry:exception(Span, Class, Reason, Stacktrace),
+            erlang:raise(Class, Reason, Stacktrace)
+    end.
+
+request_metadata(Req) ->
+    #{Field => maps:get(Field, Req, undefined)
+      || Field <- [method, host, scheme, version | opt_in_request_fields()]}.
+
+opt_in_request_fields() ->
+    case application:get_env(nova, telemetry_request_fields, []) of
+        Fields when is_list(Fields) -> [Field || Field <- Fields, Field =:= path orelse Field =:= peer];
+        _ -> []
+    end.
 
 -spec execute_fallback(Callback :: function(), Req :: cowboy_req:req(), Response :: any(), Env :: map()) ->
           {ok, Req0 :: cowboy_req:req(), Env :: map()}.
