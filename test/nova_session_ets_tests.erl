@@ -65,6 +65,17 @@ expiry_test_() ->
       fun update_does_not_extend_max_age/0
      ]}.
 
+provisional_test_() ->
+    {foreach,
+     fun setup/0,
+     fun(Pid) -> cleanup(Pid), application:unset_env(nova, session_max_age) end,
+     [
+      fun provisional_session_lives_a_day_at_most/0,
+      fun provisional_session_lives_no_longer_than_any_other/0,
+      fun written_provisional_session_lives_as_long_as_any_other/0,
+      fun every_session_is_in_the_expiry_index_once/0
+     ]}.
+
 reads_test_() ->
     {foreach,
      fun setup/0,
@@ -76,6 +87,48 @@ reads_test_() ->
 get_value_without_the_server_test() ->
     ?assertEqual(undefined, whereis(nova_session_ets)),
     ?assertEqual({error, not_found}, nova_session_ets:get_value(~"s", ~"k")).
+
+expires_in(SessionId) ->
+    [Row] = ets:lookup(nova_session_ets_entries, SessionId),
+    (element(3, Row) - erlang:system_time(millisecond)) div 1000.
+
+provisional_session_lives_a_day_at_most() ->
+    ok = nova_session_ets:set_provisional_value(~"visitor", ~"k", ~"v"),
+    ok = nova_session_ets:set_value(~"user", ~"k", ~"v"),
+    ?assert(expires_in(~"visitor") =< 86400),
+    ?assert(expires_in(~"visitor") > 86000),
+    ?assert(expires_in(~"user") > 1209000),
+    application:set_env(nova, session_max_age, infinity),
+    ok = nova_session_ets:set_provisional_value(~"later", ~"k", ~"v"),
+    ?assert(expires_in(~"later") =< 86400).
+
+provisional_session_lives_no_longer_than_any_other() ->
+    application:set_env(nova, session_max_age, 60),
+    ok = nova_session_ets:set_provisional_value(~"visitor", ~"k", ~"v"),
+    ?assert(expires_in(~"visitor") =< 60).
+
+written_provisional_session_lives_as_long_as_any_other() ->
+    ok = nova_session_ets:set_provisional_value(~"visitor", ~"k", ~"v"),
+    ok = nova_session_ets:set_value(~"visitor", ~"user", ~"alice"),
+    ?assert(expires_in(~"visitor") > 1209000).
+
+%% The index is what a full table is cleared by, so a session that is missing
+%% from it would never make room and one that is there twice would be
+%% dropped for another.
+every_session_is_in_the_expiry_index_once() ->
+    ok = nova_session_ets:set_provisional_value(~"a", ~"k", ~"v"),
+    ok = nova_session_ets:set_provisional_value(~"a", ~"k2", ~"v"),
+    ok = nova_session_ets:set_value(~"a", ~"user", ~"alice"),
+    ok = nova_session_ets:set_value(~"b", ~"k", ~"v"),
+    ok = nova_session_ets:set_provisional_value(~"b", ~"k2", ~"v"),
+    ok = nova_session_ets:delete_value(~"b", ~"k"),
+    ok = nova_session_ets:set_provisional_value(~"c", ~"k", ~"v"),
+    ok = nova_session_ets:set_value(~"d", ~"k", ~"v"),
+    ok = nova_session_ets:delete_value(~"d"),
+    ok = nova_session_ets:delete_value(~"missing"),
+    ?assertEqual([~"a", ~"b", ~"c"],
+                 lists:sort([Id || {{_Rank, _ExpiresAt, Id}} <- ets:tab2list(nova_session_ets_expiry)])),
+    ?assertEqual(3, ets:info(nova_session_ets_entries, size)).
 
 %% Reads go to the table, so they do not queue behind the writes.
 get_value_does_not_wait_for_the_server() ->

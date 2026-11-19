@@ -33,6 +33,7 @@ converts both on a hot upgrade, to ordinary sessions.
          start_link/0,
          get_value/2,
          set_value/3,
+         set_provisional_value/3,
          delete_value/1,
          delete_value/2,
          session_exists/1
@@ -47,6 +48,7 @@ converts both on a hot upgrade, to ordinary sessions.
 -define(EXPIRY, nova_session_ets_expiry).
 -define(CHANNEL, '__sessions').
 -define(SWEEP_INTERVAL, 60000).
+-define(PROVISIONAL_MAX_AGE, 86400).
 
 -include("../include/nova_pubsub.hrl").
 
@@ -82,6 +84,12 @@ get_value(SessionId, Key) ->
 -spec set_value(SessionId :: binary(), Key :: binary(), Value :: binary()) -> ok | {error, Reason :: term()}.
 set_value(SessionId, Key, Value) ->
     nova_pubsub:broadcast(?CHANNEL, "set_value", {SessionId, Key, Value}),
+    sync().
+
+-spec set_provisional_value(SessionId :: binary(), Key :: binary(), Value :: term()) ->
+          ok | {error, session_store_full | session_ended}.
+set_provisional_value(SessionId, Key, Value) ->
+    nova_pubsub:broadcast(?CHANNEL, "set_provisional_value", {SessionId, Key, Value}),
     sync().
 
 -doc "Deletes the session on every node.".
@@ -168,6 +176,8 @@ handle_cast(_Request, State) ->
                          {stop, Reason :: normal | term(), NewState :: term()}.
 handle_info(#nova_pubsub{topic = "set_value", payload = {SessionId, Key, Value}}, State) ->
     {noreply, store_live(kept, SessionId, Key, Value, State)};
+handle_info(#nova_pubsub{topic = "set_provisional_value", payload = {SessionId, Key, Value}}, State) ->
+    {noreply, store_live(provisional, SessionId, Key, Value, State)};
 handle_info(#nova_pubsub{topic = "delete_value", payload = {SessionId, Key}}, State) ->
     case live_session(SessionId) of
         {ok, Session, ExpiresAt, Class} ->
@@ -237,6 +247,10 @@ live_session(SessionId) ->
 
 store_live(Class, SessionId, Key, Value, State) ->
     case live_session(SessionId) of
+        {ok, Session, _ExpiresAt, provisional} when Class =:= kept ->
+            drop(SessionId),
+            insert(SessionId, Session#{Key => Value}, expires_at(kept), kept),
+            State;
         {ok, Session, ExpiresAt, Stored} ->
             ets:insert(?TABLE, {SessionId, Session#{Key => Value}, ExpiresAt, Stored}),
             State;
@@ -291,7 +305,13 @@ expires_at(kept) ->
     case max_age() of
         undefined -> infinity;
         MaxAge -> erlang:system_time(millisecond) + MaxAge * 1000
-    end.
+    end;
+expires_at(provisional) ->
+    MaxAge = case max_age() of
+                 undefined -> ?PROVISIONAL_MAX_AGE;
+                 Configured -> min(Configured, ?PROVISIONAL_MAX_AGE)
+             end,
+    erlang:system_time(millisecond) + MaxAge * 1000.
 
 expired(infinity) -> false;
 expired(ExpiresAt) -> ExpiresAt =< erlang:system_time(millisecond).

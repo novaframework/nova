@@ -129,6 +129,8 @@ nova_session_ets_test_() ->
       fun spawned_process_does_not_notify/0,
       fun request_without_owner_does_not_notify/0,
       fun non_error_set_results_notify/0,
+      fun provisional_write_goes_to_a_backend_that_takes_it/0,
+      fun provisional_write_is_an_ordinary_one_for_a_backend_without_it/0,
       fun delete_key_preserves_other_keys/0,
       fun set_overwrites_existing_key/0,
       fun generate_session_id_format/0
@@ -448,6 +450,34 @@ non_error_set_results_notify() ->
         meck:expect(fake_session_backend, set_value, fun(_, _, _) -> {error, full} end),
         ?assertEqual({error, full}, nova_session:set(stream_req(~"c"), ~"k", ~"v")),
         no_stream_event()
+    after
+        application:set_env(nova, session_manager, nova_session_ets),
+        meck:unload(fake_session_backend)
+    end.
+
+provisional_write_goes_to_a_backend_that_takes_it() ->
+    meck:new(fake_session_backend, [non_strict]),
+    application:set_env(nova, session_manager, fake_session_backend),
+    try
+        meck:expect(fake_session_backend, set_value, fun(_, _, _) -> {error, not_this_one} end),
+        meck:expect(fake_session_backend, set_provisional_value, fun(~"a", ~"k", ~"v") -> ok end),
+        ?assertEqual(ok, nova_session:set_provisional(stream_req(~"a"), ~"k", ~"v")),
+        ?assertEqual({written, ~"a"}, stream_event()),
+        meck:expect(fake_session_backend, set_provisional_value, fun(_, _, _) -> {error, full} end),
+        ?assertEqual({error, full}, nova_session:set_provisional(stream_req(~"b"), ~"k", ~"v")),
+        no_stream_event()
+    after
+        application:set_env(nova, session_manager, nova_session_ets),
+        meck:unload(fake_session_backend)
+    end.
+
+provisional_write_is_an_ordinary_one_for_a_backend_without_it() ->
+    meck:new(fake_session_backend, [non_strict]),
+    application:set_env(nova, session_manager, fake_session_backend),
+    try
+        meck:expect(fake_session_backend, set_value, fun(~"a", ~"k", ~"v") -> ok end),
+        ?assertEqual(ok, nova_session:set_provisional(stream_req(~"a"), ~"k", ~"v")),
+        ?assertEqual({written, ~"a"}, stream_event())
     after
         application:set_env(nova, session_manager, nova_session_ets),
         meck:unload(fake_session_backend)

@@ -16,6 +16,7 @@ simply choose its own session id.
 -export([
          get/2,
          set/3,
+         set_provisional/3,
          delete/1,
          delete/2,
          sign_in/3,
@@ -59,6 +60,19 @@ simply choose its own session id.
              Key :: binary(),
              Value :: binary().
 
+-doc """
+Stores a value like `c:set_value/3`, for `set_provisional/3`. A session
+that only holds values written this way is not in use yet, and the backend
+may keep it for a shorter time and drop it first when it runs out of room.
+A backend without it gets the value through `c:set_value/3`.
+""".
+-callback set_provisional_value(SessionId, Key, Value) ->
+    ok |
+    {error, Reason :: atom()}
+        when SessionId :: binary(),
+             Key :: binary(),
+             Value :: term().
+
 %% Deletes a whole session
 -callback delete_value(SessionId) ->
     ok |
@@ -89,7 +103,7 @@ A backend without it accepts every presented id.
 """.
 -callback session_exists(SessionId :: binary()) -> boolean().
 
--optional_callbacks([start_link/0, session_exists/1]).
+-optional_callbacks([start_link/0, session_exists/1, set_provisional_value/3]).
 
 %%%===================================================================
 %%% Public functions
@@ -108,10 +122,32 @@ get(Req, Key) ->
 -spec set(Req :: cowboy_req:req(), Key :: binary(), Value :: binary()) ->
           ok | {error, Reason :: atom()} | no_return().
 set(Req, Key, Value) ->
+    write(set_value, Req, Key, Value).
+
+-doc """
+Stores `Value` under `Key` like `set/3`, for a value that every visitor gets
+and that can be made again, such as a CSRF token. A session that holds
+nothing else is not in use yet. `nova_session_ets` drops such a session after
+a day and before any other when it is full, so requests without a cookie
+cannot fill it and keep clients from signing in. The first `set/3` on the
+session makes it an ordinary one. A backend of your own that does not have
+`c:set_provisional_value/3` stores the value as `set/3` does.
+""".
+-spec set_provisional(Req :: cowboy_req:req(), Key :: binary(), Value :: term()) ->
+          ok | {error, Reason :: atom()} | no_return().
+set_provisional(Req, Key, Value) ->
+    Mod = get_session_module(),
+    _ = code:ensure_loaded(Mod),
+    case erlang:function_exported(Mod, set_provisional_value, 3) of
+        true -> write(set_provisional_value, Req, Key, Value);
+        false -> write(set_value, Req, Key, Value)
+    end.
+
+write(Function, Req, Key, Value) ->
     case get_session_id(Req, write) of
         {ok, SessionId} ->
             Mod = get_session_module(),
-            written(Mod:set_value(SessionId, Key, Value), SessionId, Req);
+            written(Mod:Function(SessionId, Key, Value), SessionId, Req);
         _ ->
             {error, session_id_not_set}
     end.
