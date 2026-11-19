@@ -15,20 +15,25 @@
 
 setup() ->
     pg:start_link(nova_scope),
+    application:unset_env(nova, environment),
     application:set_env(nova, bootstrap_application, nova),
     application:set_env(nova, use_sessions, true),
     application:set_env(nova, session_manager, nova_session_ets),
     {ok, Pid} = nova_session_ets:start_link(),
     meck:new(cowboy_req, [non_strict]),
-    meck:expect(cowboy_req, match_cookies,
-                fun([{session_id, [], undefined}], Req) ->
-                    SId = maps:get(cookie_session_id, Req, undefined),
-                    #{session_id => SId}
+    meck:expect(cowboy_req, parse_cookies,
+                fun(Req) ->
+                    case maps:get(cookie_session_id, Req, undefined) of
+                        undefined -> [];
+                        unparsable -> exit({request_error, {header, ~"cookie"}, malformed});
+                        SId -> [{nova_session:cookie_name(), SId}]
+                    end
                 end),
     meck:expect(cowboy_req, set_resp_cookie,
                 fun(Name, Value, Req, Opts) ->
                     Req#{resp_cookie => #{name => Name, value => Value, opts => Opts}}
                 end),
+    meck:expect(cowboy_req, cast, fun(Event, Req) -> meck:passthrough([Event, Req]) end),
     Pid.
 
 cleanup(Pid) ->
@@ -49,6 +54,33 @@ req_with_session(SessionId) ->
 req_with_cookie(SessionId) ->
     #{cookie_session_id => SessionId}.
 
+%% A request whose connection process is a stand-in that forwards what
+%% nova_session tells the stream handler.
+stream_req(SessionId) ->
+    Self = self(),
+    Conn = spawn_link(fun() ->
+                              receive
+                                  {{_Pid, 7}, Event} -> Self ! {stream_event, Event}
+                              after 2000 ->
+                                      ok
+                              end
+                      end),
+    #{nova_session_id => SessionId, pid => Conn, streamid => 7, nova_session_owner => self()}.
+
+no_stream_event() ->
+    receive
+        {stream_event, Event} -> error({unexpected_stream_event, Event})
+    after 200 ->
+            ok
+    end.
+
+stream_event() ->
+    receive
+        {stream_event, {nova_session, Event}} -> Event
+    after 1000 ->
+            error(no_stream_event)
+    end.
+
 %%====================================================================
 %% Test generators
 %%====================================================================
@@ -66,9 +98,17 @@ nova_session_ets_test_() ->
       fun delete_single_key/0,
       fun cookie_fallback/0,
       fun no_session_returns_error/0,
+      fun unparsable_cookie/0,
       fun no_session_delete_returns_ok/0,
       fun sessions_disabled_throws/0,
-      fun delete_sets_expired_cookie/0,
+      fun use_sessions_env/0,
+      fun delete_moves_request_to_new_session/0,
+      fun delete_tells_stream_handler/0,
+      fun set_tells_stream_handler/0,
+      fun delete_expires_cookie_without_stream_handler/0,
+      fun spawned_process_does_not_notify/0,
+      fun request_without_owner_does_not_notify/0,
+      fun non_error_set_results_notify/0,
       fun delete_key_preserves_other_keys/0,
       fun set_overwrites_existing_key/0,
       fun generate_session_id_format/0
@@ -137,6 +177,12 @@ no_session_returns_error() ->
     ?assertEqual({error, not_found}, nova_session:get(Req, <<"key">>)),
     ?assertEqual({error, session_id_not_set}, nova_session:set(Req, <<"k">>, <<"v">>)).
 
+unparsable_cookie() ->
+    Req = req_with_cookie(unparsable),
+    ?assertEqual(unparsable, nova_session:presented_session_id(Req)),
+    ?assertEqual({error, not_found}, nova_session:get(Req, ~"key")),
+    ?assertEqual({error, session_id_not_set}, nova_session:set(Req, ~"k", ~"v")).
+
 no_session_delete_returns_ok() ->
     Req = #{},
     ?assertEqual({ok, Req}, nova_session:delete(Req)),
@@ -151,13 +197,89 @@ sessions_disabled_throws() ->
     ?assertThrow({nova_session, unsupported_session_used}, nova_session:delete(Req, <<"k">>)),
     application:set_env(nova, use_sessions, true).
 
-delete_sets_expired_cookie() ->
+%% Same rule as json_lib: the bootstrap application wins, then nova.
+use_sessions_env() ->
+    application:set_env(nova, bootstrap_application, nova_session_tests_app),
+    application:set_env(nova_session_tests_app, use_sessions, true),
+    application:set_env(nova, use_sessions, false),
+    try
+        ?assert(nova_session:enabled()),
+        application:unset_env(nova_session_tests_app, use_sessions),
+        ?assertNot(nova_session:enabled()),
+        ?assertThrow({nova_session, unsupported_session_used},
+                     nova_session:get(req_with_session(~"id"), ~"k")),
+        application:unset_env(nova, use_sessions),
+        ?assert(nova_session:enabled())
+    after
+        application:unset_env(nova_session_tests_app, use_sessions),
+        application:set_env(nova, bootstrap_application, nova),
+        application:set_env(nova, use_sessions, true)
+    end.
+
+delete_moves_request_to_new_session() ->
     {ok, SId} = nova_session:generate_session_id(),
     Req = req_with_session(SId),
-    ok = nova_session:set(Req, <<"key">>, <<"val">>),
-    sync(),
+    ok = nova_session:set(Req, ~"key", ~"val"),
     {ok, Req1} = nova_session:delete(Req),
-    ?assertMatch(#{resp_cookie := #{name := <<"session_id">>, opts := #{max_age := 0}}}, Req1).
+    #{nova_session_id := NewId} = Req1,
+    ?assertNotEqual(SId, NewId),
+    ok = nova_session:set(Req1, ~"other", ~"x"),
+    ?assertEqual({error, not_found}, nova_session:get(Req, ~"other")),
+    ?assertEqual({ok, ~"x"}, nova_session:get(Req1, ~"other")).
+
+delete_tells_stream_handler() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    Req = stream_req(SId),
+    {ok, #{nova_session_id := NewId} = Req1} = nova_session:delete(Req),
+    ?assertEqual({deleted, NewId}, stream_event()),
+    ?assertNot(is_map_key(resp_cookie, Req1)).
+
+set_tells_stream_handler() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    ok = nova_session:set(stream_req(SId), ~"k", ~"v"),
+    ?assertEqual({written, SId}, stream_event()).
+
+delete_expires_cookie_without_stream_handler() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    {ok, Req1} = nova_session:delete(req_with_cookie(SId)),
+    ?assertMatch(#{resp_cookie := #{name := ~"__Host-session_id", value := <<>>,
+                                    opts := #{max_age := 0, path := ~"/", http_only := true}}}, Req1).
+
+%% Only the request process tells the stream handler. A message from anywhere
+%% else would reach whatever owns the connection by then, a websocket handler
+%% for instance.
+spawned_process_does_not_notify() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    Req = stream_req(SId),
+    Self = self(),
+    _ = spawn_link(fun() -> Self ! {spawned, nova_session:set(Req, ~"k", ~"v")} end),
+    receive {spawned, Result} -> ?assertEqual(ok, Result) after 1000 -> error(timeout) end,
+    no_stream_event(),
+    ?assertEqual({ok, ~"v"}, nova_session:get(Req, ~"k")).
+
+request_without_owner_does_not_notify() ->
+    {ok, SId} = nova_session:generate_session_id(),
+    ok = nova_session:set(maps:remove(nova_session_owner, stream_req(SId)), ~"k", ~"v"),
+    no_stream_event().
+
+%% Backends that answer true or {ok, _} wrote the value too.
+non_error_set_results_notify() ->
+    meck:new(fake_session_backend, [non_strict]),
+    application:set_env(nova, session_manager, fake_session_backend),
+    try
+        meck:expect(fake_session_backend, set_value, fun(_, _, _) -> true end),
+        ?assertEqual(true, nova_session:set(stream_req(~"a"), ~"k", ~"v")),
+        ?assertEqual({written, ~"a"}, stream_event()),
+        meck:expect(fake_session_backend, set_value, fun(_, _, _) -> {ok, stored} end),
+        ?assertEqual({ok, stored}, nova_session:set(stream_req(~"b"), ~"k", ~"v")),
+        ?assertEqual({written, ~"b"}, stream_event()),
+        meck:expect(fake_session_backend, set_value, fun(_, _, _) -> {error, full} end),
+        ?assertEqual({error, full}, nova_session:set(stream_req(~"c"), ~"k", ~"v")),
+        no_stream_event()
+    after
+        application:set_env(nova, session_manager, nova_session_ets),
+        meck:unload(fake_session_backend)
+    end.
 
 delete_key_preserves_other_keys() ->
     {ok, SId} = nova_session:generate_session_id(),
@@ -188,3 +310,293 @@ generate_session_id_format() ->
     ?assertEqual(32, byte_size(Decoded)),
     {ok, Id2} = nova_session:generate_session_id(),
     ?assertNotEqual(Id, Id2).
+
+%%--------------------------------------------------------------------
+%% cookie_opts/1
+%%--------------------------------------------------------------------
+
+cookie_opts_test_() ->
+    {foreach,
+     fun() -> application:set_env(nova, bootstrap_application, nova) end,
+     fun(_) ->
+             [application:unset_env(nova, Key)
+              || Key <- [environment, session_cookie_name, session_cookie_opts, bootstrap_application]]
+     end,
+     [
+      fun opts_prod/0,
+      fun opts_dev/0,
+      fun opts_configured/0,
+      fun opts_host_prefix/0,
+      fun opts_no_max_age/0
+     ]}.
+
+opts_prod() ->
+    application:set_env(nova, environment, prod),
+    ?assertEqual(#{path => ~"/", http_only => true, same_site => lax, secure => true},
+                 nova_session:cookie_opts(#{scheme => ~"http"})).
+
+opts_dev() ->
+    application:set_env(nova, environment, dev),
+    ?assertMatch(#{secure := false}, nova_session:cookie_opts(#{scheme => ~"http"})),
+    ?assertMatch(#{secure := true}, nova_session:cookie_opts(#{scheme => ~"https"})).
+
+%% A value of the wrong type leaves the default in place.
+opts_configured() ->
+    application:set_env(nova, session_cookie_name, ~"sid"),
+    application:set_env(nova, session_cookie_opts,
+                        #{same_site => strict, path => "/x", http_only => false, domain => ~"example.com"}),
+    ?assertMatch(#{same_site := strict, path := ~"/", http_only := false, domain := ~"example.com"},
+                 nova_session:cookie_opts(#{scheme => ~"http"})).
+
+%% A browser only keeps a __Host- cookie that is Secure, has Path=/ and no
+%% Domain, so those win over session_cookie_opts.
+opts_host_prefix() ->
+    application:set_env(nova, session_cookie_opts,
+                        #{domain => ~"example.com", path => ~"/app", secure => false, same_site => strict}),
+    Opts = nova_session:cookie_opts(#{scheme => ~"http"}),
+    ?assertEqual(#{path => ~"/", http_only => true, same_site => strict, secure => true}, Opts),
+    application:set_env(nova, environment, dev),
+    application:set_env(nova, session_cookie_name, ~"__Host-sid"),
+    ?assertEqual(Opts, nova_session:cookie_opts(#{scheme => ~"http"})).
+
+%% The cookie ends with the browser session, also when the options ask for
+%% a Max-Age.
+opts_no_max_age() ->
+    application:set_env(nova, session_cookie_opts, #{max_age => 3600}),
+    ?assertNot(is_map_key(max_age, nova_session:cookie_opts(#{scheme => ~"https"}))).
+
+%%--------------------------------------------------------------------
+%% The name of the cookie and the session id a request presents
+%%--------------------------------------------------------------------
+
+cookie_name_test_() ->
+    {foreach,
+     fun() ->
+             application:set_env(nova, bootstrap_application, nova),
+             application:unset_env(nova, environment),
+             application:unset_env(nova, session_cookie_name),
+             nova_once:forget({nova_session, ambiguous_cookie_warned})
+     end,
+     fun(_) ->
+             application:unset_env(nova, environment),
+             application:unset_env(nova, session_cookie_name),
+             application:unset_env(nova, bootstrap_application),
+             nova_once:forget({nova_session, ambiguous_cookie_warned})
+     end,
+     [
+      fun name_outside_dev/0,
+      fun name_in_dev/0,
+      fun name_configured/0,
+      fun old_name/0,
+      fun ambiguous_cookie/0,
+      fun repeated_cookie/0,
+      fun needs_https/0
+     ]}.
+
+name_outside_dev() ->
+    ?assertEqual(~"__Host-session_id", nova_session:cookie_name()),
+    [begin
+         application:set_env(nova, environment, Environment),
+         ?assertEqual({Environment, ~"__Host-session_id"}, {Environment, nova_session:cookie_name()})
+     end || Environment <- [prod, test, staging]].
+
+%% A browser keeps session_id over plain http.
+name_in_dev() ->
+    application:set_env(nova, environment, dev),
+    ?assertEqual(~"session_id", nova_session:cookie_name()),
+    ?assertMatch(#{secure := false}, nova_session:cookie_opts(#{scheme => ~"http"})).
+
+name_configured() ->
+    application:set_env(nova, session_cookie_name, ~"sid"),
+    ?assertEqual(~"sid", nova_session:cookie_name()),
+    application:set_env(nova, environment, dev),
+    ?assertEqual(~"sid", nova_session:cookie_name()),
+    [begin
+         application:set_env(nova, session_cookie_name, Unusable),
+         ?assertEqual(~"session_id", nova_session:cookie_name())
+     end || Unusable <- [<<>>, "sid", sid]].
+
+%% The session_id cookie of a Nova that named it so is no session.
+old_name() ->
+    ?assertEqual(undefined, nova_session:presented_session_id(cookie_req(~"session_id=before"))),
+    ?assertEqual(~"new", nova_session:presented_session_id(cookie_req(~"session_id=before; __Host-session_id=new"))).
+
+%% A cookie of the same name that is set for a parent domain or another path
+%% arrives next to ours, and neither is trusted.
+ambiguous_cookie() ->
+    Req = cookie_req(~"__Host-session_id=one; __Host-session_id=two"),
+    ?assertEqual(undefined, nova_session:presented_session_id(Req)),
+    ?assertEqual({error, not_found}, nova_session:get(Req, ~"k")),
+    ?assertNot(nova_once:first({nova_session, ambiguous_cookie_warned})).
+
+repeated_cookie() ->
+    Req = cookie_req(~"__Host-session_id=same; __Host-session_id=same"),
+    ?assertEqual(~"same", nova_session:presented_session_id(Req)),
+    ?assert(nova_once:first({nova_session, ambiguous_cookie_warned})).
+
+%% A listener without TLS is where the cookie needs https, unless Secure was
+%% taken off the cookie or sessions are off.
+needs_https() ->
+    ?assert(nova_session:needs_https()),
+    application:set_env(nova, session_cookie_name, ~"session_id"),
+    ?assert(nova_session:needs_https()),
+    application:set_env(nova, session_cookie_opts, #{secure => false}),
+    ?assertNot(nova_session:needs_https()),
+    application:unset_env(nova, session_cookie_name),
+    application:unset_env(nova, session_cookie_opts),
+    application:set_env(nova, environment, dev),
+    ?assertNot(nova_session:needs_https()),
+    application:unset_env(nova, environment),
+    application:set_env(nova, use_sessions, false),
+    try
+        ?assertNot(nova_session:needs_https())
+    after
+        application:unset_env(nova, use_sessions),
+        application:unset_env(nova, session_cookie_opts)
+    end.
+
+cookie_req(Cookie) ->
+    nova_test_helper:with_header(~"cookie", Cookie, nova_test_helper:mock_req(~"GET", ~"/")).
+
+%%--------------------------------------------------------------------
+%% validate_cookie_config/0
+%%--------------------------------------------------------------------
+
+validate_test_() ->
+    {foreach,
+     fun() ->
+             application:set_env(nova, bootstrap_application, nova),
+             application:unset_env(nova, environment),
+             application:unset_env(nova, session_cookie_name),
+             application:unset_env(nova, session_cookie_opts)
+     end,
+     fun(_) ->
+             application:unset_env(nova, environment),
+             application:unset_env(nova, session_cookie_name),
+             application:unset_env(nova, session_cookie_opts),
+             application:unset_env(nova, bootstrap_application)
+     end,
+     [
+      fun valid_defaults/0,
+      fun valid_name/0,
+      fun bad_names/0,
+      fun bad_values/0,
+      fun prefix_conflicts/0,
+      fun prefix_fits/0,
+      fun dropped_opts/0,
+      fun opts_not_a_map/0,
+      fun same_site_none/0,
+      fun secure_prefix/0
+     ]}.
+
+valid_defaults() ->
+    ?assertEqual(ok, nova_session:validate_cookie_config()),
+    application:set_env(nova, environment, dev),
+    ?assertEqual(ok, nova_session:validate_cookie_config()).
+
+valid_name() ->
+    application:set_env(nova, session_cookie_name, ~"a!#$%&'*+-.^_`|~9"),
+    application:set_env(nova, session_cookie_opts, #{path => ~"/app", domain => ~"example.com"}),
+    ?assertEqual(ok, nova_session:validate_cookie_config()).
+
+bad_names() ->
+    [begin
+         application:set_env(nova, session_cookie_name, Name),
+         ?assertError({invalid_session_cookie_config, #{name := Name, path := ~"/", domain := undefined}},
+                      nova_session:validate_cookie_config())
+     end || Name <- [<<>>, "session", session_id, ~"app:sid", ~"a/b", ~"a\"b", ~"a b", <<"s", 200>>]].
+
+%% A control character or a semicolon in Path or Domain would end the
+%% attribute and start another one, or another header.
+bad_values() ->
+    application:set_env(nova, session_cookie_name, ~"sid"),
+    [begin
+         application:set_env(nova, session_cookie_opts, Opts),
+         Path = maps:get(path, Opts, ~"/"),
+         Domain = maps:get(domain, Opts, undefined),
+         ?assertError({invalid_session_cookie_config, #{name := ~"sid", path := Path, domain := Domain}},
+                      nova_session:validate_cookie_config())
+     end || Opts <- [#{path => ~"/a\nb"},
+                     #{path => ~"/a;b"},
+                     #{domain => ~"a\r\nset-cookie: x=y"},
+                     #{domain => <<"ex", 200, ".com">>},
+                     #{domain => <<"a", 127>>, path => ~"/app"}]].
+
+%% The default name has the __Host- prefix outside dev, and what it cannot
+%% have would be dropped without a word.
+prefix_conflicts() ->
+    [begin
+         application:set_env(nova, session_cookie_opts, Opts),
+         ?assertError({invalid_setting, session_cookie_opts, {requires, session_cookie_name}},
+                      nova_session:validate_cookie_config())
+     end || Opts <- [#{domain => ~"example.com"}, #{path => ~"/app"}, #{secure => false}]].
+
+prefix_fits() ->
+    application:set_env(nova, session_cookie_opts, #{path => ~"/", secure => true, same_site => strict}),
+    ?assertEqual(ok, nova_session:validate_cookie_config()),
+    Opts = #{domain => ~"example.com", path => ~"/app", secure => false},
+    application:set_env(nova, session_cookie_opts, Opts),
+    application:set_env(nova, session_cookie_name, ~"session_id"),
+    ?assertEqual(ok, nova_session:validate_cookie_config()),
+    ?assertMatch(#{domain := ~"example.com", path := ~"/app", secure := false},
+                 nova_session:cookie_opts(#{scheme => ~"http"})),
+    application:unset_env(nova, session_cookie_name),
+    application:set_env(nova, environment, dev),
+    ?assertEqual(ok, nova_session:validate_cookie_config()).
+
+%% What cookie_opts/1 leaves out is refused when Nova starts.
+dropped_opts() ->
+    [begin
+         application:set_env(nova, session_cookie_opts, Opts),
+         ?assertError({invalid_setting, session_cookie_opts, {not_taken, Keys}},
+                      nova_session:validate_cookie_config())
+     end || {Opts, Keys} <- [{#{same_site => ~"strict"}, [same_site]},
+                             {#{same_site => sideways}, [same_site]},
+                             {#{path => "/app"}, [path]},
+                             {#{domain => 'example.com'}, [domain]},
+                             {#{secure => yes}, [secure]},
+                             {#{http_only => 0}, [http_only]},
+                             {#{max_age => 3600}, [max_age]},
+                             {#{~"path" => ~"/"}, [~"path"]},
+                             {#{unknown => 1, path => ~"/", max_age => infinity}, [max_age, unknown]}]].
+
+opts_not_a_map() ->
+    application:set_env(nova, session_cookie_opts, [{secure, true}]),
+    ?assertError({invalid_setting, session_cookie_opts, not_a_map}, nova_session:validate_cookie_config()).
+
+%% A browser drops a SameSite=None cookie that is not Secure.
+same_site_none() ->
+    ?assertEqual(ok, validate(#{same_site => none})),
+    application:set_env(nova, session_cookie_name, ~"sid"),
+    ?assertEqual(ok, validate(#{same_site => none})),
+    ?assertEqual(ok, validate(#{same_site => none, secure => true})),
+    ?assertError({invalid_setting, session_cookie_opts, {requires, secure}},
+                 validate(#{same_site => none, secure => false})),
+    application:set_env(nova, environment, dev),
+    ?assertEqual(ok, validate(#{same_site => none, secure => true})),
+    ?assertError({invalid_setting, session_cookie_opts, {requires, secure}}, validate(#{same_site => none})).
+
+%% And one with the __Secure- prefix that is not Secure.
+secure_prefix() ->
+    application:set_env(nova, session_cookie_name, ~"__Secure-sid"),
+    ?assertEqual(ok, validate(#{})),
+    ?assertEqual(ok, validate(#{secure => true, domain => ~"example.com"})),
+    ?assertError({invalid_setting, session_cookie_name, {requires, secure}}, validate(#{secure => false})),
+    application:set_env(nova, environment, dev),
+    ?assertEqual(ok, validate(#{secure => true})),
+    ?assertError({invalid_setting, session_cookie_name, {requires, secure}}, validate(#{})).
+
+validate(Opts) ->
+    application:set_env(nova, session_cookie_opts, Opts),
+    nova_session:validate_cookie_config().
+
+%% What nova_stream_h asks before it puts the cookie on a response.
+valid_cookie_test_() ->
+    [?_assert(nova_session:valid_cookie(~"__Host-session_id", #{path => ~"/", domain => ~"example.com"})),
+     ?_assert(nova_session:valid_cookie(~"a!#$%&'*+-.^_`|~9", #{})),
+     ?_assertNot(nova_session:valid_cookie(<<>>, #{})),
+     ?_assertNot(nova_session:valid_cookie("session_id", #{})),
+     ?_assertNot(nova_session:valid_cookie(session_id, #{})),
+     ?_assertNot(nova_session:valid_cookie(~"app:sid", #{})),
+     ?_assertNot(nova_session:valid_cookie(~"sid", #{path => ~"/a\nb"})),
+     ?_assertNot(nova_session:valid_cookie(~"sid", #{domain => <<"a", 127>>}))].

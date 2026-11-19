@@ -139,6 +139,10 @@ init([]) ->
 
     %% try to ensure callback module is loaded first
     ExportedFuns = SessionManager:module_info(exports),
+    case nova_session:enabled() of
+        true -> nova_session:validate_cookie_config();
+        false -> ok
+    end,
 
     Children =
         case proplists:get_value(start_link, ExportedFuns) of
@@ -246,9 +250,23 @@ start_cowboy(Configuration) ->
                                              apps = [BootstrapApp],
                                              dispatch_key = DispatchKey,
                                              tls = Tls}),
+            https_notice(Tls),
             {ok, BootstrapApp, Host, Port};
         {error, Reason} ->
             {error, Reason}
+    end.
+
+https_notice(true) ->
+    ok;
+https_notice(false) ->
+    case nova_session:needs_https() of
+        true ->
+            ?LOG_NOTICE(#{msg => ~"Session cookie is Secure but this listener has no TLS: over plain http no session is kept",
+                          notice => session_cookie_needs_https,
+                          cookie => nova_session:cookie_name(),
+                          settings => [cowboy_configuration, environment]});
+        false ->
+            ok
     end.
 
 %%--------------------------------------------------------------------
