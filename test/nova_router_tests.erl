@@ -95,7 +95,24 @@ method_to_binary_wildcard_test() ->
     ?assertEqual('_', nova_router:method_to_binary('_')).
 
 method_to_binary_unknown_atom_test() ->
-    ?assertEqual('_', nova_router:method_to_binary(foobar)).
+    ?assertThrow({error, {invalid_method, foobar}}, nova_router:method_to_binary(foobar)).
+
+method_to_binary_accepts_every_spelling_test_() ->
+    [?_assertEqual(<<"POST">>, nova_router:method_to_binary(Method))
+     || Method <- ['POST', 'Post', <<"POST">>, "POST"]].
+
+method_to_binary_keeps_the_case_of_a_binary_or_string_test_() ->
+    [?_assertEqual(Expected, nova_router:method_to_binary(Method))
+     || {Method, Expected} <- [{~"post", ~"post"}, {"post", ~"post"}, {~"Purge", ~"Purge"}, {"pots", ~"pots"}]].
+
+method_to_binary_accepts_any_token_test_() ->
+    [?_assertEqual(iolist_to_binary(Method), nova_router:method_to_binary(Method))
+     || Method <- [~"PURGE", "PROPFIND", ~"QUERY", "M-SEARCH", ~"!#$%&'*+-.^_`|~09azAZ"]].
+
+method_to_binary_rejects_what_is_not_a_method_test_() ->
+    [?_assertThrow({error, {invalid_method, Method}}, nova_router:method_to_binary(Method))
+     || Method <- [gett, update, purge, 'PROPFIND', <<"P O">>, <<>>, "", "GET,POST", ~"GET\r\n", ~"G/T",
+                   <<"G", 233, "T">>, [$G, 233, $T], [$G, 16#D800], 1, {get}, [get]]].
 
 %%====================================================================
 %% concat_strings/2
@@ -175,8 +192,8 @@ execute_method_not_allowed_test_() ->
         {ok, Req1, Env1} = nova_router:execute(Req, #{}),
         %% Should get 405 with allow header
         ?assertEqual(405, maps:get(resp_status_code, Req1)),
-        AllowHeader = maps:get(<<"allow">>, maps:get(resp_headers, Req1), undefined),
-        ?assertNotEqual(undefined, AllowHeader),
+        AllowHeader = maps:get(<<"allow">>, maps:get(resp_headers, Req1)),
+        ?assertEqual([~"GET", ~"POST"], lists:sort(binary:split(iolist_to_binary(AllowHeader), ~", ", [global]))),
         ?assertMatch(F when is_function(F), maps:get(callback, Env1))
     end}.
 
