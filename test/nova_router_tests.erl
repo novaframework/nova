@@ -647,6 +647,42 @@ plugins_before_security_that_is_refused_names_the_route_group_test() ->
 order(Before) ->
     #{before => Before, secured => false}.
 
+%% trusted_origins is an option of two plugins as well as a setting. The
+%% option is checked as the setting is, when the routes are compiled.
+trusted_origins_of_a_plugin_is_checked_with_the_routes_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Routes = fun(Plugin, Value) ->
+                         #{prefix => "/origins", plugins => [{pre_request, Plugin, #{trusted_origins => Value}}],
+                           routes => [{"/page", fun(_) -> {json, #{}} end, #{methods => [post]}}]}
+                 end,
+        [begin
+             {_, Events} = nova_test_log:collect(
+                             fun() ->
+                                     ?assertThrow({error, {invalid_setting, trusted_origins, Value}},
+                                                  nova_router:add_routes(route_app, Routes(Plugin, Value)))
+                             end),
+             ?assertMatch([#{setting := trusted_origins, value := Value, plugin := Plugin, app := route_app,
+                             prefix := "/origins"}],
+                          nova_test_log:errors(Events))
+         end || Plugin <- [nova_csrf_plugin, nova_ws_origin_plugin],
+                Value <- [same_hosts, ~"https://example.com", [same_host], #{}]],
+
+        [begin
+             ok = nova_router:add_routes(route_app, Routes(Plugin, Value)),
+             {ok, #{plugins := [_ | _] = Plugins}, _} =
+                 nova_router:execute(nova_test_helper:mock_req(~"POST", ~"/origins/page"), #{}),
+             ?assertEqual({Plugin, Value, [Kept]},
+                          {Plugin, Value,
+                           lists:usort([Origins || {_Phase, [_ | _] = Callbacks} <- Plugins,
+                                                   {_Callback, #{trusted_origins := Origins}} <- Callbacks])})
+         end || {Plugin, Value, Kept} <- [{nova_csrf_plugin, same_origin, same_origin},
+                                          {nova_csrf_plugin, ["https://example.com", ~"https://other.example"],
+                                           [~"https://example.com", ~"https://other.example"]},
+                                          {nova_ws_origin_plugin, any, any},
+                                          {nova_ws_origin_plugin, [], []},
+                                          {nova_request_plugin, same_hosts, same_hosts}]]
+    end}.
+
 %%====================================================================
 %% add_routes/2
 %%====================================================================
@@ -745,6 +781,61 @@ apply_callback_missing_module_test_() ->
 %%====================================================================
 %% Route template
 %%====================================================================
+
+route_template_controller_and_ws_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Callback = fun(_) -> {json, #{}} end,
+        ok = nova_router:add_routes(route_app,
+                                    #{prefix => "/api",
+                                      plugins => [{pre_request, nova_request_plugin, #{}}],
+                                      routes => [{"/users/:id", Callback, #{methods => [get]}},
+                                                 {"/socket", route_ws_mod, #{protocol => ws}}]}),
+
+        {ok, Req, _Env} = nova_router:execute(nova_test_helper:mock_req(~"GET", ~"/api/users/7"), #{}),
+        ?assertEqual(~"/api/users/:id", maps:get(nova_route, Req)),
+        ?assertEqual([{after_security, [{fun nova_request_plugin:pre_request/4, #{}}]},
+                      {pre_request, [{fun nova_request_plugin:pre_security/4, #{}}]}],
+                     maps:get(plugins, Req)),
+
+        {ok, WsReq, WsEnv} = nova_router:execute(nova_test_helper:mock_req(~"GET", ~"/api/socket"), #{}),
+        ?assertEqual(~"/api/socket", maps:get(nova_route, WsReq)),
+        ?assertEqual([{after_security, [{fun nova_request_plugin:pre_request/4, #{}}]},
+                      {pre_request, [{fun nova_ws_origin_plugin:pre_security/4, #{}},
+                                     {fun nova_request_plugin:pre_security/4, #{}}]}],
+                     maps:get(plugins, WsReq)),
+        ?assertEqual(#{module => route_ws_mod, app => route_app}, maps:get(arguments, WsEnv))
+    end}.
+
+%% A websocket route checks the Origin before anything else of the route
+%% runs, by the options its route group gave nova_ws_origin_plugin if it
+%% lists it, wherever in its plugins that is.
+websocket_route_checks_the_origin_first_test_() ->
+    {setup, ?SETUP, ?CLEANUP, fun() ->
+        Origins = #{trusted_origins => [~"https://example.com"]},
+        Routes = fun(Prefix, Group) ->
+                         Group#{prefix => Prefix,
+                                routes => [{"/page", fun(_) -> {json, #{}} end, #{methods => [get]}},
+                                           {"/socket", route_ws_mod, #{protocol => ws}}]}
+                 end,
+        Plugins = fun(Path) ->
+                          {ok, #{plugins := Phases}, _} = nova_router:execute(nova_test_helper:mock_req(~"GET", Path), #{}),
+                          Phases
+                  end,
+        Check = fun nova_ws_origin_plugin:pre_security/4,
+        ok = nova_router:add_routes(route_app, Routes("/none", #{plugins => []})),
+        ?assertEqual([{pre_request, [{Check, #{}}]}], Plugins(~"/none/socket")),
+        ?assertEqual([], Plugins(~"/none/page")),
+
+        ok = nova_router:add_routes(route_app,
+                                    Routes("/last", #{plugins => [{pre_request, nova_cors_plugin, #{}},
+                                                                  {pre_request, nova_ws_origin_plugin, Origins}]})),
+        ?assertEqual([{pre_request, [{Check, Origins}, {fun nova_cors_plugin:pre_security/4, #{}}]}],
+                     Plugins(~"/last/socket")),
+        ?assertEqual([{pre_request, [{fun nova_cors_plugin:pre_security/4, #{}}, {Check, Origins}]}],
+                     Plugins(~"/last/page")),
+
+        ?assert(lists:member(nova_ws_origin_plugin, nova_router:plugins()))
+    end}.
 
 route_template_static_dir_test_() ->
     {setup, ?SETUP, ?CLEANUP, fun() ->

@@ -114,6 +114,7 @@ the listener of the bootstrap application.
 
 -type plugin() :: {Type :: atom(), Module :: module(), Options :: term()}.
 -type callback() :: {Callback :: fun(), Options :: term()}.
+-type phased() :: [{Phase :: atom(), [callback()]}].
 -type order() :: #{before := all | [module()], secured := boolean()}.
 -type order_warning() :: body_behind_security | form_behind_security | pre_request_behind_security |
                          pre_request_not_for_preflight.
@@ -570,7 +571,9 @@ compile_paths([RouteInfo|Tl], Dispatch, Options) ->
     Named = #{app => App, prefix => Prefix, router_file => RouterFile},
 
     ok = warn_route_plugin_strategy(App, RouteInfo, RouterFile),
-    Plugins = resolve_plugins(maps:get(plugin_strategy, Options, local_or_global), RouteInfo, RouterFile),
+    Plugins = [with_checked_options(Plugin, Named)
+               || Plugin <- resolve_plugins(maps:get(plugin_strategy, Options, local_or_global), RouteInfo,
+                                            RouterFile)],
 
     Secure = resolve_secure(Options, RouteInfo, RouterFile),
 
@@ -695,7 +698,7 @@ parse_url(Host,
                   app = App,
                   handler = nova_ws_handler,
                   arguments = websocket_arguments(Mod, App, Options, T),
-                  plugins = with_route(RealPath, Value#nova_handler_value.plugins),
+                  plugins = with_route(RealPath, with_origin_check(Value#nova_handler_value.plugins)),
                   secure = Secure},
 
     ?LOG_DEBUG(#{action => <<"Adding route">>, protocol => <<"ws">>, route => Path, app => App,
@@ -992,6 +995,37 @@ dedupe_plugins([Plugin|Tl], Seen, Acc) ->
 
 plugin_key({Type, PluginName, _Options}) -> {Type, PluginName};
 plugin_key(Plugin)                       -> Plugin.
+
+-spec with_checked_options(Plugin :: plugin(), Named :: map()) -> plugin().
+with_checked_options(Plugin, Named) ->
+    with_checked_origins(Plugin, Named).
+
+-spec with_checked_origins(Plugin :: plugin(), Named :: map()) -> plugin().
+with_checked_origins({Type, Plugin, Options = #{trusted_origins := Value}}, Named)
+  when Plugin =:= nova_csrf_plugin; Plugin =:= nova_ws_origin_plugin ->
+    case nova_settings:checked(trusted_origins, Value) of
+        {ok, Origins} ->
+            {Type, Plugin, Options#{trusted_origins := Origins}};
+        {error, Reason} ->
+            ?LOG_ERROR(Named#{msg => nova_settings:expected(trusted_origins), setting => trusted_origins,
+                              value => Reason, plugin => Plugin}),
+            throw({error, {invalid_setting, trusted_origins, Reason}})
+    end;
+with_checked_origins(Plugin, _Named) ->
+    Plugin.
+
+-spec with_origin_check(phased()) -> phased().
+with_origin_check(Phased) ->
+    Check = fun nova_ws_origin_plugin:pre_security/4,
+    Options = case [Options || {_Phase, Callbacks} <- Phased, {Callback, Options} <- Callbacks, Callback =:= Check] of
+                  [OfTheGroup | _] -> OfTheGroup;
+                  [] -> #{}
+              end,
+    Others = [{Phase, [Entry || Entry = {Callback, _Options} <- Callbacks, Callback =/= Check]}
+              || {Phase, Callbacks} <- Phased],
+    add_plugin(nova_ws_origin_plugin),
+    Ahead = lists:append([Callbacks || {pre_request, Callbacks} <- Others]),
+    lists:keystore(pre_request, 1, Others, {pre_request, [{Check, Options} | Ahead]}).
 
 normalize_plugins(Plugins, Order) ->
     Phased = lists:append([phased(Plugin, Order) || Plugin <- Plugins]),

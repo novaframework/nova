@@ -1,11 +1,11 @@
 -module(nova_settings).
 -moduledoc false.
 
--export([validate/0, value/1, checked/2]).
+-export([validate/0, value/1, checked/2, expected/1]).
 
 -include_lib("kernel/include/logger.hrl").
 
--type key() :: max_sessions | non_canonical_paths | plugins_before_security |
+-type key() :: trusted_origins | max_sessions | non_canonical_paths | plugins_before_security |
                secret_key_base.
 -export_type([key/0]).
 
@@ -37,6 +37,13 @@ takes one of the settings as an option of its own.
 -spec checked(Key :: key(), Value :: term()) -> {ok, term()} | {error, Reason :: term()}.
 checked(non_canonical_paths, Value) when Value =:= reject; Value =:= resolve ->
     {ok, Value};
+checked(trusted_origins, Value) when Value =:= same_host; Value =:= same_origin; Value =:= any ->
+    {ok, Value};
+checked(trusted_origins, Value) ->
+    case origins(Value, []) of
+        {ok, Origins} -> {ok, Origins};
+        error -> {error, Value}
+    end;
 checked(secret_key_base, undefined) ->
     {ok, []};
 checked(secret_key_base, Secret) when is_binary(Secret) ->
@@ -60,6 +67,7 @@ checked(_Key, Value) ->
 
 -spec expected(Key :: key()) -> binary().
 expected(non_canonical_paths) -> ~"non_canonical_paths must be reject or resolve";
+expected(trusted_origins) -> ~"trusted_origins must be same_host, same_origin, any or a list of origins";
 expected(secret_key_base) ->
     ~"secret_key_base must be a binary of at least 32 bytes out of a random source, or a list of such. A value that repeats a few bytes, an example out of the documentation or a ${VARIABLE} that was not filled in is refused. base64:encode(crypto:strong_rand_bytes(48)) in an Erlang shell, or openssl rand -base64 48, makes one";
 expected(max_sessions) -> ~"max_sessions must be infinity or an integer above 0";
@@ -68,10 +76,11 @@ expected(plugins_before_security) ->
 
 -spec keys() -> [key()].
 keys() ->
-    [non_canonical_paths, secret_key_base, max_sessions, plugins_before_security].
+    [non_canonical_paths, trusted_origins, secret_key_base, max_sessions, plugins_before_security].
 
 -spec default(key()) -> term().
 default(non_canonical_paths) -> reject;
+default(trusted_origins) -> same_host;
 default(secret_key_base) -> undefined;
 default(max_sessions) -> ?DEFAULT_MAX_SESSIONS;
 default(plugins_before_security) -> [].
@@ -84,6 +93,28 @@ valid(Key) ->
         {error, Reason} ->
             ?LOG_ERROR(#{msg => expected(Key), setting => Key, value => Reason}),
             erlang:error({invalid_setting, Key, Reason})
+    end.
+
+-spec origins(term(), [binary()]) -> {ok, [binary()]} | error.
+origins([], Origins) ->
+    {ok, lists:reverse(Origins)};
+origins([Origin | Rest], Origins) when is_binary(Origin) ->
+    origins(Rest, [Origin | Origins]);
+origins([Origin | Rest], Origins) when is_list(Origin) ->
+    case string_as_binary(Origin) of
+        {ok, Binary} -> origins(Rest, [Binary | Origins]);
+        error -> error
+    end;
+origins(_NotOrigins, _Origins) ->
+    error.
+
+-spec string_as_binary(list()) -> {ok, binary()} | error.
+string_as_binary(String) ->
+    try unicode:characters_to_binary(String) of
+        Binary when is_binary(Binary) -> {ok, Binary};
+        _NotUnicode -> error
+    catch
+        error:badarg -> error
     end.
 
 -spec secrets(term()) -> {ok, [binary()]} | error.
