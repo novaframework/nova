@@ -3,6 +3,18 @@
 -moduledoc """
 All kind of operations on sessions is handled by the nova_session-module. The module also presents a behaviour that can be used to create customized backends for the session-data.
 
+The session id lives in the `__Host-session_id` cookie, and in `session_id`
+when the `environment` is `dev` (see `session_cookie_name` in the
+configuration guide). A browser keeps a cookie with the `__Host-` prefix only
+when it is `Secure`, has `Path=/` and no `Domain`, so no other host of the
+domain can set or shadow it. `nova_stream_h` issues it with the response of the
+first request that writes to the session, is given a token by
+`nova_csrf_plugin` or is upgraded to a websocket, so visitors that do none of
+these get no cookie. A request carrying two or more different session ids
+is treated as having no session. A request whose Cookie header does not parse
+gets a session for that request only and no cookie, so a session cookie the
+client already holds is not overwritten.
+
 Sign a user in with `sign_in/3` and out with `delete/1`. `sign_in/3` moves
 the client to a new session id, stores who signed in under it and returns the
 request that carries the new id. That is the defence against session
@@ -34,6 +46,17 @@ session writes to a session of its own, under another id, and never under
 the one the client was moved off. `nova_session_ets` sees to that for five
 minutes after a session was deleted, and a backend of your own does with
 `c:session_ended/1`.
+
+Session changes reach the cookie only when they are made from the process
+serving the request (where controllers, plugins and `c:nova_websocket:init/1`
+run). A process spawned with the request can read and write the session data,
+but the response will not carry a new cookie for it.
+
+Cookies are written by `nova_stream_h`. A `stream_handlers` configuration
+without it still stores session data, and `renew/1` and `delete/1` set or
+expire the cookie on the returned request themselves, but a `set/3` without a
+cookie does not start a session and presented ids are used without the check
+above.
 """.
 -export([
          get/2,
@@ -72,7 +95,11 @@ minutes after a session was deleted, and a backend of your own does with
 %%% Callbacks
 %%%===================================================================
 
-%% Get a value from a given session_id
+-doc """
+Called by `get/2` for the value stored under `Key` in the session
+`SessionId`. What it returns is returned from `get/2` as it is. Return
+`{error, not_found}` for a session or a key the backend does not have.
+""".
 -callback get_value(SessionId, Key) ->
     {ok, Value :: any()} |
     {error, Reason :: atom()}
@@ -110,20 +137,30 @@ A backend without it gets the value through `c:set_value/3`.
              Key :: binary(),
              Value :: term().
 
-%% Deletes a whole session
+-doc """
+Called by `delete/1`, `renew/1` and `sign_in/3` to drop the session
+`SessionId` and all its data. The return value is not used.
+""".
 -callback delete_value(SessionId) ->
     ok |
     {error, Reason :: atom()}
         when SessionId :: binary().
 
-%% Deletes a specific key of a session
+-doc """
+Called by `delete/2` to drop `Key` from the session `SessionId`. The return
+value is not used.
+""".
 -callback delete_value(SessionId, Key) ->
     ok |
     {error, Reason :: atom()}
         when SessionId :: binary(),
              Key :: binary().
 
-%% Start a server process for session backend, if necessary
+-doc """
+Starts the process of the backend, if it has one. When the backend exports
+it, `nova_sup` runs it as a permanent child that is started before the
+listener.
+""".
 -callback start_link() ->
     {ok, Pid :: pid()} |
     {error, Error :: {already_started, pid()}} |
@@ -350,8 +387,11 @@ held_id(Req) ->
         _ -> {error, not_found}
     end.
 
--spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} |
-          {error, Reason :: atom()} | no_return().
+-doc """
+Deletes `Key` from the session of the request and returns `{ok, Req}` with
+the request as it was given, also when the request has no session.
+""".
+-spec delete(Req :: cowboy_req:req(), Key :: binary()) -> {ok, Req :: cowboy_req:req()} | no_return().
 delete(Req, Key) ->
     case get_session_id(Req, write) of
         {ok, SessionId} ->
