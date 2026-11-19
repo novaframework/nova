@@ -75,6 +75,11 @@ handle_reply({reply, Status, Headers, Body}, Req) ->
     Req0 = cowboy_req:set_resp_headers(Headers, Req),
     Req1 = cowboy_req:set_resp_body(Body, Req0),
     Req1#{resp_status_code => Status};
+handle_reply({status, Status}, Req) ->
+    handle_reply({status, Status, #{}}, Req);
+handle_reply({status, Status, Headers}, Req)
+  when is_integer(Status), is_map(Headers) orelse is_list(Headers) ->
+    (cowboy_req:set_resp_headers(Headers, Req))#{resp_status_code => Status};
 handle_reply(_, Req) ->
     Req.
 
