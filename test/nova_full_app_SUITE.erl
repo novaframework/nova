@@ -40,6 +40,11 @@
          secure_route_accepts_token/1,
          auth_data_reaches_controller/1,
          pre_and_post_request_plugins_run/1,
+         plugin_break_redirect_skips_controller/1,
+         plugin_break_status_skips_controller/1,
+         plugin_break_unknown_reply_is_a_500/1,
+         plugin_stop_two_tuple_replies/1,
+         plugin_error_is_a_500/1,
          cors_preflight_on_a_route_that_accepts_options/1,
          custom_not_found/1,
          controller_crash_is_a_500/1,
@@ -122,6 +127,11 @@ groups() ->
                             ]},
      {plugins, [], [
                     pre_and_post_request_plugins_run,
+                    plugin_break_redirect_skips_controller,
+                    plugin_break_status_skips_controller,
+                    plugin_break_unknown_reply_is_a_500,
+                    plugin_stop_two_tuple_replies,
+                    plugin_error_is_a_500,
                     cors_preflight_on_a_route_that_accepts_options
                    ]},
      {errors, [parallel], [
@@ -363,7 +373,7 @@ auth_data_reaches_controller(Config) ->
 %% pre_request can still touch the response; post_request runs after
 %% nova_handler has replied, so it is observed through the plugin's counter.
 pre_and_post_request_plugins_run(Config) ->
-    Counters = persistent_term:get(nova_test_app_plugin),
+    Counters = plugin_counters(),
     PreBefore = counters:get(Counters, 1),
     PostBefore = counters:get(Counters, 2),
 
@@ -372,6 +382,34 @@ pre_and_post_request_plugins_run(Config) ->
 
     ?assert(counters:get(Counters, 1) > PreBefore),
     ?assert(counters:get(Counters, 2) > PostBefore).
+
+%% {break, ...} is a deprecated alias of stop: it must never let the request
+%% through to the controller (nova_oidcc answers anonymous users this way).
+plugin_break_redirect_skips_controller(Config) ->
+    {302, Headers, Body} = get(Config, "/plugin-break-redirect/"),
+    ?assertEqual(~"/login", header(~"location", Headers)),
+    ?assertEqual(undefined, header(~"x-nova-pre-request", Headers)),
+    ?assertEqual(<<>>, Body).
+
+plugin_break_status_skips_controller(Config) ->
+    {401, _Headers, Body} = get(Config, "/plugin-break-status/"),
+    ?assertEqual(<<>>, Body).
+
+plugin_break_unknown_reply_is_a_500(Config) ->
+    {500, _Headers, Body} = get(Config, "/plugin-break-unknown/"),
+    ?assertEqual(nomatch, binary:match(Body, ~"\"from\"")).
+
+plugin_stop_two_tuple_replies(Config) ->
+    {429, _Headers, Body} = get(Config, "/plugin-stop/"),
+    ?assertEqual(~"slow down", Body).
+
+%% The 500 page runs through the post_request phase; the pre_request plugins
+%% must not run a second time on the way.
+plugin_error_is_a_500(Config) ->
+    Counters = plugin_counters(),
+    PreBefore = counters:get(Counters, 1),
+    {500, _Headers, _Body} = get(Config, "/plugin-error/"),
+    ?assertEqual(PreBefore + 1, counters:get(Counters, 1)).
 
 %% The route lists options in its methods, so the router hands the preflight
 %% to nova_cors_plugin, which answers it; the controller only sees the plain
@@ -383,6 +421,15 @@ cors_preflight_on_a_route_that_accepts_options(Config) ->
     {200, PlainHeaders, Body} = options(Config, "/cors/", [Origin]),
     ?assertEqual(~"https://app.example.com", header(~"access-control-allow-origin", PlainHeaders)),
     ?assertEqual(#{~"method" => ~"OPTIONS"}, json(Body)).
+
+-spec plugin_counters() -> counters:counters_ref().
+plugin_counters() ->
+    stored(nova_test_app_plugin).
+
+%% persistent_term holds any term; the suite knows what it stored.
+-spec stored(atom()) -> dynamic().
+stored(Key) ->
+    persistent_term:get(Key).
 
 %%====================================================================
 %% Errors
