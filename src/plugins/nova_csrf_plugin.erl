@@ -17,6 +17,7 @@ __Important:__`nova_request_plugin` must run before this plugin so that form par
 
 -export([
          init/0,
+         pre_security/4,
          pre_request/4,
          post_request/4,
          plugin_info/0
@@ -52,6 +53,42 @@ tokens() ->
     case nova_settings:value(csrf_token) =/= session andalso nova_secret:keys(csrf_token) of
         [_ | _] = Keys -> {stateless, Keys};
         _NoSecret -> session
+    end.
+
+-doc "Stops a request that changes state and that the browser says another site sent with a 403, ahead of the security callback and before anything of its body is read.".
+-spec pre_security(Req :: cowboy_req:req(), Env :: any(), Options :: map(), State :: any()) ->
+          {ok, Req0 :: cowboy_req:req(), NewState :: any()} |
+          {stop, nova_plugin:reply(), Req0 :: cowboy_req:req(), NewState :: any()}.
+pre_security(Req = #{method := Method, path := Path}, _Env, Options, State) ->
+    case is_safe_method(Method) orelse is_excluded_path(Path, maps:get(excluded_paths, Options, []))
+        orelse is_sent_by_the_site(Req, Options) of
+        true ->
+            {ok, Req, State};
+        false ->
+            {stop, {reply, 403, [{~"content-type", ~"text/plain"}], ~"Forbidden - request from another origin"},
+             Req, State}
+    end.
+
+-spec is_sent_by_the_site(Req :: cowboy_req:req(), Options :: map()) -> boolean().
+is_sent_by_the_site(Req, Options) ->
+    Trusted = trusted_origins(Options),
+    Origin = cowboy_req:header(~"origin", Req),
+    case cowboy_req:header(~"sec-fetch-site", Req) of
+        Site when Site =:= ~"same-origin"; Site =:= ~"none"; Trusted =:= any ->
+            true;
+        undefined ->
+            nova_origin:is_allowed(Origin, Req, Trusted);
+        _ElseWhere ->
+            is_binary(Origin) andalso is_list(Trusted) andalso nova_origin:is_allowed(Origin, Req, Trusted)
+    end.
+
+-spec trusted_origins(Options :: map()) -> term().
+trusted_origins(#{trusted_origins := Origins}) ->
+    Origins;
+trusted_origins(_Options) ->
+    case nova_settings:value(trusted_origins) of
+        any -> same_host;
+        Origins -> Origins
     end.
 
 -doc "Pre-request callback. On safe methods, puts a CSRF token into the Req map. On unsafe methods, validates the submitted token.".
@@ -105,6 +142,7 @@ plugin_info() ->
                   {field_name, <<"Form field name for CSRF token (default: _csrf_token)">>},
                   {header_name, <<"Header name for CSRF token (default: x-csrf-token)">>},
                   {session_key, <<"Session key for CSRF token (default: _csrf_token)">>},
+                  {trusted_origins, ~"same_host, same_origin, any, or the list of origins that may send unsafe requests"},
                   {excluded_paths, <<"List of path prefixes to exclude from CSRF protection">>}
                  ]}.
 
