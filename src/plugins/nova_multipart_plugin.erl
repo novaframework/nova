@@ -11,6 +11,10 @@ Multipart fields win over `params` set by an earlier plugin, and a repeated fiel
 
 -export([pre_request/4, post_request/4, plugin_info/0]).
 
+-ifdef(TEST).
+-export([deadline_expired/1]).
+-endif.
+
 -define(DEFAULT_MAX_PARTS, 32).
 -define(DEFAULT_MAX_PART_SIZE, 8000000).
 -define(DEFAULT_MAX_FIELD_SIZE, 65536).
@@ -354,7 +358,3 @@ safe_label(Value) ->
 
 to_binary_label(Value) when is_binary(Value) -> Value;
 to_binary_label(Value) -> iolist_to_binary(io_lib:format("~0p", [Value])).
-
--ifdef(TEST).
--compile(export_all).
--endif.
